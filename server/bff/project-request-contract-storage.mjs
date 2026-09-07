@@ -53,19 +53,30 @@ function objectNameWithinPrefix(path, prefix, errorMessage) {
 
 export function createDraftAttachmentCleanupOutboxHandler({ draftStorageService } = {}) {
   return async (event) => {
-    if (typeof draftStorageService?.deleteDraftAttachment !== 'function') {
+    if (
+      typeof draftStorageService?.deleteDraftAttachment !== 'function'
+      && typeof draftStorageService?.deleteProjectRegistrationAttachment !== 'function'
+    ) {
       throw new Error('Draft attachment storage service is required');
     }
     const draftId = readOptionalText(event?.payload?.draftId);
+    const projectId = readOptionalText(event?.payload?.projectId);
     const paths = event?.payload?.paths;
     if (!draftId || !Array.isArray(paths) || paths.length < 1 || paths.length > 100) {
       throw new Error('Draft attachment cleanup payload is invalid');
     }
-    await Promise.all(paths.map((path) => draftStorageService.deleteDraftAttachment({
-      tenantId: event?.tenantId,
-      draftId,
-      path,
-    })));
+    const permanentPrefix = projectId
+      ? projectRegistrationAttachmentPrefix(event?.tenantId, projectId)
+      : '';
+    await Promise.all(paths.map((path) => (
+      permanentPrefix && readOptionalText(path).startsWith(permanentPrefix)
+        ? draftStorageService.deleteProjectRegistrationAttachment({
+            tenantId: event?.tenantId, projectId, draftId, path,
+          })
+        : draftStorageService.deleteDraftAttachment({
+            tenantId: event?.tenantId, draftId, path,
+          })
+    )));
   };
 }
 
@@ -204,6 +215,9 @@ export function createProjectRequestContractStorageService(options = {}) {
     async uploadProjectRegistrationAttachment(input) {
       const tenantId = requireStoragePathSegment(input?.tenantId, 'tenantId');
       const projectId = requireStoragePathSegment(input?.projectId, 'projectId');
+      const draftId = readOptionalText(input?.draftId)
+        ? requireStoragePathSegment(input.draftId, 'draftId')
+        : '';
       const attachmentId = requireStoragePathSegment(input?.attachmentId, 'attachmentId');
       const fileName = normalizeSafeFileName(input?.fileName);
       const mimeType = readOptionalText(input?.mimeType) || 'application/octet-stream';
@@ -221,7 +235,7 @@ export function createProjectRequestContractStorageService(options = {}) {
         resumable: false,
         metadata: {
           contentType: mimeType,
-          metadata: { tenantId, projectId, attachmentId },
+          metadata: { tenantId, projectId, attachmentId, ...(draftId ? { draftId } : {}) },
         },
       });
 
@@ -301,6 +315,39 @@ export function createProjectRequestContractStorageService(options = {}) {
         contentType: readOptionalText(metadata?.contentType) || 'application/octet-stream',
         size: Number.parseInt(String(metadata?.size || buffer.byteLength), 10) || buffer.byteLength,
       };
+    },
+
+    async inspectProjectRegistrationAttachment(input) {
+      const prefix = projectRegistrationAttachmentPrefix(input?.tenantId, input?.projectId);
+      const { path } = objectNameWithinPrefix(
+        input?.path,
+        prefix,
+        'project registration attachment path is outside its canonical prefix',
+      );
+      const [metadata] = await bucket.file(path).getMetadata();
+      return {
+        path,
+        size: Number.parseInt(String(metadata?.size || 0), 10) || 0,
+        contentType: readOptionalText(metadata?.contentType) || 'application/octet-stream',
+        attachmentId: readOptionalText(metadata?.metadata?.attachmentId),
+        draftId: readOptionalText(metadata?.metadata?.draftId),
+      };
+    },
+
+    async deleteProjectRegistrationAttachment(input) {
+      const draftId = requireStoragePathSegment(input?.draftId, 'draftId');
+      const prefix = projectRegistrationAttachmentPrefix(input?.tenantId, input?.projectId);
+      const { path } = objectNameWithinPrefix(
+        input?.path,
+        prefix,
+        'project registration attachment path is outside its canonical prefix',
+      );
+      const file = bucket.file(path);
+      const [metadata] = await file.getMetadata();
+      if (readOptionalText(metadata?.metadata?.draftId) !== draftId) {
+        throw new Error('project registration attachment belongs to another draft');
+      }
+      await file.delete({ ignoreNotFound: true });
     },
   };
 }

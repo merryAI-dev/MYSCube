@@ -315,14 +315,14 @@ describe('project information private drafts', () => {
       }))
     ));
     const storageService = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
       relocateDraftAttachments,
     };
     const h = harness({
@@ -384,7 +384,7 @@ describe('project information private drafts', () => {
     expect(relocateDraftAttachments).not.toHaveBeenCalled();
     await handler(newEvent);
 
-    expect(relocateDraftAttachments).toHaveBeenCalledOnce();
+    expect(relocateDraftAttachments).not.toHaveBeenCalled();
     expect(h.db.documents.get('orgs/tenant-a/project_requests/change-project-a')).toMatchObject({
       requestVersion: 2,
       submittedOutboxId: 'outbox-2',
@@ -399,14 +399,14 @@ describe('project information private drafts', () => {
 
   it('keeps an inherited unpublished attachment immutable when the next draft removes it', async () => {
     const storageService = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService });
     await openedDraft(h, 'immutable-open-v1');
@@ -455,21 +455,21 @@ describe('project information private drafts', () => {
       attachmentRefs: [],
       payload: { contractDocument: null },
     });
-    expect(storageService.deleteDraftAttachment).not.toHaveBeenCalled();
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
     expect([...h.db.documents.values()].some((value) => value?.eventType === 'draft.attachments.cleanup'))
       .toBe(false);
   });
 
   it('replaces an inherited proposal without deleting the prior request blob', async () => {
     const storageService = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService });
     await openedDraft(h, 'inherited-proposal-open-v1');
@@ -514,7 +514,7 @@ describe('project information private drafts', () => {
       expect.objectContaining({ documentKind: 'proposal', name: 'proposal-v1.pdf' }),
       expect.objectContaining({ documentKind: 'rfp_request_evidence', name: 'rfp-v2.pdf' }),
     ]));
-    expect(storageService.deleteDraftAttachment).not.toHaveBeenCalled();
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
     expect([...h.db.documents.values()].some((value) => value?.eventType === 'draft.attachments.cleanup'))
       .toBe(false);
   });
@@ -1064,14 +1064,14 @@ describe('project information private drafts', () => {
 
   it('preserves completed-project checkout and three private evidence PDFs in the change request', async () => {
     const storage = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService: storage });
     await openedDraft(h);
@@ -1446,16 +1446,16 @@ describe('project information private drafts', () => {
       .toMatchObject({ status: 'ACTIVE', payload: { name: 'Must remain private' } });
   });
 
-  it('uploads into the private owner draft path and saves metadata only after storage succeeds', async () => {
+  it('uploads into the permanent private project path and saves metadata only after storage succeeds', async () => {
     const storage = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService: storage });
     await openedDraft(h);
@@ -1483,8 +1483,8 @@ describe('project information private drafts', () => {
     expect(uploaded.body).toMatchObject({
       draft: { draftRevision: 1, attachmentRefs: [{ documentKind: 'contract', name: 'contract.pdf' }] },
     });
-    expect(storage.uploadDraftAttachment).toHaveBeenCalledWith(expect.objectContaining({
-      tenantId: 'tenant-a', draftId: expect.stringMatching(/^v1_/), actorId: 'actor-a',
+    expect(storage.uploadProjectRegistrationAttachment).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 'tenant-a', projectId: 'project-a', draftId: expect.stringMatching(/^v1_/), actorId: 'actor-a',
     }));
     expect(replaced.body.draft.attachmentRefs).toHaveLength(1);
     expect(replaced.body.draft.attachmentRefs[0].name).toBe('replacement.pdf');
@@ -1493,6 +1493,7 @@ describe('project information private drafts', () => {
       entityType: 'project_info_draft',
       payload: {
         draftId: expect.stringMatching(/^v1_/),
+        projectId: 'project-a',
         paths: [uploaded.body.attachment.path],
       },
     });
@@ -1500,14 +1501,14 @@ describe('project information private drafts', () => {
 
   it('clears canonical contract analysis when a private replacement is uploaded and submitted with null analysis', async () => {
     const storage = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService: storage });
     const projectPath = 'orgs/tenant-a/projects/project-a';
@@ -1555,14 +1556,14 @@ describe('project information private drafts', () => {
 
   it('removes a private attachment only with the owning lease fence and advances the draft revision', async () => {
     const storage = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService: storage });
     await openedDraft(h);
@@ -1590,7 +1591,7 @@ describe('project information private drafts', () => {
       expectedDraftRevision: 2,
       documentKind: 'contract',
     })).rejects.toMatchObject({ statusCode: 423, code: 'edit_lease_held' });
-    expect(storage.deleteDraftAttachment).not.toHaveBeenCalled();
+    expect(storage.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
     expect(h.db.documents.has('outbox/cleanup-outbox-1')).toBe(false);
 
     const removed = await h.service.removeAttachment({
@@ -1605,9 +1606,10 @@ describe('project information private drafts', () => {
       attachmentRefs: [],
       payload: { contractDocument: null },
     });
-    expect(storage.deleteDraftAttachment).toHaveBeenCalledOnce();
-    expect(storage.deleteDraftAttachment).toHaveBeenCalledWith({
+    expect(storage.deleteProjectRegistrationAttachment).toHaveBeenCalledOnce();
+    expect(storage.deleteProjectRegistrationAttachment).toHaveBeenCalledWith({
       tenantId: 'tenant-a',
+      projectId: 'project-a',
       draftId: expect.stringMatching(/^v1_/),
       path: uploaded.body.attachment.path,
     });
@@ -1622,14 +1624,14 @@ describe('project information private drafts', () => {
 
   it('keeps proposal and RFP as independent private edit attachments', async () => {
     const storage = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService: storage });
     await openedDraft(h);
@@ -1656,7 +1658,7 @@ describe('project information private drafts', () => {
 
     expect(rfp.body.draft.attachmentRefs.map((item) => item.documentKind))
       .toEqual(['proposal', 'rfp_request_evidence']);
-    expect(storage.deleteDraftAttachment).not.toHaveBeenCalledWith(expect.objectContaining({
+    expect(storage.deleteProjectRegistrationAttachment).not.toHaveBeenCalledWith(expect.objectContaining({
       path: proposal.body.attachment.path,
     }));
 
@@ -1698,14 +1700,14 @@ describe('project information private drafts', () => {
     replacementKind,
   }) => {
     const storage = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService: storage });
     h.db.documents.set('orgs/tenant-a/projects/project-a', {
@@ -1851,14 +1853,14 @@ describe('project information private drafts', () => {
 
   it('maps a new original-document kind into the canonical change request field', async () => {
     const storage = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService: storage });
     await openedDraft(h);
@@ -1886,14 +1888,14 @@ describe('project information private drafts', () => {
 
   it('allows a same-kind replacement when the private attachment list is at its limit', async () => {
     const storage = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const h = harness({ storageService: storage });
     await openedDraft(h);
@@ -1929,8 +1931,8 @@ describe('project information private drafts', () => {
 
   it('rejects non-PDF MIME types and fake PDF content before private storage', async () => {
     const storage = {
-      uploadDraftAttachment: vi.fn(),
-      deleteDraftAttachment: vi.fn(),
+      uploadProjectRegistrationAttachment: vi.fn(),
+      deleteProjectRegistrationAttachment: vi.fn(),
     };
     const h = harness({ storageService: storage });
     await openedDraft(h);
@@ -1956,7 +1958,7 @@ describe('project information private drafts', () => {
       fileSize: fakePdf.byteLength,
       buffer: fakePdf,
     })).rejects.toMatchObject({ statusCode: 422, code: 'draft_attachment_invalid' });
-    expect(storage.uploadDraftAttachment).not.toHaveBeenCalled();
+    expect(storage.uploadProjectRegistrationAttachment).not.toHaveBeenCalled();
   });
 
   it('serves an owner edit-draft attachment as private no-store bytes', async () => {

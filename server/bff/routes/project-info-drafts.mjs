@@ -147,7 +147,7 @@ function publicAttachmentRefs(draft = {}) {
   ));
 }
 
-function resumableDraftAttachments(tenantId, draftId, request = {}) {
+function resumableDraftAttachments(tenantId, projectId, draftId, request = {}) {
   if (
     readOptionalText(request.requestKind) !== 'CHANGE'
     || !['PENDING', 'REJECTED'].includes(readOptionalText(request.status))
@@ -155,11 +155,23 @@ function resumableDraftAttachments(tenantId, draftId, request = {}) {
   const source = request.proposedSnapshot && typeof request.proposedSnapshot === 'object'
     ? request.proposedSnapshot
     : request.payload;
+  const before = request.beforeSnapshot && typeof request.beforeSnapshot === 'object'
+    ? request.beforeSnapshot
+    : {};
   if (!source || typeof source !== 'object' || Array.isArray(source)) return [];
   return Object.entries(DOCUMENT_FIELD_BY_KIND).flatMap(([documentKind, field]) => {
     const document = source[field];
     const path = readOptionalText(document?.path);
-    if (!path || draftIdFromTrustedAttachmentPath(tenantId, path) !== draftId) return [];
+    const permanentPrefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
+    const changedPermanentDocument = path.startsWith(permanentPrefix)
+      && path !== readOptionalText(before?.[field]?.path);
+    if (
+      !path
+      || (
+        draftIdFromTrustedAttachmentPath(tenantId, path) !== draftId
+        && !changedPermanentDocument
+      )
+    ) return [];
     const attachmentId = readOptionalText(document?.attachmentId);
     return [{
       ...(attachmentId ? { attachmentId } : {}),
@@ -439,7 +451,7 @@ function attachmentCleanupEvent(createEvent, current, paths, timestamp) {
     eventType: DRAFT_ATTACHMENT_CLEANUP_EVENT_TYPE,
     entityType: 'project_info_draft',
     entityId: current.draftDocumentId,
-    payload: { draftId: current.draftDocumentId, paths: uniquePaths },
+    payload: { draftId: current.draftDocumentId, projectId: current.projectId, paths: uniquePaths },
     createdAt: timestamp,
   });
 }
@@ -697,6 +709,7 @@ export function createProjectInfoDraftService({
             payload: seed,
             attachmentRefs: resumableDraftAttachments(
               current.tenantId,
+              current.projectId,
               current.draftDocumentId,
               previousRequest,
             ),
@@ -889,7 +902,12 @@ export function createProjectInfoDraftService({
           baseSnapshot: buildProjectInfoDraftSeed({ ...nextProject, id: current.projectId }, {}),
           baseCanonicalVersion: nextVersion,
           draftRevision: (Number.isInteger(draft.draftRevision) ? draft.draftRevision : 0) + 1,
-          attachmentRefs: resumableDraftAttachments(current.tenantId, current.draftDocumentId, request),
+          attachmentRefs: resumableDraftAttachments(
+            current.tenantId,
+            current.projectId,
+            current.draftDocumentId,
+            request,
+          ),
           submittedAt: null,
           submittedProjectRequestId: null,
           submittedProjectVersion: null,
@@ -1039,7 +1057,10 @@ export function createProjectInfoDraftService({
         const { draft, project } = await ownedDraft(tx, current);
         const match = draftAttachments(draft).findLast((item) => item?.documentKind === documentKind);
         if (match && readOptionalText(match.path)) {
-          return { source: 'draft', attachment: match };
+          const permanentPrefix = `orgs/${current.tenantId}/project-registration-documents/${current.projectId}/`;
+          return readOptionalText(match.path).startsWith(permanentPrefix)
+            ? { source: 'project', attachment: match }
+            : { source: 'draft', attachment: match };
         }
 
         const payloadDocument = draft.payload?.[field];
@@ -1127,7 +1148,10 @@ export function createProjectInfoDraftService({
     },
 
     async addAttachment(input) {
-      if (!draftStorageService?.uploadDraftAttachment || !draftStorageService?.deleteDraftAttachment) {
+      if (
+        !draftStorageService?.uploadProjectRegistrationAttachment
+        || !draftStorageService?.deleteProjectRegistrationAttachment
+      ) {
         throw new Error('Draft attachment storage service is required');
       }
       const current = context(input);
@@ -1198,8 +1222,11 @@ export function createProjectInfoDraftService({
       const cleanup = async () => {
         if (!uploaded?.path) return;
         try {
-          await draftStorageService.deleteDraftAttachment({
-            tenantId: current.tenantId, draftId: current.draftDocumentId, path: uploaded.path,
+          await draftStorageService.deleteProjectRegistrationAttachment({
+            tenantId: current.tenantId,
+            projectId: current.projectId,
+            draftId: current.draftDocumentId,
+            path: uploaded.path,
           });
         } catch {
           console.warn('[bff] project info draft attachment cleanup failed', {
@@ -1208,8 +1235,9 @@ export function createProjectInfoDraftService({
         }
       };
       try {
-        uploaded = await draftStorageService.uploadDraftAttachment({
+        uploaded = await draftStorageService.uploadProjectRegistrationAttachment({
           tenantId: current.tenantId,
+          projectId: current.projectId,
           draftId: current.draftDocumentId,
           attachmentId,
           fileName,
@@ -1218,9 +1246,9 @@ export function createProjectInfoDraftService({
           buffer,
           actorId: current.actorId,
         });
-        const prefix = `orgs/${current.tenantId}/project-registration-drafts/${current.draftDocumentId}/`;
+        const prefix = `orgs/${current.tenantId}/project-registration-documents/${current.projectId}/`;
         const storagePath = readOptionalText(uploaded?.path);
-        if (!storagePath.startsWith(prefix)) throw new Error('Draft storage returned a path outside the private draft prefix');
+        if (!storagePath.startsWith(prefix)) throw new Error('Draft storage returned a path outside the private project prefix');
         const attachment = {
           attachmentId, documentKind, path: storagePath, name: fileName, size: buffer.byteLength,
           contentType: mimeType, uploadedAt: readOptionalText(uploaded.uploadedAt) || clockDate(now).toISOString(),
@@ -1284,8 +1312,9 @@ export function createProjectInfoDraftService({
               || replaced.path === attachment.path
             ) return;
             try {
-              await draftStorageService.deleteDraftAttachment({
+              await draftStorageService.deleteProjectRegistrationAttachment({
                 tenantId: current.tenantId,
+                projectId: current.projectId,
                 draftId: current.draftDocumentId,
                 path: replaced.path,
               });
@@ -1333,7 +1362,7 @@ export function createProjectInfoDraftService({
     },
 
     async removeAttachment(input) {
-      if (!draftStorageService?.deleteDraftAttachment) {
+      if (!draftStorageService?.deleteProjectRegistrationAttachment) {
         throw new Error('Draft attachment storage service is required');
       }
       const current = context(input);
@@ -1413,8 +1442,9 @@ export function createProjectInfoDraftService({
       await Promise.all(result.removedAttachments.map(async (attachment) => {
         if (attachment?.inheritedFromProjectRequest === true) return;
         try {
-          await draftStorageService.deleteDraftAttachment({
+          await draftStorageService.deleteProjectRegistrationAttachment({
             tenantId: current.tenantId,
+            projectId: current.projectId,
             draftId: current.draftDocumentId,
             path: attachment.path,
           });
