@@ -562,9 +562,6 @@ export function createProjectInfoDraftService({
   idempotencyService,
   draftStorageService,
   rbacPolicy,
-  // Moves the submitted files to the shared folder as part of saving, so the approver can
-  // open them immediately instead of waiting for the background queue.
-  publishSubmittedAttachments = null,
 } = {}) {
   if (!db?.runTransaction) throw new Error('Firestore is required for project information drafts');
   if (!auditChainService?.appendManyInTransaction) throw new Error('Atomic audit chain service is required');
@@ -670,6 +667,35 @@ export function createProjectInfoDraftService({
     });
   }
 
+  async function assertSubmittedAttachmentsStored(current, draft) {
+    const attachments = draftAttachments(draft);
+    if (attachments.length === 0) return;
+    if (typeof draftStorageService?.inspectProjectRegistrationAttachment !== 'function') {
+      throw new Error('Project registration attachment inspection is required');
+    }
+    try {
+      await Promise.all(attachments.map(async (attachment) => {
+        const stored = await draftStorageService.inspectProjectRegistrationAttachment({
+          tenantId: current.tenantId,
+          projectId: current.projectId,
+          path: attachment.path,
+        });
+        if (
+          readOptionalText(stored?.path) !== readOptionalText(attachment?.path)
+          || readOptionalText(stored?.attachmentId) !== readOptionalText(attachment?.attachmentId)
+          || Number(stored?.size) !== Number(attachment?.size)
+          || readOptionalText(stored?.contentType) !== readOptionalText(attachment?.contentType)
+        ) throw new Error('Project information attachment metadata does not match');
+      }));
+    } catch {
+      throw createHttpError(
+        422,
+        '제출 파일을 확인할 수 없습니다. 다시 첨부해 주세요.',
+        'project_attachment_unavailable',
+      );
+    }
+  }
+
   return {
     async open(input) {
       const current = context(input);
@@ -749,7 +775,7 @@ export function createProjectInfoDraftService({
       return db.runTransaction(async (tx) => {
         const nowDate = clockDate(now);
         const timestamp = nowDate.toISOString();
-        const { actorRole, projectRef, project, draftRef, draft } = await ownedDraft(tx, current);
+        const { actorRole, project, draftRef, draft } = await ownedDraft(tx, current);
         const requestRef = refs(current).request;
         const requestSnap = await tx.get(requestRef);
         const lock = await checkIdempotency(tx, current, fingerprint, nowDate);
@@ -1507,8 +1533,9 @@ export function createProjectInfoDraftService({
             'canonical_version_conflict',
           );
         }
+        await assertSubmittedAttachmentsStored(current, draft);
         const nextVersion = actualVersion + 1;
-        const { projectPatch, projectRequest } = buildProjectInfoChangeSubmission({
+        const { projectRequest } = buildProjectInfoChangeSubmission({
           tenantId: current.tenantId,
           project: { ...project, id: current.projectId },
           previousRequest,
@@ -1518,23 +1545,12 @@ export function createProjectInfoDraftService({
           actorName: current.actorDisplayName,
           actorEmail: current.actorEmail,
           timestamp,
-          targetProjectVersion: nextVersion,
           resubmit: input?.resubmit === true,
           reviewComment: input?.reviewComment,
         });
         const submittedProjectRequest = {
           ...projectRequest,
           submittedOutboxId: eventTemplate.id,
-        };
-        const nextProject = {
-          ...project,
-          ...projectPatch,
-          tenantId: current.tenantId,
-          version: nextVersion,
-          createdBy: project.createdBy || current.actorId,
-          createdAt: project.createdAt || timestamp,
-          updatedBy: current.actorId,
-          updatedAt: timestamp,
         };
         const revision = expectedDraftRevision + 1;
         const submittedDraft = {
@@ -1564,10 +1580,8 @@ export function createProjectInfoDraftService({
           payload: {
             projectId: current.projectId,
             projectRequestId: submittedProjectRequest.id,
-            draftId: current.draftDocumentId,
             requestVersion: submittedProjectRequest.requestVersion,
             targetProjectVersion: submittedProjectRequest.targetProjectVersion,
-            attachmentRefs: publicAttachmentRefs(draft),
           },
           createdAt: timestamp,
           nextAttemptAt: timestamp,
@@ -1577,7 +1591,7 @@ export function createProjectInfoDraftService({
           status: 'SUBMITTED',
           projectId: current.projectId,
           projectRequestId: projectRequest.id,
-          projectVersion: nextVersion,
+          projectVersion: actualVersion,
           draftRevision: revision,
           submittedAt: timestamp,
           lease: { state: 'RELEASED', canEdit: false },
@@ -1585,42 +1599,23 @@ export function createProjectInfoDraftService({
         };
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_SUBMIT', revision, timestamp, {
-            fence: current.fence, projectRequestId: projectRequest.id, projectVersion: nextVersion,
+            fence: current.fence,
+            projectRequestId: projectRequest.id,
+            projectVersion: actualVersion,
+            targetProjectVersion: nextVersion,
           }),
           buildEditLeaseAuditEntry({ ...current, resourceType: RESOURCE_TYPE, resourceId: current.projectId }, actorRole, 'release', {
             state: 'RELEASED', fence: current.fence, resultCode: 'edit_lease_released_on_submit', timestamp,
           }),
         ]);
-        tx.set(projectRef, nextProject);
         tx.set(requestRef, submittedProjectRequest);
         tx.set(draftRef, submittedDraft);
         tx.set(refs(current).lease, releasedLease);
         tx.create(outboxRef, outboxEvent);
         completeIdempotency(tx, current, lock, { method, path, status: 200, body, ttlSeconds: 86_400 }, nowDate);
-        return { status: 200, body, replayed: false, outboxEvent };
+        return { status: 200, body, replayed: false };
       });
-
-      const { outboxEvent: submittedEvent, ...response } = outcome;
-      if (!outcome.replayed && submittedEvent && typeof publishSubmittedAttachments === 'function') {
-        try {
-          await publishSubmittedAttachments(submittedEvent);
-          // Close the queue entry so the worker does not repeat work already done here.
-          const doneAt = clockDate(now).toISOString();
-          await outboxRef.set({
-            status: 'DONE', processedAt: doneAt, updatedAt: doneAt, lastError: null,
-          }, { merge: true });
-        } catch (error) {
-          // Saving already succeeded. Leave the queue entry pending so the worker retries,
-          // and record why the immediate move failed.
-          // eslint-disable-next-line no-console
-          console.error('[bff] project info attachment publish failed', JSON.stringify({
-            projectId: current.projectId,
-            outboxId: submittedEvent.id,
-            message: error?.message || String(error),
-          }));
-        }
-      }
-      return response;
+      return outcome;
     },
   };
 }

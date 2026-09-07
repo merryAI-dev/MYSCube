@@ -2287,7 +2287,6 @@ export function buildProjectInfoChangeSubmission({
   actorName,
   actorEmail,
   timestamp,
-  targetProjectVersion,
   resubmit = false,
   reviewComment,
 }) {
@@ -2302,11 +2301,6 @@ export function buildProjectInfoChangeSubmission({
   if (registrationRequirementsVersion(payload.registrationRequirementsVersion) !== 2) {
     invalidRegistration('Project information changes require registration requirements version 2');
   }
-  const ownerId = readOptionalText(payload.registeredById)
-    || readOptionalText(payload.managerId)
-    || readOptionalText(project.registeredById)
-    || readOptionalText(project.managerId)
-    || actorId;
   assertTrustedProjectInfoDocumentReferences(
     project,
     payload,
@@ -2339,62 +2333,11 @@ export function buildProjectInfoChangeSubmission({
     : 1;
   const managementPlanningResubmission = isManagementPlanningRevisionRejected(project);
   const executiveResubmission = isExecutiveRevisionRejected(project);
-  if (resubmit && !managementPlanningResubmission && !executiveResubmission) {
+  const rejectedChangeRequest = isProjectChangeRequest(previousRequest)
+    && readOptionalText(previousRequest?.status) === 'REJECTED';
+  if (resubmit && !managementPlanningResubmission && !executiveResubmission && !rejectedChangeRequest) {
     throw createHttpError(409, 'Project is not awaiting resubmission', 'invalid_resubmit_state');
   }
-  const shouldResubmit = resubmit || managementPlanningResubmission || executiveResubmission;
-  const previousExecutiveReviewStatus = readOptionalText(project.executiveReviewStatus) || 'PENDING';
-  const executiveReviewReopens = !shouldResubmit
-    && ['APPROVED', 'PLANNING_AGREED'].includes(previousExecutiveReviewStatus);
-  const currentExecutiveHistory = Array.isArray(project.executiveReviewHistory)
-    ? project.executiveReviewHistory
-    : [];
-  const previousReviewedAt = readOptionalText(project.executiveReviewedAt);
-  const previousReviewedById = readOptionalText(project.executiveReviewedById);
-  const previousReviewedByName = readOptionalText(project.executiveReviewedByName);
-  const previousReviewComment = readOptionalText(project.executiveReviewComment);
-  const previousDecisionAlreadyRecorded = currentExecutiveHistory.some((entry) => (
-    readOptionalText(entry?.status) === previousExecutiveReviewStatus
-      && readOptionalText(entry?.reviewedAt) === previousReviewedAt
-      && readOptionalText(entry?.reviewedById) === previousReviewedById
-  ));
-  const previousDecisionHistory = executiveReviewReopens
-    && !previousDecisionAlreadyRecorded
-    && (previousReviewedAt || previousReviewedById || previousReviewedByName || previousReviewComment)
-    ? [{
-        status: previousExecutiveReviewStatus,
-        previousStatus: null,
-        reviewedAt: previousReviewedAt || null,
-        reviewedById: previousReviewedById || null,
-        reviewedByName: previousReviewedByName || null,
-        reviewComment: previousReviewComment || null,
-      }]
-    : [];
-  const executivePendingPatch = {
-    executiveReviewStatus: 'PENDING',
-    executiveReviewedAt: null,
-    executiveReviewedById: null,
-    executiveReviewedByName: null,
-    executiveReviewComment: null,
-    executiveReviewHistory: [
-      ...currentExecutiveHistory,
-      ...previousDecisionHistory,
-      {
-        status: 'PENDING',
-        previousStatus: previousExecutiveReviewStatus,
-        reviewedAt: timestamp,
-        reviewedById: actorId,
-        reviewedByName: actorName,
-        reviewComment: readOptionalText(reviewComment) || null,
-        ...(changedFields.length ? { changes: changedFields } : {}),
-      },
-    ],
-  };
-  const projectPatch = shouldResubmit
-    ? (managementPlanningResubmission
-      ? buildManagementPlanningResubmissionPatch()
-      : executivePendingPatch)
-    : (executiveReviewReopens ? executivePendingPatch : {});
   const projectRequestId = `change-${readOptionalText(project.id)}`;
   const projectRequest = stripUndefinedDeep({
     id: projectRequestId,
@@ -2403,7 +2346,7 @@ export function buildProjectInfoChangeSubmission({
     targetProjectId: project.id,
     approvedProjectId: project.id,
     baseProjectVersion: currentVersion,
-    targetProjectVersion,
+    targetProjectVersion: currentVersion + 1,
     requestVersion,
     beforeSnapshot,
     proposedSnapshot,
@@ -2424,7 +2367,7 @@ export function buildProjectInfoChangeSubmission({
     createdAt: previousRequest?.createdAt || timestamp,
     updatedAt: timestamp,
   });
-  return { projectPatch, projectRequest };
+  return { projectRequest };
 }
 
 function isProjectChangeRequest(request) {

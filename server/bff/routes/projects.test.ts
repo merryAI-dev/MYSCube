@@ -902,7 +902,7 @@ describe('project route helpers', () => {
     }).projectRequest.payload.executiveApproverId).toBe('pm-a');
   });
 
-  it('forces an organization-head rejection back to the organization-head queue even when a client omits resubmit', () => {
+  it('keeps an organization-head rejection unchanged while creating a pending request', () => {
     const canonical = registrationV2Canonical(
       registrationV2Payload(),
       registrationV2AttachmentKinds,
@@ -925,20 +925,19 @@ describe('project route helpers', () => {
       actorName: 'PM A',
       actorEmail: 'pm-a@example.com',
       timestamp: '2026-07-14T00:00:00.000Z',
-      targetProjectVersion: 2,
       resubmit: false,
       reviewComment: '계약 기간을 보완했습니다.',
     });
 
-    expect(submission.projectPatch).toMatchObject({
-      executiveReviewStatus: 'PENDING',
-      executiveReviewedAt: null,
-      executiveReviewedById: null,
-      executiveReviewedByName: null,
+    expect(submission).not.toHaveProperty('projectPatch');
+    expect(submission.projectRequest).toMatchObject({
+      status: 'PENDING',
+      baseProjectVersion: 1,
+      targetProjectVersion: 2,
     });
   });
 
-  it('preserves the organization-head approval and returns a planning rejection only to planning review when a client omits resubmit', () => {
+  it('keeps a planning rejection unchanged while creating a pending request', () => {
     const canonical = registrationV2Canonical(
       registrationV2Payload(),
       registrationV2AttachmentKinds,
@@ -965,19 +964,16 @@ describe('project route helpers', () => {
       actorName: 'PM A',
       actorEmail: 'pm-a@example.com',
       timestamp: '2026-07-14T00:00:00.000Z',
-      targetProjectVersion: 2,
       resubmit: false,
       reviewComment: '프로젝트 코드 확인 내용을 보완했습니다.',
     });
 
-    expect(submission.projectPatch).toEqual({
-      managementPlanningReviewStatus: 'PENDING',
-      managementPlanningReviewedAt: null,
-      managementPlanningReviewedById: null,
-      managementPlanningReviewedByName: null,
-      managementPlanningReviewComment: null,
+    expect(submission).not.toHaveProperty('projectPatch');
+    expect(submission.projectRequest).toMatchObject({
+      status: 'PENDING',
+      baseProjectVersion: 1,
+      targetProjectVersion: 2,
     });
-    expect(submission.projectPatch).not.toHaveProperty('executiveReviewStatus');
   });
 
   it('allows a v2 settlement-none basis with required contract confirmations', () => {
@@ -3060,7 +3056,18 @@ describe('project route helpers', () => {
           status: 'PENDING',
           requestedAt: '2026-07-20T01:00:00.000Z',
           targetProjectVersion: 4,
-          payload: { contractAmount: 999_000 },
+          payload: {
+            contractAmount: 999_000,
+            contractDocument: {
+              path: 'orgs/mysc/project-registration-documents/project-a/submitted-contract.pdf',
+            },
+          },
+          proposedSnapshot: {
+            contractAmount: 999_000,
+            contractDocument: {
+              path: 'orgs/mysc/project-registration-documents/project-a/submitted-contract.pdf',
+            },
+          },
         },
         {
           id: 'registration-latest',

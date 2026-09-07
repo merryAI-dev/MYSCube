@@ -816,8 +816,6 @@ export function createBffApp(options = {}) {
       idempotencyService,
       draftStorageService: projectRegistrationDraftStorageService,
       rbacPolicy,
-      // Resolved lazily: the handler is defined further down in this factory.
-      publishSubmittedAttachments: (event) => projectInfoOutboxHandler(event),
     })
     : null);
   const cashflowEditDraftService = options.cashflowEditDraftService || (editLeasesEnabled
