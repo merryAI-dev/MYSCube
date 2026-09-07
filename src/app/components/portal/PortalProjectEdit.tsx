@@ -103,9 +103,17 @@ const PROJECT_INFO_PREVIEW_FIELDS: Array<{
   { documentKind: 'final_report', field: 'finalReportDocument' },
 ];
 
-function resolveExecutiveBanner(project: Project) {
-  const status = project.executiveReviewStatus || 'PENDING';
-  const reason = project.executiveReviewComment || '';
+function resolveExecutiveBanner(
+  project: Project,
+  changeRequestStatus: ProjectRequest['status'] | null,
+  request: ProjectRequest | null,
+) {
+  const status = changeRequestStatus === 'REJECTED'
+    ? 'REVISION_REJECTED'
+    : changeRequestStatus || project.executiveReviewStatus || 'PENDING';
+  const reason = changeRequestStatus === 'REJECTED'
+    ? request?.reviewComment || request?.rejectedReason || ''
+    : project.executiveReviewComment || '';
   if (status === 'APPROVED') return {
     tone: 'success', title: '승인 완료',
     description: '조직장 검토가 승인되었습니다. 경영기획실 합의가 완료될 때까지 조직장 승인 이력은 유지됩니다.',
@@ -284,8 +292,14 @@ function ProjectInfoEditor({
     resourceId: project.id,
   }), [actor, orgId, project.id, session.sessionId]);
   const lease = useEditLease({ client: leaseClient });
-  const canExecutiveResubmit = project.executiveReviewStatus === 'REVISION_REJECTED'
-    || project.executiveReviewStatus === 'DUPLICATE_DISCARDED';
+  const changeRequestStatus = resolveProjectRequestKind(requestDoc) === 'CHANGE'
+    ? requestDoc?.status || null
+    : null;
+  const canExecutiveResubmit = changeRequestStatus === 'REJECTED'
+    || (!changeRequestStatus && (
+      project.executiveReviewStatus === 'REVISION_REJECTED'
+      || project.executiveReviewStatus === 'DUPLICATE_DISCARDED'
+    ));
   const managementPlanningReview = useMemo(() => getManagementPlanningReview(project), [project]);
   const hasExplicitManagementPlanningReview = useMemo(() => hasManagementPlanningReview(project), [project]);
   const managementPlanningBanner = useMemo(
@@ -296,11 +310,14 @@ function ProjectInfoEditor({
   );
   const canManagementPlanningResubmit = managementPlanningReview.status === 'REVISION_REJECTED';
   const canResubmit = canExecutiveResubmit || canManagementPlanningResubmit;
-  const executiveBanner = useMemo(() => resolveExecutiveBanner(project), [project]);
+  const executiveBanner = useMemo(
+    () => resolveExecutiveBanner(project, changeRequestStatus, requestDoc),
+    [changeRequestStatus, project, requestDoc],
+  );
   // A submit clears the local draft record, so its status is never 'SUBMITTED' here.
   // Show the action whenever the project is awaiting a decision; the server rejects it
   // with request_not_withdrawable if there is nothing pending to pull back.
-  const canWithdrawRequest = project.executiveReviewStatus === 'PENDING'
+  const canWithdrawRequest = changeRequestStatus === 'PENDING'
     && lease.canEdit
     && !submitted;
   const reviewFeedback = useMemo(() => buildPortalProjectReviewFeedback(project, requestDoc), [project, requestDoc]);

@@ -34,6 +34,13 @@ describe('PortalProjectEdit persistence shell', () => {
     expect(source).not.toContain("collection(db, 'tenants'");
   });
 
+  it('uses the latest change request state while the approved project waits unchanged', () => {
+    expect(source).toContain("const changeRequestStatus = resolveProjectRequestKind(requestDoc) === 'CHANGE'");
+    expect(source).toContain("const canExecutiveResubmit = changeRequestStatus === 'REJECTED'");
+    expect(source).toContain("const canWithdrawRequest = changeRequestStatus === 'PENDING'");
+    expect(source).toContain('resolveExecutiveBanner(project, changeRequestStatus, requestDoc)');
+  });
+
   it('keeps the project edit draft key stable across request listener updates', () => {
     expect(source).toContain('const autosaveKey = `portal-edit-${orgId}-${project.id}-${actor.uid}`');
     expect(source).toContain('draftKey={autosaveKey}');
