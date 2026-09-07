@@ -1803,7 +1803,7 @@ export function normalizeProjectOrganizationLabel(value) {
   return normalized;
 }
 
-function buildProjectRequestPayloadFromProject(project, existingPayload = {}) {
+export function buildProjectRequestPayloadFromProject(project, existingPayload = {}) {
   const { finalPaymentExpectedWeek: _historicalWeek, ...existingRequestPayload } = existingPayload && typeof existingPayload === 'object'
     ? existingPayload
     : {};
