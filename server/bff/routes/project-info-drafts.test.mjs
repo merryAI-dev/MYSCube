@@ -309,6 +309,7 @@ describe('project information private drafts', () => {
     expect(reopened.body.draft.attachmentRefs[0]).not.toHaveProperty('inheritedFromProjectRequest');
     const rawDraft = [...h.db.documents.values()].find((value) => value?.resourceType === 'project-info' && value?.status === 'ACTIVE');
     expect(rawDraft.attachmentRefs[0]).toMatchObject({
+      attachmentId: 'attachment-a',
       documentKind: 'contract',
       inheritedFromProjectRequest: true,
     });

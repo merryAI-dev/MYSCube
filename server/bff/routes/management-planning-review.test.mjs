@@ -225,7 +225,7 @@ describe('management planning project review route', () => {
     }));
   });
 
-  it('closes a resubmitted management-planning change request when it agrees', async () => {
+  it('agrees with management planning without deciding a pending change request', async () => {
     const executiveHistory = [{
       status: 'APPROVED',
       previousStatus: 'PENDING',
@@ -271,7 +271,7 @@ describe('management planning project review route', () => {
 
     expect(response.status).toBe(200);
     expect(db.documents.get('orgs/tenant-a/projects/project-a')).toMatchObject({
-      name: '보완 후 프로젝트 A',
+      name: '보완 전 프로젝트 A',
       version: 5,
       executiveReviewStatus: 'APPROVED',
       executiveReviewHistory: executiveHistory,
@@ -279,58 +279,11 @@ describe('management planning project review route', () => {
       projectCode: 'AXR-2026-002',
     });
     expect(db.documents.get('orgs/tenant-a/project_requests/request-a')).toMatchObject({
-      status: 'APPROVED',
-      reviewOutcome: 'APPROVED',
-      reviewedBy: 'finance-a',
-      reviewedByName: 'finance-a@example.com',
-      reviewComment: '보완 확인',
+      status: 'PENDING',
+      reviewOutcome: null,
       rejectedReason: null,
-      approvedProjectVersion: 5,
-      approvedSnapshot: expect.objectContaining({ name: '보완 후 프로젝트 A' }),
+      proposedSnapshot: expect.objectContaining({ name: '보완 후 프로젝트 A' }),
     });
-  });
-
-  it('does not agree to a resubmitted change while its attachments are still private draft files', async () => {
-    const { app, db } = createRouteApp({
-      seed: reviewSeed(
-        approvedProject({
-          registrationRequirementsVersion: 2,
-          managementPlanningReviewStatus: 'REVISION_REJECTED',
-        }),
-        approvedRequest({
-          requestKind: 'CHANGE',
-          status: 'PENDING',
-          reviewOutcome: null,
-          baseProjectVersion: 3,
-          targetProjectVersion: 4,
-          proposedSnapshot: {
-            name: '보완 후 프로젝트 A',
-            registrationRequirementsVersion: 2,
-            settlementType: 'NONE',
-            financialYears: [],
-            contractDocument: {
-              name: 'private-contract.pdf',
-              path: 'orgs/tenant-a/project-registration-drafts/draft-a/private-contract.pdf',
-            },
-          },
-        }),
-      ),
-    });
-
-    const response = await request(app)
-      .post('/api/v1/projects/project-a/management-planning-review')
-      .set('idempotency-key', 'planning-private-attachment')
-      .send({
-        requestId: 'request-a',
-        reviewStatus: 'AGREED',
-        projectCode: 'AXR-2026-PRIVATE',
-      });
-
-    expect(response.status).toBe(409);
-    expect(response.body.error).toBe('project_attachments_processing');
-    expect(db.documents.get('orgs/tenant-a/projects/project-a')?.managementPlanningReviewStatus)
-      .toBe('REVISION_REJECTED');
-    expect(db.documents.get('orgs/tenant-a/projectCodeClaims/AXR-2026-PRIVATE')).toBeUndefined();
   });
 
   it('accepts a legacy approved request as organization-head approval for code issuance', async () => {

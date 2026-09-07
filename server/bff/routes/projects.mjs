@@ -1139,6 +1139,7 @@ function registrationPrivateDocuments(attachmentRefs) {
       size: Number.isSafeInteger(attachment?.size) && attachment.size >= 0 ? attachment.size : 0,
       contentType: readOptionalText(attachment?.contentType),
       uploadedAt: readOptionalText(attachment?.uploadedAt),
+      attachmentId: readOptionalText(attachment?.attachmentId),
       visibility: 'PRIVATE',
     }));
   }
