@@ -382,6 +382,7 @@ export async function mergeProjectAndRequestDocs({
   buildRequestPatch,
   requestRefs,
   enforceChangeRequestVersion = false,
+  writeProject = true,
   tenantId,
   actorId,
   now,
@@ -419,7 +420,8 @@ export async function mergeProjectAndRequestDocs({
         || baseProjectVersion < 1
         || !Number.isSafeInteger(targetProjectVersion)
         || targetProjectVersion !== baseProjectVersion + 1
-        || targetProjectVersion !== currentVersion
+        || baseProjectVersion !== currentVersion
+        || targetProjectVersion !== nextVersion
       ) {
         throw createHttpError(
           409,
@@ -429,16 +431,18 @@ export async function mergeProjectAndRequestDocs({
       }
     }
     const projectPatch = await buildProjectPatch(current, currentRequest, nextVersion, tx);
-    const document = {
-      ...current, ...projectPatch, tenantId, version: nextVersion,
-      createdBy: current.createdBy || actorId, createdAt: current.createdAt || now,
-      updatedBy: actorId, updatedAt: now,
-    };
+    const document = writeProject
+      ? {
+          ...current, ...projectPatch, tenantId, version: nextVersion,
+          createdBy: current.createdBy || actorId, createdAt: current.createdAt || now,
+          updatedBy: actorId, updatedAt: now,
+        }
+      : current;
     const sanitizedProject = stripUndefinedDeep(document);
 
     const requestPatch = buildRequestPatch?.(current, currentRequest, nextVersion) || null;
     const sanitizedRequestPatch = requestPatch ? stripUndefinedDeep(requestPatch) : null;
-    if (typeof stageTransactionWrites === 'function') {
+    if (writeProject && typeof stageTransactionWrites === 'function') {
       await stageTransactionWrites({
         tx,
         document: sanitizedProject,
@@ -448,12 +452,16 @@ export async function mergeProjectAndRequestDocs({
       });
     }
 
-    tx.set(projectRef, sanitizedProject, { merge: true });
+    if (writeProject) tx.set(projectRef, sanitizedProject, { merge: true });
     if (requestPatch && currentRequestRef) {
       tx.set(currentRequestRef, sanitizedRequestPatch, { merge: true });
     }
 
-    return { version: nextVersion, data: sanitizedProject, request: currentRequest };
+    return {
+      version: writeProject ? nextVersion : currentVersion,
+      data: sanitizedProject,
+      request: currentRequest,
+    };
   });
 }
 
@@ -3875,7 +3883,11 @@ export function mountProjectRoutes(app, {
       projectPath,
       buildProjectPatch: async (currentProject, currentRequest, _nextVersion, tx) => {
         const reviewRequest = currentRequest || request;
-        const previousStatus = readOptionalText(currentProject.executiveReviewStatus) || 'PENDING';
+        const pendingChangeRequest = isProjectChangeRequest(reviewRequest)
+          && readOptionalText(reviewRequest?.status) === 'PENDING';
+        const previousStatus = pendingChangeRequest
+          ? 'PENDING'
+          : (readOptionalText(currentProject.executiveReviewStatus) || 'PENDING');
         const currentHistory = Array.isArray(currentProject.executiveReviewHistory) ? currentProject.executiveReviewHistory : [];
         const isLegacyPlanningAgreement = previousStatus === 'PLANNING_AGREED';
         const requestPayload = resolveProjectRequestPayloadForReview(reviewRequest);
@@ -3883,7 +3895,7 @@ export function mountProjectRoutes(app, {
         const designatedApproverId = !isLegacyPlanningAgreement && requestApproverId
           ? requestApproverId
           : readOptionalText(currentProject.executiveApproverId);
-        if (!['PENDING', 'PLANNING_AGREED'].includes(previousStatus)) {
+        if (!pendingChangeRequest && !['PENDING', 'PLANNING_AGREED'].includes(previousStatus)) {
           throw createHttpError(409, 'Project is not awaiting an organization-head decision', 'invalid_executive_review_state');
         }
         if (designatedApproverId && designatedApproverId !== actorId) {
@@ -3961,7 +3973,8 @@ export function mountProjectRoutes(app, {
           })
       ),
       requestRefs: resolvedRequestId ? refs : [],
-      enforceChangeRequestVersion: parsed.reviewStatus === 'APPROVED',
+      enforceChangeRequestVersion: isProjectChangeRequest(request),
+      writeProject: parsed.reviewStatus === 'APPROVED' || !isProjectChangeRequest(request),
       tenantId,
       actorId,
       now,
@@ -4042,10 +4055,6 @@ export function mountProjectRoutes(app, {
       requestId: parsed.requestId,
       projectId,
     });
-    const appliesResubmittedChange = parsed.reviewStatus === 'AGREED'
-      && isProjectChangeRequest(request)
-      && readOptionalText(request?.status) === 'PENDING';
-
     let projectCodeClaimWrite = null;
     const projectResult = await mergeProjectAndRequestDocs({
       db,
@@ -4073,18 +4082,6 @@ export function mountProjectRoutes(app, {
           ? currentProject.managementPlanningReviewHistory
           : [];
         const isAgreed = parsed.reviewStatus === 'AGREED';
-        const appliesCurrentChange = isAgreed
-          && isProjectChangeRequest(reviewRequest)
-          && readOptionalText(reviewRequest?.status) === 'PENDING';
-        if (appliesCurrentChange) {
-          assertProjectRequestAttachmentsPublished(reviewRequest, tenantId);
-        }
-        const approvedChangePatch = appliesCurrentChange
-          ? buildProjectPatchFromChangeRequestPayload(
-            resolveProjectRequestPayloadForReview(reviewRequest),
-            currentProject,
-          )
-          : {};
         if (isAgreed && projectCode && projectCodeClaimRef) {
           const existingProjectCode = normalizeProjectCode(currentProject.projectCode);
           if (existingProjectCode && existingProjectCode !== projectCode) {
@@ -4120,7 +4117,6 @@ export function mountProjectRoutes(app, {
         }
 
         return {
-          ...approvedChangePatch,
           managementPlanningReviewStatus: parsed.reviewStatus,
           managementPlanningReviewedAt: now,
           managementPlanningReviewedById: actorId,
@@ -4178,25 +4174,11 @@ export function mountProjectRoutes(app, {
         };
       },
       requestRefs: resolvedRequestId ? refs : [],
-      enforceChangeRequestVersion: appliesResubmittedChange,
       tenantId,
       actorId,
       now,
       notFoundMessage: `Project not found: ${projectId}`,
-      stageTransactionWrites: async ({ tx, document, currentRequest }) => {
-        if (
-          parsed.reviewStatus === 'AGREED'
-          && isProjectChangeRequest(currentRequest || request)
-          && readOptionalText((currentRequest || request)?.status) === 'PENDING'
-        ) {
-          await syncProjectParticipationEntries({
-            db,
-            transaction: tx,
-            tenantId,
-            project: document,
-            now,
-          });
-        }
+      stageTransactionWrites: async ({ tx }) => {
         if (projectCodeClaimWrite) {
           tx.set(projectCodeClaimWrite.ref, projectCodeClaimWrite.value, { merge: true });
         }

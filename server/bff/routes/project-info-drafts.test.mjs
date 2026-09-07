@@ -828,6 +828,20 @@ describe('project information private drafts', () => {
     expect([...h.db.documents.keys()].some((path) => path.includes('/idempotency_keys/'))).toBe(true);
     expect(h.auditChainService.appendManyInTransaction).toHaveBeenCalled();
     expect(replay).toEqual({ ...submitted, replayed: true });
+
+    h.db.documents.set(
+      `orgs/tenant-a/editLeases/${resolveEditLeaseDocumentId('project-info', 'project-a')}`,
+      buildActiveEditLeaseDocument({
+        tenantId: 'tenant-a', resourceType: 'project-info', resourceId: 'project-a',
+        actorId: 'actor-a', actorDisplayName: 'Actor A', sessionId: 'session-a',
+        leaseId: 'lease-a', serverNow: Date.parse('2026-07-12T00:00:00.000Z'),
+      }),
+    );
+    const withdrawn = await h.service.withdraw({ ...h.base, idempotencyKey: 'withdraw-a' });
+
+    expect(h.db.documents.get('orgs/tenant-a/projects/project-a')).toEqual(projectBefore);
+    expect(h.db.documents.get('orgs/tenant-a/project_requests/change-project-a')).toMatchObject({ status: 'WITHDRAWN' });
+    expect(withdrawn.body).toMatchObject({ withdrawn: true, canonicalVersion: 3 });
   });
 
   it('carries staffing and settlementSystemOther changes into the change request snapshot and review diff', async () => {

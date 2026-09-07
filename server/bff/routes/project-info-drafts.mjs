@@ -345,36 +345,6 @@ export function mergeProjectInfoDraftFields({ base, mine, theirs }) {
   return { merged, autoMerged, conflicts };
 }
 
-// Submitting a change request moves the project to PENDING and clears the recorded
-// decision. Withdrawing puts back the last real decision so the project does not sit
-// in "awaiting approval" with no request behind it.
-export function restoreExecutiveReviewAfterWithdraw(project) {
-  const history = Array.isArray(project?.executiveReviewHistory) ? project.executiveReviewHistory : [];
-  const lastDecision = history
-    .slice()
-    .reverse()
-    .find((entry) => {
-      const status = readOptionalText(entry?.status);
-      return status && status !== 'PENDING';
-    });
-  if (!lastDecision) {
-    return {
-      executiveReviewStatus: 'PENDING',
-      executiveReviewedAt: null,
-      executiveReviewedById: null,
-      executiveReviewedByName: null,
-      executiveReviewComment: null,
-    };
-  }
-  return {
-    executiveReviewStatus: readOptionalText(lastDecision.status),
-    executiveReviewedAt: readOptionalText(lastDecision.reviewedAt) || null,
-    executiveReviewedById: readOptionalText(lastDecision.reviewedById) || null,
-    executiveReviewedByName: readOptionalText(lastDecision.reviewedByName) || null,
-    executiveReviewComment: readOptionalText(lastDecision.reviewComment) || null,
-  };
-}
-
 function assertRevision(draft, expected) {
   const actual = Number.isInteger(draft.draftRevision) ? draft.draftRevision : 0;
   if (actual !== expected) {
@@ -891,26 +861,6 @@ export function createProjectInfoDraftService({
           throw createHttpError(403, 'Only the requester can withdraw this change request', 'request_owner_mismatch');
         }
         const actualVersion = Number.isInteger(project.version) && project.version > 0 ? project.version : 1;
-        const nextVersion = actualVersion + 1;
-        const restoredReview = restoreExecutiveReviewAfterWithdraw(project);
-        const nextProject = stripUndefinedDeep({
-          ...project,
-          ...restoredReview,
-          executiveReviewHistory: [
-            ...(Array.isArray(project.executiveReviewHistory) ? project.executiveReviewHistory : []),
-            {
-              status: restoredReview.executiveReviewStatus,
-              previousStatus: 'PENDING',
-              reviewedAt: timestamp,
-              reviewedById: current.actorId,
-              reviewedByName: current.actorDisplayName || null,
-              reviewComment: '요청자가 수정 요청을 회수했습니다.',
-            },
-          ],
-          version: nextVersion,
-          updatedBy: current.actorId,
-          updatedAt: timestamp,
-        });
         const withdrawnRequest = stripUndefinedDeep({
           ...request,
           status: 'WITHDRAWN',
@@ -919,14 +869,14 @@ export function createProjectInfoDraftService({
           withdrawnByName: current.actorDisplayName || null,
           updatedAt: timestamp,
         });
-        // Hand the submitted payload back to the owner, rebased onto the restored project
+        // Hand the submitted payload back to the owner, rebased onto the unchanged project
         // so the very next submit does not trip the canonical version gate again.
         const restoredDraft = stripUndefinedDeep({
           ...draft,
           status: 'ACTIVE',
           payload: request.payload && typeof request.payload === 'object' ? request.payload : draft.payload,
-          baseSnapshot: buildProjectInfoDraftSeed({ ...nextProject, id: current.projectId }, {}),
-          baseCanonicalVersion: nextVersion,
+          baseSnapshot: buildProjectInfoDraftSeed({ ...project, id: current.projectId }, {}),
+          baseCanonicalVersion: actualVersion,
           draftRevision: (Number.isInteger(draft.draftRevision) ? draft.draftRevision : 0) + 1,
           attachmentRefs: resumableDraftAttachments(
             current.tenantId,
@@ -945,18 +895,16 @@ export function createProjectInfoDraftService({
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_WITHDRAW', restoredDraft.draftRevision, timestamp, {
             fence: current.fence,
             projectRequestId: readOptionalText(request.id) || null,
-            restoredExecutiveReviewStatus: restoredReview.executiveReviewStatus,
-            canonicalVersion: nextVersion,
+            canonicalVersion: actualVersion,
           }),
         ]);
-        tx.set(projectRef, nextProject);
         tx.set(requestRef, withdrawnRequest);
         tx.set(draftRef, restoredDraft);
         const body = {
           withdrawn: true,
           draft: draftContract(restoredDraft),
-          canonicalVersion: nextVersion,
-          executiveReviewStatus: restoredReview.executiveReviewStatus,
+          canonicalVersion: actualVersion,
+          executiveReviewStatus: readOptionalText(project.executiveReviewStatus) || 'PENDING',
         };
         completeIdempotency(tx, current, lock, { method, path, status: 200, body }, nowDate);
         return { status: 200, body, replayed: false };
