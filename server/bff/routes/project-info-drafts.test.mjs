@@ -2088,14 +2088,14 @@ describe('project information private drafts', () => {
     const readIncomingUpload = vi.fn(async () => ({ buffer: VALID_PDF }));
     const deleteIncomingUpload = vi.fn(async () => undefined);
     const storageService = {
-      uploadDraftAttachment: vi.fn(async (input) => ({
-        path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
         name: input.fileName,
         size: input.buffer.byteLength,
         contentType: input.mimeType,
         uploadedAt: '2026-07-12T00:01:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
       createIncomingUploadUrl: vi.fn(async (input) => ({
         uploadUrl: 'https://storage.example/signed-put',
         path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/incoming/uuid-${input.fileName}`,
@@ -2138,8 +2138,8 @@ describe('project information private drafts', () => {
 
   it('rejects a storagePath attachment when the direct upload cannot be found', async () => {
     const storageService = {
-      uploadDraftAttachment: vi.fn(async () => { throw new Error('unexpected'); }),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      uploadProjectRegistrationAttachment: vi.fn(async () => { throw new Error('unexpected'); }),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
       readIncomingUpload: vi.fn(async () => { throw new Error('missing'); }),
     };
     const h = harness({ storageService });

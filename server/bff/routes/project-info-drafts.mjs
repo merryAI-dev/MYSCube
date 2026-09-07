@@ -791,7 +791,7 @@ export function createProjectInfoDraftService({
       return db.runTransaction(async (tx) => {
         const nowDate = clockDate(now);
         const timestamp = nowDate.toISOString();
-        const { actorRole, project, draftRef, draft } = await ownedDraft(tx, current);
+        const { actorRole, projectRef, project, draftRef, draft } = await ownedDraft(tx, current);
         const requestRef = refs(current).request;
         const requestSnap = await tx.get(requestRef);
         const lock = await checkIdempotency(tx, current, fingerprint, nowDate);
