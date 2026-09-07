@@ -4186,6 +4186,7 @@ export function mountProjectRoutes(app, {
       },
       buildRequestPatch: (_currentProject, currentRequest, nextVersion) => {
         if (!resolvedRequestId) return null;
+        if (isProjectChangeRequest(currentRequest || request)) return null;
         const isAgreed = parsed.reviewStatus === 'AGREED';
         const reviewComment = readOptionalText(parsed.reviewComment);
         if (!isAgreed) {

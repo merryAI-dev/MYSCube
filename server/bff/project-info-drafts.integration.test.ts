@@ -13,21 +13,29 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
   let nowMs = Date.parse('2026-07-12T00:00:00.000Z');
   let attachmentSequence = 0;
   let outboxSequence = 0;
-  const relocated: string[] = [];
+  const storedAttachments = new Map<string, Record<string, any>>();
   const storage = {
-    uploadDraftAttachment: vi.fn(async (input: Record<string, any>) => ({
-      path: `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`,
-      name: input.fileName,
-      size: input.buffer.byteLength,
-      contentType: input.mimeType,
-      uploadedAt: new Date(nowMs).toISOString(),
-    })),
-    deleteDraftAttachment: vi.fn(async () => undefined),
-    relocateDraftAttachments: vi.fn(async (input: Record<string, any>) => input.attachmentRefs.map((attachment: Record<string, any>) => {
-      const path = `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${String(attachment.path).split('/').at(-1)}`;
-      relocated.push(path);
-      return { ...attachment, path, visibility: 'PRIVATE' };
-    })),
+    uploadProjectRegistrationAttachment: vi.fn(async (input: Record<string, any>) => {
+      const attachment = {
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
+        name: input.fileName,
+        size: input.buffer.byteLength,
+        contentType: input.mimeType,
+        uploadedAt: new Date(nowMs).toISOString(),
+        attachmentId: input.attachmentId,
+        draftId: input.draftId,
+      };
+      storedAttachments.set(attachment.path, attachment);
+      return attachment;
+    }),
+    inspectProjectRegistrationAttachment: vi.fn(async ({ path }: Record<string, any>) => {
+      const attachment = storedAttachments.get(path);
+      if (!attachment) throw new Error('stored attachment not found');
+      return attachment;
+    }),
+    deleteProjectRegistrationAttachment: vi.fn(async ({ path }: Record<string, any>) => {
+      storedAttachments.delete(path);
+    }),
   };
   const api = request(createBffApp({
     projectId: firebaseProjectId,
@@ -164,7 +172,7 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
     nowMs = Date.parse('2026-07-12T00:00:00.000Z');
     attachmentSequence = 0;
     outboxSequence = 0;
-    relocated.length = 0;
+    storedAttachments.clear();
     vi.clearAllMocks();
   }
 
@@ -188,7 +196,7 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
   beforeEach(reset, 60_000);
   afterAll(reset, 60_000);
 
-  it('keeps temporary data owner-only and atomically publishes only the final change request', async () => {
+  it('keeps temporary data owner-only and atomically submits only the final change request', async () => {
     const acquired = await acquire();
     expect(acquired.status).toBe(200);
     const headers = mutationHeaders(acquired.body, 'draft-open-a');
@@ -203,47 +211,28 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
 
     const adminRead = await api.get('/api/v1/project-info-drafts/project-a').set(actorHeaders('actor-admin', 'admin'));
     expect(adminRead.status).toBe(404);
+    const projectBeforeSubmit = (await db.doc(`orgs/${tenantId}/projects/project-a`).get()).data();
 
     const submitted = await api.post('/api/v1/project-info-drafts/project-a/submit')
       .set({ ...headers, 'idempotency-key': 'draft-submit-a' })
       .send({ expectedDraftRevision: 1, expectedVersion: 3, resubmit: false });
     expect(submitted.status).toBe(200);
-    expect(submitted.body).toMatchObject({ projectVersion: 4, lease: { state: 'RELEASED' } });
+    expect(submitted.body).toMatchObject({ projectVersion: 3, lease: { state: 'RELEASED' } });
     const [project, changeRequest, drafts] = await Promise.all([
       db.doc(`orgs/${tenantId}/projects/project-a`).get(),
       db.doc(`orgs/${tenantId}/project_requests/change-project-a`).get(),
       db.collection(`orgs/${tenantId}/privateEditDrafts`).get(),
     ]);
-    expect(project.data()).toMatchObject({
-      name: 'Project A',
-      version: 4,
-      executiveReviewStatus: 'PENDING',
-      executiveReviewedAt: null,
-      executiveReviewedById: null,
-      executiveReviewedByName: null,
-      executiveReviewComment: null,
+    expect(project.data()).toEqual(projectBeforeSubmit);
+    expect(changeRequest.data()).toMatchObject({
+      status: 'PENDING', baseProjectVersion: 3, targetProjectVersion: 4,
+      proposedSnapshot: { name: 'Private name' },
     });
-    expect(project.data()?.executiveReviewHistory).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        status: 'APPROVED',
-        reviewedAt: '2026-07-01T09:00:00.000Z',
-        reviewedById: 'organization-head',
-        reviewedByName: '조직장',
-        reviewComment: '기존 승인 메모',
-      }),
-      expect.objectContaining({
-        status: 'PENDING',
-        previousStatus: 'APPROVED',
-        reviewedAt: '2026-07-12T00:00:00.000Z',
-        reviewedById: 'actor-a',
-      }),
-    ]));
-    expect(changeRequest.data()).toMatchObject({ status: 'PENDING', proposedSnapshot: { name: 'Private name' } });
     expect((await db.doc(`orgs/${tenantId}/projectRequests/change-project-a`).get()).exists).toBe(false);
     expect(drafts.docs[0].data()).not.toHaveProperty('payload');
   });
 
-  it('publishes same-kind private attachments while saving and leaves version conflicts private', async () => {
+  it('stores same-kind private attachments permanently and leaves version conflicts private', async () => {
     const acquired = await acquire();
     const baseHeaders = mutationHeaders(acquired.body, 'draft-open-b');
     const opened = await api.post('/api/v1/project-info-drafts/project-a/open').set(baseHeaders).send({});
@@ -253,8 +242,10 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
         expectedDraftRevision: opened.body.draft.draftRevision,
         documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf',
         fileSize: VALID_PDF.byteLength, contentBase64: VALID_PDF.toString('base64'),
-      });
+    });
     expect(uploaded.status).toBe(200);
+    const attachmentPath = uploaded.body.attachment.path;
+    expect(attachmentPath).toContain('/project-registration-documents/project-a/');
     await db.doc(`orgs/${tenantId}/projects/project-a`).set({ version: 4 }, { merge: true });
     const conflict = await api.post('/api/v1/project-info-drafts/project-a/submit')
       .set({ ...baseHeaders, 'idempotency-key': 'draft-submit-conflict' })
@@ -269,15 +260,9 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
       .set({ ...baseHeaders, 'idempotency-key': 'draft-submit-b' })
       .send({ expectedDraftRevision: 1, expectedVersion: 3 });
     expect(submitted.status).toBe(200);
-    const worker = await api.post('/api/internal/workers/outbox/run')
-      .set({ 'x-worker-secret': 'project-info-worker-secret' })
-      .send({ limit: 10 });
-    expect(worker.status).toBe(200);
-    // Saving already moved the file, so the queue entry is closed and the worker is a no-op.
-    expect(worker.body.succeeded).toBe(0);
-    expect(relocated).toHaveLength(1);
+    expect(storage.uploadProjectRegistrationAttachment).toHaveBeenCalledOnce();
     expect((await db.doc(`orgs/${tenantId}/project_requests/change-project-a`).get()).data())
-      .toMatchObject({ proposedSnapshot: { contractDocument: { path: relocated[0] } } });
+      .toMatchObject({ proposedSnapshot: { contractDocument: { path: attachmentPath } } });
   });
 
   it('does not copy an attachment twice when a resubmit inherits the published file', async () => {
@@ -290,8 +275,9 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
         expectedDraftRevision: firstDraft.body.draft.draftRevision,
         documentKind: 'contract', fileName: 'race-contract.pdf', mimeType: 'application/pdf',
         fileSize: VALID_PDF.byteLength, contentBase64: VALID_PDF.toString('base64'),
-      });
+    });
     expect(uploaded.status).toBe(200);
+    const attachmentPath = uploaded.body.attachment.path;
     const firstSubmit = await api.post('/api/v1/project-info-drafts/project-a/submit')
       .set({ ...firstHeaders, 'idempotency-key': 'draft-submit-race-v1' })
       .send({ expectedDraftRevision: 1, expectedVersion: 3 });
@@ -304,26 +290,15 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
     expect(secondDraft.status).toBe(200);
     const secondSubmit = await api.post('/api/v1/project-info-drafts/project-a/submit')
       .set({ ...secondHeaders, 'idempotency-key': 'draft-submit-race-v2' })
-      .send({ expectedDraftRevision: 0, expectedVersion: 4 });
+      .send({ expectedDraftRevision: 0, expectedVersion: 3 });
     expect(secondSubmit.status).toBe(200);
-
-    const worker = await api.post('/api/internal/workers/outbox/run')
-      .set({ 'x-worker-secret': 'project-info-worker-secret' })
-      .send({ limit: 10 });
-
-    expect(worker.status).toBe(200);
-    expect(worker.body).toMatchObject({ failed: 0 });
-    // The first save moved the file; the resubmit inherits the published path and must not
-    // copy it again, so storage is touched exactly once across both submissions.
-    expect(storage.relocateDraftAttachments).toHaveBeenCalledOnce();
-    expect(relocated).toHaveLength(1);
+    expect(storage.uploadProjectRegistrationAttachment).toHaveBeenCalledOnce();
+    expect(storedAttachments.size).toBe(1);
     expect((await db.doc(`orgs/${tenantId}/project_requests/change-project-a`).get()).data())
       .toMatchObject({
         requestVersion: 2,
         submittedOutboxId: 'project-info-outbox-2',
-        // The resubmit carries the already published file forward. There is nothing left
-        // to move, so it records no new publication of its own.
-        proposedSnapshot: { contractDocument: { path: relocated[0] } },
+        proposedSnapshot: { contractDocument: { path: attachmentPath } },
       });
   });
 

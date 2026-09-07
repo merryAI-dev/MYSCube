@@ -1678,7 +1678,6 @@ export function mountProjectInfoDraftRoutes(app, {
   enabled = false,
   projectInfoDraftService,
   piiProtector,
-  processOutboxEventInline,
 } = {}) {
   if (!enabled) return;
   if (!projectInfoDraftService) throw new Error('Project information draft routes require a service');
@@ -1768,15 +1767,6 @@ export function mountProjectInfoDraftRoutes(app, {
     const outcome = await projectInfoDraftService.submit({
       ...await routeContext(req, piiProtector), ...routeOwnership(req), projectId: routeProjectId(req), ...parsed,
     });
-    // 첨부 공개 이관을 같은 요청 안에서 처리한다. 실패해도 크론이 안전망이라 응답은 성공 그대로.
-    const outboxId = !outcome.replayed ? outcome.body?.outbox?.id : null;
-    if (outboxId && processOutboxEventInline) {
-      await processOutboxEventInline(outboxId).catch((error) => {
-        console.warn('[bff] inline info submit outbox processing failed', {
-          outboxId, errorCode: 'submit_outbox_inline_failed', message: error?.message,
-        });
-      });
-    }
     sendOutcome(res, outcome);
   }));
 }

@@ -1671,7 +1671,6 @@ export function createBffApp(options = {}) {
     enabled: editLeasesEnabled,
     projectInfoDraftService,
     piiProtector,
-    processOutboxEventInline: processSubmitOutboxInline,
   });
   mountCashflowEditDraftRoutes(app, {
     enabled: editLeasesEnabled,
