@@ -6,6 +6,7 @@ import { buildActiveEditLeaseDocument, resolveEditLeaseDocumentId } from '../edi
 import { loadRbacPolicy } from '../rbac-policy.mjs';
 import {
   createProjectInfoDraftService,
+  createProjectInfoSubmittedOutboxHandler,
   mountProjectInfoDraftRoutes,
 } from './project-info-drafts.mjs';
 
@@ -882,6 +883,150 @@ describe('project information private drafts', () => {
     const staffingChange = (request.changedFields || []).find((change) => change.key === 'staffing');
     expect(staffingChange).toMatchObject({ label: '실제 투입인력' });
     expect(staffingChange.after).toBe('총괄 리드 / 실무 박실무 / 운영 오퍼 / 멘토 하늘 / 정산지원 도담');
+  });
+
+  it('archives a submitted request and only uploads Drive files that are missing', async () => {
+    const requestPath = 'orgs/tenant-a/project_requests/change-project-a';
+    const outboxPath = 'outbox/archive-a';
+    const attachmentPath = 'orgs/tenant-a/project-registration-documents/project-a/contract.pdf';
+    const submittedRequest = {
+      id: 'change-project-a', requestKind: 'CHANGE', targetProjectId: 'project-a',
+      requestVersion: 2, targetProjectVersion: 4, submittedOutboxId: 'archive-a',
+      status: 'PENDING', requestedAt: '2026-09-07T09:30:00.000Z',
+      requestedBy: 'actor-a', requestedByName: 'Actor A', changedFields: ['name', 'contractDocument'],
+      proposedSnapshot: {
+        name: 'Changed project',
+        contractDocument: { path: attachmentPath, name: 'contract.pdf', contentType: 'application/pdf' },
+      },
+    };
+    const db = createDb({
+      'orgs/tenant-a/projects/project-a': {
+        id: 'project-a', name: 'Project A', version: 3, evidenceDriveRootFolderId: 'project-root-a',
+      },
+      [requestPath]: submittedRequest,
+      [outboxPath]: { status: 'PROCESSING', claimToken: 'claim-a' },
+    });
+    const driveService = {
+      getConfig: () => ({ enabled: true }),
+      ensureProjectChangeRequestFolder: vi.fn(async () => ({
+        folder: {
+          id: 'change-folder-a',
+          webViewLink: 'https://drive.google.com/drive/folders/change-folder-a',
+        },
+      })),
+      listFolderFiles: vi.fn(async () => [{ appProperties: { archiveFileKey: 'request-summary' } }]),
+      uploadFileToFolder: vi.fn(async () => ({ id: 'file-a' })),
+    };
+    const storage = {
+      downloadProjectRegistrationAttachment: vi.fn(async () => ({
+        buffer: VALID_PDF, contentType: 'application/pdf', size: VALID_PDF.byteLength,
+      })),
+    };
+    const handler = createProjectInfoSubmittedOutboxHandler({
+      db, driveService, projectRegistrationAttachmentStorageService: storage,
+      now: () => '2026-09-07T10:00:00.000Z',
+    });
+    const event = {
+      id: 'archive-a', tenantId: 'tenant-a', claimToken: 'claim-a',
+      payload: {
+        projectId: 'project-a', projectRequestId: 'change-project-a',
+        requestVersion: 2, targetProjectVersion: 4,
+      },
+    };
+
+    await handler(event);
+    await handler(event);
+
+    expect(driveService.ensureProjectChangeRequestFolder).toHaveBeenCalledOnce();
+    expect(driveService.ensureProjectChangeRequestFolder).toHaveBeenCalledWith({
+      tenantId: 'tenant-a', projectId: 'project-a', projectName: 'Project A',
+      projectFolderId: 'project-root-a', requestId: 'change-project-a', requestVersion: 2,
+      requestedAt: '2026-09-07T09:30:00.000Z',
+    });
+    expect(driveService.listFolderFiles).toHaveBeenCalledOnce();
+    expect(driveService.uploadFileToFolder.mock.calls.map(([input]) => input.appProperties.archiveFileKey))
+      .toEqual(['request-json', 'document-contract']);
+    const requestUpload = driveService.uploadFileToFolder.mock.calls[0][0];
+    expect(JSON.parse(Buffer.from(requestUpload.contentBase64, 'base64').toString('utf8'))).toEqual(submittedRequest);
+    expect(storage.downloadProjectRegistrationAttachment).toHaveBeenCalledWith({
+      tenantId: 'tenant-a', projectId: 'project-a', path: attachmentPath,
+    });
+    expect(db.documents.get(requestPath)).toMatchObject({
+      status: 'PENDING', proposedSnapshot: { name: 'Changed project' },
+      driveArchiveFolderId: 'change-folder-a',
+      driveArchiveFolderLink: 'https://drive.google.com/drive/folders/change-folder-a',
+      driveArchivedAt: '2026-09-07T10:00:00.000Z',
+    });
+  });
+
+  it('skips disabled or stale Drive deliveries before any external call', async () => {
+    const requestPath = 'orgs/tenant-a/project_requests/change-project-a';
+    const db = createDb({
+      'orgs/tenant-a/projects/project-a': { id: 'project-a', name: 'Project A', version: 3 },
+      [requestPath]: {
+        id: 'change-project-a', requestKind: 'CHANGE', targetProjectId: 'project-a', requestVersion: 2,
+        targetProjectVersion: 4, submittedOutboxId: 'archive-a',
+      },
+      'outbox/archive-a': { status: 'PROCESSING', claimToken: 'claim-a' },
+    });
+    const ensureProjectChangeRequestFolder = vi.fn();
+    const event = {
+      id: 'archive-a', tenantId: 'tenant-a', claimToken: 'claim-a',
+      payload: {
+        projectId: 'project-a', projectRequestId: 'change-project-a',
+        requestVersion: 2, targetProjectVersion: 4,
+      },
+    };
+    const disabled = createProjectInfoSubmittedOutboxHandler({
+      db,
+      driveService: { getConfig: () => ({ enabled: false }), ensureProjectChangeRequestFolder },
+    });
+
+    await disabled(event);
+    db.documents.set(requestPath, { ...db.documents.get(requestPath), requestVersion: 3 });
+    const enabled = createProjectInfoSubmittedOutboxHandler({
+      db,
+      driveService: { getConfig: () => ({ enabled: true }), ensureProjectChangeRequestFolder },
+    });
+    await enabled(event);
+
+    expect(ensureProjectChangeRequestFolder).not.toHaveBeenCalled();
+    expect(db.documents.get(requestPath)).not.toHaveProperty('driveArchiveFolderId');
+  });
+
+  it('leaves the request and outbox unchanged when Drive archival fails', async () => {
+    const requestPath = 'orgs/tenant-a/project_requests/change-project-a';
+    const outboxPath = 'outbox/archive-a';
+    const db = createDb({
+      'orgs/tenant-a/projects/project-a': { id: 'project-a', name: 'Project A', version: 3 },
+      [requestPath]: {
+        id: 'change-project-a', requestKind: 'CHANGE', targetProjectId: 'project-a',
+        requestVersion: 2, targetProjectVersion: 4, submittedOutboxId: 'archive-a', status: 'PENDING',
+        requestedAt: '2026-09-07T09:30:00.000Z', proposedSnapshot: { name: 'Changed project' },
+      },
+      [outboxPath]: { status: 'PROCESSING', claimToken: 'claim-a' },
+    });
+    const requestBefore = clone(db.documents.get(requestPath));
+    const outboxBefore = clone(db.documents.get(outboxPath));
+    const handler = createProjectInfoSubmittedOutboxHandler({
+      db,
+      driveService: {
+        getConfig: () => ({ enabled: true }),
+        ensureProjectChangeRequestFolder: vi.fn(async () => { throw new Error('Drive unavailable'); }),
+        listFolderFiles: vi.fn(),
+        uploadFileToFolder: vi.fn(),
+      },
+    });
+
+    await expect(handler({
+      id: 'archive-a', tenantId: 'tenant-a', claimToken: 'claim-a',
+      payload: {
+        projectId: 'project-a', projectRequestId: 'change-project-a',
+        requestVersion: 2, targetProjectVersion: 4,
+      },
+    })).rejects.toThrow('Drive unavailable');
+    expect(db.documents.get(requestPath)).toEqual(requestBefore);
+    expect(db.documents.get(outboxPath)).toEqual(outboxBefore);
   });
 
   it('does not reopen organization-head review while management planning is still pending', async () => {

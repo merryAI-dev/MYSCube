@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildDriveProjectChangeRequestFolderName,
   buildDriveProjectFolderName,
   buildDriveTransactionFolderName,
   deriveEvidenceLabelFromFileName,
@@ -12,6 +13,11 @@ import {
 describe('google-drive helpers', () => {
   it('builds deterministic project and transaction folder names', () => {
     expect(buildDriveProjectFolderName('온드림 AI 증빙', 'p001')).toBe('온드림_AI_증빙_p001');
+    expect(buildDriveProjectChangeRequestFolderName({
+      requestedAt: '2026-09-07T09:30:00.000Z',
+      requestId: 'change-p001',
+      requestVersion: 2,
+    })).toBe('2026-09-07_change-p001_v2');
     expect(buildDriveTransactionFolderName({
       id: 'tx001',
       dateTime: '2026-03-11',

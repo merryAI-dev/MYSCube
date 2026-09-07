@@ -859,7 +859,8 @@ export function createBffApp(options = {}) {
   const projectInfoOutboxHandler = options.projectInfoOutboxHandler
     || createProjectInfoSubmittedOutboxHandler({
       db,
-      draftStorageService: projectRegistrationDraftStorageService,
+      driveService,
+      projectRegistrationAttachmentStorageService: projectRegistrationDraftStorageService,
       now,
     });
   const draftAttachmentCleanupOutboxHandler = options.draftAttachmentCleanupOutboxHandler
