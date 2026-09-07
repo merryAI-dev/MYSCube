@@ -100,20 +100,15 @@ function isFileAttachment(value: unknown): value is FileAttachment {
 }
 
 export function buildMigrationReviewDocumentSlots(record: MigrationAuditConsoleRecord): ReviewDocumentSlot[] {
-  const payload = resolveProjectRequestPayload(record.request);
+  const payload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
   const requestNotes = payload?.registrationOptionalDocumentNotes;
-  const notes: Partial<ProjectRegistrationOptionalDocumentNotes> = requestNotes !== undefined
-    ? (requestNotes || {})
-    : (record.project.registrationOptionalDocumentNotes || {});
-  const quoteSubmissionDeferred = payload?.quoteSubmissionDeferred ?? record.project.quoteSubmissionDeferred;
-  const confirmations = payload?.registrationConfirmations ?? record.project.registrationConfirmations;
+  const notes: Partial<ProjectRegistrationOptionalDocumentNotes> = requestNotes || {};
+  const quoteSubmissionDeferred = payload?.quoteSubmissionDeferred;
+  const confirmations = payload?.registrationConfirmations;
   const documentByKind = new Map<ProjectRequestDocumentKind, ReviewDocumentEntry>();
 
   REVIEW_DOCUMENT_DEFINITIONS.forEach((definition) => {
-    const requestDocument = payload?.[definition.field];
-    const document = requestDocument !== undefined
-      ? requestDocument
-      : record.project[definition.field];
+    const document = payload?.[definition.field];
     if (!isFileAttachment(document)) return;
     documentByKind.set(definition.kind, { ...definition, document });
   });
@@ -219,18 +214,17 @@ export function MigrationAuditDocumentDialog({
   if (!record) return null;
 
   const dossier = buildMigrationReviewDossier(record.project, record.request);
-  const requestPayload = resolveProjectRequestPayload(record.request);
-  const totalActualCost = requestPayload?.totalActualCost ?? record.project.totalActualCost;
-  const financialYears = requestPayload?.financialYears ?? record.project.financialYears;
-  const interestRefundPolicy = requestPayload?.interestRefundPolicy ?? record.project.interestRefundPolicy;
-  const registrationNote = requestPayload?.note ?? record.project.note;
-  // 계약 체결 방식(모두싸인)은 요청 payload 를 먼저 보고 없으면 저장된 프로젝트에서 읽는다(문서 슬롯과 같은 원천).
-  const confirmations = requestPayload?.registrationConfirmations ?? record.project.registrationConfirmations;
-  const checkout = requestPayload?.checkout ?? record.project.checkout;
+  const reviewPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
+  const totalActualCost = reviewPayload?.totalActualCost;
+  const financialYears = reviewPayload?.financialYears;
+  const interestRefundPolicy = reviewPayload?.interestRefundPolicy;
+  const registrationNote = reviewPayload?.note;
+  const confirmations = reviewPayload?.registrationConfirmations;
+  const checkout = reviewPayload?.checkout;
   const checkoutVisible = record.project.status === 'COMPLETED' || record.project.status === 'COMPLETED_PENDING_PAYMENT';
-  const quoteDocument = requestPayload?.quoteDocument !== undefined ? requestPayload.quoteDocument : record.project.quoteDocument;
-  const quoteSubmissionDeferred = requestPayload?.quoteSubmissionDeferred ?? record.project.quoteSubmissionDeferred;
-  const designatedApproverName = requestPayload?.executiveApproverName || record.project.executiveApproverName || '';
+  const quoteDocument = reviewPayload?.quoteDocument;
+  const quoteSubmissionDeferred = reviewPayload?.quoteSubmissionDeferred;
+  const designatedApproverName = reviewPayload?.executiveApproverName || '';
   const isManagementPlanning = reviewStage === 'managementPlanning';
   const organizationReviewStatus = record.project.executiveReviewStatus;
   const organizationDecisionState = organizationReviewStatus === 'APPROVED'

@@ -2412,6 +2412,40 @@ function assertProjectRequestAttachmentsPublished(request, tenantId) {
   }
 }
 
+async function assertProjectChangeRequestAttachmentsStored(request, tenantId, storageService) {
+  if (!isProjectChangeRequest(request)) return;
+  const projectId = readOptionalText(request?.targetProjectId || request?.approvedProjectId);
+  const payload = resolveProjectRequestPayloadForReview(request);
+  const documents = PROJECT_INFO_DOCUMENT_FIELDS
+    .map((field) => payload?.[field])
+    .filter((document) => readOptionalText(document?.path));
+  if (documents.length === 0) return;
+  try {
+    if (!projectId || typeof storageService?.inspectProjectRegistrationAttachment !== 'function') {
+      throw new Error('Project attachment storage inspection is not configured');
+    }
+    await Promise.all(documents.map(async (document) => {
+      const stored = await storageService.inspectProjectRegistrationAttachment({
+        tenantId,
+        projectId,
+        path: document.path,
+      });
+      if (
+        readOptionalText(stored?.path) !== readOptionalText(document?.path)
+        || readOptionalText(stored?.attachmentId) !== readOptionalText(document?.attachmentId)
+        || Number(stored?.size) !== Number(document?.size)
+        || readOptionalText(stored?.contentType) !== readOptionalText(document?.contentType)
+      ) throw new Error('Project attachment metadata does not match');
+    }));
+  } catch {
+    throw createHttpError(
+      422,
+      '제출 파일을 확인할 수 없습니다. 다시 첨부해 주세요.',
+      'project_attachment_unavailable',
+    );
+  }
+}
+
 function hasCanonicalRegistrationV2Documents(request, payload, tenantId) {
   const projectId = readOptionalText(request?.approvedProjectId || request?.targetProjectId);
   if (!projectId || projectId.includes('/')) return false;
@@ -3877,12 +3911,25 @@ export function mountProjectRoutes(app, {
       requestId: parsed.requestId,
       projectId,
     });
+    if (parsed.reviewStatus === 'APPROVED') {
+      await assertProjectChangeRequestAttachmentsStored(
+        request,
+        tenantId,
+        projectRequestContractStorageService,
+      );
+    }
 
     const projectResult = await mergeProjectAndRequestDocs({
       db,
       projectPath,
       buildProjectPatch: async (currentProject, currentRequest, _nextVersion, tx) => {
         const reviewRequest = currentRequest || request;
+        if (
+          isProjectChangeRequest(reviewRequest)
+          && Number(reviewRequest?.requestVersion) !== Number(request?.requestVersion)
+        ) {
+          throw createHttpError(409, 'Project request changed before approval', 'canonical_version_conflict');
+        }
         const pendingChangeRequest = isProjectChangeRequest(reviewRequest)
           && readOptionalText(reviewRequest?.status) === 'PENDING';
         const previousStatus = pendingChangeRequest

@@ -37,9 +37,11 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(pageSource).not.toContain('isSameMigrationAuditCic');
     expect(documentSource).toContain('canFinalize: boolean');
     expect(documentSource).toContain('지정된 조직장만 승인 또는 반려할 수 있습니다.');
-    expect(documentSource.indexOf('requestPayload?.executiveApproverName')).toBeLessThan(
-      documentSource.indexOf('record.project.executiveApproverName'),
+    expect(documentSource).toContain(
+      'const reviewPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;',
     );
+    expect(documentSource).toContain("const designatedApproverName = reviewPayload?.executiveApproverName || '';");
+    expect(documentSource).not.toContain('record.project.executiveApproverName');
   });
 
   it('exposes an assignee-only portal inbox without broadening the admin review route', () => {
@@ -100,6 +102,8 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(pageSource).toContain('REVIEW_DOCUMENT_FIELDS');
     expect(pageSource).toContain('downloadProjectRequestAttachmentViaBff');
     expect(pageSource).toContain('downloadProjectAttachmentViaBff');
+    expect(pageSource).toContain('const reviewPayload = openRecord.request');
+    expect(pageSource).not.toContain('requestDocument !== undefined');
     expect(pageSource).toContain('onLoadDocumentPreview={loadDocumentPreview}');
     expect(documentSource).toContain('ContractDocumentPreview');
     expect(documentSource).toContain('onLoadDocumentPreview');
@@ -111,7 +115,7 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(documentSource).toContain('PDF 미리보기가 비어 있으면 새 탭에서 원문을 확인하고');
   });
 
-  it('treats the submitted snapshot as authoritative and preserves optional-file reasons', () => {
+  it('does not fill an omitted submitted document from the old project', () => {
     const record = {
       project: {
         contractDocument: { name: 'old-contract.pdf', path: 'projects/old-contract.pdf' },
@@ -125,7 +129,6 @@ describe('ProjectMigrationAuditPage review flow', () => {
       request: {
         requestKind: 'REGISTRATION',
         payload: {
-          contractDocument: { name: 'submitted-contract.pdf', path: 'requests/submitted-contract.pdf' },
           customerBusinessRegistrationDocument: { name: 'customer.pdf', path: 'requests/customer.pdf' },
           quoteDocument: { name: 'quote.pdf', path: 'requests/quote.pdf' },
           proposalDocument: null,
@@ -149,7 +152,7 @@ describe('ProjectMigrationAuditPage review flow', () => {
     const slots = buildMigrationReviewDocumentSlots(record);
 
     expect(slots).toHaveLength(7);
-    expect(slots[0]?.entries[0]?.document.name).toBe('submitted-contract.pdf');
+    expect(slots[0]?.entries).toEqual([]);
     expect(slots[3]?.entries).toEqual([]);
     expect(slots[3]?.note).toBe('고객사가 Word 원본을 제공하지 않음');
     expect(slots[4]?.link).toBe('https://drive.google.com/file/d/proposal/view');

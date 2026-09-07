@@ -2209,28 +2209,37 @@ describe('project route helpers', () => {
 
   it.each([
     {
-      label: 'change request with private draft paths',
+      label: 'change request whose canonical attachment is missing from storage',
       requestId: 'change-p001',
+      expectedStatus: 422,
+      expectedError: 'project_attachment_unavailable',
       projectRequest: {
         requestKind: 'CHANGE',
         targetProjectId: 'p001',
         approvedProjectId: 'p001',
         requestedBy: 'pm-a',
         status: 'PENDING',
+        requestVersion: 1,
         baseProjectVersion: 3,
         targetProjectVersion: 4,
         payload: {
           executiveApproverId: 'head-a',
           contractDocument: {
-            path: 'orgs/mysc/project-registration-drafts/private-change/contract.pdf',
+            attachmentId: 'contract-a',
+            path: 'orgs/mysc/project-registration-documents/p001/contract-a-contract.pdf',
             name: 'contract.pdf',
+            size: 123,
+            contentType: 'application/pdf',
           },
         },
         proposedSnapshot: {
           executiveApproverId: 'head-a',
           contractDocument: {
-            path: 'orgs/mysc/project-registration-drafts/private-change/contract.pdf',
+            attachmentId: 'contract-a',
+            path: 'orgs/mysc/project-registration-documents/p001/contract-a-contract.pdf',
             name: 'contract.pdf',
+            size: 123,
+            contentType: 'application/pdf',
           },
         },
         submittedOutboxId: 'outbox-change-p001',
@@ -2239,6 +2248,8 @@ describe('project route helpers', () => {
     {
       label: 'new registration before canonical attachments are published',
       requestId: 'registration-p001',
+      expectedStatus: 409,
+      expectedError: 'project_attachments_processing',
       projectRequest: {
         requestKind: 'REGISTRATION',
         targetProjectId: 'p001',
@@ -2259,6 +2270,8 @@ describe('project route helpers', () => {
     {
       label: 'markerless v2 registration missing the required quote',
       requestId: 'registration-p001',
+      expectedStatus: 409,
+      expectedError: 'project_attachments_processing',
       projectRequest: {
         requestKind: 'REGISTRATION',
         targetProjectId: 'p001',
@@ -2286,7 +2299,12 @@ describe('project route helpers', () => {
         submittedOutboxId: 'outbox-registration-p001',
       },
     },
-  ])('blocks organization-head approval until attachments are published: $label', async ({ requestId, projectRequest }) => {
+  ])('blocks organization-head approval when submitted attachments are unavailable: $label', async ({
+    requestId,
+    projectRequest,
+    expectedStatus,
+    expectedError,
+  }) => {
     const projectRef = { path: 'orgs/mysc/projects/p001' };
     const requestRef = { path: `orgs/mysc/project_requests/${requestId}` };
     const project = {
@@ -2318,6 +2336,9 @@ describe('project route helpers', () => {
       complete: vi.fn(),
       fail: vi.fn(),
     };
+    const inspectProjectRegistrationAttachment = vi.fn(async () => {
+      throw new Error('object not found');
+    });
     const app = express();
     app.use(express.json());
     app.use((req: any, _res, next) => {
@@ -2335,6 +2356,7 @@ describe('project route helpers', () => {
       db,
       now: () => '2026-07-14T00:00:00.000Z',
       idempotencyService,
+      projectRequestContractStorageService: { inspectProjectRegistrationAttachment },
     } as any);
     app.use((error: any, _req, res, _next) => {
       res.status(error.statusCode || 500).json({ error: error.code || 'internal_error' });
@@ -2345,8 +2367,8 @@ describe('project route helpers', () => {
       reviewStatus: 'APPROVED',
     });
 
-    expect(response.status).toBe(409);
-    expect(response.body.error).toBe('project_attachments_processing');
+    expect(response.status).toBe(expectedStatus);
+    expect(response.body.error).toBe(expectedError);
     expect(tx.set).not.toHaveBeenCalled();
   });
 
