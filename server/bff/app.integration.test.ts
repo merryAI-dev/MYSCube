@@ -558,7 +558,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         managementPlanningReviewStatus: 'PENDING',
       },
       reviewBody: { reviewStatus: 'AGREED', projectCode: 'PRJ-2026-431' },
-      requestRemainsPending: true,
+      expectedRequestStatus: 'APPROVED',
     },
     {
       label: 'organization-head rejection',
@@ -570,7 +570,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         executiveApproverId: actorId,
       },
       reviewBody: { reviewStatus: 'REVISION_REJECTED', reviewComment: '참여율을 확인해 주세요' },
-      requestRemainsPending: false,
+      expectedRequestStatus: 'REJECTED',
     },
     {
       label: 'management-planning rejection',
@@ -582,7 +582,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         managementPlanningReviewStatus: 'PENDING',
       },
       reviewBody: { reviewStatus: 'REVISION_REJECTED', reviewComment: '참여율을 확인해 주세요' },
-      requestRemainsPending: false,
+      expectedRequestStatus: 'APPROVED',
     },
   ])('does not sync portal change participation entries on $label', async ({
     projectId: targetProjectId,
@@ -590,7 +590,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     path,
     projectReviewState,
     reviewBody,
-    requestRemainsPending,
+    expectedRequestStatus,
   }) => {
     const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
     const { oldSyncRef, manualRef, oldSyncEntry, manualEntry } = await seedPortalParticipationChange({
@@ -598,6 +598,9 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       requestId,
       projectReviewState,
     });
+    if (expectedRequestStatus === 'APPROVED') {
+      await db.doc(`orgs/${tenantId}/project_requests/${requestId}`).update({ status: 'APPROVED' });
+    }
 
     const response = await reviewApi
       .post(path)
@@ -611,9 +614,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     expect((await oldSyncRef.get()).data()).toEqual(oldSyncEntry);
     expect((await manualRef.get()).data()).toEqual(manualEntry);
     expect((await db.doc(`orgs/${tenantId}/partEntries/pte-${targetProjectId}-able__2026-01`).get()).exists).toBe(false);
-    if (requestRemainsPending) {
-      expect((await db.doc(`orgs/${tenantId}/project_requests/${requestId}`).get()).data()?.status).toBe('PENDING');
-    }
+    expect((await db.doc(`orgs/${tenantId}/project_requests/${requestId}`).get()).data()?.status).toBe(expectedRequestStatus);
   });
 
   it('requires a rejection reason for executive rejection and discard', async () => {
