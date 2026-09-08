@@ -81,9 +81,34 @@ const FIELD_LABELS: Record<string, string> = {
   registeredByName: '등록자',
   managerId: 'PM 계정',
   executiveApproverId: '최종 결재자 계정',
+  executiveApproverEmail: '최종 결재자 이메일',
+  registeredById: '등록자 계정',
+  registeredByEmail: '등록자 이메일',
+  participationSheetLink: '참여율 시트 링크',
+  contractEndUndecided: '종료 기간 없음',
+  staffing: '참여인력 구성',
+  budgetCurrentYear: '당해연도 예산',
+  taxInvoiceAmount: '세금계산서 발행액',
+  profitRate: '수익률',
+  profitAmount: '수익금',
+  year: '연도',
+  confirmed: '확정 여부',
+  isSettled: '정산 완료',
+  memberName: '성명',
+  memberNickname: '닉네임',
+  role: '역할',
+  participationRate: '참여율',
+  monthlyRates: '월별 참여율',
+  laborAllocationStartMonth: '참여 시작월',
+  laborAllocationEndMonth: '참여 종료월',
+  personId: '구성원',
+  isDocumentOnly: '문서상 인력',
+  identityInput: '구성원 입력',
+  inputMode: '입력 방식',
+  finalReportDocument: '최종 보고서',
 };
 
-function fieldLabel(field: string) {
+export function fieldLabel(field: string) {
   return FIELD_LABELS[field] || field;
 }
 
@@ -96,7 +121,7 @@ function text(value: unknown) {
 }
 
 // The dialog shows what the person sees on the form, never the stored shape.
-function displayValue(value: unknown): string {
+export function displayValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '입력하지 않음';
   if (typeof value === 'boolean') return value ? '예' : '아니오';
   if (typeof value === 'number') return value.toLocaleString('ko-KR');
@@ -104,22 +129,7 @@ function displayValue(value: unknown): string {
 
   if (Array.isArray(value)) {
     if (value.length === 0) return '없음';
-    const people = value
-      .map((entry) => {
-        if (!isRecord(entry)) return '';
-        const name = text(entry.memberName) || text(entry.name);
-        if (!name) return '';
-        const nickname = text(entry.memberNickname);
-        const role = text(entry.role);
-        return `${name}${nickname ? `(${nickname})` : ''}${role ? ` · ${role}` : ''}`;
-      })
-      .filter(Boolean);
-    if (people.length === value.length) return people.join(', ');
-    const years = value
-      .map((entry) => (isRecord(entry) && entry.year ? String(entry.year) : ''))
-      .filter(Boolean);
-    if (years.length === value.length) return `${years.join(', ')}년`;
-    return `${value.length}개 항목`;
+    return value.map(displayValue).join('\n');
   }
 
   if (isRecord(value)) {
@@ -140,8 +150,7 @@ function displayValue(value: unknown): string {
         return `${MONEY_LABELS[key]} ${shown}`;
       });
     if (parts.length > 0) return parts.join(' · ');
-    const filled = Object.values(value).filter((entry) => entry !== null && entry !== undefined && entry !== '').length;
-    return filled === 0 ? '입력하지 않음' : `${filled}개 항목 입력됨`;
+    return Object.entries(value).map(([key, entry]) => `${fieldLabel(key)}: ${displayValue(entry)}`).join(' · ') || '입력하지 않음';
   }
   return String(value);
 }

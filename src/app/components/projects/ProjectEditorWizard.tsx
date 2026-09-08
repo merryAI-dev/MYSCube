@@ -1,4 +1,7 @@
 import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
+import { recoverProjectEditorDraft, projectEditorRecoveryDifferences } from '../../platform/project-editor-recovery';
+import { fieldLabel, displayValue } from '../portal/ProjectInfoRebaseDialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../ui/dialog';
 import {
   ArrowLeft,
   ArrowRight,
@@ -21,7 +24,7 @@ import {
   CircleCheck,
   Clock3,
 } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode, type SetStateAction } from 'react';
 import { useAuth } from '../../data/auth-store';
 import { useFirebase } from '../../lib/firebase-context';
 import { PlatformApiError } from '../../platform/api-client';
@@ -206,6 +209,7 @@ interface ProjectEditorWizardProps {
   showCheckoutEntry?: boolean;
   actions: ProjectEditorAction[];
   busyActionId?: string | null;
+  completed?: boolean;
   readOnly?: boolean;
   trustedParticipationSheetDraft?: ProjectEditorDraft;
   onContractFileUpload?: (file: File) => Promise<{
@@ -229,7 +233,11 @@ interface ProjectEditorWizardProps {
   autosave?: {
     key: string;
     disabled?: boolean;
+    ready?: boolean;
+    conflictCount?: number;
     onSave?: (draft: ProjectEditorDraft, stepIndex: number) => void | Promise<void>;
+    onLoadLatest?: () => Promise<ProjectEditorDraft>;
+    onResume?: () => void;
     onDiscard?: () => void | Promise<void>;
   };
   onCancel?: () => void | Promise<void>;
@@ -312,7 +320,7 @@ const REGISTRATION_DOCUMENT_SLOTS: RegistrationDocumentSlot[] = [
     kinds: ['rfp_request_evidence'],
   },
 ];
-type AutosaveState = 'idle' | 'saving' | 'saved' | 'error';
+type AutosaveState = 'idle' | 'saving' | 'saved' | 'local' | 'error';
 type StoredProjectEditorDraft = {
   schemaVersion: number;
   draftKey: string;
@@ -406,8 +414,8 @@ function getProjectEditorAutosaveStorageKey(key: string) {
 }
 
 function readStoredProjectEditorDraft(key: string): StoredProjectEditorDraft | null {
-  if (typeof localStorage === 'undefined') return null;
   try {
+    if (typeof localStorage === 'undefined') return null;
     const parsed = JSON.parse(localStorage.getItem(getProjectEditorAutosaveStorageKey(key)) || 'null') as StoredProjectEditorDraft | null;
     if (!parsed || parsed.schemaVersion !== PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION || !parsed.draft) return null;
     return parsed;
@@ -417,13 +425,18 @@ function readStoredProjectEditorDraft(key: string): StoredProjectEditorDraft | n
 }
 
 function writeStoredProjectEditorDraft(key: string, value: StoredProjectEditorDraft) {
-  if (typeof localStorage === 'undefined') return;
+  if (typeof localStorage === 'undefined') throw new Error('이 기기에 작성 내용을 보관할 수 없습니다.');
   localStorage.setItem(getProjectEditorAutosaveStorageKey(key), JSON.stringify(value));
 }
 
 function removeStoredProjectEditorDraft(key: string) {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.removeItem(getProjectEditorAutosaveStorageKey(key));
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(getProjectEditorAutosaveStorageKey(key));
+    return true;
+  } catch {
+    toast.warning('이 기기에 보관된 사본을 정리하지 못했습니다.');
+    return false;
+  }
 }
 
 function normalizeRestoredProjectEditorDraft(draft: ProjectEditorDraft, mode: ProjectEditorMode) {
@@ -590,6 +603,7 @@ export function ProjectEditorWizard({
   showCheckoutEntry = false,
   actions,
   busyActionId,
+  completed = false,
   readOnly = false,
   trustedParticipationSheetDraft,
   onContractFileUpload,
@@ -618,8 +632,8 @@ export function ProjectEditorWizard({
   const [teamSyncYear, setTeamSyncYear] = useState('');
   // 시트를 공유해야 할 상대. 오류가 난 뒤에 알려주면 늦다 - 링크를 넣는 그 자리에 있어야 한다.
   const [sheetSystemAccount, setSheetSystemAccount] = useState('');
-  const [stepIndex, setStepIndex] = useState(0);
-  const [draft, setDraft] = useState<ProjectEditorDraft>(() => createProjectEditorWizardDraft(initialDraft));
+  const [stepIndex, setStepIndexState] = useState(0);
+  const [draft, setDraftState] = useState<ProjectEditorDraft>(() => createProjectEditorWizardDraft(initialDraft));
   const [documentUploadState, setDocumentUploadState] = useState<Record<ProjectRequestDocumentKind, ContractUploadState>>({
     contract: 'idle',
     customer_business_registration: 'idle',
@@ -649,6 +663,14 @@ export function ProjectEditorWizard({
     final_report: '',
   });
   const [restoreCandidate, setRestoreCandidate] = useState<StoredProjectEditorDraft | null>(null);
+  const [comparison, setComparison] = useState<{ mine: ProjectEditorDraft; server: ProjectEditorDraft; stepIndex: number } | null>(null);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparisonBusy, setComparisonBusy] = useState(false);
+  const comparisonLoadingRef = useRef(false);
+  const handledConflictRef = useRef(0);
+  const writesPausedRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const finishedRef = useRef(false);
   const [autosaveState, setAutosaveState] = useState<AutosaveState>('idle');
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [exitIntent, setExitIntent] = useState<'cancel' | 'route' | null>(null);
@@ -679,6 +701,14 @@ export function ProjectEditorWizard({
   const exitInFlightRef = useRef(false);
   const leaveApprovedRef = useRef(false);
   const draftRef = useRef(draft);
+  const setDraft = useCallback((next: SetStateAction<ProjectEditorDraft>) => {
+    if (submitInFlightRef.current || comparisonLoadingRef.current || finishedRef.current) return;
+    setDraftState(next);
+  }, []);
+  const setStepIndex = useCallback((next: SetStateAction<number>) => {
+    if (submitInFlightRef.current || comparisonLoadingRef.current || finishedRef.current) return;
+    setStepIndexState(next);
+  }, []);
   const autosaveErrorRef = useRef<string>('');
   const lastPersistedFingerprintRef = useRef(JSON.stringify(createProjectEditorDraft(initialDraft)));
   const lastResetKeyRef = useRef<string | null>(null);
@@ -718,13 +748,21 @@ export function ProjectEditorWizard({
   const hasPendingRetryFile = [...registrationDocumentKinds, ...checkoutDocumentKinds]
     .some((kind) => Boolean(retryDocumentFileRef.current[kind]));
   const hasUnsavedInput = currentDraftFingerprint !== lastPersistedFingerprintRef.current;
-  const shouldBlockNavigation = hasUnsavedInput || uploadInProgress || hasPendingRetryFile;
+  const shouldBlockNavigation = !completed && (hasUnsavedInput || uploadInProgress || hasPendingRetryFile);
   const shouldConfirmExit = shouldBlockNavigation || (Boolean(onLeave) && !readOnly);
   const blocker = useBlocker(shouldConfirmExit);
 
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
+  useEffect(() => {
+    if (!completed) return;
+    finishedRef.current = true;
+    if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
+    lastPersistedFingerprintRef.current = JSON.stringify(createProjectEditorDraft(draftRef.current));
+    setAutosaveState('idle');
+  }, [completed, autosave?.key]);
 
   useEffect(() => {
     const resetKey = `${draftKey}::${autosave?.key || ''}`;
@@ -776,11 +814,11 @@ export function ProjectEditorWizard({
       final_settlement_report: '',
       final_report: '',
     });
-    setAutosaveState('idle');
+    setAutosaveState(!isNewEditorSession && autosave?.onSave && autosave.ready !== false ? 'saved' : 'idle');
     setLastAutosavedAt('');
     setPreloadWarningVisible(false);
-    setRestoreCandidate(autosave?.key ? readStoredProjectEditorDraft(autosave.key) : null);
-  }, [autosave?.key, draftKey, initialDraft, initialDraftFingerprint]);
+    if (isNewEditorSession) setRestoreCandidate(autosave?.key ? readStoredProjectEditorDraft(autosave.key) : null);
+  }, [autosave?.key, autosave?.onSave, autosave?.ready, draftKey, initialDraft, initialDraftFingerprint]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -789,17 +827,62 @@ export function ProjectEditorWizard({
     return () => window.removeEventListener('mysc:preloadError', handlePreloadError);
   }, []);
 
+  const writeLocalBackup = useCallback((nextDraft: ProjectEditorDraft, nextStepIndex: number) => {
+    if (!autosave?.key || finishedRef.current) return false;
+    try {
+      const now = new Date().toISOString();
+      writeStoredProjectEditorDraft(autosave.key, {
+        schemaVersion: PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION, draftKey,
+        draft: createProjectEditorDraft(nextDraft), stepIndex: nextStepIndex, updatedAt: now,
+      });
+      setLastAutosavedAt(now);
+      setAutosaveState('local');
+      return true;
+    } catch (error) {
+      autosaveErrorRef.current = error instanceof Error ? error.message : String(error);
+      setAutosaveState('error');
+      return false;
+    }
+  }, [autosave?.key, draftKey]);
+
+  const openComparison = useCallback(async (mine: ProjectEditorDraft, nextStepIndex: number) => {
+    if (comparisonLoadingRef.current) return;
+    comparisonLoadingRef.current = true;
+    writesPausedRef.current = true;
+    setComparisonBusy(true);
+    try {
+      const server = autosave?.onLoadLatest ? await autosave.onLoadLatest() : initialDraft;
+      setComparison({ mine, server, stepIndex: nextStepIndex });
+      setComparisonOpen(true);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '최근 임시저장을 불러오지 못했습니다.');
+    } finally {
+      comparisonLoadingRef.current = false;
+      setComparisonBusy(false);
+    }
+  }, [autosave?.onLoadLatest, initialDraft]);
+
+  useEffect(() => {
+    const count = autosave?.conflictCount || 0;
+    if (count <= handledConflictRef.current) return;
+    handledConflictRef.current = count;
+    void openComparison(draftRef.current, stepIndex);
+  }, [autosave?.conflictCount, openComparison, stepIndex]);
+
   const persistAutosaveSnapshot = useCallback(async (
     nextDraft: ProjectEditorDraft,
     nextStepIndex: number,
+    forSubmit = false,
   ) => {
+    if (finishedRef.current || restoreCandidate || (submitInFlightRef.current && !forSubmit)) return false;
+    const localSaved = writeLocalBackup(nextDraft, nextStepIndex);
     // 재시도 대기 여부는 렌더 시점 값이 아니라 ref 를 즉석에서 본다 - 나가기 직전에
     // 대기 파일을 버린 경우에도 임시저장이 진행돼야 한다.
     const pendingRetryNow = [...registrationDocumentKinds, ...checkoutDocumentKinds]
       .some((kind) => Boolean(retryDocumentFileRef.current[kind]));
-    if (uploadInProgress || pendingRetryNow) return false;
-    if (readOnly || !autosave?.key || autosave.disabled) return false;
-    if (mode === 'portal-register' && !hasRequiredRegistrationDocuments) return false;
+    if (uploadInProgress || pendingRetryNow || readOnly || !autosave?.key || autosave.disabled || writesPausedRef.current
+      || (mode === 'portal-register' && !hasRequiredRegistrationDocuments)) return forSubmit ? false : localSaved ? 'local' : false;
+    if (!autosave.onSave) return localSaved ? 'local' : false;
     const now = new Date().toISOString();
     const storedDraft: StoredProjectEditorDraft = {
       schemaVersion: PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION,
@@ -810,13 +893,15 @@ export function ProjectEditorWizard({
     };
     setAutosaveState('saving');
     try {
-      writeStoredProjectEditorDraft(autosave.key, storedDraft);
       await autosave.onSave?.(storedDraft.draft, nextStepIndex);
-      lastPersistedFingerprintRef.current = JSON.stringify(storedDraft.draft);
+      const savedFingerprint = JSON.stringify(storedDraft.draft);
+      lastPersistedFingerprintRef.current = savedFingerprint;
       autosaveErrorRef.current = '';
-      setLastAutosavedAt(now);
-      setAutosaveState('saved');
-      return true;
+      if (JSON.stringify(createProjectEditorDraft(draftRef.current)) === savedFingerprint) {
+        setLastAutosavedAt(now);
+        setAutosaveState('saved');
+      }
+      return 'server';
     } catch (error) {
       console.error('[ProjectEditorWizard] autosave failed:', error);
       // 서버가 적어 준 원인을 실패 토스트가 보여줄 수 있게 남겨 둔다 - "잠시 후 다시"만으로는
@@ -828,7 +913,7 @@ export function ProjectEditorWizard({
       setAutosaveState('error');
       return false;
     }
-  }, [autosave?.disabled, autosave?.key, autosave?.onSave, draftKey, hasPendingRetryFile, hasRequiredRegistrationDocuments, mode, readOnly, uploadInProgress]);
+  }, [autosave?.disabled, autosave?.key, autosave?.onSave, draftKey, hasPendingRetryFile, hasRequiredRegistrationDocuments, mode, readOnly, uploadInProgress, restoreCandidate, writeLocalBackup]);
 
   const saveDraftAndRelease = useCallback(async () => {
     if (uploadInProgress) {
@@ -841,7 +926,7 @@ export function ProjectEditorWizard({
       retryDocumentFileRef.current = {};
       toast.info('업로드에 실패했던 첨부파일은 저장되지 않았습니다. 다음에 다시 첨부해 주세요.');
     }
-    if (hasUnsavedInput && autosave?.key && !autosave.disabled && !readOnly) {
+    if (hasUnsavedInput && autosave?.key) {
       if (!await persistAutosaveSnapshot(draft, stepIndex)) {
         toast.error(`임시저장에 실패해 수정 세션을 종료하지 않았습니다.${autosaveErrorRef.current ? ` (${autosaveErrorRef.current})` : ''}`);
         return false;
@@ -849,6 +934,7 @@ export function ProjectEditorWizard({
     }
     try {
       await onLeave?.();
+      finishedRef.current = true;
       return true;
     } catch (error) {
       console.error('[ProjectEditorWizard] edit session release failed:', error);
@@ -864,6 +950,7 @@ export function ProjectEditorWizard({
     }
     try {
       await onLeave?.();
+      finishedRef.current = true;
       if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
       return true;
     } catch (error) {
@@ -894,7 +981,7 @@ export function ProjectEditorWizard({
   }, [blocker, exitIntent, onCancel, releaseWithoutSaving, saveDraftAndRelease]);
 
   const requestCancel = () => {
-    if (exitInFlightRef.current) return;
+    if (exitInFlightRef.current || submitInFlightRef.current) return;
     if (!shouldConfirmExit) {
       void onCancel?.();
       return;
@@ -925,7 +1012,10 @@ export function ProjectEditorWizard({
   }, [blocker]);
 
   useEffect(() => {
-    if (readOnly || !autosave?.key || autosave.disabled || restoreCandidate || uploadInProgress || hasPendingRetryFile) return undefined;
+    if (!autosave?.key || restoreCandidate || autosave.ready === false || submitting || finishedRef.current) return undefined;
+    if (!hasUnsavedInput) return undefined;
+    writeLocalBackup(draft, stepIndex);
+    if (readOnly || autosave.disabled || writesPausedRef.current || uploadInProgress || hasPendingRetryFile) return undefined;
     const isInitialDraft = stepIndex === 0 && JSON.stringify(createProjectEditorDraft(draft)) === initialDraftFingerprint;
     if (isInitialDraft) return undefined;
 
@@ -933,19 +1023,15 @@ export function ProjectEditorWizard({
       void persistAutosaveSnapshot(draft, stepIndex);
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [autosave?.disabled, autosave?.key, draft, hasPendingRetryFile, initialDraftFingerprint, persistAutosaveSnapshot, readOnly, restoreCandidate, stepIndex, uploadInProgress]);
+  }, [autosave?.disabled, autosave?.key, autosave?.ready, draft, hasPendingRetryFile, initialDraftFingerprint, persistAutosaveSnapshot, readOnly, restoreCandidate, stepIndex, uploadInProgress, hasUnsavedInput, submitting, writeLocalBackup]);
 
   const restoreLocalDraft = () => {
-    if (!restoreCandidate) return;
-    setDraft(normalizeRestoredProjectEditorDraft(restoreCandidate.draft, mode));
-    setStepIndex(Math.max(0, Math.min(STEPS.length - 1, restoreCandidate.stepIndex || 0)));
-    setLastAutosavedAt(restoreCandidate.updatedAt);
-    setAutosaveState('saved');
-    setRestoreCandidate(null);
+    if (!restoreCandidate || autosave?.ready === false || comparisonBusy) return;
+    void openComparison(restoreCandidate.draft, restoreCandidate.stepIndex);
   };
 
   const discardLocalDraft = () => {
-    if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
+    if (autosave?.key && !removeStoredProjectEditorDraft(autosave.key)) return;
     setRestoreCandidate(null);
     void autosave?.onDiscard?.();
   };
@@ -956,23 +1042,27 @@ export function ProjectEditorWizard({
       return;
     }
     const saved = await persistAutosaveSnapshot(draft, stepIndex);
-    if (saved) toast.success('임시저장되었습니다.');
+    if (saved === 'local') toast.info('이 기기에 보관됨');
+    else if (saved) toast.success('임시저장되었습니다.');
     else toast.error(`임시저장에 실패했습니다.${autosaveErrorRef.current ? ` (${autosaveErrorRef.current})` : ' 잠시 후 다시 시도해 주세요.'}`);
   };
 
   const handleActionSubmit = async (actionId: string) => {
-    if (submitInFlightRef.current) return;
+    if (submitInFlightRef.current || finishedRef.current || writesPausedRef.current || restoreCandidate) return;
     if (uploadInProgress || hasPendingRetryFile) {
       toast.error('첨부파일 처리를 완료한 뒤 최종 저장해 주세요.');
       return;
     }
     submitInFlightRef.current = true;
+    setSubmitting(true);
+    const snapshot = createProjectEditorDraft(draftRef.current);
     try {
-      if (autosave?.key && !await persistAutosaveSnapshot(draft, stepIndex)) {
+      if (autosave?.key && !await persistAutosaveSnapshot(snapshot, stepIndex, true)) {
         throw new Error('최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다.');
       }
-      await onSubmit(createProjectEditorDraft(draft), actionId);
-      lastPersistedFingerprintRef.current = JSON.stringify(createProjectEditorDraft(draft));
+      await onSubmit(snapshot, actionId);
+      finishedRef.current = true;
+      lastPersistedFingerprintRef.current = JSON.stringify(snapshot);
       if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
       setAutosaveState('idle');
       setLastAutosavedAt('');
@@ -981,6 +1071,7 @@ export function ProjectEditorWizard({
       toast.error(error instanceof Error ? error.message : '저장에 실패했습니다.');
     } finally {
       submitInFlightRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -3493,7 +3584,12 @@ export function ProjectEditorWizard({
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-5">
+    <div className="mx-auto w-full max-w-6xl space-y-5"
+      onClickCapture={(event) => { if (submitInFlightRef.current) { event.preventDefault(); event.stopPropagation(); } }}
+      onChangeCapture={(event) => { if (submitInFlightRef.current) event.stopPropagation(); }}
+      onKeyDownCapture={(event) => { if (submitInFlightRef.current) { event.preventDefault(); event.stopPropagation(); } }}
+    >
+      <fieldset disabled={submitting || comparisonBusy || Boolean(busyActionId)} className="contents">
       {embeddedInShell ? (
         onCancel ? (
           <div className="flex justify-end">
@@ -3573,13 +3669,59 @@ export function ProjectEditorWizard({
               <Button type="button" variant="outline" size="sm" onClick={discardLocalDraft}>
                 버리기
               </Button>
-              <Button type="button" size="sm" onClick={restoreLocalDraft}>
+              <Button type="button" size="sm" onClick={restoreLocalDraft} disabled={autosave?.ready === false || comparisonBusy}>
                 임시저장 불러오기
               </Button>
             </div>
           </div>
         </div>
       ) : null}
+
+      {writesPausedRef.current && !restoreCandidate ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm">
+          최근 임시저장과 비교할 때까지 서버 저장을 중단했습니다. 내 입력은 이 화면에 남아 있습니다.
+          <Button type="button" variant="outline" className="ml-3" disabled={comparisonBusy}
+            onClick={() => void openComparison(draftRef.current, stepIndex)}>
+            입력 비교하기
+          </Button>
+        </div>
+      ) : null}
+      <Dialog open={comparisonOpen} onOpenChange={setComparisonOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>내 입력과 최근 임시저장 비교</DialogTitle>
+            <DialogDescription>계속 사용할 입력 전체를 선택해 주세요. 첨부파일은 최근 서버 임시저장을 유지합니다. 닫으면 서버 저장은 계속 중단됩니다.</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[50vh] space-y-3 overflow-y-auto">
+            {comparison ? projectEditorRecoveryDifferences(comparison.mine, comparison.server).map((entry) => (
+              <div key={entry.field} className="rounded border p-3 text-sm">
+                <p className="font-medium">{fieldLabel(entry.field)}</p>
+                <p className="whitespace-pre-wrap">내 입력 · {displayValue(entry.mine)}</p>
+                <p className="whitespace-pre-wrap">최근 임시저장 · {displayValue(entry.theirs)}</p>
+              </div>
+            )) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setComparisonOpen(false)}>닫기</Button>
+            {(['server', 'mine'] as const).map((source) => (
+              <Button key={source} onClick={() => {
+                if (!comparison) return;
+                const next = normalizeRestoredProjectEditorDraft(recoverProjectEditorDraft(comparison[source], comparison.server), mode);
+                draftRef.current = next;
+                setDraft(next);
+                setStepIndex(Math.max(0, Math.min(STEPS.length - 1, comparison.stepIndex || 0)));
+                lastPersistedFingerprintRef.current = JSON.stringify(createProjectEditorDraft(comparison.server));
+                writeLocalBackup(next, comparison.stepIndex);
+                setRestoreCandidate(null);
+                setComparisonOpen(false);
+                setComparison(null);
+                writesPausedRef.current = false;
+                autosave?.onResume?.();
+              }}>{source === 'mine' ? '내 입력으로 계속' : '최근 임시저장으로 계속'}</Button>
+            ))}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="space-y-4">
       <Card className="border-slate-200/80 shadow-sm">
@@ -3694,7 +3836,9 @@ export function ProjectEditorWizard({
                   {autosaveState === 'saving'
                     ? '임시저장 중'
                     : autosaveState === 'saved'
-                      ? `임시저장됨${lastAutosavedAt ? ` ${formatAutosaveTime(lastAutosavedAt)}` : ''}`
+                      ? (hasUnsavedInput ? '이 기기에 보관됨' : `임시저장됨${lastAutosavedAt ? ` ${formatAutosaveTime(lastAutosavedAt)}` : ''}`)
+                      : autosaveState === 'local'
+                        ? '이 기기에 보관됨'
                       : autosaveState === 'error'
                         ? '임시저장 실패'
                         : '임시저장 대기'}
@@ -3798,6 +3942,7 @@ export function ProjectEditorWizard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </fieldset>
     </div>
   );
 }

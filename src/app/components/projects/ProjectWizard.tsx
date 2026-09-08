@@ -145,7 +145,7 @@ export function ProjectWizard({ editProject, initialPhase = 'PROSPECT' }: Projec
       }
     } catch (error) {
       console.error('[ProjectWizard] save failed:', error);
-      toast.error(error instanceof Error ? error.message : '프로젝트 저장에 실패했습니다.');
+      throw error;
     } finally {
       setBusyActionId(null);
     }
@@ -231,7 +231,7 @@ export function ProjectWizard({ editProject, initialPhase = 'PROSPECT' }: Projec
       contractAnalysisMergeMode="none"
       canRemoveContractDocument
       onCancel={() => navigate(editProject ? `/projects/${editProject.id}` : '/projects')}
-      onSubmit={(draft, actionId) => void handleSubmit(draft, actionId)}
+      onSubmit={handleSubmit}
     />
   );
 }

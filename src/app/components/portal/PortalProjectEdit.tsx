@@ -242,6 +242,11 @@ function ProjectInfoEditor({
   const revisionRef = useRef(0);
   const recordLoadedRef = useRef(false);
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const writesPausedRef = useRef(false);
+  const finishedRef = useRef(false);
+  const mutationEpochRef = useRef(0);
+  const latestRecordRef = useRef<ProjectInfoDraft | null>(null);
+  const [draftConflictCount, setDraftConflictCount] = useState(0);
   const leaseClient = useMemo(() => createEditLeaseClient({
     tenantId: orgId,
     actor,
@@ -332,7 +337,12 @@ function ProjectInfoEditor({
   }, [draftClient, lease.checkStatus, releaseLeaseAfterDraftOpenFailure]);
 
   const enqueueMutation = useCallback(<T,>(operation: () => Promise<T>): Promise<T> => {
-    const run = mutationQueueRef.current.then(operation, operation);
+    const epoch = mutationEpochRef.current;
+    const checkedOperation = () => {
+      if (epoch !== mutationEpochRef.current) throw new Error('수정 요청 회수 전 입력은 다시 확인한 뒤 저장해 주세요.');
+      return operation();
+    };
+    const run = mutationQueueRef.current.then(checkedOperation, checkedOperation);
     mutationQueueRef.current = run.then(() => undefined, () => undefined);
     return run;
   }, []);
@@ -340,11 +350,16 @@ function ProjectInfoEditor({
   const withOwnership = useCallback(async <T,>(
     operation: (ownership: { leaseId: string; fence: number }) => Promise<T>,
   ) => {
+    if (finishedRef.current || writesPausedRef.current) throw new Error('최근 임시저장과 비교한 뒤 다시 저장해 주세요.');
     const ownership = await lease.checkBeforeSave();
     if (!ownership) throw new Error('수정 세션이 종료되었거나 다른 세션이 사용 중입니다.');
     try {
       return await operation(ownership);
     } catch (error) {
+      if (error instanceof PlatformApiError && error.status === 409 && error.code === 'draft_version_conflict') {
+        writesPausedRef.current = true;
+        setDraftConflictCount((count) => count + 1);
+      }
       await lease.checkStatus();
       throw error;
     }
@@ -375,6 +390,15 @@ function ProjectInfoEditor({
       setRecord(saved.draft);
     })
   )), [draftClient, enqueueMutation, record, withOwnership]);
+
+  const loadLatestDraft = useCallback(async () => {
+    writesPausedRef.current = true;
+    await mutationQueueRef.current;
+    const latest = await draftClient.get();
+    revisionRef.current = latest.draft.draftRevision;
+    latestRecordRef.current = latest.draft;
+    return editorDraftFromPrivate(latest.draft);
+  }, [draftClient]);
 
   const uploadDocument = useCallback((kind: ProjectRequestDocumentKind, file: File) => enqueueMutation(() => (
     withOwnership(async (ownership) => {
@@ -429,6 +453,7 @@ function ProjectInfoEditor({
       resubmit: shouldResubmit,
       ...(shouldResubmit && resubmitComment.trim() ? { reviewComment: resubmitComment.trim() } : {}),
     })));
+    finishedRef.current = true;
     await lease.checkStatus();
     if (shouldResubmit) setResubmitComment('');
     rebasedVersionRef.current = 0;
@@ -476,10 +501,12 @@ function ProjectInfoEditor({
   };
 
   const withdrawRequest = async () => {
+    mutationEpochRef.current += 1;
     setWithdrawBusy(true);
     try {
       const result = await enqueueMutation(() => withOwnership((ownership) => draftClient.withdraw(ownership)));
       if (result.kind === 'REGISTRATION') {
+        finishedRef.current = true;
         // 신규 등록 건은 등록 임시저장으로 복원된다. 이 수정 화면이 아니라 등록 위저드에서 이어간다.
         setWithdrawOpen(false);
         toast.success('등록 요청을 회수했습니다. 등록 임시저장에서 이어서 작성할 수 있습니다.');
@@ -648,12 +675,24 @@ function ProjectInfoEditor({
         settlementSystemOptions={settlementSystemOptions}
         topSlot={topSlot}
         showCheckoutEntry
-        readOnly={!editorCanEdit}
+        readOnly={!editorCanEdit || withdrawBusy || rebaseBusy || rebaseState !== null}
         trustedParticipationSheetDraft={canonicalDraft}
         canRemoveContractDocument={Boolean(record?.attachmentRefs.some((attachment) => attachment.documentKind === 'contract'))}
         canRemoveProjectDocuments
         onRemoveProjectDocument={removeDocument}
-        autosave={record && !submitted ? { key: autosaveKey, disabled: !editorCanEdit, onSave: persistDraft } : undefined}
+        completed={submitted}
+        autosave={{
+          key: autosaveKey,
+          ready: record !== null,
+          disabled: submitted || !editorCanEdit || withdrawBusy || rebaseBusy || rebaseState !== null,
+          conflictCount: draftConflictCount,
+          onSave: persistDraft,
+          onLoadLatest: loadLatestDraft,
+          onResume: () => {
+            if (latestRecordRef.current) setRecord(latestRecordRef.current);
+            writesPausedRef.current = false;
+          },
+        }}
         actions={submitted ? [] : (
           canResubmit
             ? [{ id: 'resubmit', label: '수정 후 다시 제출', icon: SendHorizontal, variant: 'secondary' as const }]
@@ -669,7 +708,12 @@ function ProjectInfoEditor({
         }}
         onProjectDocumentFileUpload={({ kind, file }) => uploadDocument(kind, file)}
         onLeave={async () => {
-          if (!await lease.release()) throw new Error('edit lease release failed');
+          finishedRef.current = true;
+          await mutationQueueRef.current;
+          if (!await lease.release()) {
+            finishedRef.current = false;
+            throw new Error('edit lease release failed');
+          }
         }}
         onCancel={() => navigate('/portal/project-select')}
         onSubmit={handleSubmit}
