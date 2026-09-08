@@ -32,6 +32,7 @@ import {
 import {
   buildProjectInfoChangeSubmission,
   buildProjectInfoDraftSeed,
+  registrationPrivateDocuments,
 } from './projects.mjs';
 import {
   PROJECT_INFO_DOCUMENT_KINDS,
@@ -292,6 +293,16 @@ function stableValue(value) {
 
 function sameFieldValue(left, right) {
   return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right));
+}
+
+function sourceConflict() {
+  return createHttpError(409, '최근 제출 또는 확정 내용이 변경되었습니다. 다시 비교해 주세요.', 'draft_source_conflict');
+}
+
+function assertDraftSource(draft, project, request) {
+  if (draft.baseSnapshot == null || !sameFieldValue(draft.baseSnapshot, buildProjectInfoDraftSeed(project, request))) {
+    throw sourceConflict();
+  }
 }
 
 // Three-way merge between the canonical values the draft started from (base),
@@ -999,6 +1010,7 @@ export function createProjectInfoDraftService({
         body: {
           actorId: current.actorId, sessionId: current.sessionId, leaseId: current.leaseId,
           fence: current.fence, expectedDraftRevision, resolutions,
+          sourceFingerprint: input?.sourceFingerprint ?? null,
         },
       });
       return db.runTransaction(async (tx) => {
@@ -1016,15 +1028,29 @@ export function createProjectInfoDraftService({
         await assertLease(tx, current, nowDate);
         const actualVersion = Number.isInteger(project.version) && project.version > 0 ? project.version : 1;
         const theirs = buildProjectInfoDraftSeed(project, previousRequest);
+        const sourceFingerprint = sha256(JSON.stringify(stableValue({
+          canonicalVersion: actualVersion,
+          requestId: requestSnap.id,
+          requestExists: requestSnap.exists,
+          requestStatus: previousRequest.status,
+          requestVersion: previousRequest.requestVersion,
+          theirs,
+        })));
+        if (resolutions && (!/^[a-f0-9]{64}$/.test(input?.sourceFingerprint || '') || input.sourceFingerprint !== sourceFingerprint)) {
+          throw sourceConflict();
+        }
+        const privateDocuments = Object.fromEntries(Object.entries(registrationPrivateDocuments(draftAttachments(draft)))
+          .filter(([, document]) => document !== null));
         const { merged, autoMerged, conflicts } = mergeProjectInfoDraftFields({
           base: draft.baseSnapshot ?? null,
-          mine: draft.payload,
+          mine: { ...draft.payload, ...privateDocuments },
           theirs,
         });
         // Without resolutions this is a preview: report the merge outcome and write nothing.
         if (!resolutions) {
           const body = {
             rebased: false,
+            sourceFingerprint,
             baseCanonicalVersion: Number.isInteger(draft.baseCanonicalVersion) ? draft.baseCanonicalVersion : 1,
             canonicalVersion: actualVersion,
             autoMerged,
@@ -1046,11 +1072,21 @@ export function createProjectInfoDraftService({
         conflicts.forEach((conflict) => {
           merged[conflict.field] = resolutions[conflict.field] === 'THEIRS' ? conflict.theirs : conflict.mine;
         });
+        const inherited = resumableDraftAttachments(current.tenantId, current.projectId, current.draftDocumentId, previousRequest);
+        const attachmentRefs = Object.entries(DOCUMENT_FIELD_BY_KIND).flatMap(([kind, field]) => {
+          const path = readOptionalText(merged[field]?.path);
+          if (!path || path === readOptionalText(project[field]?.path)) return [];
+          const selected = [...draftAttachments(draft), ...inherited].findLast(attachment => (
+            attachment.documentKind === kind && readOptionalText(attachment.path) === path
+          ));
+          return selected ? [selected] : [];
+        });
         // `merged` and `theirs` are computed rather than literal, so an absent optional
         // field can arrive here as undefined, which Firestore rejects on write.
         const nextDraft = stripUndefinedDeep({
           ...draft,
           payload: merged,
+          attachmentRefs,
           baseSnapshot: theirs,
           baseCanonicalVersion: actualVersion,
           draftRevision: expectedDraftRevision + 1,
@@ -1071,6 +1107,7 @@ export function createProjectInfoDraftService({
         tx.set(draftRef, nextDraft);
         const body = {
           rebased: true,
+          sourceFingerprint,
           draft: draftContract(nextDraft),
           canonicalVersion: actualVersion,
           autoMerged,
@@ -1545,6 +1582,7 @@ export function createProjectInfoDraftService({
       const preflight = await db.runTransaction(async (tx) => {
         const nowDate = clockDate(now);
         const { project, draft } = await ownedDraft(tx, current);
+        const requestSnap = await tx.get(refs(current).request);
         const lock = await checkIdempotency(tx, current, fingerprint, nowDate);
         if (lock.mode === 'replay') return { outcome: { status: lock.status, body: lock.body, replayed: true } };
         const lockError = idempotencyError(lock);
@@ -1556,6 +1594,7 @@ export function createProjectInfoDraftService({
         if (draft.baseCanonicalVersion !== actualVersion || expectedVersion !== actualVersion) {
           throw createHttpError(409, `Canonical version mismatch: expected ${expectedVersion}, actual ${actualVersion}`, 'canonical_version_conflict');
         }
+        assertDraftSource(draft, project, requestSnap.exists ? requestSnap.data() : null);
         return { draft };
       });
       if (preflight.outcome) return preflight.outcome;
@@ -1592,6 +1631,7 @@ export function createProjectInfoDraftService({
             'canonical_version_conflict',
           );
         }
+        assertDraftSource(draft, project, previousRequest);
         if (JSON.stringify(draftAttachments(draft)) !== JSON.stringify(draftAttachments(preflight.draft))) {
           throw createHttpError(409, 'Draft attachments changed during submission', 'draft_version_conflict');
         }

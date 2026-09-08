@@ -82,12 +82,10 @@ describe('PortalProjectEdit private draft boundary', () => {
     expect(source).toContain('[...attachments.values()]');
   });
 
-  it('restores only the latest private proposal alternative after a refresh', () => {
-    expect(source).toContain('latestPrivateAlternativeDocumentKind');
-    expect(source).toContain("latestAlternativeKind === 'rfp_request_evidence' ? { proposalDocument: null }");
-    expect(source).toContain("latestAlternativeKind === 'proposal' ? { rfpRequestEvidenceDocument: null }");
-    expect(source).toContain("attachments.delete('proposal')");
-    expect(source).toContain("attachments.delete('rfp_request_evidence')");
+  it('preserves independently stored proposal and RFP documents after a refresh', () => {
+    expect(source).not.toContain('latestPrivateAlternativeDocumentKind');
+    expect(source).not.toContain("attachments.delete('proposal')");
+    expect(source).not.toContain("attachments.delete('rfp_request_evidence')");
   });
 
   it('removes private replacement attachments through the fenced draft API before clearing editor state', () => {

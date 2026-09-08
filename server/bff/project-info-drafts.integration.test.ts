@@ -1,4 +1,5 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
 import request from 'supertest';
 import { createBffApp } from './app.mjs';
 import { createFirestoreDb } from './firestore.mjs';
@@ -37,7 +38,7 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
       storedAttachments.delete(path);
     }),
   };
-  const api = request(createBffApp({
+  const server = createServer(createBffApp({
     projectId: firebaseProjectId,
     db,
     authMode: 'headers',
@@ -64,6 +65,7 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
       BFF_SCHEDULER_OWNER: 'disabled',
     },
   }));
+  const api = request(server);
 
   function actorHeaders(actorId = 'actor-a', role = 'pm') {
     return {
@@ -193,8 +195,73 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
     };
   }
 
+  // Match Supertest's IPv4 target; macOS can bind :: on an occupied IPv4 loopback port.
+  beforeAll(() => new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve)));
   beforeEach(reset, 60_000);
-  afterAll(reset, 60_000);
+  afterAll(async () => {
+    try {
+      await reset();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  }, 60_000);
+
+  it('blocks an older private draft across sequential leases and binds file selection to the previewed Request (real Firestore, StorageMap)', async () => {
+    await db.doc(`orgs/${tenantId}/members/actor-b`).set({ uid: 'actor-b', role: 'pm', status: 'ACTIVE' });
+    const basePath = '/api/v1/project-info-drafts/project-a';
+    const aLease = await acquire('rebase-acquire-A');
+    expect(aLease.body).toMatchObject({ canEdit: true, state: 'ACTIVE', leaseId: expect.any(String) });
+    let a = mutationHeaders(aLease.body, 'rebase-open-A');
+    expect((await api.post(`${basePath}/open`).set(a).send({})).status).toBe(200);
+    const upload = (headers: Record<string, string>, name: string) => api.post(`${basePath}/attachments`).set({ ...headers, 'idempotency-key': `rebase-upload-${name}` }).send({ expectedDraftRevision: 0, documentKind: 'contract', fileName: `${name}.pdf`, mimeType: 'application/pdf', fileSize: VALID_PDF.byteLength, contentBase64: VALID_PDF.toString('base64') });
+    const uploadedA = await upload(a, 'A');
+    expect(uploadedA.status).toBe(200);
+    expect((await api.post('/api/v1/edit-leases/project-info/project-a/release').set({ ...a, 'idempotency-key': 'rebase-release-A' }).send({})).status).toBe(200);
+    const bLease = await api.post('/api/v1/edit-leases/project-info/project-a/acquire').set({ ...actorHeaders('actor-b'), 'x-edit-session-id': 'session-b', 'idempotency-key': 'rebase-acquire-B' }).send({});
+    expect(bLease.status).toBe(200);
+    expect(bLease.body).toMatchObject({ canEdit: true, state: 'ACTIVE', leaseId: expect.any(String) });
+    const b = { ...mutationHeaders(bLease.body, 'rebase-open-B'), ...actorHeaders('actor-b'), 'x-edit-session-id': 'session-b' };
+    expect((await api.post(`${basePath}/open`).set(b).send({})).status).toBe(200);
+    const uploadedB = await upload(b, 'B');
+    expect(uploadedB.status).toBe(200);
+    expect((await api.post(`${basePath}/submit`).set({ ...b, 'idempotency-key': 'rebase-submit-B' }).send({ expectedDraftRevision: 1, expectedVersion: 3 })).status).toBe(200);
+    const reacquiredA = await acquire('rebase-reacquire-A');
+    expect(reacquiredA.body).toMatchObject({ canEdit: true, state: 'ACTIVE', leaseId: expect.any(String) });
+    a = mutationHeaders(reacquiredA.body, 'rebase-reopen-A');
+    expect((await api.post(`${basePath}/open`).set(a).send({})).status).toBe(200);
+    const requestRef = db.doc(`orgs/${tenantId}/project_requests/change-project-a`);
+    const before = (await requestRef.get()).data()!;
+    const auditCount = (await db.collection(`orgs/${tenantId}/audit_logs`).get()).size;
+    const outboxCount = (await db.collection('outbox').get()).size;
+    const rejected = await api.post(`${basePath}/submit`).set({ ...a, 'idempotency-key': 'rebase-submit-A' }).send({ expectedDraftRevision: 1, expectedVersion: 3 });
+    expect(rejected.status).toBe(409);
+    expect(rejected.body.error).toBe('draft_source_conflict');
+    expect((await requestRef.get()).data()).toEqual(before);
+    expect((await db.doc(`orgs/${tenantId}/projects/project-a`).get()).data()?.version).toBe(3);
+    expect((await db.collection(`orgs/${tenantId}/audit_logs`).get()).size).toBe(auditCount);
+    expect((await db.collection('outbox').get()).size).toBe(outboxCount);
+    const preview = await api.post(`${basePath}/rebase`).set({ ...a, 'idempotency-key': 'rebase-preview-B' }).send({ expectedDraftRevision: 1 });
+    expect(preview.status).toBe(200);
+    expect(preview.body.conflicts).toContainEqual(expect.objectContaining({ field: 'contractDocument', mine: expect.objectContaining({ name: 'A.pdf' }), theirs: expect.objectContaining({ name: 'B.pdf' }) }));
+    await requestRef.set({ ...before, requestVersion: 2, proposedSnapshot: { ...before.proposedSnapshot, name: 'C' } });
+    const applyInput = { expectedDraftRevision: 1, sourceFingerprint: preview.body.sourceFingerprint, resolutions: { contractDocument: 'THEIRS' } };
+    const stale = await api.post(`${basePath}/rebase`).set({ ...a, 'idempotency-key': 'rebase-apply-stale' }).send(applyInput);
+    expect(stale.status).toBe(409);
+    expect(stale.body.error).toBe('draft_source_conflict');
+    const refreshed = await api.post(`${basePath}/rebase`).set({ ...a, 'idempotency-key': 'rebase-preview-C' }).send({ expectedDraftRevision: 1 });
+    expect(refreshed.status).toBe(200);
+    const applied = await api.post(`${basePath}/rebase`).set({ ...a, 'idempotency-key': 'rebase-apply-C' }).send({ ...applyInput, sourceFingerprint: refreshed.body.sourceFingerprint });
+    expect(applied.status).toBe(200);
+    expect(applied.body.draft.payload.contractDocument.path).toBe(uploadedB.body.attachment.path);
+    expect(applied.body.draft.attachmentRefs[0].path).toBe(uploadedB.body.attachment.path);
+    const read = await api.get(basePath).set(actorHeaders());
+    expect(read.body.draft).toEqual(applied.body.draft);
+    expect((await api.post(`${basePath}/submit`).set({ ...a, 'idempotency-key': 'rebase-submit-C' }).send({ expectedDraftRevision: 2, expectedVersion: 3 })).status).toBe(200);
+    expect((await requestRef.get()).data()?.proposedSnapshot.contractDocument.path).toBe(uploadedB.body.attachment.path);
+    expect(storedAttachments.has(uploadedA.body.attachment.path)).toBe(true);
+    expect(storedAttachments.has(uploadedB.body.attachment.path)).toBe(true);
+    expect(storage.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
+  });
 
   it('keeps temporary data owner-only and atomically submits only the final change request', async () => {
     const acquired = await acquire();

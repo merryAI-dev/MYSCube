@@ -4,6 +4,104 @@ import { createHash } from 'node:crypto';
 
 const documents = JSON.parse(readFileSync(new URL('../../policies/project-documents.json', import.meta.url), 'utf8')) as Record<string, { field: string }>;
 
+test('private draft GET to editor save preserves all twelve selected document fields', async ({ page }) => {
+  const attachmentRefs = Object.keys(documents).map(documentKind => ({ documentKind, path: `selected/${documentKind}`, name: `${documentKind}.pdf`, size: 100, contentType: 'application/pdf' }));
+  let record = { projectId: 'p009', resourceId: 'p009', resourceType: 'project-info', status: 'ACTIVE', baseCanonicalVersion: 1, draftRevision: 1, payload: { name: '열두 문서 확인' }, attachmentRefs, stepIndex: 0 };
+  let saved: Record<string, any> | undefined;
+  await page.route('**/api/v1/projects/p009/latest-request', route => route.fulfill({ json: { item: null } }));
+  await page.route('**/api/v1/edit-leases/**', route => route.fulfill({ json: { serverNow: new Date().toISOString(), state: 'ACTIVE', canEdit: true, expiresAt: new Date(Date.now() + 1_800_000).toISOString(), leaseId: 'test-lease', fence: 1 } }));
+  await page.route('**/api/v1/project-info-drafts/p009/open', route => route.fulfill({ json: { draft: record } }));
+  await page.route('**/api/v1/project-info-drafts/p009', route => {
+    if (route.request().method() === 'PATCH') {
+      saved = route.request().postDataJSON().payload;
+      record = { ...record, draftRevision: record.draftRevision + 1, payload: saved as typeof record.payload };
+    }
+    return route.fulfill({ json: { draft: record } });
+  });
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'PM 샘플 로그인' }).click();
+  await page.goto('/portal/edit-project/p009');
+  await expect(page.getByPlaceholder('예: 26농식품AC')).toHaveValue('열두 문서 확인');
+  await page.getByRole('button', { name: '임시저장', exact: true }).click();
+  await expect.poll(() => saved !== undefined).toBe(true);
+  for (const [kind, { field }] of Object.entries(documents)) expect(saved?.[field]?.path, field).toBe(`selected/${kind}`);
+});
+
+for (const scenario of ['stale-apply', 'stale-submit', 'malformed-apply']) {
+  test(`rebase choice protocol preserves files and requires fresh confirmation: ${scenario}`, async ({ page }) => {
+    const file = (name: string) => ({ documentKind: 'contract', path: `server/${name}.pdf`, name: `${name}.pdf`, size: 100, contentType: 'application/pdf' });
+    const payload = {
+      name: '비교 후 제출', officialContractName: '계약명', clientOrg: '고객사', department: 'CIC1',
+      projectPurpose: '목적', description: '내용', type: 'I1', contractStart: '2026-01-01', contractEnd: '', contractEndUndecided: true,
+      contractAmount: 0, salesVatAmount: 0, totalRevenueAmount: 0, totalActualCost: 0, supportAmount: 0,
+      financialYears: [{ year: 2026, contractAmount: 0, salesVatAmount: 0, totalRevenueAmount: 0, totalActualCost: 0, supportAmount: 0, profitRate: 0, confirmed: true }],
+      settlementType: 'TYPE1', managerName: '데이나', executiveApproverId: 'u001', executiveApproverName: '관리자',
+      participationSheetLink: 'https://docs.google.com/spreadsheets/d/test', registrationConfirmations: { modusignContractUsed: true },
+      contractDocument: file('A'),
+    };
+    let record = { projectId: 'p009', resourceType: 'project-info', resourceId: 'p009', status: 'ACTIVE', baseCanonicalVersion: 1, draftRevision: 1, payload, attachmentRefs: [file('A'), ...['customer_business_registration', 'quote'].map(kind => ({ ...file(kind), documentKind: kind }))], stepIndex: 0 };
+    let previews = 0;
+    const applies: any[] = [];
+    const submits: any[] = [];
+    await page.route('**/api/v1/projects/p009/latest-request', route => route.fulfill({ json: { item: null } }));
+    await page.route('**/api/v1/edit-leases/**', route => route.fulfill({ json: { serverNow: new Date().toISOString(), state: 'ACTIVE', canEdit: true, expiresAt: new Date(Date.now() + 1_800_000).toISOString(), leaseId: 'test-lease', fence: 1 } }));
+    await page.route('**/api/v1/project-info-drafts/p009/open', route => route.fulfill({ json: { draft: record } }));
+    await page.route('**/api/v1/project-info-drafts/p009', route => {
+      if (route.request().method() === 'PATCH') record = { ...record, draftRevision: record.draftRevision + 1, payload: route.request().postDataJSON().payload };
+      return route.fulfill({ json: { draft: record } });
+    });
+    await page.route('**/api/v1/project-info-drafts/p009/submit', route => {
+      submits.push(route.request().postDataJSON());
+      if (submits.length === 1 || (scenario === 'stale-submit' && submits.length === 2)) return route.fulfill({ status: 409, json: { error: 'draft_source_conflict', message: '다시 비교해 주세요.' } });
+      return route.fulfill({ json: { status: 'SUBMITTED', projectId: 'p009', projectRequestId: 'change-p009', projectVersion: 1, draftRevision: record.draftRevision + 1 } });
+    });
+    await page.route('**/api/v1/project-info-drafts/p009/rebase', route => {
+      const body = route.request().postDataJSON();
+      if (!body.resolutions) {
+        previews += 1;
+        return route.fulfill({ json: { rebased: false, sourceFingerprint: (previews === 1 ? 'b' : 'c').repeat(64), canonicalVersion: 1, autoMerged: [], conflicts: [{ field: 'contractDocument', base: null, mine: record.payload.contractDocument, theirs: file(previews === 1 ? 'B' : 'C') }] } });
+      }
+      applies.push(body);
+      if (scenario === 'stale-apply' && applies.length === 1) return route.fulfill({ status: 409, json: { error: 'draft_source_conflict', message: '다시 비교해 주세요.' } });
+      if (scenario === 'malformed-apply') return route.fulfill({ json: { rebased: false, sourceFingerprint: 'b'.repeat(64), canonicalVersion: 1, autoMerged: [], conflicts: [] } });
+      const selected = file(previews === 1 ? 'B' : 'C');
+      record = { ...record, draftRevision: record.draftRevision + 1, payload: { ...record.payload, contractDocument: selected }, attachmentRefs: [selected, ...record.attachmentRefs.slice(1)] };
+      return route.fulfill({ json: { rebased: true, sourceFingerprint: (previews === 1 ? 'b' : 'c').repeat(64), canonicalVersion: 1, autoMerged: [], conflicts: [], draft: record } });
+    });
+    await page.goto('/login');
+    await page.getByRole('button', { name: 'PM 샘플 로그인' }).click();
+    await page.goto('/portal/edit-project/p009');
+    await expect(page.getByPlaceholder('예: 26농식품AC')).toHaveValue('비교 후 제출');
+    await page.getByRole('button', { name: '검토 및 저장', exact: true }).click();
+    await page.getByRole('button', { name: '최종 저장', exact: true }).click();
+    const dialog = page.getByRole('dialog').filter({ hasText: '수정하는 동안 프로젝트가 변경되었습니다' });
+    await expect(dialog).toContainText('B.pdf');
+    await dialog.getByRole('radio').nth(1).click();
+    await dialog.getByRole('button', { name: '선택한 내용으로 계속', exact: true }).click();
+    if (scenario === 'malformed-apply') {
+      await expect(page.getByText('Invalid project information rebase response', { exact: true })).toBeVisible();
+      expect(submits).toHaveLength(1);
+      expect(record.payload.contractDocument.name).toBe('A.pdf');
+      await expect(dialog).toBeVisible();
+      return;
+    }
+    await expect(dialog).toContainText('C.pdf');
+    await expect(dialog.getByRole('radio', { checked: true })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: '1건 선택 필요' })).toBeDisabled();
+    expect(applies).toHaveLength(1);
+    expect(submits).toHaveLength(scenario === 'stale-submit' ? 2 : 1);
+    await dialog.getByRole('radio').nth(1).click();
+    await page.screenshot({ path: `test-results/rebase-${scenario}-fresh-choice.png` });
+    await dialog.getByRole('button', { name: '선택한 내용으로 계속', exact: true }).click();
+    await expect.poll(() => submits.length).toBe(scenario === 'stale-submit' ? 3 : 2);
+    expect(applies[0].sourceFingerprint).toBe('b'.repeat(64));
+    expect(applies[1].sourceFingerprint).toBe('c'.repeat(64));
+    expect(submits.at(-1).expectedDraftRevision).toBe(record.draftRevision);
+    expect(record.payload.contractDocument.name).toBe('C.pdf');
+    expect(record.attachmentRefs[0].name).toBe('C.pdf');
+  });
+}
+
 test('request lookup clears a prior approval intention before authority is restored', async ({ page }) => {
   let calls = 0;
   let release!: () => void;

@@ -35,11 +35,10 @@ import {
 import { ProjectInfoRebaseDialog } from './ProjectInfoRebaseDialog';
 import { PlatformApiError } from '../../platform/api-client';
 
-// The draft froze the project version it started from; the project has moved since.
-function isCanonicalVersionConflict(error: unknown) {
+function isDraftSourceConflict(error: unknown) {
   if (!(error instanceof PlatformApiError) || error.status !== 409) return false;
   const body = error.body as { error?: string } | null | undefined;
-  return body?.error === 'canonical_version_conflict';
+  return body?.error === 'canonical_version_conflict' || body?.error === 'draft_source_conflict';
 }
 import {
   analyzeProjectRequestContractViaBff,
@@ -156,25 +155,12 @@ function attachmentDocument(attachment: ProjectInfoAttachment): FileAttachment {
   };
 }
 
-function latestPrivateAlternativeDocumentKind(attachmentRefs: ProjectInfoAttachment[]) {
-  let latest: 'proposal' | 'rfp_request_evidence' | null = null;
-  for (const attachment of attachmentRefs) {
-    if (attachment.documentKind === 'proposal' || attachment.documentKind === 'rfp_request_evidence') {
-      latest = attachment.documentKind;
-    }
-  }
-  return latest;
-}
-
 function editorDraftFromPrivate(record: ProjectInfoDraft): ProjectEditorDraft {
   const documents: Partial<Record<ProjectRequestDocumentKind, FileAttachment>> = {};
   for (const attachment of record.attachmentRefs) documents[attachment.documentKind] = attachmentDocument(attachment);
-  const latestAlternativeKind = latestPrivateAlternativeDocumentKind(record.attachmentRefs);
   return createProjectEditorDraft({
     ...(record.payload as Partial<ProjectEditorDraft>),
     ...Object.fromEntries(PROJECT_DOCUMENTS.filter(({ documentKind }) => documents[documentKind]).map(({ documentKind, field }) => [field, documents[documentKind]])),
-    ...(latestAlternativeKind === 'proposal' ? { rfpRequestEvidenceDocument: null } : {}),
-    ...(latestAlternativeKind === 'rfp_request_evidence' ? { proposalDocument: null } : {}),
     registrationRequirementsVersion: 2,
   });
 }
@@ -194,9 +180,6 @@ function previewAttachmentsFromPrivateDraft(record: ProjectInfoDraft | null) {
       path: attachment.path,
     });
   }
-  const latestAlternativeKind = latestPrivateAlternativeDocumentKind(record.attachmentRefs);
-  if (latestAlternativeKind === 'rfp_request_evidence') attachments.delete('proposal');
-  if (latestAlternativeKind === 'proposal') attachments.delete('rfp_request_evidence');
   return [...attachments.values()];
 }
 
@@ -235,6 +218,7 @@ function ProjectInfoEditor({
     conflicts: ProjectInfoRebaseConflict[];
     autoMerged: Array<{ field: string; value: unknown }>;
     pendingActionId: string;
+    sourceFingerprint: string;
   } | null>(null);
   const [rebaseBusy, setRebaseBusy] = useState(false);
   const rebasedVersionRef = useRef(0);
@@ -477,6 +461,18 @@ function ProjectInfoEditor({
     void lease.release();
   };
 
+  const refreshRebase = async (actionId: string) => {
+    const preview = await enqueueMutation(() => withOwnership((ownership) => draftClient.rebase(ownership, {
+      expectedDraftRevision: revisionRef.current,
+    })));
+    setRebaseState({
+      conflicts: preview.conflicts,
+      autoMerged: preview.autoMerged,
+      sourceFingerprint: preview.sourceFingerprint,
+      pendingActionId: actionId,
+    });
+  };
+
   const handleSubmit = async (_draft: ProjectEditorDraft, actionId: string) => {
     if (busyActionId) return;
     if (!record) {
@@ -487,16 +483,9 @@ function ProjectInfoEditor({
     try {
       await submitDraft(actionId);
     } catch (error) {
-      if (isCanonicalVersionConflict(error)) {
+      if (isDraftSourceConflict(error)) {
         try {
-          const preview = await enqueueMutation(() => withOwnership((ownership) => draftClient.rebase(ownership, {
-            expectedDraftRevision: revisionRef.current,
-          })));
-          setRebaseState({
-            conflicts: preview.conflicts,
-            autoMerged: preview.autoMerged,
-            pendingActionId: actionId,
-          });
+          await refreshRebase(actionId);
         } catch (rebaseError) {
           toast.error(rebaseError instanceof Error
             ? rebaseError.message
@@ -549,11 +538,11 @@ function ProjectInfoEditor({
       const result = await enqueueMutation(() => withOwnership((ownership) => draftClient.rebase(ownership, {
         expectedDraftRevision: revisionRef.current,
         resolutions,
+        sourceFingerprint: rebaseState.sourceFingerprint,
       })));
-      if (result.draft) {
-        revisionRef.current = result.draft.draftRevision;
-        setRecord(result.draft);
-      }
+      if (!result.rebased || !result.draft) throw new Error('변경 내용 반영을 확인하지 못했습니다. 입력 내용은 보관됩니다.');
+      revisionRef.current = result.draft.draftRevision;
+      setRecord(result.draft);
       rebasedVersionRef.current = result.canonicalVersion;
       setRebaseState(null);
       setBusyActionId(actionId);
@@ -563,7 +552,15 @@ function ProjectInfoEditor({
         setBusyActionId(null);
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '변경 내용을 반영하지 못했습니다. 다시 시도해주세요.');
+      if (isDraftSourceConflict(error)) {
+        try {
+          await refreshRebase(actionId);
+        } catch (refreshError) {
+          toast.error(refreshError instanceof Error ? refreshError.message : '최근 변경 내용을 불러오지 못했습니다. 입력 내용은 보관됩니다.');
+        }
+      } else {
+        toast.error(error instanceof Error ? error.message : '변경 내용을 반영하지 못했습니다. 다시 시도해주세요.');
+      }
     } finally {
       setRebaseBusy(false);
     }

@@ -2,7 +2,8 @@ import express from 'express';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
 import { createIdempotencyService } from '../idempotency.mjs';
-import { buildActiveEditLeaseDocument, resolveEditLeaseDocumentId } from '../edit-lease.mjs';
+import { buildActiveEditLeaseDocument, createEditLeaseService, resolveEditLeaseDocumentId } from '../edit-lease.mjs';
+import { PROJECT_DOCUMENT_FIELD_BY_KIND } from '../project-document-validation.mjs';
 import { loadRbacPolicy } from '../rbac-policy.mjs';
 import { mountProjectRoutes } from './projects.mjs';
 import {
@@ -261,7 +262,8 @@ function harness({ storageService, outboxEventFactory, cleanupOutboxEventFactory
     actorEmail: 'actor-a@example.com', actorRole: 'pm', requestId: 'request-a',
     projectId: 'project-a', sessionId: 'session-a', leaseId: 'lease-a', fence: 1,
   };
-  return { db, service, base, auditChainService, advance: (ms) => { nowMs += ms; } };
+  const leases = createEditLeaseService({ db, now: () => nowMs, auditChainService, idempotencyService, rbacPolicy: loadRbacPolicy() });
+  return { db, service, base, leases, auditChainService, advance: (ms) => { nowMs += ms; } };
 }
 
 async function openedDraft(h, key = 'open-a') {
@@ -269,6 +271,131 @@ async function openedDraft(h, key = 'open-a') {
 }
 
 describe('project information private drafts', () => {
+  const projectPath = 'orgs/tenant-a/projects/project-a';
+  const requestPath = 'orgs/tenant-a/project_requests/change-project-a';
+  const sourceRequest = (payload, requestVersion = 1) => ({
+    id: 'change-project-a', requestKind: 'CHANGE', status: 'PENDING', requestVersion,
+    targetProjectId: 'project-a', beforeSnapshot: validV2Payload(), proposedSnapshot: payload, payload,
+  });
+  const storageForRebase = () => ({
+    uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+      path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.fileName}`,
+      name: input.fileName, size: input.buffer.byteLength, contentType: input.mimeType,
+    })),
+    deleteProjectRegistrationAttachment: vi.fn(),
+  });
+  const upload = (h, documentKind, name, revision = 0, base = h.base) => h.service.addAttachment({
+    ...base, idempotencyKey: `upload-${name}`, expectedDraftRevision: revision, documentKind,
+    fileName: `${name}.pdf`, mimeType: 'application/pdf', fileSize: VALID_PDF.byteLength, buffer: VALID_PDF,
+  });
+
+  it.each([false, true])('prevents A/B/A sequential lease overwrite, autosave=%s', async (autosave) => {
+    let outbox = 0;
+    const h = harness({ storageService: storageForRebase(), outboxEventFactory: (input) => ({ ...input, id: `outbox-${++outbox}` }) });
+    await openedDraft(h);
+    const a = await upload(h, 'contract', 'A');
+    let revision = 1;
+    if (autosave) {
+      await h.service.update({ ...h.base, idempotencyKey: 'save-A', expectedDraftRevision: revision++, payload: { ...a.body.draft.payload, contractDocument: a.body.attachment } });
+    }
+    const leaseResource = { resourceType: 'project-info', resourceId: 'project-a' };
+    await h.leases.release({ ...h.base, ...leaseResource, idempotencyKey: 'release-A' });
+    h.db.documents.set('orgs/tenant-a/members/actor-b', { uid: 'actor-b', role: 'pm', status: 'ACTIVE' });
+    const b = { ...h.base, actorId: 'actor-b', sessionId: 'session-b' };
+    const acquiredB = await h.leases.acquire({ ...b, ...leaseResource, idempotencyKey: 'acquire-B' });
+    Object.assign(b, { leaseId: acquiredB.body.leaseId, fence: acquiredB.body.fence });
+    await h.service.open({ ...b, idempotencyKey: 'open-B' });
+    await upload(h, 'contract', 'B', 0, b);
+    await h.service.submit({ ...b, idempotencyKey: 'submit-B', expectedDraftRevision: 1, expectedVersion: 3 });
+    const acquiredA = await h.leases.acquire({ ...h.base, ...leaseResource, idempotencyKey: 'acquire-A' });
+    Object.assign(h.base, { leaseId: acquiredA.body.leaseId, fence: acquiredA.body.fence });
+    await openedDraft(h, 'reopen-A');
+    const before = clone([...h.db.documents]);
+    h.auditChainService.appendManyInTransaction.mockClear();
+    await expect(h.service.submit({ ...h.base, idempotencyKey: 'submit-A', expectedDraftRevision: revision, expectedVersion: 3 })).rejects.toMatchObject({ statusCode: 409, code: 'draft_source_conflict' });
+    expect([...h.db.documents]).toEqual(before);
+    expect(h.auditChainService.appendManyInTransaction).not.toHaveBeenCalled();
+    expect(h.db.documents.get(requestPath).proposedSnapshot.contractDocument.name).toBe('B.pdf');
+  });
+
+  it.each(Object.entries(PROJECT_DOCUMENT_FIELD_BY_KIND).flatMap(([kind, field]) => ['MINE', 'THEIRS', 'NULL', 'CANONICAL'].map(choice => [kind, field, choice])))('rebases %s %s choice %s with matching payload and private refs', async (kind, field, choice) => {
+    const storage = storageForRebase();
+    const h = harness({ storageService: storage });
+    h.db.documents.get(projectPath)[field] = { path: `orgs/tenant-a/project-registration-documents/project-a/base-${kind}.pdf` };
+    await openedDraft(h);
+    // Persisted private metadata is the upload commit; payload autosave has not happened.
+    const draft = [...h.db.documents.values()].find(d => d.resourceType === 'project-info' && d.ownerUid);
+    const own = { documentKind: kind, path: `orgs/tenant-a/project-registration-documents/project-a/A-${kind}.pdf`, name: 'A.pdf', size: 9, contentType: 'application/pdf', attachmentId: 'A' };
+    draft.attachmentRefs = [own];
+    const theirs = choice === 'NULL' ? null : { ...own, path: own.path.replace('/A-', '/B-'), name: 'B.pdf', attachmentId: 'B' };
+    if (choice === 'CANONICAL') Object.assign(h.db.documents.get(projectPath), { version: 4, [field]: theirs });
+    else h.db.documents.set(requestPath, sourceRequest({ ...validV2Payload(), [field]: theirs }));
+    const preview = await h.service.rebase({ ...h.base, idempotencyKey: 'preview', expectedDraftRevision: 0 });
+    expect(preview.body.sourceFingerprint).toMatch(/^[a-f0-9]{64}$/);
+    expect(preview.body.conflicts).toContainEqual(expect.objectContaining({ field, mine: expect.objectContaining({ path: own.path }), theirs }));
+    const resolutions = Object.fromEntries(preview.body.conflicts.map(c => [c.field, choice === 'MINE' ? 'MINE' : 'THEIRS']));
+    const applied = await h.service.rebase({ ...h.base, idempotencyKey: 'apply', expectedDraftRevision: 0, resolutions, sourceFingerprint: preview.body.sourceFingerprint });
+    const selected = choice === 'MINE' ? own : theirs;
+    expect(applied.body.draft.payload[field]?.path ?? null).toBe(selected?.path ?? null);
+    expect(applied.body.draft.attachmentRefs.map(a => a.path)).toEqual(selected && choice !== 'CANONICAL' ? [selected.path] : []);
+    expect((await h.service.get(h.base)).draft).toEqual(applied.body.draft);
+    if (choice === 'THEIRS') expect([...h.db.documents.values()].find(d => d.ownerUid)?.attachmentRefs[0].inheritedFromProjectRequest).toBe(true);
+    expect(storage.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
+    if (choice !== 'NULL' || !['contract', 'customer_business_registration', 'quote'].includes(kind)) {
+      await h.service.submit({ ...h.base, idempotencyKey: 'submit-selected', expectedDraftRevision: 1, expectedVersion: choice === 'CANONICAL' ? 4 : 3 });
+      expect(h.db.documents.get(requestPath).proposedSnapshot[field]?.path ?? null).toBe(selected?.path ?? null);
+    }
+  });
+
+  it.each(['request', 'project', 'status-only', 'version-only', 'missing', 'malformed'])('rejects unseen rebase source: %s', async (change) => {
+    const h = harness();
+    await openedDraft(h);
+    h.db.documents.set(requestPath, sourceRequest(validV2Payload({ name: 'B' })));
+    const preview = await h.service.rebase({ ...h.base, idempotencyKey: 'preview-B', expectedDraftRevision: 0 });
+    if (change === 'request') h.db.documents.set(requestPath, sourceRequest(validV2Payload({ name: 'C' }), 2));
+    if (change === 'project') h.db.documents.get(projectPath).version = 4;
+    if (change === 'status-only') h.db.documents.get(requestPath).status = 'REJECTED';
+    if (change === 'version-only') h.db.documents.get(requestPath).requestVersion = 2;
+    const token = change === 'missing' ? undefined : change === 'malformed' ? 'bad' : preview.body.sourceFingerprint;
+    const before = clone([...h.db.documents]);
+    await expect(h.service.rebase({ ...h.base, idempotencyKey: 'apply-stale', expectedDraftRevision: 0, resolutions: {}, sourceFingerprint: token })).rejects.toMatchObject({ statusCode: 409, code: 'draft_source_conflict' });
+    expect([...h.db.documents]).toEqual(before);
+  });
+
+  it('requires explicit legacy comparison and replays applied response before revision checks', async () => {
+    const h = harness();
+    await openedDraft(h);
+    const draft = [...h.db.documents.values()].find(d => d.ownerUid);
+    delete draft.baseSnapshot;
+    draft.payload.name = 'Legacy mine';
+    await expect(h.service.submit({ ...h.base, idempotencyKey: 'legacy-submit', expectedDraftRevision: 0, expectedVersion: 3 })).rejects.toMatchObject({ code: 'draft_source_conflict' });
+    const preview = await h.service.rebase({ ...h.base, idempotencyKey: 'legacy-preview', expectedDraftRevision: 0 });
+    expect(preview.body.conflicts).toContainEqual(expect.objectContaining({ field: 'name' }));
+    const apply = { ...h.base, idempotencyKey: 'legacy-apply', expectedDraftRevision: 0, sourceFingerprint: preview.body.sourceFingerprint, resolutions: Object.fromEntries(preview.body.conflicts.map(c => [c.field, 'MINE'])) };
+    const applied = await h.service.rebase(apply);
+    h.db.documents.get(projectPath).version = 4;
+    expect(await h.service.rebase(apply)).toEqual({ ...applied, replayed: true });
+    await expect(h.service.rebase({ ...apply, sourceFingerprint: '0'.repeat(64) })).rejects.toMatchObject({ code: 'idempotency_conflict' });
+  });
+
+  it('rechecks Request source after Storage inspection before any submission writes', async () => {
+    let h;
+    const storage = { ...storageForRebase(), inspectProjectRegistrationAttachment: vi.fn(async () => {
+      h.db.documents.set(requestPath, sourceRequest(validV2Payload({ name: 'C' }), 2));
+      return [...h.db.documents.values()].find(d => d.ownerUid).attachmentRefs[0];
+    }) };
+    h = harness({ storageService: storage });
+    await openedDraft(h);
+    await upload(h, 'contract', 'A');
+    h.auditChainService.appendManyInTransaction.mockClear();
+    const project = clone(h.db.documents.get(projectPath));
+    await expect(h.service.submit({ ...h.base, idempotencyKey: 'racy-submit', expectedDraftRevision: 1, expectedVersion: 3 })).rejects.toMatchObject({ code: 'draft_source_conflict' });
+    expect(h.db.documents.get(projectPath)).toEqual(project);
+    expect(h.db.documents.get(requestPath).proposedSnapshot.name).toBe('C');
+    expect([...h.db.documents.keys()].filter(p => p.startsWith('outbox/'))).toEqual([]);
+    expect(h.auditChainService.appendManyInTransaction).not.toHaveBeenCalled();
+  });
+
   it.each(['projects/project-a', 'project-requests/change-project-a'])('downloads final report over HTTP from %s and rejects unknown kinds', async (resource) => {
     const attachment = { path: 'orgs/tenant-a/project-registration-documents/project-a/report.pdf', name: 'report.pdf', contentType: 'application/pdf' };
     const h = harness();

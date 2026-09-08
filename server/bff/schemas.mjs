@@ -77,6 +77,7 @@ export const projectInfoDraftAttachmentUploadUrlSchema = projectRegistrationDraf
 
 export const projectInfoDraftRebaseSchema = z.object({
   expectedDraftRevision: z.number().int().nonnegative(),
+  sourceFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   // Absent means "preview only": report the merge outcome without writing.
   resolutions: z.record(z.string().min(1), z.enum(['MINE', 'THEIRS'])).optional(),
 }).strict();

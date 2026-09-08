@@ -1,4 +1,5 @@
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
 import request from 'supertest';
 import { createBffApp } from './app.mjs';
 import { createFirestoreDb, getOrInitAdminApp } from './firestore.mjs';
@@ -81,7 +82,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
     })),
   };
 
-  const api = request(createBffApp({
+  const server = createServer(createBffApp({
     projectId,
     db,
     authMode: 'headers',
@@ -108,6 +109,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
       BFF_SCHEDULER_OWNER: 'disabled',
     },
   }));
+  const api = request(server);
 
   function actorHeaders(actorId = 'actor-a', actorRole = 'pm') {
     return {
@@ -327,8 +329,16 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
     vi.clearAllMocks();
   }
 
+  // Match Supertest's IPv4 target; macOS can bind :: on an occupied IPv4 loopback port.
+  beforeAll(() => new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve)));
   beforeEach(resetData, 60_000);
-  afterAll(clearData, 60_000);
+  afterAll(async () => {
+    try {
+      await clearData();
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  }, 60_000);
 
   it.skipIf(!process.env.FIREBASE_STORAGE_EMULATOR_HOST).each(['registration', 'info'])('replays consumed incoming %s uploads with real Storage bytes', async (kind) => {
     const storage = createProjectRequestContractStorageService({ projectId, bucketName: `${projectId}.firebasestorage.app` });
@@ -396,6 +406,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
     const sourceRefs = [];
     const restoredPrivatePaths: string[] = [];
     const publishedCopies: Array<{ projectId: string; path: string }> = [];
+    let downloadServer: ReturnType<typeof createServer> | undefined;
     let existingCopy;
     let submitted;
     try {
@@ -430,12 +441,14 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
       app.use((req, _res, next) => { req.context = { ...base, actorId: 'executive-a', actorRole: 'admin' }; next(); });
       mountProjectRoutes(app, { db, projectRequestContractStorageService: storage });
       app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.message }));
+      downloadServer = createServer(app);
+      await new Promise<void>((resolve) => downloadServer!.listen(0, '127.0.0.1', resolve));
       for (const [index, [kind, field]] of kinds.entries()) {
         const metadata = await storage.inspectProjectRegistrationAttachment({ tenantId, projectId: submitted.body.projectId, path: project[field].path });
         expect(metadata).toMatchObject({ size: pdf.byteLength, contentType: 'application/pdf', draftId: ownership.draftId });
         expect(projectRequest.payload[field].path).toBe(project[field].path);
         for (const resource of [`projects/${submitted.body.projectId}`, `project-requests/${submitted.body.projectRequestId}`]) {
-          const response = await request(app).get(`/api/v1/${resource}/attachments/${kind}`);
+          const response = await request(downloadServer).get(`/api/v1/${resource}/attachments/${kind}`);
           expect(response.status).toBe(200);
           expect(checksum(response.body)).toBe(checksum(pdf));
           expect(response.headers['cache-control']).toContain('no-store');
@@ -482,6 +495,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
         expect((await db.doc(`orgs/${tenantId}/project_requests/${submitted.body.projectRequestId}`).get()).data()?.payload.contractDocument.path).toBe(sourceRefs[0].path);
       }
     } finally {
+      if (downloadServer?.listening) await new Promise<void>((resolve, reject) => downloadServer!.close(error => error ? reject(error) : resolve()));
       for (const path of new Set(restoredPrivatePaths)) await storage.deleteDraftAttachment({ tenantId, draftId: ownership.draftId, path });
       for (const copy of publishedCopies) await storage.deleteProjectRegistrationAttachment({ tenantId, draftId: ownership.draftId, ...copy });
       for (const attachment of sourceRefs) {

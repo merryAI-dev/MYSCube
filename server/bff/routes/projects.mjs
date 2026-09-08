@@ -1138,7 +1138,7 @@ function registrationSettlementSheetPolicy(value, fundInputMode) {
   };
 }
 
-function registrationPrivateDocuments(attachmentRefs) {
+export function registrationPrivateDocuments(attachmentRefs) {
   const latest = new Map();
   for (const attachment of Array.isArray(attachmentRefs) ? attachmentRefs : []) {
     const documentKind = readOptionalText(attachment?.documentKind);
