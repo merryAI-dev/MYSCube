@@ -225,7 +225,7 @@ describe('management planning project review route', () => {
     }));
   });
 
-  it('agrees with management planning without deciding a pending change request', async () => {
+  it('requires executive approval of the pending modern change before management planning agreement', async () => {
     const executiveHistory = [{
       status: 'APPROVED',
       previousStatus: 'PENDING',
@@ -234,7 +234,9 @@ describe('management planning project review route', () => {
       reviewedByName: '조직장A',
       reviewComment: '조직장 승인',
     }];
+    const notifyMessage = vi.fn();
     const { app, db } = createRouteApp({
+      projectRegistrationSlackService: { enabled: true, notifyMessage },
       seed: reviewSeed(
         approvedProject({
           name: '보완 전 프로젝트 A',
@@ -259,6 +261,7 @@ describe('management planning project review route', () => {
       ),
     });
 
+    const before = clone([...db.documents]);
     const response = await request(app)
       .post('/api/v1/projects/project-a/management-planning-review')
       .set('idempotency-key', 'planning-resubmitted-agree')
@@ -269,21 +272,11 @@ describe('management planning project review route', () => {
         reviewComment: '보완 확인',
       });
 
-    expect(response.status).toBe(200);
-    expect(db.documents.get('orgs/tenant-a/projects/project-a')).toMatchObject({
-      name: '보완 전 프로젝트 A',
-      version: 5,
-      executiveReviewStatus: 'APPROVED',
-      executiveReviewHistory: executiveHistory,
-      managementPlanningReviewStatus: 'AGREED',
-      projectCode: 'AXR-2026-002',
-    });
-    expect(db.documents.get('orgs/tenant-a/project_requests/request-a')).toMatchObject({
-      status: 'PENDING',
-      reviewOutcome: null,
-      rejectedReason: null,
-      proposedSnapshot: expect.objectContaining({ name: '보완 후 프로젝트 A' }),
-    });
+    expect(response.status).toBe(409);
+    expect(response.body.error).toBe('executive_review_required');
+    expect([...db.documents]).toEqual(before);
+    expect([...db.documents.keys()].some(path => path.includes('/projectCodeClaims/'))).toBe(false);
+    expect(notifyMessage).not.toHaveBeenCalled();
   });
 
   it('accepts a legacy approved request as organization-head approval for code issuance', async () => {

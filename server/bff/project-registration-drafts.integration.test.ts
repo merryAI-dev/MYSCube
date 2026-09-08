@@ -15,6 +15,7 @@ import { createAuditChainService } from './audit-chain.mjs';
 import { createIdempotencyService } from './idempotency.mjs';
 import { loadRbacPolicy } from './rbac-policy.mjs';
 import { createProjectInfoDraftService } from './routes/project-info-drafts.mjs';
+import { PROJECT_DOCUMENT_FIELD_BY_KIND, PROJECT_INFO_DOCUMENT_KINDS, PROJECT_REGISTRATION_DOCUMENT_KINDS, PROJECT_REGISTRATION_REQUIRED_DOCUMENT_KINDS } from './project-document-validation.mjs';
 
 const describeIfEmulator = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
 const VALID_PDF = Buffer.from('%PDF-1.4\n');
@@ -337,6 +338,148 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
       await clearData();
     } finally {
       await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
+    }
+  }, 60_000);
+
+  it.skipIf(!process.env.FIREBASE_STORAGE_EMULATOR_HOST)('roundtrips all twelve real files through registration, change approval and explicit removal', async () => {
+    const bucket = getStorage(getOrInitAdminApp({ projectId })).bucket(`${projectId}.firebasestorage.app`);
+    const nativeStorage = createProjectRequestContractStorageService({ projectId, bucketName: bucket.name });
+    const nativeServer = createServer(createBffApp({ projectId, db, authMode: 'headers', editLeasesEnabled: true,
+      now: () => new Date(nowMs).toISOString(), projectRegistrationDraftStorageService: nativeStorage,
+      projectRequestContractStorageService: nativeStorage, driveService, projectRegistrationSlackService,
+      env: { ...process.env, BFF_DEPLOY_ENV: 'local', BFF_SCHEDULER_OWNER: 'disabled' } }));
+    await new Promise<void>((resolve) => nativeServer.listen(0, '127.0.0.1', resolve));
+    const client = request(nativeServer);
+    const paths = new Set<string>();
+    let sequence = 0;
+    const headers = (ownership = {}, actor = 'actor-a') => ({ ...actorHeaders(actor), ...ownership, 'idempotency-key': `native-flow-${++sequence}` });
+    const ok = (response: any, status = 200) => { expect(response.status, JSON.stringify(response.body)).toBe(status); return response.body; };
+    const checksum = (buffer: Buffer) => createHash('sha256').update(buffer).digest('hex');
+    const fixtures = Object.fromEntries(PROJECT_INFO_DOCUMENT_KINDS.map((kind: string) => {
+      const word = kind === 'proposal_word_original';
+      const ppt = ['proposal_ppt_original', 'presentation_ppt_original'].includes(kind);
+      const fileName = word ? 'project-registration-attachment.docx' : ppt ? 'mola-project-attachment.pptx' : 'project-registration-attachment.pdf';
+      const mimeType = word ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' : ppt ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : 'application/pdf';
+      const buffer = readFileSync(new URL(`./fixtures/${fileName}`, import.meta.url));
+      expect(buffer.length).toBeGreaterThan(100);
+      return [kind, { fileName, mimeType, buffer }];
+    }));
+    const download = async (resource: string, kind: string, actor = 'executive-a') => {
+      const response = await client.get(`/api/v1/${resource}/attachments/${kind}`).set(headers({}, actor)).buffer(true)
+        .parse((res, callback) => { const chunks: Buffer[] = []; res.on('data', chunk => chunks.push(Buffer.from(chunk))); res.on('end', () => callback(null, Buffer.concat(chunks))); res.on('error', callback); });
+      expect(response.status).toBe(200);
+      expect(checksum(response.body)).toBe(checksum(fixtures[kind].buffer));
+    };
+    const readProject = async (id: string) => ok(await client.get('/api/v1/projects').set(headers())).items.find((item: any) => item.id === id);
+    const latest = async (id: string) => ok(await client.get(`/api/v1/projects/${id}/latest-request`).set(headers())).item;
+    const upload = async (base: string, ownership: Record<string, string>, kinds: string[], round: string) => {
+      const selected: Record<string, any> = {};
+      for (const kind of kinds) {
+        const draft = ok(await client.get(base).set(headers())).draft;
+        const file = fixtures[kind];
+        const added = ok(await client.post(`${base}/attachments`).set(headers(ownership)).send({ expectedDraftRevision: draft.draftRevision,
+          documentKind: kind, fileName: `${round}-${kind}-${file.fileName}`, mimeType: file.mimeType, fileSize: file.buffer.length, contentBase64: file.buffer.toString('base64') }));
+        paths.add(added.attachment.path);
+        selected[PROJECT_DOCUMENT_FIELD_BY_KIND[kind]] = added.attachment;
+      }
+      const saved = ok(await client.get(base).set(headers())).draft;
+      expect(saved.attachmentRefs).toHaveLength(kinds.length);
+      for (const kind of kinds) {
+        expect(saved.attachmentRefs.find((ref: any) => ref.documentKind === kind).path).toBe(selected[PROJECT_DOCUMENT_FIELD_BY_KIND[kind]].path);
+        await download(base.replace('/api/v1/', ''), kind, 'actor-a');
+      }
+      return selected;
+    };
+    const approve = async (id: string, requestId: string) => ok(await client.post(`/api/v1/projects/${id}/executive-review`)
+      .set(headers({}, 'executive-a')).send({ requestId, reviewStatus: 'APPROVED' }));
+    try {
+      const created = ok(await client.post('/api/v1/project-registration-drafts').set(headers({ 'x-edit-session-id': 'native-registration' })).send({ payload: validPayload() }), 201);
+      const registrationBase = `/api/v1/project-registration-drafts/${created.draft.draftId}`;
+      const registrationOwnership = { 'x-edit-session-id': 'native-registration', 'x-edit-lease-id': created.lease.leaseId, 'x-edit-fence': String(created.lease.fence) };
+      await upload(registrationBase, registrationOwnership, PROJECT_REGISTRATION_DOCUMENT_KINDS, 'registration');
+      const registrationDraft = ok(await client.get(registrationBase).set(headers())).draft;
+      const submitted = ok(await client.post(`${registrationBase}/submit`).set(headers(registrationOwnership)).send({ expectedDraftRevision: registrationDraft.draftRevision }), 201);
+      const id = submitted.projectId;
+      const registrationRequest = await latest(id);
+      expect(registrationRequest.id).toBe(submitted.projectRequestId);
+      expect(registrationRequest.requestVersion).toBe(1);
+      const registrationProject = await readProject(id);
+      for (const kind of PROJECT_REGISTRATION_DOCUMENT_KINDS) {
+        const field = PROJECT_DOCUMENT_FIELD_BY_KIND[kind];
+        paths.add(registrationRequest.payload[field].path);
+        expect(registrationProject[field].path).toBe(registrationRequest.payload[field].path);
+        await download(`project-requests/${submitted.projectRequestId}`, kind);
+      }
+      const wrong = await client.post(`/api/v1/projects/${id}/executive-review`).set(headers({}, 'actor-b')).send({ requestId: submitted.projectRequestId, reviewStatus: 'APPROVED' });
+      expect(wrong.status).toBe(403);
+      expect(await readProject(id)).toEqual(registrationProject);
+      expect(await latest(id)).toEqual(registrationRequest);
+      await approve(id, submitted.projectRequestId);
+      const confirmed = await readProject(id);
+      expect(confirmed.version).toBe(registrationProject.version + 1);
+      const infoBase = `/api/v1/project-info-drafts/${id}`;
+      const open = async (round: string) => {
+        const session = `native-${round}`;
+        const lease = ok(await client.post(`/api/v1/edit-leases/project-info/${id}/acquire`).set(headers({ 'x-edit-session-id': session })).send({}));
+        expect(lease).toMatchObject({ state: 'ACTIVE', canEdit: true, leaseId: expect.any(String) });
+        const ownership = { 'x-edit-session-id': session, 'x-edit-lease-id': lease.leaseId, 'x-edit-fence': String(lease.fence) };
+        ok(await client.post(`${infoBase}/open`).set(headers(ownership)).send({}));
+        return ownership;
+      };
+      const infoOwnership = await open('change');
+      const selected = await upload(infoBase, infoOwnership, PROJECT_INFO_DOCUMENT_KINDS, 'change');
+      const infoDraft = ok(await client.get(infoBase).set(headers())).draft;
+      const changed = ok(await client.post(`${infoBase}/submit`).set(headers(infoOwnership)).send({ expectedDraftRevision: infoDraft.draftRevision, expectedVersion: confirmed.version }));
+      expect(await readProject(id)).toEqual(confirmed);
+      const changeRequest = await latest(id);
+      expect(changeRequest).toMatchObject({ id: changed.projectRequestId, requestVersion: 1, baseProjectVersion: confirmed.version, targetProjectVersion: confirmed.version + 1 });
+      for (const kind of PROJECT_INFO_DOCUMENT_KINDS) {
+        const field = PROJECT_DOCUMENT_FIELD_BY_KIND[kind];
+        expect(changeRequest.proposedSnapshot[field].path).toBe(selected[field].path);
+        if (registrationRequest.payload[field]) expect(selected[field].path).not.toBe(registrationRequest.payload[field].path);
+        await download(`project-requests/${changed.projectRequestId}`, kind);
+      }
+      await approve(id, changed.projectRequestId);
+      const approved = await readProject(id);
+      expect(approved.version).toBe(confirmed.version + 1);
+      for (const kind of PROJECT_INFO_DOCUMENT_KINDS) {
+        const field = PROJECT_DOCUMENT_FIELD_BY_KIND[kind];
+        expect(approved[field]).toEqual(changeRequest.proposedSnapshot[field]);
+        await download(`projects/${id}`, kind);
+      }
+      const removeOwnership = await open('remove');
+      const reopened = ok(await client.get(infoBase).set(headers())).draft;
+      for (const kind of PROJECT_INFO_DOCUMENT_KINDS) expect(reopened.payload[PROJECT_DOCUMENT_FIELD_BY_KIND[kind]]).toEqual(approved[PROJECT_DOCUMENT_FIELD_BY_KIND[kind]]);
+      const optional = PROJECT_INFO_DOCUMENT_KINDS.filter((kind: string) => !PROJECT_REGISTRATION_REQUIRED_DOCUMENT_KINDS.includes(kind));
+      expect(optional).toHaveLength(9);
+      const nullFields = Object.fromEntries(optional.map((kind: string) => [PROJECT_DOCUMENT_FIELD_BY_KIND[kind], null]));
+      const removed = ok(await client.patch(infoBase).set(headers(removeOwnership)).send({ expectedDraftRevision: reopened.draftRevision, payload: { ...reopened.payload, ...nullFields } })).draft;
+      const removalSubmit = ok(await client.post(`${infoBase}/submit`).set(headers(removeOwnership)).send({ expectedDraftRevision: removed.draftRevision, expectedVersion: approved.version }));
+      expect(await readProject(id)).toEqual(approved);
+      const removalRequest = await latest(id);
+      expect(removalRequest).toMatchObject({ id: changed.projectRequestId, requestVersion: changeRequest.requestVersion + 1, baseProjectVersion: approved.version, targetProjectVersion: approved.version + 1 });
+      for (const kind of optional) expect(removalRequest.proposedSnapshot[PROJECT_DOCUMENT_FIELD_BY_KIND[kind]]).toBeNull();
+      await approve(id, removalSubmit.projectRequestId);
+      const removedProject = await readProject(id);
+      expect(removedProject.version).toBe(approved.version + 1);
+      const finalOwnership = await open('verify');
+      const finalDraft = ok(await client.get(infoBase).set(headers())).draft;
+      for (const kind of optional) {
+        const field = PROJECT_DOCUMENT_FIELD_BY_KIND[kind];
+        expect(removedProject[field]).toBeNull();
+        expect(finalDraft.payload[field]).toBeNull();
+        expect(finalDraft.attachmentRefs.some((ref: any) => ref.documentKind === kind)).toBe(false);
+        const unavailable = await client.get(`/api/v1/projects/${id}/attachments/${kind}`).set(headers({}, 'executive-a'));
+        expect(unavailable.status).toBe(409);
+        expect(unavailable.body.error).toBe('project_attachment_not_ready');
+      }
+      for (const kind of PROJECT_REGISTRATION_REQUIRED_DOCUMENT_KINDS) await download(`projects/${id}`, kind);
+      for (const kind of PROJECT_REGISTRATION_DOCUMENT_KINDS) await download(`project-requests/${submitted.projectRequestId}`, kind);
+      for (const path of paths) expect(checksum((await bucket.file(path).download())[0])).toBe(checksum(fixtures[PROJECT_INFO_DOCUMENT_KINDS.find((kind: string) => path.includes(`-${kind}-`))!].buffer));
+      ok(await client.post(`/api/v1/edit-leases/project-info/${id}/release`).set(headers(finalOwnership)).send({}));
+    } finally {
+      await new Promise<void>((resolve, reject) => nativeServer.close(error => error ? reject(error) : resolve()));
+      for (const path of paths) await bucket.file(path).delete({ ignoreNotFound: true });
     }
   }, 60_000);
 
