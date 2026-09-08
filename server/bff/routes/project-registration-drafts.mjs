@@ -1101,25 +1101,12 @@ export function createProjectRegistrationDraftService({
       let buffer = Buffer.isBuffer(input?.buffer)
         ? input.buffer
         : (input?.buffer instanceof Uint8Array ? Buffer.from(input.buffer) : null);
-      // 큰 파일은 서명 URL 로 스토리지에 직접 올라온다(Vercel 본문 4.5MB 우회). 여기서는
-      // 그 경로를 읽어 같은 검증·저장 경로를 태운다 - 전송 수단만 다르고 계약은 같다.
       const incomingPath = !buffer && input?.storagePath ? String(input.storagePath) : null;
-      if (incomingPath) {
-        if (!draftStorageService?.readIncomingUpload) {
-          throw createHttpError(503, '대용량 첨부 업로드가 아직 켜져 있지 않습니다.', 'draft_attachment_direct_unavailable');
-        }
-        try {
-          ({ buffer } = await draftStorageService.readIncomingUpload({
-            tenantId: current.tenantId, draftId: current.draftId, path: incomingPath,
-          }));
-        } catch {
-          throw createHttpError(422, '업로드된 파일을 찾지 못했습니다. 다시 업로드해 주세요.', 'draft_attachment_incoming_missing');
-        }
-      }
-      if (!buffer || buffer.byteLength < 1) {
+      if (!incomingPath && (!buffer || buffer.byteLength < 1)) {
         throw createHttpError(400, 'Attachment content is required', 'draft_attachment_invalid');
       }
-      if (Number(input?.fileSize) !== buffer.byteLength) {
+      const fileSize = Number(input?.fileSize);
+      if (!Number.isSafeInteger(fileSize) || fileSize < 1 || (!incomingPath && fileSize !== buffer.byteLength)) {
         throw createHttpError(422, 'Attachment size does not match its content', 'draft_attachment_size_mismatch');
       }
       const fileName = requiredText(input?.fileName, 'fileName');
@@ -1129,7 +1116,7 @@ export function createProjectRegistrationDraftService({
         throw createHttpError(400, 'documentKind is invalid', 'draft_attachment_invalid');
       }
       const replacedDocumentKinds = replacementDocumentKinds(documentKind);
-      assertProjectAttachment(buffer, mimeType, fileName, documentKind);
+      if (!incomingPath) assertProjectAttachment(buffer, mimeType, fileName, documentKind);
       const attachmentId = documentId(createAttachmentId(), 'attachmentId');
       const method = 'POST';
       const path = `/api/v1/project-registration-drafts/${current.draftId}/attachments`;
@@ -1145,8 +1132,8 @@ export function createProjectRegistrationDraftService({
           documentKind,
           fileName,
           mimeType,
-          fileSize: buffer.byteLength,
-          contentHash: sha256(buffer),
+          fileSize,
+          ...(incomingPath ? { storagePath: incomingPath } : { contentHash: sha256(buffer) }),
         },
       });
 
@@ -1184,6 +1171,22 @@ export function createProjectRegistrationDraftService({
       });
       if (preflight.outcome) return preflight.outcome;
       current.targetProjectId = preflight.targetProjectId;
+      if (incomingPath) {
+        if (!draftStorageService?.readIncomingUpload) {
+          throw createHttpError(503, '대용량 첨부 업로드가 아직 켜져 있지 않습니다.', 'draft_attachment_direct_unavailable');
+        }
+        try {
+          ({ buffer } = await draftStorageService.readIncomingUpload({
+            tenantId: current.tenantId, draftId: current.draftId, path: incomingPath,
+          }));
+        } catch {
+          throw createHttpError(422, '업로드된 파일을 찾지 못했습니다. 다시 업로드해 주세요.', 'draft_attachment_incoming_missing');
+        }
+        if (fileSize !== buffer?.byteLength) {
+          throw createHttpError(422, 'Attachment size does not match its content', 'draft_attachment_size_mismatch');
+        }
+        assertProjectAttachment(buffer, mimeType, fileName, documentKind);
+      }
 
       let uploaded;
       const cleanup = async () => {
@@ -1292,8 +1295,9 @@ export function createProjectRegistrationDraftService({
           }
           return { status: 200, body, replayed: false };
         });
-        if (outcome.replayed && outcome.body?.attachment?.path !== uploaded.path) await cleanup();
-        else {
+        if (outcome.replayed) {
+          if (outcome.body?.attachment?.path !== uploaded.path) await cleanup();
+        } else {
           await Promise.all(replacedAttachments.map(async (replaced) => {
             if (!readOptionalText(replaced?.path) || replaced.path === attachment.path) return;
             try {

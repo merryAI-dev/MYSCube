@@ -62,7 +62,7 @@ function createDb(seed = {}) {
     documents,
     doc,
     collection,
-    async runTransaction(callback) {
+    async runTransaction(callback, commit = true) {
       const writes = [];
       const tx = {
         get: async (ref) => snapshot(ref.path),
@@ -70,6 +70,7 @@ function createDb(seed = {}) {
         create: (ref, value) => writes.push({ type: 'create', ref, value: clone(value), options: {} }),
       };
       const result = await callback(tx);
+      if (!commit) return result;
       for (const write of writes) {
         const current = documents.get(write.ref.path);
         if (write.type === 'create' && current !== undefined) throw new Error('document already exists');
@@ -2167,6 +2168,153 @@ describe('project information private drafts', () => {
       documentKind: 'tax_invoice',
     }));
   });
+  it.each([false, true])('retains a committed info upload after response loss (lookup fails: %s)', async (readFails) => {
+    const storageService = {
+      uploadProjectRegistrationAttachment: vi.fn(async ({ projectId, fileName }) => ({
+        path: `orgs/tenant-a/project-registration-documents/${projectId}/${fileName}`,
+      })),
+      deleteProjectRegistrationAttachment: vi.fn(),
+    };
+    const h = harness({ storageService });
+    await openedDraft(h);
+    const run = h.db.runTransaction.bind(h.db);
+    const error = new Error('Commit response lost');
+    let lost = false;
+    h.db.runTransaction = async (callback) => {
+      if (lost && readFails) throw new Error('Lookup unavailable');
+      const result = await run(callback);
+      if (result?.body?.attachment && !lost) { lost = true; throw error; }
+      return result;
+    };
+    const input = { ...h.base, idempotencyKey: 'lost-upload', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length, buffer: VALID_PDF };
+    if (readFails) await expect(h.service.addAttachment(input)).rejects.toBe(error);
+    else expect((await h.service.addAttachment(input)).body.draft.draftRevision).toBe(1);
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
+    h.db.runTransaction = run;
+    expect((await h.service.addAttachment(input)).body.draft.draftRevision).toBe(1);
+    expect(storageService.uploadProjectRegistrationAttachment).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains the submitted request file when upload acknowledgement fails after submit', async () => {
+    const storageService = {
+      uploadProjectRegistrationAttachment: vi.fn(async () => ({ path: 'orgs/tenant-a/project-registration-documents/project-a/contract.pdf' })),
+      deleteProjectRegistrationAttachment: vi.fn(),
+    };
+    const h = harness({ storageService });
+    await openedDraft(h);
+    const run = h.db.runTransaction.bind(h.db);
+    let lost = false;
+    h.db.runTransaction = async (callback) => {
+      const result = await run(callback);
+      if (result?.body?.attachment && !lost) {
+        lost = true;
+        await h.service.submit({ ...h.base, idempotencyKey: 'racing-submit', expectedDraftRevision: 1, expectedVersion: 3 });
+        throw new Error('Commit response lost');
+      }
+      return result;
+    };
+    const result = await h.service.addAttachment({ ...h.base, idempotencyKey: 'racing-upload', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length, buffer: VALID_PDF });
+    expect(result.replayed).toBe(true);
+    expect(h.db.documents.get('orgs/tenant-a/project_requests/change-project-a').proposedSnapshot.contractDocument.path).toBe(result.body.attachment.path);
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('cleans only a different unreferenced upload on concurrent replay (same path: %s)', async (samePath) => {
+    const committedPath = 'orgs/tenant-a/project-registration-documents/project-a/committed.pdf';
+    const duplicatePath = samePath ? committedPath : 'orgs/tenant-a/project-registration-documents/project-a/duplicate.pdf';
+    const storageService = {
+      uploadProjectRegistrationAttachment: vi.fn(async () => ({ path: committedPath })),
+      deleteProjectRegistrationAttachment: vi.fn(),
+    };
+    const h = harness({ storageService });
+    await openedDraft(h);
+    const input = { ...h.base, idempotencyKey: 'concurrent-upload', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length, buffer: VALID_PDF };
+    storageService.uploadProjectRegistrationAttachment.mockImplementationOnce(async () => {
+      await h.service.addAttachment(input);
+      return { path: duplicatePath };
+    });
+    const result = await h.service.addAttachment(input);
+    expect(result.replayed).toBe(true);
+    expect(result.body.attachment.path).toBe(committedPath);
+    expect(storageService.deleteProjectRegistrationAttachment.mock.calls.map(([value]) => value.path)).toEqual(samePath ? [] : [duplicatePath]);
+  });
+
+  it('cleans its unreferenced upload after a known revision conflict', async () => {
+    let h;
+    const path = 'orgs/tenant-a/project-registration-documents/project-a/uncommitted.pdf';
+    const storageService = {
+      uploadProjectRegistrationAttachment: vi.fn(async () => {
+        [...h.db.documents.values()].find((value) => value.resourceType === 'project-info' && value.attachmentRefs).draftRevision++;
+        return { path };
+      }),
+      deleteProjectRegistrationAttachment: vi.fn(),
+    };
+    h = harness({ storageService });
+    await openedDraft(h);
+    await expect(h.service.addAttachment({ ...h.base, idempotencyKey: 'conflicting-upload', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length, buffer: VALID_PDF })).rejects.toMatchObject({ statusCode: 409 });
+    expect(storageService.deleteProjectRegistrationAttachment.mock.calls.map(([value]) => value.path)).toEqual([path]);
+  });
+
+  it.each(['none', 'retry', 'refs', 'revision', 'expiry', 'fence', 'canonical', 'role'])('checks storage outside transactions and rechecks submit state: %s', async (mutation) => {
+    let h;
+    let depth = 0;
+    const storageService = {
+      uploadProjectRegistrationAttachment: vi.fn(async ({ projectId, fileName }) => ({
+        path: `orgs/tenant-a/project-registration-documents/${projectId}/${fileName}`,
+      })),
+      deleteProjectRegistrationAttachment: vi.fn(),
+      inspectProjectRegistrationAttachment: vi.fn(async () => {
+        const inspectionDepth = depth;
+        const draft = [...h.db.documents.values()].find((value) => value.resourceType === 'project-info' && value.attachmentRefs);
+        const attachment = clone(draft.attachmentRefs[0]);
+        if (mutation === 'refs') draft.attachmentRefs[0].name = 'changed.pdf';
+        if (mutation === 'revision') draft.draftRevision++;
+        if (mutation === 'expiry') h.advance(60 * 60 * 1000);
+        if (mutation === 'fence') h.db.documents.get(`orgs/tenant-a/editLeases/${resolveEditLeaseDocumentId('project-info', 'project-a')}`).fence++;
+        if (mutation === 'canonical') h.db.documents.get('orgs/tenant-a/projects/project-a').version++;
+        if (mutation === 'role') h.db.documents.get('orgs/tenant-a/members/actor-a').status = 'INACTIVE';
+        return { ...attachment, inspectionDepth };
+      }),
+    };
+    h = harness({ storageService });
+    await openedDraft(h);
+    await h.service.addAttachment({ ...h.base, idempotencyKey: 'inspect-upload', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length, buffer: VALID_PDF });
+    h.auditChainService.appendManyInTransaction.mockClear();
+    const run = h.db.runTransaction.bind(h.db);
+    let finalRetried = false;
+    h.db.runTransaction = async (callback) => {
+      const attempt = async (tx) => {
+        depth++;
+        try { return await callback(tx); } finally { depth--; }
+      };
+      if (mutation === 'retry' && storageService.inspectProjectRegistrationAttachment.mock.calls.length && !finalRetried) {
+        finalRetried = true;
+        await run(attempt, false);
+      }
+      return run(attempt);
+    };
+    const input = { ...h.base, idempotencyKey: 'inspect-submit', expectedDraftRevision: 1, expectedVersion: 3 };
+    if (mutation === 'none' || mutation === 'retry') {
+      const result = await h.service.submit(input);
+      expect(await h.service.submit(input)).toEqual({ ...result, replayed: true });
+      expect(h.auditChainService.appendManyInTransaction).toHaveBeenCalledTimes(mutation === 'retry' ? 2 : 1);
+      expect([...h.db.documents.keys()].filter((path) => path === 'outbox/outbox-a')).toHaveLength(1);
+    } else {
+      await expect(h.service.submit(input)).rejects.toThrow();
+      expect(h.db.documents.has('outbox/outbox-a')).toBe(false);
+      expect(h.db.documents.has('orgs/tenant-a/project_requests/change-project-a')).toBe(false);
+      expect(h.auditChainService.appendManyInTransaction).not.toHaveBeenCalled();
+      expect(h.db.documents.get(`orgs/tenant-a/editLeases/${resolveEditLeaseDocumentId('project-info', 'project-a')}`).state).toBe('ACTIVE');
+    }
+    expect(storageService.inspectProjectRegistrationAttachment).toHaveBeenCalledTimes(1);
+    expect((await storageService.inspectProjectRegistrationAttachment.mock.results[0].value).inspectionDepth).toBe(0);
+  });
+
   it('issues a signed upload URL and accepts a storagePath attachment through the same contract', async () => {
     const readIncomingUpload = vi.fn(async () => ({ buffer: VALID_PDF }));
     const deleteIncomingUpload = vi.fn(async () => undefined);
@@ -2217,6 +2365,15 @@ describe('project information private drafts', () => {
     expect(uploaded.body.attachment.size).toBe(VALID_PDF.byteLength);
     expect(readIncomingUpload).toHaveBeenCalledWith(expect.objectContaining({ path: storagePath }));
     expect(deleteIncomingUpload).toHaveBeenCalledWith(expect.objectContaining({ path: storagePath }));
+    readIncomingUpload.mockRejectedValue(new Error('Incoming deleted'));
+    const retry = { ...h.base, idempotencyKey: 'upload-direct', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'big-contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length, storagePath };
+    expect(await h.service.addAttachment(retry)).toEqual({ ...uploaded, replayed: true });
+    for (const changed of [{ storagePath: `${storagePath}-other` }, { fileName: 'other.pdf' }, { mimeType: 'text/plain' }, { fileSize: VALID_PDF.length + 1 }, { documentKind: 'quote' }]) {
+      await expect(h.service.addAttachment({ ...retry, ...changed })).rejects.toMatchObject({ statusCode: 409 });
+    }
+    expect(readIncomingUpload).toHaveBeenCalledTimes(1);
+    expect(storageService.uploadProjectRegistrationAttachment).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a storagePath attachment when the direct upload cannot be found', async () => {
@@ -2237,6 +2394,24 @@ describe('project information private drafts', () => {
       fileSize: VALID_PDF.byteLength,
       storagePath: 'orgs/tenant-a/project-registration-drafts/x/incoming/uuid-big-contract.pdf',
     })).rejects.toMatchObject({ code: 'draft_attachment_incoming_missing' });
+  });
+
+  it('fails closed for a legacy contentHash key without losing the stored info attachment', async () => {
+    const storageService = {
+      uploadProjectRegistrationAttachment: vi.fn(async () => ({ path: 'orgs/tenant-a/project-registration-documents/project-a/legacy.pdf' })),
+      readIncomingUpload: vi.fn(), deleteProjectRegistrationAttachment: vi.fn(),
+      downloadProjectRegistrationAttachment: vi.fn(async () => ({ buffer: VALID_PDF, contentType: 'application/pdf' })),
+    };
+    const h = harness({ storageService });
+    await openedDraft(h);
+    const input = { ...h.base, idempotencyKey: 'legacy-hash', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length };
+    // Pre-deploy incoming keys used the same fingerprint as inline content.
+    await h.service.addAttachment({ ...input, buffer: VALID_PDF });
+    await expect(h.service.addAttachment({ ...input, storagePath: 'orgs/tenant-a/project-registration-drafts/legacy/incoming/contract.pdf' })).rejects.toMatchObject({ statusCode: 409 });
+    expect(storageService.readIncomingUpload).not.toHaveBeenCalled();
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
+    expect((await h.service.readAttachment({ ...h.base, documentKind: 'contract' })).buffer).toEqual(VALID_PDF);
   });
 
   it.each([false, true])('withdraws a pending registration request into a fresh target draft (permanent: %s)', async (permanent) => {

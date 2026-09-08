@@ -276,6 +276,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
   async function clearData() {
     await Promise.all([
       'projectRequestDrafts',
+      'privateEditDrafts',
       'editLeases',
       'audit_logs',
       'audit_chain',
@@ -328,6 +329,58 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
 
   beforeEach(resetData, 60_000);
   afterAll(clearData, 60_000);
+
+  it.skipIf(!process.env.FIREBASE_STORAGE_EMULATOR_HOST).each(['registration', 'info'])('replays consumed incoming %s uploads with real Storage bytes', async (kind) => {
+    const storage = createProjectRequestContractStorageService({ projectId, bucketName: `${projectId}.firebasestorage.app` });
+    const read = vi.spyOn(storage, 'readIncomingUpload');
+    const upload = vi.spyOn(storage, 'uploadProjectRegistrationAttachment');
+    const clock = () => new Date(nowMs).toISOString();
+    const dependencies = { db, now: clock, rbacPolicy: loadRbacPolicy(), auditChainService: createAuditChainService(db, { now: clock }),
+      idempotencyService: createIdempotencyService(db), draftStorageService: storage };
+    const base = { tenantId, actorId: 'actor-a', actorRole: 'pm', actorDisplayName: 'Actor A', sessionId: 'incoming-session', requestId: 'incoming-request' };
+    let service;
+    let ownership;
+    let draftId;
+    if (kind === 'registration') {
+      service = createProjectRegistrationDraftService(dependencies);
+      const created = await service.create({ ...base, idempotencyKey: 'incoming-create', payload: validPayload() });
+      draftId = created.body.draft.draftId;
+      ownership = { ...base, draftId, leaseId: created.body.lease.leaseId, fence: created.body.lease.fence };
+    } else {
+      const resourceId = 'incoming-project';
+      await db.doc(`orgs/${tenantId}/projects/${resourceId}`).set({ ...validPayload(), id: resourceId, tenantId, version: 1, executiveReviewStatus: 'APPROVED' });
+      const lease = buildActiveEditLeaseDocument({ ...base, resourceType: 'project-info', resourceId, leaseId: 'incoming-lease', serverNow: nowMs });
+      await db.doc(`orgs/${tenantId}/editLeases/${resolveEditLeaseDocumentId('project-info', resourceId)}`).set(lease);
+      service = createProjectInfoDraftService(dependencies);
+      ownership = { ...base, projectId: resourceId, leaseId: lease.leaseId, fence: lease.fence };
+      await service.open({ ...ownership, idempotencyKey: 'incoming-open' });
+      draftId = (await db.collection(`orgs/${tenantId}/privateEditDrafts`).get()).docs[0].id;
+    }
+    const bucket = getStorage(getOrInitAdminApp({ projectId })).bucket(`${projectId}.firebasestorage.app`);
+    const incomingPath = `orgs/${tenantId}/project-registration-drafts/${draftId}/incoming/source.pdf`;
+    const pdf = readFileSync(new URL('./fixtures/project-registration-attachment.pdf', import.meta.url));
+    await bucket.file(incomingPath).save(pdf, { contentType: 'application/pdf' });
+    let publishedPath;
+    try {
+      const input = { ...ownership, idempotencyKey: 'incoming-finalize', expectedDraftRevision: 0, documentKind: 'contract',
+        fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: pdf.length, storagePath: incomingPath };
+      const result = await service.addAttachment(input);
+      publishedPath = result.body.attachment.path;
+      expect((await bucket.file(incomingPath).exists())[0]).toBe(false);
+      expect(await service.addAttachment(input)).toEqual({ ...result, replayed: true });
+      for (const changed of [{ storagePath: `${incomingPath}-other` }, { fileName: 'other.pdf' }]) {
+        await expect(service.addAttachment({ ...input, ...changed })).rejects.toMatchObject({ statusCode: 409 });
+      }
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(upload).toHaveBeenCalledTimes(1);
+      expect((await bucket.file(publishedPath).download())[0]).toEqual(pdf);
+      const draft = (await db.doc(`orgs/${tenantId}/${kind === 'info' ? 'privateEditDrafts' : 'projectRequestDrafts'}/${draftId}`).get()).data();
+      expect(draft).toMatchObject({ draftRevision: 1, attachmentRefs: [{ path: publishedPath }] });
+    } finally {
+      await bucket.file(incomingPath).delete({ ignoreNotFound: true });
+      if (publishedPath) await bucket.file(publishedPath).delete({ ignoreNotFound: true });
+    }
+  });
 
   it.skipIf(!process.env.FIREBASE_STORAGE_EMULATOR_HOST).each([false, true, 'plain-copy'])('publishes real Storage PDF bytes before any worker (legacy: %s)', async (legacy) => {
     const storage = createProjectRequestContractStorageService({ projectId, bucketName: `${projectId}.firebasestorage.app` });

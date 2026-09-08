@@ -372,6 +372,49 @@ async function expectHttpError(promise, statusCode, code) {
 }
 
 describe('project registration draft service', () => {
+  it('replays incoming finalize after the consumed incoming object is deleted', async () => {
+    const storageService = {
+      readIncomingUpload: vi.fn(async () => ({ buffer: VALID_PDF })),
+      deleteIncomingUpload: vi.fn(),
+      uploadProjectRegistrationAttachment: vi.fn(async ({ projectId, fileName }) => ({ path: `orgs/tenant-a/project-registration-documents/${projectId}/${fileName}` })),
+      deleteProjectRegistrationAttachment: vi.fn(),
+    };
+    const h = createHarness({ storageService });
+    const created = await h.service.create({ ...h.base, idempotencyKey: 'incoming-create' });
+    const input = { ...h.base, draftId: created.body.draft.draftId, leaseId: created.body.lease.leaseId,
+      fence: created.body.lease.fence, idempotencyKey: 'incoming-upload', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length,
+      storagePath: 'orgs/tenant-a/project-registration-drafts/draft-1/incoming/contract.pdf' };
+    const result = await h.service.addAttachment(input);
+    expect(storageService.deleteIncomingUpload).toHaveBeenCalledTimes(1);
+    storageService.readIncomingUpload.mockRejectedValue(new Error('Incoming deleted'));
+    expect(await h.service.addAttachment(input)).toEqual({ ...result, replayed: true });
+    for (const changed of [{ storagePath: `${input.storagePath}-other` }, { fileName: 'other.pdf' }, { mimeType: 'text/plain' }, { fileSize: VALID_PDF.length + 1 }, { documentKind: 'quote' }]) {
+      await expect(h.service.addAttachment({ ...input, ...changed })).rejects.toMatchObject({ statusCode: 409 });
+    }
+    expect(storageService.readIncomingUpload).toHaveBeenCalledTimes(1);
+    expect(storageService.uploadProjectRegistrationAttachment).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed for a legacy contentHash key without losing the stored registration attachment', async () => {
+    const storageService = {
+      uploadProjectRegistrationAttachment: vi.fn(async ({ projectId }) => ({ path: `orgs/tenant-a/project-registration-documents/${projectId}/legacy.pdf` })),
+      readIncomingUpload: vi.fn(), deleteProjectRegistrationAttachment: vi.fn(),
+      downloadProjectRegistrationAttachment: vi.fn(async () => ({ buffer: VALID_PDF, contentType: 'application/pdf' })),
+    };
+    const h = createHarness({ storageService });
+    const created = await h.service.create({ ...h.base, idempotencyKey: 'legacy-create' });
+    const input = { ...h.base, draftId: created.body.draft.draftId, leaseId: created.body.lease.leaseId,
+      fence: created.body.lease.fence, idempotencyKey: 'legacy-hash', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length };
+    // Pre-deploy incoming keys used the same fingerprint as inline content.
+    await h.service.addAttachment({ ...input, buffer: VALID_PDF });
+    await expect(h.service.addAttachment({ ...input, storagePath: 'orgs/tenant-a/project-registration-drafts/draft-1/incoming/contract.pdf' })).rejects.toMatchObject({ statusCode: 409 });
+    expect(storageService.readIncomingUpload).not.toHaveBeenCalled();
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
+    expect((await h.service.readAttachment(input)).buffer).toEqual(VALID_PDF);
+  });
+
   it.each([false, true])('retains a committed upload when its response is lost (result read fails: %s)', async (readFails) => {
     const storageService = {
       uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, attachmentId, fileName, buffer, mimeType }) => ({
