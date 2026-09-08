@@ -2716,6 +2716,13 @@ export function createProjectRegistrationSubmittedOutboxHandler({
   projectRegistrationAttachmentStorageService,
   now = () => new Date().toISOString(),
 }) {
+  function assertAttachmentPublicationPending(project, request) {
+    if (request.requestKind !== 'REGISTRATION' || request.status !== 'PENDING'
+      || project.executiveReviewStatus !== 'PENDING' || project.managementPlanningReviewStatus !== 'PENDING') {
+      throw new Error('Project registration has progressed beyond attachment publication');
+    }
+  }
+
   function assertCurrentClaim(outbox, event) {
     if (
       event?.claimToken
@@ -2783,6 +2790,7 @@ export function createProjectRegistrationSubmittedOutboxHandler({
       const attachmentIdempotencyKey = `outbox:${event.id}:registrationAttachments`;
       const shouldRelocate = await mutateSideEffects(event, (sideEffects) => {
         if (sideEffects.registrationAttachments === 'DONE') return null;
+        assertAttachmentPublicationPending(project, projectRequest);
         return {
           ...sideEffects,
           registrationAttachments: 'PROCESSING',
@@ -2792,6 +2800,11 @@ export function createProjectRegistrationSubmittedOutboxHandler({
         };
       });
       if (shouldRelocate) {
+        const changeRequestRef = db.doc(`orgs/${tenantId}/project_requests/change-${projectId}`);
+        if ((await changeRequestRef.get()).exists) {
+          throw new Error('A project change request supersedes registration attachment publication');
+        }
+        const requestSnapshot = stableStringify(requestSnap.data() || {});
         const relocated = await projectRegistrationAttachmentStorageService.relocateDraftAttachments({
           tenantId,
           draftId,
@@ -2809,13 +2822,14 @@ export function createProjectRegistrationSubmittedOutboxHandler({
             throw new Error('Project registration attachment relocation returned an invalid path');
           }
         }
-        const documents = registrationPrivateDocuments(relocated);
+        const documents = Object.fromEntries(Object.entries(registrationPrivateDocuments(relocated)).filter(([, document]) => document !== null));
         await db.runTransaction(async (tx) => {
           const outboxRef = db.doc(`outbox/${event.id}`);
-          const [currentProjectSnap, currentRequestSnap, outboxSnap] = await Promise.all([
+          const [currentProjectSnap, currentRequestSnap, outboxSnap, changeRequestSnap] = await Promise.all([
             tx.get(projectRef),
             tx.get(requestRef),
             tx.get(outboxRef),
+            tx.get(changeRequestRef),
           ]);
           if (!currentProjectSnap.exists || !currentRequestSnap.exists || !outboxSnap.exists) {
             throw new Error('Project registration delivery records are missing');
@@ -2826,12 +2840,27 @@ export function createProjectRegistrationSubmittedOutboxHandler({
             ? outbox.sideEffects
             : {};
           if (sideEffects.registrationAttachments === 'DONE') return;
+          if (changeRequestSnap.exists) {
+            throw new Error('A project change request supersedes registration attachment publication');
+          }
           if (sideEffects.registrationAttachmentsIdempotencyKey !== attachmentIdempotencyKey) {
             throw new Error('Project registration attachment delivery claim changed');
           }
           const currentRequest = currentRequestSnap.data() || {};
+          const currentProject = currentProjectSnap.data() || {};
+          assertAttachmentPublicationPending(currentProject, currentRequest);
+          if (stableStringify(currentRequest) !== requestSnapshot) {
+            throw new Error('Project registration request changed during attachment publication');
+          }
           if (readOptionalText(currentRequest.approvedProjectId) !== projectId) {
             throw new Error('Project registration request does not match its project');
+          }
+          for (const [field, document] of Object.entries(documents)) {
+            for (const existing of [currentProject[field], currentRequest.payload?.[field]]) {
+              if (existing != null && stableStringify(existing) !== stableStringify(document)) {
+                throw new Error('Project registration attachment was replaced before publication');
+              }
+            }
           }
           tx.set(projectRef, {
             ...documents,

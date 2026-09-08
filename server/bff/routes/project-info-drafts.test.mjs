@@ -2239,8 +2239,11 @@ describe('project information private drafts', () => {
     })).rejects.toMatchObject({ code: 'draft_attachment_incoming_missing' });
   });
 
-  it('withdraws a pending registration request back into an active registration draft', async () => {
-    const h = harness();
+  it.each([false, true])('withdraws a pending registration request into a fresh target draft (permanent: %s)', async (permanent) => {
+    const restoreProjectRegistrationAttachments = vi.fn(async ({ attachmentRefs }) => attachmentRefs.map((attachment) => ({ ...attachment,
+      path: 'orgs/tenant-a/project-registration-drafts/registration-draft-1/a-contract.pdf',
+    })));
+    const h = harness({ storageService: { restoreProjectRegistrationAttachments } });
     await openedDraft(h, 'open-withdraw-reg');
     h.db.documents.set('orgs/tenant-a/project_requests/pr-registration-1', {
       id: 'pr-registration-1',
@@ -2256,6 +2259,7 @@ describe('project information private drafts', () => {
       ownerUid: 'actor-a', ownerId: 'actor-a', tenantId: 'tenant-a',
       resourceType: 'project-registration', resourceId: 'registration-draft-1',
       draftRevision: 8, status: 'SUBMITTED',
+      targetProjectId: 'project-a',
       submittedAt: '2026-08-26T02:00:00.000Z',
       submittedProjectId: 'project-a',
       submittedProjectRequestId: 'pr-registration-1',
@@ -2267,7 +2271,7 @@ describe('project information private drafts', () => {
       payload: {
         attachmentRefs: [{
           documentKind: 'contract',
-          path: 'orgs/tenant-a/project-registration-drafts/registration-draft-1/a-contract.pdf',
+          path: permanent ? 'orgs/tenant-a/project-registration-documents/project-a/a-contract.pdf' : 'orgs/tenant-a/project-registration-drafts/registration-draft-1/a-contract.pdf',
           name: 'contract.pdf', size: 9, contentType: 'application/pdf',
         }],
       },
@@ -2286,11 +2290,13 @@ describe('project information private drafts', () => {
     const restored = h.db.documents.get('orgs/tenant-a/projectRequestDrafts/registration-draft-1');
     expect(restored).toMatchObject({
       status: 'ACTIVE', draftRevision: 9,
+      targetProjectId: null,
       payload: { name: '회수 대상 등록' },
       submittedProjectId: null, submittedProjectRequestId: null, submittedOutboxId: null,
     });
     expect(restored.attachmentRefs).toHaveLength(1);
     expect(restored.attachmentRefs[0].path).toContain('/project-registration-drafts/registration-draft-1/');
+    expect(restoreProjectRegistrationAttachments).toHaveBeenCalledTimes(permanent ? 1 : 0);
   });
 
   it('still rejects withdraw when nothing is pending for the project', async () => {

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createIdempotencyService } from '../idempotency.mjs';
 import { resolveEditLeaseDocumentId } from '../edit-lease.mjs';
 import { loadRbacPolicy } from '../rbac-policy.mjs';
+import { mountProjectRoutes } from './projects.mjs';
 import {
   createProjectRegistrationDraftService,
   mountProjectRegistrationDraftRoutes,
@@ -181,7 +182,20 @@ function createHarness({
     })),
     auditChainService,
     idempotencyService,
-    draftStorageService: storageService,
+    draftStorageService: {
+      deleteDraftAttachment: vi.fn(async () => undefined),
+      relocateDraftAttachments: vi.fn(async ({ attachmentRefs, projectId, draftId }) => attachmentRefs.map((attachment) => ({
+        ...attachment, draftId, path: `orgs/tenant-a/project-registration-documents/${projectId}/${attachment.path.split('/').at(-1)}`,
+      }))),
+      inspectProjectRegistrationAttachment: vi.fn(async ({ path }) => {
+        for (const draft of db.documents.values()) {
+          const attachment = (draft.attachmentRefs || []).find((item) => item.path.split('/').at(-1) === path.split('/').at(-1));
+          if (attachment) return { ...attachment, path, draftId: draft.resourceId };
+        }
+        throw new Error('Stored attachment not found');
+      }),
+      ...storageService,
+    },
     rbacPolicy: loadRbacPolicy(),
   });
   const base = {
@@ -358,6 +372,109 @@ async function expectHttpError(promise, statusCode, code) {
 }
 
 describe('project registration draft service', () => {
+  it.each([false, true])('retains a committed upload when its response is lost (result read fails: %s)', async (readFails) => {
+    const storageService = {
+      uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, attachmentId, fileName, buffer, mimeType }) => ({
+        path: `orgs/${tenantId}/project-registration-documents/${projectId}/${attachmentId}-${fileName}`,
+        name: fileName, size: buffer.byteLength, contentType: mimeType,
+      })),
+      deleteProjectRegistrationAttachment: vi.fn(),
+    };
+    const { db, service, base } = createHarness({ storageService });
+    const created = await service.create({ ...base, idempotencyKey: 'lost-response-create' });
+    const run = db.runTransaction.bind(db);
+    let responseLost = false;
+    db.runTransaction = async (callback) => {
+      if (responseLost && readFails) throw new Error('Read unavailable');
+      const result = await run(callback);
+      if (result?.body?.attachment && !responseLost) { responseLost = true; throw new Error('Commit response lost'); }
+      return result;
+    };
+    const uploaded = service.addAttachment({ ...base, draftId: created.body.draft.draftId, leaseId: created.body.lease.leaseId,
+      fence: created.body.lease.fence, idempotencyKey: 'lost-response-upload', expectedDraftRevision: 0,
+      documentKind: 'contract', fileName: 'contract.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.byteLength, buffer: VALID_PDF });
+    if (readFails) await expect(uploaded).rejects.toThrow('Commit response lost');
+    else expect((await uploaded).body.attachment.path).toContain('/project-registration-documents/');
+    expect(db.documents.get(`orgs/tenant-a/projectRequestDrafts/${created.body.draft.draftId}`).attachmentRefs).toHaveLength(1);
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing', 'refs-changed', 'copy-failed'])('preserves the legacy ACTIVE input when publication is %s', async (failure) => {
+    let h;
+    let transactionDepth = 0;
+    const storageService = {
+      relocateDraftAttachments: vi.fn(async ({ attachmentRefs, projectId, draftId }) => {
+        expect(transactionDepth).toBe(0);
+        if (failure === 'copy-failed') throw new Error('Copy failed');
+        return attachmentRefs.map((attachment) => ({ ...attachment, draftId, path: `orgs/tenant-a/project-registration-documents/${projectId}/${attachment.path.split('/').at(-1)}` }));
+      }),
+      inspectProjectRegistrationAttachment: vi.fn(async ({ path }) => {
+        expect(transactionDepth).toBe(0);
+        if (failure === 'missing') throw new Error('Object missing');
+        const draft = h.db.documents.get('orgs/tenant-a/projectRequestDrafts/draft-1');
+        const attachment = draft.attachmentRefs.find((item) => item.path.split('/').at(-1) === path.split('/').at(-1));
+        if (failure === 'refs-changed') draft.attachmentRefs[0].name = 'changed.pdf';
+        return { ...attachment, path, draftId: 'draft-1' };
+      }),
+    };
+    h = createHarness({ storageService });
+    const created = await h.service.create({ ...h.base, idempotencyKey: 'legacy-create', payload: validRegistrationV2Payload() });
+    addRequiredRegistrationAttachments(h.db, created.body.draft.draftId);
+    const draft = h.db.documents.get('orgs/tenant-a/projectRequestDrafts/draft-1');
+    delete draft.targetProjectId;
+    const payload = clone(draft.payload);
+    const run = h.db.runTransaction.bind(h.db);
+    h.db.runTransaction = (callback) => run(async (tx) => { transactionDepth++; try { return await callback(tx); } finally { transactionDepth--; } });
+    await expect(h.service.submit({ ...h.base, draftId: 'draft-1', leaseId: created.body.lease.leaseId, fence: created.body.lease.fence,
+      idempotencyKey: 'legacy-submit', expectedDraftRevision: 0 })).rejects.toThrow();
+    expect(h.db.documents.get('orgs/tenant-a/projectRequestDrafts/draft-1')).toMatchObject({ status: 'ACTIVE', draftRevision: 0, payload, targetProjectId: 'project-1' });
+    expect(h.db.documents.has('orgs/tenant-a/projects/project-1')).toBe(false);
+    expect(h.db.documents.has('orgs/tenant-a/project_requests/project-request-1')).toBe(false);
+  });
+
+  it('publishes all three required files before returning submit, without running the outbox worker', async () => {
+    const files = new Map();
+    const upload = async (input) => {
+      const prefix = input.projectId ? `project-registration-documents/${input.projectId}` : `project-registration-drafts/${input.draftId}`;
+      const path = `orgs/${input.tenantId}/${prefix}/${input.attachmentId}-${input.fileName}`;
+      const metadata = { path, name: input.fileName, size: input.buffer.byteLength, contentType: input.mimeType, draftId: input.draftId, attachmentId: input.attachmentId };
+      files.set(path, { ...metadata, buffer: input.buffer });
+      return metadata;
+    };
+    const storageService = {
+      uploadDraftAttachment: vi.fn(upload), uploadProjectRegistrationAttachment: vi.fn(upload),
+      deleteDraftAttachment: vi.fn(), deleteProjectRegistrationAttachment: vi.fn(),
+      inspectProjectRegistrationAttachment: vi.fn(async ({ path }) => files.get(path)),
+      downloadProjectRegistrationAttachment: vi.fn(async ({ path }) => files.get(path)),
+    };
+    const { db, service, base } = createHarness({ storageService });
+    const created = await service.create({ ...base, idempotencyKey: 'immediate-create', payload: validRegistrationV2Payload() });
+    const ownership = { ...base, draftId: created.body.draft.draftId, leaseId: created.body.lease.leaseId, fence: created.body.lease.fence };
+    const kinds = [['contract', 'contractDocument'], ['customer_business_registration', 'customerBusinessRegistrationDocument'], ['quote', 'quoteDocument']];
+    for (const [index, [documentKind]] of kinds.entries()) {
+      await service.addAttachment({ ...ownership, idempotencyKey: `immediate-upload-${index}`, expectedDraftRevision: index,
+        documentKind, fileName: `${documentKind}.pdf`, mimeType: 'application/pdf', fileSize: VALID_PDF.byteLength, buffer: VALID_PDF });
+    }
+    const submitted = await service.submit({ ...ownership, idempotencyKey: 'immediate-submit', expectedDraftRevision: 3 });
+    const project = db.documents.get(`orgs/tenant-a/projects/${submitted.body.projectId}`);
+    const projectRequest = db.documents.get(`orgs/tenant-a/project_requests/${submitted.body.projectRequestId}`);
+    const app = express();
+    app.use((req, _res, next) => { req.context = { ...base, actorId: 'actor-admin', actorRole: 'admin' }; next(); });
+    mountProjectRoutes(app, { db, projectRequestContractStorageService: storageService });
+    app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.message }));
+    for (const [kind, field] of kinds) {
+      expect(project[field]?.path).toMatch(`/project-registration-documents/${submitted.body.projectId}/`);
+      expect(projectRequest.payload[field]).toEqual(project[field]);
+      for (const resource of [`projects/${submitted.body.projectId}`, `project-requests/${submitted.body.projectRequestId}`]) {
+        const response = await request(app).get(`/api/v1/${resource}/attachments/${kind}`);
+        expect(response.status).toBe(200);
+        expect(response.body).toEqual(VALID_PDF);
+      }
+    }
+    expect(db.documents.get('outbox/outbox-1').sideEffects.registrationAttachments).toBe('DONE');
+    expect(storageService.uploadDraftAttachment).not.toHaveBeenCalled();
+  });
+
   it('creates one opaque draft and initial lease atomically, then replays exactly', async () => {
     const { db, service, base, auditChainService, advance } = createHarness();
     const input = {
@@ -1004,7 +1121,7 @@ describe('project registration draft service', () => {
     db.runTransaction = async (callback) => {
       submitTransactionCalls += 1;
       const result = await runTransaction(callback);
-      if (submitTransactionCalls === 1) {
+      if (submitTransactionCalls === 2) {
         throw Object.assign(new Error('3 INVALID_ARGUMENT: Transaction is invalid or closed.'), {
           code: 3,
           details: 'Transaction is invalid or closed.',
@@ -1023,23 +1140,23 @@ describe('project registration draft service', () => {
     });
 
     expect(submitted).toMatchObject({ status: 201, replayed: true, body: { status: 'SUBMITTED' } });
-    expect(submitTransactionCalls).toBe(2);
+    expect(submitTransactionCalls).toBe(3);
     expect([...db.documents.keys()].filter((path) => path.includes('/projects/'))).toHaveLength(1);
     expect([...db.documents.keys()].filter((path) => path.includes('/project_requests/'))).toHaveLength(1);
-    expect([...db.documents.keys()].filter((path) => path.startsWith('outbox/'))).toHaveLength(1);
+    expect([...db.documents.values()].filter((document) => document.eventType === 'project.registration.submitted')).toHaveLength(1);
     expect(auditChainService.appendManyInTransaction).toHaveBeenCalledTimes(2);
   });
 
   it('accepts the seven PPT page 29 registration documents end to end', async () => {
     const storageService = {
-      uploadDraftAttachment: vi.fn(async ({ tenantId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
-        path: `orgs/${tenantId}/project-registration-drafts/${draftId}/${attachmentId}-${fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
+        path: `orgs/${tenantId}/project-registration-documents/${projectId}/${attachmentId}-${fileName}`,
         name: fileName,
         size: buffer.byteLength,
         contentType: mimeType,
         uploadedAt: '2026-07-10T00:00:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const { db, service, base } = createHarness({ storageService });
     const created = await service.create({
@@ -1087,7 +1204,7 @@ describe('project registration draft service', () => {
     });
     expect(db.documents.get('orgs/tenant-a/project_requests/project-request-1').payload)
       .not.toHaveProperty('groupwareName');
-    expect(db.documents.get('outbox/outbox-1').payload.attachmentRefs.map((item) => item.documentKind))
+    expect(Object.values(db.documents.get('orgs/tenant-a/projects/project-1')).filter((value) => value?.documentKind).map((item) => item.documentKind))
       .toEqual(documents.map(([documentKind]) => documentKind));
   });
 
@@ -1197,14 +1314,14 @@ describe('project registration draft service', () => {
 
   it('keeps a stored legacy proposal when the required RFP is uploaded', async () => {
     const storageService = {
-      uploadDraftAttachment: vi.fn(async ({ tenantId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
-        path: `orgs/${tenantId}/project-registration-drafts/${draftId}/${attachmentId}-${fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
+        path: `orgs/${tenantId}/project-registration-documents/${projectId}/${attachmentId}-${fileName}`,
         name: fileName,
         size: buffer.byteLength,
         contentType: mimeType,
         uploadedAt: '2026-07-10T00:00:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const { db, service, base } = createHarness({ storageService });
     const created = await service.create({
@@ -1243,7 +1360,7 @@ describe('project registration draft service', () => {
     expect(storedDraft.attachmentRefs.map((item) => item.documentKind))
     expect(storedDraft.attachmentRefs.map((item) => item.documentKind)).toContain('proposal');
     expect(storedDraft.attachmentRefs.map((item) => item.documentKind)).toContain('rfp_request_evidence');
-    expect(storageService.deleteDraftAttachment).not.toHaveBeenCalledWith(expect.objectContaining({
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalledWith(expect.objectContaining({
       path: proposal.body.attachment.path,
     }));
 
@@ -1256,7 +1373,7 @@ describe('project registration draft service', () => {
       expectedDraftRevision: 2,
     });
 
-    expect(db.documents.get('outbox/outbox-1').payload.attachmentRefs.map((item) => item.documentKind))
+    expect(Object.values(db.documents.get('orgs/tenant-a/projects/project-1')).filter((value) => value?.documentKind).map((item) => item.documentKind))
       .toEqual(expect.arrayContaining(['proposal', 'rfp_request_evidence']));
   });
 
@@ -1407,14 +1524,14 @@ describe('project registration draft service', () => {
 
   it('maps only the latest typed private attachment to each canonical document field', async () => {
     const storageService = {
-      uploadDraftAttachment: vi.fn(async ({ tenantId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
-        path: `orgs/${tenantId}/project-registration-drafts/${draftId}/${attachmentId}-${fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
+        path: `orgs/${tenantId}/project-registration-documents/${projectId}/${attachmentId}-${fileName}`,
         name: fileName,
         size: buffer.byteLength,
         contentType: mimeType,
         uploadedAt: '2026-07-10T00:00:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const { db, service, base } = createHarness({ storageService });
     const created = await service.create({
@@ -1462,10 +1579,10 @@ describe('project registration draft service', () => {
     });
 
     const project = db.documents.get('orgs/tenant-a/projects/project-1');
-    expect(project.contractDocument).toBeNull();
+    expect(project.contractDocument).toMatchObject({ name: 'latest-contract.pdf' });
     expect(db.documents.get(`orgs/tenant-a/projectRequestDrafts/${created.body.draft.draftId}`))
       .not.toHaveProperty('attachmentRefs');
-    expect(db.documents.get('outbox/outbox-1').payload.attachmentRefs).toEqual(expect.arrayContaining([
+    expect(Object.values(project)).toEqual(expect.arrayContaining([
       expect.objectContaining({ documentKind: 'contract', name: 'latest-contract.pdf' }),
       expect.objectContaining({ documentKind: 'customer_business_registration' }),
       expect.objectContaining({ documentKind: 'quote' }),
@@ -1624,14 +1741,14 @@ describe('project registration draft service', () => {
   it('deletes the superseded private object after a same-kind replacement commits', async () => {
     let uploadCount = 0;
     const storageService = {
-      uploadDraftAttachment: vi.fn(async ({ tenantId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
-        path: `orgs/${tenantId}/project-registration-drafts/${draftId}/${attachmentId}-${++uploadCount}-${fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
+        path: `orgs/${tenantId}/project-registration-documents/${projectId}/${attachmentId}-${++uploadCount}-${fileName}`,
         name: fileName,
         size: buffer.byteLength,
         contentType: mimeType,
         uploadedAt: '2026-07-10T00:00:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const { db, service, base } = createHarness({ storageService });
     const created = await service.create({ ...base, idempotencyKey: 'idem-replace-create' });
@@ -1652,8 +1769,9 @@ describe('project registration draft service', () => {
       ...common, idempotencyKey: 'idem-replace-second', expectedDraftRevision: 1, fileName: 'second.pdf',
     });
 
-    expect(storageService.deleteDraftAttachment).toHaveBeenCalledWith({
+    expect(storageService.deleteProjectRegistrationAttachment).toHaveBeenCalledWith({
       tenantId: 'tenant-a',
+      projectId: 'project-1',
       draftId: created.body.draft.draftId,
       path: first.body.attachment.path,
     });
@@ -1672,14 +1790,14 @@ describe('project registration draft service', () => {
   it('clears stale contract analysis when a private contract is replaced before submission', async () => {
     let uploadCount = 0;
     const storageService = {
-      uploadDraftAttachment: vi.fn(async ({ tenantId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
-        path: `orgs/${tenantId}/project-registration-drafts/${draftId}/${attachmentId}-${++uploadCount}-${fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
+        path: `orgs/${tenantId}/project-registration-documents/${projectId}/${attachmentId}-${++uploadCount}-${fileName}`,
         name: fileName,
         size: buffer.byteLength,
         contentType: mimeType,
         uploadedAt: '2026-07-10T00:00:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const { db, service, base } = createHarness({ storageService });
     const created = await service.create({
@@ -1748,14 +1866,14 @@ describe('project registration draft service', () => {
 
   it('removes a private attachment only with the owning lease fence and advances the draft revision', async () => {
     const storageService = {
-      uploadDraftAttachment: vi.fn(async ({ tenantId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
-        path: `orgs/${tenantId}/project-registration-drafts/${draftId}/${attachmentId}-${fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
+        path: `orgs/${tenantId}/project-registration-documents/${projectId}/${attachmentId}-${fileName}`,
         name: fileName,
         size: buffer.byteLength,
         contentType: mimeType,
         uploadedAt: '2026-07-10T00:00:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const { db, service, base } = createHarness({ storageService });
     const created = await service.create({ ...base, idempotencyKey: 'idem-remove-create' });
@@ -1791,7 +1909,7 @@ describe('project registration draft service', () => {
       expectedDraftRevision: 2,
       documentKind: 'contract',
     }), 423, 'edit_lease_held');
-    expect(storageService.deleteDraftAttachment).not.toHaveBeenCalled();
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
     expect(db.documents.has('outbox/cleanup-outbox-1')).toBe(false);
 
     const removed = await service.removeAttachment({
@@ -1809,9 +1927,10 @@ describe('project registration draft service', () => {
       attachmentRefs: [],
       payload: { contractDocument: null },
     });
-    expect(storageService.deleteDraftAttachment).toHaveBeenCalledOnce();
-    expect(storageService.deleteDraftAttachment).toHaveBeenCalledWith({
+    expect(storageService.deleteProjectRegistrationAttachment).toHaveBeenCalledOnce();
+    expect(storageService.deleteProjectRegistrationAttachment).toHaveBeenCalledWith({
       tenantId: 'tenant-a',
+      projectId: 'project-1',
       draftId: created.body.draft.draftId,
       path: uploaded.body.attachment.path,
     });
@@ -1829,15 +1948,15 @@ describe('project registration draft service', () => {
     let uploadCount = 0;
     let db;
     const storageService = {
-      uploadDraftAttachment: vi.fn(async ({ tenantId, draftId, attachmentId, fileName, buffer, mimeType }) => {
+      uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, draftId, attachmentId, fileName, buffer, mimeType }) => {
         uploadCount += 1;
-        const path = `orgs/${tenantId}/project-registration-drafts/${draftId}/${attachmentId}-${fileName}`;
+        const path = `orgs/${tenantId}/project-registration-documents/${projectId}/${attachmentId}-${fileName}`;
         if (uploadCount === 2) {
           await db.doc(`orgs/${tenantId}/projectRequestDrafts/${draftId}`).set({ draftRevision: 2 }, { merge: true });
         }
         return { path, name: fileName, size: buffer.byteLength, contentType: mimeType, uploadedAt: '2026-07-10T00:00:00.000Z' };
       }),
-      deleteDraftAttachment: vi.fn(async ({ path }) => {
+      deleteProjectRegistrationAttachment: vi.fn(async ({ path }) => {
         deleted.push(path);
         throw new Error('sensitive cleanup detail: orgs/tenant-a/private/contract.pdf');
       }),
@@ -1885,7 +2004,7 @@ describe('project registration draft service', () => {
     }
 
     expect(deleted).toEqual([
-      'orgs/tenant-a/project-registration-drafts/draft-1/attachment-2-contract.pdf',
+      'orgs/tenant-a/project-registration-documents/project-1/attachment-2-contract.pdf',
     ]);
     expect(db.documents.get('orgs/tenant-a/projectRequestDrafts/draft-1').attachmentRefs)
       .toEqual([expect.objectContaining({ path: firstPath })]);
@@ -1893,8 +2012,8 @@ describe('project registration draft service', () => {
 
   it('rejects non-PDF MIME types and fake PDF content before private storage', async () => {
     const storageService = {
-      uploadDraftAttachment: vi.fn(),
-      deleteDraftAttachment: vi.fn(),
+      uploadProjectRegistrationAttachment: vi.fn(),
+      deleteProjectRegistrationAttachment: vi.fn(),
     };
     const { service, base } = createHarness({ storageService });
     const created = await service.create({ ...base, idempotencyKey: 'idem-pdf-validation-create' });
@@ -1923,19 +2042,19 @@ describe('project registration draft service', () => {
       fileSize: fakePdf.byteLength,
       buffer: fakePdf,
     }), 422, 'draft_attachment_invalid');
-    expect(storageService.uploadDraftAttachment).not.toHaveBeenCalled();
+    expect(storageService.uploadProjectRegistrationAttachment).not.toHaveBeenCalled();
   });
 
   it('rejects a reused attachment key when only the raw file bytes differ', async () => {
     const storageService = {
-      uploadDraftAttachment: vi.fn(async ({ tenantId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
-        path: `orgs/${tenantId}/project-registration-drafts/${draftId}/${attachmentId}-${fileName}`,
+      uploadProjectRegistrationAttachment: vi.fn(async ({ tenantId, projectId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
+        path: `orgs/${tenantId}/project-registration-documents/${projectId}/${attachmentId}-${fileName}`,
         name: fileName,
         size: buffer.byteLength,
         contentType: mimeType,
         uploadedAt: '2026-07-10T00:00:00.000Z',
       })),
-      deleteDraftAttachment: vi.fn(async () => undefined),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
     };
     const { service, base } = createHarness({ storageService });
     const created = await service.create({ ...base, idempotencyKey: 'idem-attachment-bytes-create' });
@@ -1961,8 +2080,8 @@ describe('project registration draft service', () => {
       409,
       'idempotency_conflict',
     );
-    expect(storageService.uploadDraftAttachment).toHaveBeenCalledTimes(1);
-    expect(storageService.deleteDraftAttachment).not.toHaveBeenCalled();
+    expect(storageService.uploadProjectRegistrationAttachment).toHaveBeenCalledTimes(1);
+    expect(storageService.deleteProjectRegistrationAttachment).not.toHaveBeenCalled();
   });
 });
 

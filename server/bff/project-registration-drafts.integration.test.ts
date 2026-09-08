@@ -1,8 +1,19 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createBffApp } from './app.mjs';
-import { createFirestoreDb } from './firestore.mjs';
-import { EDIT_LEASE_TTL_MS, resolveEditLeaseDocumentId } from './edit-lease.mjs';
+import { createFirestoreDb, getOrInitAdminApp } from './firestore.mjs';
+import { getStorage } from 'firebase-admin/storage';
+import { EDIT_LEASE_TTL_MS, resolveEditLeaseDocumentId, buildActiveEditLeaseDocument } from './edit-lease.mjs';
+import express from 'express';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createProjectRequestContractStorageService, createDraftAttachmentCleanupOutboxHandler } from './project-request-contract-storage.mjs';
+import { createProjectRegistrationDraftService } from './routes/project-registration-drafts.mjs';
+import { mountProjectRoutes } from './routes/projects.mjs';
+import { createAuditChainService } from './audit-chain.mjs';
+import { createIdempotencyService } from './idempotency.mjs';
+import { loadRbacPolicy } from './rbac-policy.mjs';
+import { createProjectInfoDraftService } from './routes/project-info-drafts.mjs';
 
 const describeIfEmulator = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
 const VALID_PDF = Buffer.from('%PDF-1.4\n');
@@ -23,6 +34,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
   const uploadedPaths: string[] = [];
   const deletedPaths: string[] = [];
   const relocatedPaths: string[] = [];
+  const storedFiles = new Map<string, Record<string, any>>();
   const driveService = {
     getConfig: vi.fn(() => ({ enabled: true, defaultParentFolderId: 'stage-root' })),
     ensureProjectRootFolder: vi.fn(async (input: Record<string, any>) => {
@@ -41,8 +53,9 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
   };
 
   const draftStorageService = {
-    uploadDraftAttachment: vi.fn(async (input: Record<string, any>) => {
-      const path = `orgs/${input.tenantId}/project-registration-drafts/${input.draftId}/${input.attachmentId}-${input.fileName}`;
+    uploadProjectRegistrationAttachment: vi.fn(async (input: Record<string, any>) => {
+      const path = `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`;
+      storedFiles.set(path, { ...input, path, size: input.buffer.byteLength, contentType: input.mimeType });
       uploadedPaths.push(path);
       if (uploadHook) await uploadHook({ ...input, path });
       return {
@@ -53,7 +66,11 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
         uploadedAt: new Date(nowMs).toISOString(),
       };
     }),
-    deleteDraftAttachment: vi.fn(async ({ path }: { path: string }) => {
+    deleteDraftAttachment: vi.fn(async () => undefined),
+    inspectProjectRegistrationAttachment: vi.fn(async ({ path }: { path: string }) => storedFiles.get(path)),
+    downloadProjectRegistrationAttachment: vi.fn(async ({ path }: { path: string }) => storedFiles.get(path)),
+    deleteProjectRegistrationAttachment: vi.fn(async ({ path }: { path: string }) => {
+      storedFiles.delete(path);
       deletedPaths.push(path);
     }),
     relocateDraftAttachments: vi.fn(async (input: Record<string, any>) => input.attachmentRefs.map((attachment: Record<string, any>) => {
@@ -76,6 +93,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
     createProjectRegistrationProjectId: () => `canonical-project-${++projectSequence}`,
     createProjectRegistrationRequestId: () => `canonical-request-${++projectRequestSequence}`,
     projectRegistrationDraftStorageService: draftStorageService,
+    projectRequestContractStorageService: draftStorageService,
     driveService,
     projectRegistrationSlackService,
     workerSecret: 'draft-worker-secret',
@@ -304,11 +322,124 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
     uploadedPaths.length = 0;
     deletedPaths.length = 0;
     relocatedPaths.length = 0;
+    storedFiles.clear();
     vi.clearAllMocks();
   }
 
   beforeEach(resetData, 60_000);
   afterAll(clearData, 60_000);
+
+  it.skipIf(!process.env.FIREBASE_STORAGE_EMULATOR_HOST).each([false, true, 'plain-copy'])('publishes real Storage PDF bytes before any worker (legacy: %s)', async (legacy) => {
+    const storage = createProjectRequestContractStorageService({ projectId, bucketName: `${projectId}.firebasestorage.app` });
+    const clock = () => new Date(nowMs).toISOString();
+    const service = createProjectRegistrationDraftService({ db, now: clock, rbacPolicy: loadRbacPolicy(),
+      auditChainService: createAuditChainService(db, { now: clock }), idempotencyService: createIdempotencyService(db), draftStorageService: storage });
+    const base = { tenantId, actorId: 'actor-a', actorRole: 'pm', actorDisplayName: 'Actor A', sessionId: 'storage-session', requestId: 'storage-request' };
+    const created = await service.create({ ...base, idempotencyKey: 'storage-create', payload: validPayload() });
+    const ownership = { ...base, draftId: created.body.draft.draftId, leaseId: created.body.lease.leaseId, fence: created.body.lease.fence };
+    const pdf = readFileSync(new URL('./fixtures/project-registration-attachment.pdf', import.meta.url));
+    const checksum = (buffer: Buffer) => createHash('sha256').update(buffer).digest('hex');
+    const kinds = [['contract', 'contractDocument'], ['customer_business_registration', 'customerBusinessRegistrationDocument'], ['quote', 'quoteDocument']];
+    const sourceRefs = [];
+    const restoredPrivatePaths: string[] = [];
+    const publishedCopies: Array<{ projectId: string; path: string }> = [];
+    let existingCopy;
+    let submitted;
+    try {
+      for (const [index, [documentKind]] of kinds.entries()) {
+        const input = { ...ownership, attachmentId: `source-${index}`, documentKind, fileName: `${documentKind}.pdf`, mimeType: 'application/pdf', fileSize: pdf.byteLength, buffer: pdf };
+        if (legacy) sourceRefs.push({ ...(await storage.uploadDraftAttachment(input)), attachmentId: input.attachmentId, documentKind });
+        else sourceRefs.push((await service.addAttachment({ ...input, idempotencyKey: `storage-upload-${index}`, expectedDraftRevision: index })).body.attachment);
+      }
+      if (legacy) {
+        const ref = db.doc(`orgs/${tenantId}/projectRequestDrafts/${ownership.draftId}`);
+        const old = (await ref.get()).data();
+        const { targetProjectId: _reserved, ...unreserved } = old!;
+        await ref.set({ ...(legacy === 'plain-copy' ? old : unreserved), attachmentRefs: sourceRefs });
+        if (legacy === 'plain-copy') {
+          const bucket = getStorage(getOrInitAdminApp({ projectId })).bucket(`${projectId}.firebasestorage.app`);
+          const path = sourceRefs[0].path.replace(`/project-registration-drafts/${ownership.draftId}/`, `/project-registration-documents/${old!.targetProjectId}/`);
+          const file = bucket.file(path);
+          await bucket.file(sourceRefs[0].path).copy(file);
+          const [metadata] = await file.getMetadata();
+          existingCopy = { file, metadata };
+          expect(metadata.metadata).not.toHaveProperty('relocationSourcePath');
+        }
+      }
+      submitted = await service.submit({ ...ownership, idempotencyKey: 'storage-submit', expectedDraftRevision: legacy ? 0 : 3 });
+      if (existingCopy) {
+        const [metadata] = await existingCopy.file.getMetadata();
+        expect(metadata).toEqual(existingCopy.metadata);
+      }
+      const project = (await db.doc(`orgs/${tenantId}/projects/${submitted.body.projectId}`).get()).data()!;
+      const projectRequest = (await db.doc(`orgs/${tenantId}/project_requests/${submitted.body.projectRequestId}`).get()).data()!;
+      const app = express();
+      app.use((req, _res, next) => { req.context = { ...base, actorId: 'executive-a', actorRole: 'admin' }; next(); });
+      mountProjectRoutes(app, { db, projectRequestContractStorageService: storage });
+      app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.message }));
+      for (const [index, [kind, field]] of kinds.entries()) {
+        const metadata = await storage.inspectProjectRegistrationAttachment({ tenantId, projectId: submitted.body.projectId, path: project[field].path });
+        expect(metadata).toMatchObject({ size: pdf.byteLength, contentType: 'application/pdf', draftId: ownership.draftId });
+        expect(projectRequest.payload[field].path).toBe(project[field].path);
+        for (const resource of [`projects/${submitted.body.projectId}`, `project-requests/${submitted.body.projectRequestId}`]) {
+          const response = await request(app).get(`/api/v1/${resource}/attachments/${kind}`);
+          expect(response.status).toBe(200);
+          expect(checksum(response.body)).toBe(checksum(pdf));
+          expect(response.headers['cache-control']).toContain('no-store');
+        }
+        if (legacy) expect(checksum((await storage.downloadDraftAttachment({ tenantId, draftId: ownership.draftId, path: sourceRefs[index].path })).buffer)).toBe(checksum(pdf));
+      }
+      const outbox = (await db.doc(`outbox/${submitted.body.outbox.id}`).get()).data()!;
+      expect(outbox).toMatchObject({ status: 'PENDING', sideEffects: { registrationAttachments: 'DONE' } });
+      expect(outbox.payload.attachmentRefs.map((attachment: any) => attachment.path)).toEqual(sourceRefs.map((attachment) => attachment.path));
+      if (!legacy) {
+        const infoService = createProjectInfoDraftService({ db, now: clock, rbacPolicy: loadRbacPolicy(), draftStorageService: storage,
+          auditChainService: createAuditChainService(db, { now: clock }), idempotencyService: createIdempotencyService(db) });
+        const withdraw = async (target: string, round: string) => {
+          const lease = buildActiveEditLeaseDocument({ tenantId, actorId: 'actor-a', actorDisplayName: 'Actor A', sessionId: base.sessionId,
+            resourceType: 'project-info', resourceId: target, leaseId: `info-${round}`, serverNow: nowMs });
+          await db.doc(`orgs/${tenantId}/editLeases/${resolveEditLeaseDocumentId('project-info', target)}`).set(lease);
+          const input = { ...base, projectId: target, leaseId: lease.leaseId, fence: lease.fence };
+          await infoService.open({ ...input, idempotencyKey: `info-open-${round}` });
+          await infoService.withdraw({ ...input, idempotencyKey: `info-withdraw-${round}` });
+          const draft = (await db.doc(`orgs/${tenantId}/projectRequestDrafts/${ownership.draftId}`).get()).data()!;
+          expect(draft.targetProjectId).toBeNull();
+          expect(draft.attachmentRefs).toHaveLength(3);
+          restoredPrivatePaths.push(...draft.attachmentRefs.map((attachment: any) => attachment.path));
+          const registrationLease = buildActiveEditLeaseDocument({ tenantId, actorId: 'actor-a', actorDisplayName: 'Actor A', sessionId: base.sessionId,
+            resourceType: 'project-registration', resourceId: ownership.draftId, leaseId: `registration-${round}`, serverNow: nowMs });
+          await db.doc(`orgs/${tenantId}/editLeases/${resolveEditLeaseDocumentId('project-registration', ownership.draftId)}`).set(registrationLease);
+          return { draft, ownership: { ...ownership, leaseId: registrationLease.leaseId, fence: registrationLease.fence } };
+        };
+        const firstWithdrawal = await withdraw(submitted.body.projectId, 'first');
+        const resubmitted = await service.submit({ ...firstWithdrawal.ownership, idempotencyKey: 'storage-resubmit', expectedDraftRevision: firstWithdrawal.draft.draftRevision });
+        expect(resubmitted.body.projectId).not.toBe(submitted.body.projectId);
+        const secondProject = (await db.doc(`orgs/${tenantId}/projects/${resubmitted.body.projectId}`).get()).data()!;
+        for (const [, field] of kinds) publishedCopies.push({ projectId: resubmitted.body.projectId, path: secondProject[field].path });
+        const secondWithdrawal = await withdraw(resubmitted.body.projectId, 'second');
+        const replacement = await service.addAttachment({ ...secondWithdrawal.ownership, idempotencyKey: 'storage-replace', expectedDraftRevision: secondWithdrawal.draft.draftRevision,
+          documentKind: 'contract', fileName: 'replacement.pdf', mimeType: 'application/pdf', fileSize: pdf.byteLength, buffer: pdf });
+        await service.removeAttachment({ ...secondWithdrawal.ownership, idempotencyKey: 'storage-remove', expectedDraftRevision: replacement.body.draft.draftRevision, documentKind: 'contract' });
+        const discarded = await service.discard({ ...base, draftId: ownership.draftId });
+        const cleanupEvent = (await db.doc(`outbox/${discarded.outboxId}`).get()).data();
+        await createDraftAttachmentCleanupOutboxHandler({ draftStorageService: storage })(cleanupEvent);
+        for (const copy of [...sourceRefs.map((attachment) => ({ projectId: submitted.body.projectId, path: attachment.path })), ...publishedCopies]) {
+          expect(checksum((await storage.downloadProjectRegistrationAttachment({ tenantId, ...copy })).buffer)).toBe(checksum(pdf));
+        }
+        expect((await db.doc(`orgs/${tenantId}/project_requests/${submitted.body.projectRequestId}`).get()).data()?.payload.contractDocument.path).toBe(sourceRefs[0].path);
+      }
+    } finally {
+      for (const path of new Set(restoredPrivatePaths)) await storage.deleteDraftAttachment({ tenantId, draftId: ownership.draftId, path });
+      for (const copy of publishedCopies) await storage.deleteProjectRegistrationAttachment({ tenantId, draftId: ownership.draftId, ...copy });
+      for (const attachment of sourceRefs) {
+        if (legacy) await storage.deleteDraftAttachment({ tenantId, draftId: ownership.draftId, path: attachment.path });
+        const canonicalPath = legacy && submitted
+          ? `orgs/${tenantId}/project-registration-documents/${submitted.body.projectId}/${attachment.path.split('/').at(-1)}` : attachment.path;
+        if (!legacy || submitted) await storage.deleteProjectRegistrationAttachment({ tenantId, draftId: ownership.draftId,
+          projectId: submitted?.body.projectId || created.body.draft.targetProjectId, path: canonicalPath });
+      }
+    }
+  });
 
   it('atomically creates exactly one private draft and lease and replays without extending expiry', async () => {
     const createBody = { payload: { name: 'Private only' }, stepIndex: 1 };
@@ -509,7 +640,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
       draft: { draftRevision: 1 },
       attachment: {
         attachmentId: 'draft-attachment-1',
-        path: expect.stringContaining('/project-registration-drafts/'),
+        path: expect.stringContaining('/project-registration-documents/'),
         name: 'contract.pdf',
         size: VALID_PDF.byteLength,
         contentType: 'application/pdf',
@@ -566,7 +697,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
     expect(await count(`orgs/${tenantId}/partEntries`)).toBe(2);
     expect(driveService.ensureProjectRootFolder).toHaveBeenCalledTimes(1);
     expect(projectRegistrationSlackService.notifyMessage).toHaveBeenCalledTimes(1);
-    expect(relocatedPaths).toHaveLength(7);
+    expect(relocatedPaths).toHaveLength(0);
 
     const project = (await db.doc(`orgs/${tenantId}/projects/${first.body.projectId}`).get()).data();
     expect(project).toMatchObject({
@@ -591,16 +722,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
     expect(draft).not.toHaveProperty('payload');
     expect(draft).not.toHaveProperty('attachmentRefs');
     expect(draft).not.toHaveProperty('stepIndex');
-    expect((await db.doc(`outbox/${first.body.outbox.id}`).get()).data()?.payload?.attachmentRefs)
-      .toEqual(expect.arrayContaining([
-        expect.objectContaining({ documentKind: 'contract', path: expect.stringContaining('/project-registration-drafts/') }),
-        expect.objectContaining({ documentKind: 'customer_business_registration' }),
-        expect.objectContaining({ documentKind: 'quote' }),
-        expect.objectContaining({ documentKind: 'proposal_word_original' }),
-        expect.objectContaining({ documentKind: 'proposal_ppt_original' }),
-        expect.objectContaining({ documentKind: 'presentation_ppt_original' }),
-        expect.objectContaining({ documentKind: 'rfp_request_evidence' }),
-      ]));
+    expect((await db.doc(`outbox/${first.body.outbox.id}`).get()).data()?.payload?.attachmentRefs).toHaveLength(7);
     const lease = (await db.doc(
       `orgs/${tenantId}/editLeases/${resolveEditLeaseDocumentId('project-registration', created.body.draft.draftId)}`,
     ).get()).data();

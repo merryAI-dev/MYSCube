@@ -776,6 +776,37 @@ export function createProjectInfoDraftService({
           leaseId: current.leaseId, fence: current.fence,
         },
       });
+      const withdrawal = registrationRequestRef ? await db.runTransaction(async (tx) => {
+        const nowDate = clockDate(now);
+        await ownedDraft(tx, current);
+        const lock = await checkIdempotency(tx, current, fingerprint, nowDate);
+        if (lock.mode === 'replay') return { outcome: { status: lock.status, body: lock.body, replayed: true } };
+        const lockError = idempotencyError(lock);
+        if (lockError) throw lockError;
+        await assertLease(tx, current, nowDate);
+        const change = await tx.get(refs(current).request);
+        if (change.exists && change.data()?.requestKind === 'CHANGE') return null;
+        const snap = await tx.get(registrationRequestRef);
+        const registration = snap.exists ? snap.data() : null;
+        if (!registration || registration.requestKind !== 'REGISTRATION' || registration.status !== 'PENDING') return null;
+        if (registration.requestedBy !== current.actorId) throw createHttpError(403, 'Only the requester can withdraw this change request', 'request_owner_mismatch');
+        const sourceDraftId = readOptionalText(registration.sourceDraftId);
+        if (!sourceDraftId) return null;
+        const draftSnap = await tx.get(db.doc(`orgs/${current.tenantId}/projectRequestDrafts/${sourceDraftId}`));
+        const sourceDraft = draftSnap.exists ? draftSnap.data() : null;
+        if (!sourceDraft) return null;
+        const submittedOutboxId = readOptionalText(sourceDraft.submittedOutboxId);
+        const outbox = submittedOutboxId ? await tx.get(db.doc(`outbox/${submittedOutboxId}`)) : null;
+        const attachmentRefs = Array.isArray(outbox?.data()?.payload?.attachmentRefs) ? outbox.data().payload.attachmentRefs : [];
+        return { sourceDraftId, submittedOutboxId, attachmentRefs, requestSnapshot: JSON.stringify(registration), draftRevision: sourceDraft.draftRevision };
+      }) : null;
+      if (withdrawal?.outcome) return withdrawal.outcome;
+      let restoredSnapshot = withdrawal?.attachmentRefs;
+      if (withdrawal?.attachmentRefs.some((attachment) => readOptionalText(attachment.path).startsWith(`orgs/${current.tenantId}/project-registration-documents/${current.projectId}/`))) {
+        restoredSnapshot = await draftStorageService.restoreProjectRegistrationAttachments({
+          tenantId: current.tenantId, projectId: current.projectId, draftId: withdrawal.sourceDraftId, attachmentRefs: withdrawal.attachmentRefs,
+        });
+      }
       return db.runTransaction(async (tx) => {
         const nowDate = clockDate(now);
         const timestamp = nowDate.toISOString();
@@ -815,12 +846,18 @@ export function createProjectInfoDraftService({
           if (!registrationDraft) {
             throw createHttpError(409, '등록 임시저장을 찾지 못해 회수할 수 없습니다.', 'request_not_withdrawable');
           }
-          // 제출 이벤트가 원본(사설 경로) 첨부 목록을 들고 있다 - 이관은 복사라 원본이 남아 있다.
+          // 제출 당시 첨부 스냅샷을 복원하되, 영구 파일은 과거 요청을 위해 그대로 둔다.
           const submittedOutboxId = readOptionalText(registrationDraft.submittedOutboxId);
           const outboxSnap = submittedOutboxId ? await tx.get(db.doc(`outbox/${submittedOutboxId}`)) : null;
-          const restoredAttachmentRefs = Array.isArray(outboxSnap?.data?.()?.payload?.attachmentRefs)
+          const sourceAttachmentRefs = Array.isArray(outboxSnap?.data?.()?.payload?.attachmentRefs)
             ? outboxSnap.data().payload.attachmentRefs
             : [];
+          if (!withdrawal || withdrawal.sourceDraftId !== sourceDraftId || withdrawal.submittedOutboxId !== submittedOutboxId
+            || withdrawal.requestSnapshot !== JSON.stringify(registration) || withdrawal.draftRevision !== registrationDraft.draftRevision
+            || JSON.stringify(withdrawal.attachmentRefs) !== JSON.stringify(sourceAttachmentRefs)) {
+            throw createHttpError(409, 'Registration changed during withdrawal', 'draft_version_conflict');
+          }
+          const restoredAttachmentRefs = restoredSnapshot;
 
           const withdrawnRegistration = stripUndefinedDeep({
             ...registration,
@@ -852,6 +889,7 @@ export function createProjectInfoDraftService({
           const restoredRegistrationDraft = stripUndefinedDeep({
             ...registrationDraft,
             status: 'ACTIVE',
+            targetProjectId: null,
             payload: registration.payload && typeof registration.payload === 'object'
               ? registration.payload
               : (registrationDraft.payload || {}),

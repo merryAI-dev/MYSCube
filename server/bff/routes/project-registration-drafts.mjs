@@ -132,11 +132,13 @@ function payloadWithoutAttachment(payload, documentKind, removedAttachments) {
 }
 
 function relocationAttachmentRefs(draft, current) {
-  const prefix = `orgs/${current.tenantId}/project-registration-drafts/${current.draftId}/`;
+  const prefixes = [`orgs/${current.tenantId}/project-registration-drafts/${current.draftId}/`];
+  if (current.targetProjectId) prefixes.push(`orgs/${current.tenantId}/project-registration-documents/${current.targetProjectId}/`);
   return attachmentRefs(draft).map((attachment) => {
     const documentKind = readOptionalText(attachment?.documentKind);
     const path = readOptionalText(attachment?.path);
-    const objectName = path.startsWith(prefix) ? path.slice(prefix.length) : '';
+    const prefix = prefixes.find((candidate) => path.startsWith(candidate));
+    const objectName = prefix ? path.slice(prefix.length) : '';
     if (
       !PROJECT_REGISTRATION_DOCUMENT_KINDS.includes(documentKind)
       || !objectName
@@ -165,6 +167,7 @@ function relocationAttachmentRefs(draft, current) {
 function draftContract(draft = {}) {
   return {
     draftId: readOptionalText(draft.resourceId),
+    ...(draft.targetProjectId ? { targetProjectId: draft.targetProjectId } : {}),
     resourceType: RESOURCE_TYPE,
     resourceId: readOptionalText(draft.resourceId),
     draftRevision: Number.isInteger(draft.draftRevision) ? draft.draftRevision : 0,
@@ -395,7 +398,7 @@ function attachmentCleanupEvent(createEvent, current, paths, timestamp) {
     eventType: DRAFT_ATTACHMENT_CLEANUP_EVENT_TYPE,
     entityType: 'project_registration_draft',
     entityId: current.draftId,
-    payload: { draftId: current.draftId, paths: uniquePaths },
+    payload: { draftId: current.draftId, ...(current.targetProjectId ? { projectId: current.targetProjectId } : {}), paths: uniquePaths },
     createdAt: timestamp,
   });
 }
@@ -505,6 +508,13 @@ export function createProjectRegistrationDraftService({
     }
   }
 
+  async function deleteAttachment(current, path) {
+    const permanentPrefix = `orgs/${current.tenantId}/project-registration-documents/${current.targetProjectId}/`;
+    return current.targetProjectId && path.startsWith(permanentPrefix)
+      ? draftStorageService.deleteProjectRegistrationAttachment({ tenantId: current.tenantId, projectId: current.targetProjectId, draftId: current.draftId, path })
+      : draftStorageService.deleteDraftAttachment({ tenantId: current.tenantId, draftId: current.draftId, path });
+  }
+
   async function runFinalSubmitTransaction(callback) {
     try {
       return await db.runTransaction(callback);
@@ -531,6 +541,7 @@ export function createProjectRegistrationDraftService({
       const current = context(input, { draftRequired: false });
       current.draftId = documentId(createDraftId(), 'draftId');
       const generatedLeaseId = documentId(createLeaseId(), 'leaseId');
+      const targetProjectId = documentId(createProjectId(clockDate(now)), 'projectId');
       const payload = readDraftPayload(input, { allowMissing: true });
       assertDraftSize({ payload });
       const stepIndex = Number.isInteger(input?.stepIndex) && input.stepIndex >= 0 ? input.stepIndex : 0;
@@ -576,6 +587,7 @@ export function createProjectRegistrationDraftService({
           tenantId: current.tenantId,
           resourceType: RESOURCE_TYPE,
           resourceId: current.draftId,
+          targetProjectId,
           draftRevision: 0,
           payload: adoptedPayload && typeof adoptedPayload === 'object' && !Array.isArray(adoptedPayload)
             ? adoptedPayload
@@ -712,6 +724,7 @@ export function createProjectRegistrationDraftService({
           return { status: 200, body: { draftId: current.draftId, status: 'DISCARDED' }, replayed: false, outboxId: null };
         }
         const next = { ...draft, status: 'DISCARDED', discardedAt: timestamp, updatedAt: timestamp };
+        current.targetProjectId = readOptionalText(draft.targetProjectId);
         tx.set(ref, next);
         const cleanupEvent = attachmentCleanupEvent(
           createAttachmentCleanupOutboxEvent,
@@ -732,7 +745,7 @@ export function createProjectRegistrationDraftService({
     },
 
     async readAttachment(input) {
-      if (!draftStorageService?.downloadDraftAttachment) {
+      if (!draftStorageService) {
         throw new Error('Draft attachment storage service is required');
       }
       const current = context(input, { sessionRequired: false, idempotencyRequired: false });
@@ -742,17 +755,17 @@ export function createProjectRegistrationDraftService({
       }
       const attachment = await db.runTransaction(async (tx) => {
         const { draft } = await ownedDraft(tx, current);
+        current.targetProjectId = readOptionalText(draft.targetProjectId);
         const match = attachmentRefs(draft).findLast((item) => item?.documentKind === documentKind);
         if (!match || !readOptionalText(match.path)) {
           throw createHttpError(404, 'Project registration draft attachment not found', 'not_found');
         }
         return match;
       });
-      const downloaded = await draftStorageService.downloadDraftAttachment({
-        tenantId: current.tenantId,
-        draftId: current.draftId,
-        path: attachment.path,
-      });
+      const permanentPrefix = `orgs/${current.tenantId}/project-registration-documents/${current.targetProjectId}/`;
+      const downloaded = current.targetProjectId && attachment.path.startsWith(permanentPrefix)
+        ? await draftStorageService.downloadProjectRegistrationAttachment({ tenantId: current.tenantId, projectId: current.targetProjectId, path: attachment.path })
+        : await draftStorageService.downloadDraftAttachment({ tenantId: current.tenantId, draftId: current.draftId, path: attachment.path });
       return { ...downloaded, name: readOptionalText(attachment.name) || 'attachment.pdf' };
     },
 
@@ -843,7 +856,7 @@ export function createProjectRegistrationDraftService({
         throw createHttpError(400, 'expectedDraftRevision must be a non-negative integer', 'draft_request_invalid');
       }
       const identityDate = clockDate(now);
-      const projectId = documentId(createProjectId(identityDate), 'projectId');
+      const reservedProjectId = documentId(createProjectId(identityDate), 'projectId');
       const projectRequestId = documentId(createProjectRequestId(identityDate), 'projectRequestId');
       const method = 'POST';
       const path = `/api/v1/project-registration-drafts/${current.draftId}/submit`;
@@ -858,6 +871,56 @@ export function createProjectRegistrationDraftService({
           expectedDraftRevision,
         },
       });
+      const preflight = await db.runTransaction(async (tx) => {
+        const nowDate = clockDate(now);
+        const { ref, draft } = await ownedDraft(tx, current);
+        const lock = await checkIdempotency(tx, current, requestFingerprint, nowDate);
+        if (lock.mode === 'replay') return { outcome: { status: lock.status, body: lock.body, replayed: true } };
+        const lockError = idempotencyError(lock);
+        if (lockError) throw lockError;
+        assertRevision(draft, expectedDraftRevision);
+        assertActive(draft);
+        await assertOwnedInTransaction({
+          tx, leaseRef: leaseRef(current), tenantId: current.tenantId, resourceType: RESOURCE_TYPE,
+          resourceId: current.draftId, actorId: current.actorId, sessionId: current.sessionId,
+          leaseId, fence, serverNow: nowDate,
+        });
+        const targetProjectId = readOptionalText(draft.targetProjectId) || reservedProjectId;
+        const snapshot = relocationAttachmentRefs(draft, { ...current, targetProjectId });
+        buildProjectRegistrationCanonicalDocuments({
+          tenantId: current.tenantId, projectId: targetProjectId, projectRequestId,
+          sourceDraftId: current.draftId, payload: draft.payload, attachmentRefs: snapshot,
+          requirementsAttachmentRefs: snapshot, actorId: current.actorId,
+          actorName: current.actorDisplayName, actorEmail: current.actorEmail, timestamp: nowDate.toISOString(),
+        });
+        if (!draft.targetProjectId) tx.set(ref, { targetProjectId }, { merge: true });
+        return { targetProjectId, snapshot };
+      });
+      if (preflight.outcome) return preflight.outcome;
+      const projectId = documentId(preflight.targetProjectId, 'targetProjectId');
+      current.targetProjectId = projectId;
+      const permanentPrefix = `orgs/${current.tenantId}/project-registration-documents/${projectId}/`;
+      const legacy = preflight.snapshot.filter((attachment) => !attachment.path.startsWith(permanentPrefix));
+      if (!draftStorageService?.inspectProjectRegistrationAttachment) throw new Error('Project attachment inspection is required');
+      const relocated = legacy.length ? await draftStorageService.relocateDraftAttachments({
+        tenantId: current.tenantId, draftId: current.draftId, projectId, attachmentRefs: legacy,
+      }) : [];
+      if (!Array.isArray(relocated) || relocated.length !== legacy.length) throw new Error('Draft attachment publication is incomplete');
+      const published = new Map(relocated.map((attachment, index) => [legacy[index].path, attachment]));
+      const attachments = preflight.snapshot.map((attachment) => published.get(attachment.path) || attachment);
+      for (const attachment of attachments) {
+        const objectName = attachment.path?.startsWith(permanentPrefix) ? attachment.path.slice(permanentPrefix.length) : '';
+        if (!objectName || objectName.includes('/') || objectName === '.' || objectName === '..') {
+          throw createHttpError(422, 'Published attachment path is invalid', 'draft_attachment_invalid');
+        }
+        const metadata = await draftStorageService.inspectProjectRegistrationAttachment({
+          tenantId: current.tenantId, projectId, path: attachment.path,
+        });
+        if (!metadata || metadata.draftId !== current.draftId || metadata.size !== attachment.size || metadata.contentType !== attachment.contentType
+          || (attachment.attachmentId && metadata.attachmentId !== attachment.attachmentId)) {
+          throw createHttpError(422, 'Stored attachment does not match the draft', 'draft_attachment_invalid');
+        }
+      }
       const outboxTemplate = createRegistrationOutboxEvent({
         tenantId: current.tenantId,
         requestId: current.requestId,
@@ -901,13 +964,16 @@ export function createProjectRegistrationDraftService({
           fence,
           serverNow: submissionDate,
         });
-        const attachments = relocationAttachmentRefs(draft, current);
+        if (draft.targetProjectId !== projectId || JSON.stringify(relocationAttachmentRefs(draft, current)) !== JSON.stringify(preflight.snapshot)) {
+          throw createHttpError(409, 'Draft attachments changed during submission', 'draft_version_conflict');
+        }
         const outboxEvent = {
           ...outboxTemplate,
           payload: {
             ...(outboxTemplate.payload || {}),
-            attachmentRefs: attachments,
+            attachmentRefs: preflight.snapshot,
           },
+          sideEffects: { registrationAttachments: 'DONE', registrationAttachmentsAt: timestamp },
           createdAt: timestamp,
           nextAttemptAt: timestamp,
           updatedAt: timestamp,
@@ -918,7 +984,7 @@ export function createProjectRegistrationDraftService({
           projectRequestId,
           sourceDraftId: current.draftId,
           payload: draft.payload,
-          attachmentRefs: [],
+          attachmentRefs: attachments,
           requirementsAttachmentRefs: attachments,
           actorId: current.actorId,
           actorName: current.actorDisplayName,
@@ -952,6 +1018,7 @@ export function createProjectRegistrationDraftService({
           createdAt: draft.createdAt || timestamp,
           updatedAt: timestamp,
           submittedAt: timestamp,
+          targetProjectId: projectId,
           submittedProjectId: projectId,
           submittedProjectRequestId: projectRequestId,
           submittedOutboxId: outboxEvent.id,
@@ -1021,7 +1088,7 @@ export function createProjectRegistrationDraftService({
     },
 
     async addAttachment(input) {
-      if (!draftStorageService?.uploadDraftAttachment || !draftStorageService?.deleteDraftAttachment) {
+      if (!draftStorageService?.uploadProjectRegistrationAttachment || !draftStorageService?.deleteProjectRegistrationAttachment) {
         throw new Error('Draft attachment storage service is required');
       }
       const current = context(input);
@@ -1083,9 +1150,10 @@ export function createProjectRegistrationDraftService({
         },
       });
 
+      const reservedProjectId = documentId(createProjectId(clockDate(now)), 'projectId');
       const preflight = await db.runTransaction(async (tx) => {
         const nowDate = clockDate(now);
-        const { draft } = await ownedDraft(tx, current);
+        const { ref, draft } = await ownedDraft(tx, current);
         const lock = await checkIdempotency(tx, current, requestFingerprint, nowDate);
         if (lock.mode === 'replay') return { outcome: { status: lock.status, body: lock.body, replayed: true } };
         const lockError = idempotencyError(lock);
@@ -1110,16 +1178,20 @@ export function createProjectRegistrationDraftService({
         ) {
           throw createHttpError(422, 'Draft attachment limit exceeded', 'draft_attachment_limit_exceeded');
         }
-        return { outcome: null };
+        const targetProjectId = readOptionalText(draft.targetProjectId) || reservedProjectId;
+        if (!draft.targetProjectId) tx.set(ref, { targetProjectId }, { merge: true });
+        return { outcome: null, targetProjectId };
       });
       if (preflight.outcome) return preflight.outcome;
+      current.targetProjectId = preflight.targetProjectId;
 
       let uploaded;
       const cleanup = async () => {
         if (!uploaded?.path) return;
         try {
-          await draftStorageService.deleteDraftAttachment({
+          await draftStorageService.deleteProjectRegistrationAttachment({
             tenantId: current.tenantId,
+            projectId: current.targetProjectId,
             draftId: current.draftId,
             path: uploaded.path,
           });
@@ -1133,8 +1205,9 @@ export function createProjectRegistrationDraftService({
       };
 
       try {
-        uploaded = await draftStorageService.uploadDraftAttachment({
+        uploaded = await draftStorageService.uploadProjectRegistrationAttachment({
           tenantId: current.tenantId,
+          projectId: current.targetProjectId,
           draftId: current.draftId,
           attachmentId,
           fileName,
@@ -1144,7 +1217,7 @@ export function createProjectRegistrationDraftService({
           actorId: current.actorId,
         });
         const storagePath = readOptionalText(uploaded?.path);
-        const expectedPrefix = `orgs/${current.tenantId}/project-registration-drafts/${current.draftId}/`;
+        const expectedPrefix = `orgs/${current.tenantId}/project-registration-documents/${current.targetProjectId}/`;
         if (!storagePath.startsWith(expectedPrefix)) {
           throw new Error('Draft storage returned a path outside the private draft prefix');
         }
@@ -1181,6 +1254,7 @@ export function createProjectRegistrationDraftService({
             serverNow: nowDate,
           });
           const revision = assertRevision(draft, expectedDraftRevision) + 1;
+          if (draft.targetProjectId !== current.targetProjectId) throw createHttpError(409, 'Draft project changed', 'draft_version_conflict');
           replacedAttachments = attachmentRefs(draft)
             .filter((currentAttachment) => replacedDocumentKinds.includes(currentAttachment?.documentKind));
           const next = {
@@ -1218,16 +1292,12 @@ export function createProjectRegistrationDraftService({
           }
           return { status: 200, body, replayed: false };
         });
-        if (outcome.replayed) await cleanup();
+        if (outcome.replayed && outcome.body?.attachment?.path !== uploaded.path) await cleanup();
         else {
           await Promise.all(replacedAttachments.map(async (replaced) => {
             if (!readOptionalText(replaced?.path) || replaced.path === attachment.path) return;
             try {
-              await draftStorageService.deleteDraftAttachment({
-                tenantId: current.tenantId,
-                draftId: current.draftId,
-                path: replaced.path,
-              });
+              await deleteAttachment(current, replaced.path);
             } catch {
               // eslint-disable-next-line no-console
               console.warn('[bff] replaced draft attachment cleanup failed', {
@@ -1244,7 +1314,24 @@ export function createProjectRegistrationDraftService({
         }
         return outcome;
       } catch (error) {
-        await cleanup();
+        if (uploaded?.path) {
+          try {
+            const stored = await db.runTransaction(async (tx) => {
+              const nowDate = clockDate(now);
+              const { draft } = await ownedDraft(tx, current);
+              const lock = await checkIdempotency(tx, current, requestFingerprint, nowDate);
+              return { draft, lock };
+            });
+            if (stored.lock.mode === 'replay') {
+              if (stored.lock.body?.attachment?.path !== uploaded.path) await cleanup();
+              return { status: stored.lock.status, body: stored.lock.body, replayed: true };
+            }
+            if (error.statusCode >= 400 && error.statusCode < 500
+              && !attachmentRefs(stored.draft).some((attachment) => attachment.path === uploaded.path)) await cleanup();
+          } catch {
+            // A failed result read cannot prove the upload commit failed; retain the file.
+          }
+        }
         throw error;
       }
     },
@@ -1342,6 +1429,7 @@ export function createProjectRegistrationDraftService({
         const revision = assertRevision(draft, expectedDraftRevision) + 1;
         const removedAttachments = attachmentRefs(draft)
           .filter((attachment) => attachment?.documentKind === documentKind && readOptionalText(attachment?.path));
+        current.targetProjectId = readOptionalText(draft.targetProjectId);
         if (removedAttachments.length === 0) {
           throw createHttpError(404, 'Project registration draft attachment not found', 'not_found');
         }
@@ -1377,11 +1465,7 @@ export function createProjectRegistrationDraftService({
 
       await Promise.all(result.removedAttachments.map(async (attachment) => {
         try {
-          await draftStorageService.deleteDraftAttachment({
-            tenantId: current.tenantId,
-            draftId: current.draftId,
-            path: attachment.path,
-          });
+          await deleteAttachment(current, attachment.path);
         } catch {
           console.warn('[bff] removed draft attachment cleanup failed', {
             requestId: current.requestId,
