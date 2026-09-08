@@ -1,0 +1,51 @@
+import { readFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { afterAll, describe, expect, it } from 'vitest';
+import { getStorage } from 'firebase-admin/storage';
+import { createFirestoreDb, getOrInitAdminApp } from './firestore.mjs';
+import { createProjectRequestContractStorageService } from './project-request-contract-storage.mjs';
+import { buildRegistrationAttachmentRepairPlan, applyRegistrationAttachmentRepairPlan } from '../../scripts/repair-project-registration-attachments.mjs';
+
+const enabled = Boolean(process.env.FIRESTORE_EMULATOR_HOST && process.env.FIREBASE_STORAGE_EMULATOR_HOST);
+const suite = enabled ? describe : describe.skip;
+suite('registration repair with real Firestore and Storage emulators', () => {
+  const firebaseProjectId = process.env.FIREBASE_PROJECT_ID || 'demo-project-submission-qa';
+  if (!firebaseProjectId.startsWith('demo-')) throw new Error('Repair integration requires a demo project');
+  const db = createFirestoreDb({ projectId: firebaseProjectId });
+  const bucketName = `${firebaseProjectId}.firebasestorage.app`;
+  const bucket = getStorage(getOrInitAdminApp({ projectId: firebaseProjectId })).bucket(bucketName);
+  const storage = createProjectRequestContractStorageService({ projectId: firebaseProjectId, bucketName });
+  afterAll(() => db.terminate());
+
+  it('copies a real PDF with matching bytes, preserves business state and rejects a later Request', async () => {
+    const id = `repair-${randomUUID()}`;
+    const target = { firebaseProjectId, bucketName, tenantId: id, projectId: id, requestId: id, outboxId: id, draftId: id };
+    const buffer = await readFile(new URL('./fixtures/project-registration-attachment.pdf', import.meta.url));
+    const original = await storage.uploadDraftAttachment({ tenantId: id, draftId: id, attachmentId: id, fileName: 'attachment.pdf', mimeType: 'application/pdf', buffer });
+    const attachment = { ...original, attachmentId: id, documentKind: 'contract' };
+    const projectRef = db.doc(`orgs/${id}/projects/${id}`);
+    const requestRef = db.doc(`orgs/${id}/project_requests/${id}`);
+    const outboxRef = db.doc(`outbox/${id}`);
+    const batch = db.batch();
+    batch.set(projectRef, { version: 2, name: 'Keep business state', executiveReviewStatus: 'PENDING', managementPlanningReviewStatus: 'PENDING', contractDocument: null });
+    batch.set(requestRef, { requestKind: 'REGISTRATION', status: 'PENDING', sourceDraftId: id, approvedProjectId: id, requestedBy: 'actor', payload: { contractDocument: null } });
+    batch.set(db.doc(`orgs/${id}/projectRequestDrafts/${id}`), { status: 'SUBMITTED', ownerUid: 'actor', submittedProjectId: id, submittedProjectRequestId: id, submittedOutboxId: id });
+    batch.set(outboxRef, { tenantId: id, eventType: 'project.registration.submitted', status: 'PENDING', payload: { projectId: id, projectRequestId: id, draftId: id, actorId: 'actor', attachmentRefs: [attachment] } });
+    await batch.commit();
+    const plan = await buildRegistrationAttachmentRepairPlan({ db, bucket, target });
+    expect((await projectRef.get()).data()?.contractDocument).toBeNull();
+    expect(await applyRegistrationAttachmentRepairPlan({ db, bucket, plan, reason: 'emulator verification' })).toMatchObject({ applied: 1 });
+    const project = (await projectRef.get()).data()!;
+    expect(project).toMatchObject({ version: 2, name: 'Keep business state', executiveReviewStatus: 'PENDING', managementPlanningReviewStatus: 'PENDING' });
+    expect((await requestRef.get()).data()?.payload.contractDocument).toEqual(project.contractDocument);
+    expect((await bucket.file(project.contractDocument.path).download())[0]).toEqual(buffer);
+    expect((await bucket.file(original.path).download())[0]).toEqual(buffer);
+    expect((await outboxRef.get()).data()?.status).toBe('PENDING');
+    const beforeRepeat = (await projectRef.get()).updateTime;
+    expect(await applyRegistrationAttachmentRepairPlan({ db, bucket, plan, reason: 'repeat' })).toMatchObject({ applied: 0 });
+    expect((await projectRef.get()).updateTime).toEqual(beforeRepeat);
+    await db.doc(`orgs/${id}/project_requests/later`).set({ requestKind: 'CHANGE', targetProjectId: id });
+    await expect(applyRegistrationAttachmentRepairPlan({ db, bucket, plan, reason: 'must refuse later request' })).rejects.toThrow('Another project request exists');
+    expect((await projectRef.get()).updateTime).toEqual(beforeRepeat);
+  });
+});
