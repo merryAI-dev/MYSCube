@@ -531,6 +531,7 @@ export function createProjectRegistrationDraftService({
         409,
         `Draft revision mismatch: expected ${expectedDraftRevision}, actual ${actual}`,
         'draft_version_conflict',
+        { expectedDraftRevision, actualDraftRevision: actual, conflictReason: 'revision_changed' },
       );
     }
     return actual;
@@ -965,7 +966,7 @@ export function createProjectRegistrationDraftService({
           serverNow: submissionDate,
         });
         if (draft.targetProjectId !== projectId || JSON.stringify(relocationAttachmentRefs(draft, current)) !== JSON.stringify(preflight.snapshot)) {
-          throw createHttpError(409, 'Draft attachments changed during submission', 'draft_version_conflict');
+          throw createHttpError(409, 'Draft attachments changed during submission', 'draft_version_conflict', { conflictReason: 'attachments_changed' });
         }
         const outboxEvent = {
           ...outboxTemplate,
@@ -1257,7 +1258,7 @@ export function createProjectRegistrationDraftService({
             serverNow: nowDate,
           });
           const revision = assertRevision(draft, expectedDraftRevision) + 1;
-          if (draft.targetProjectId !== current.targetProjectId) throw createHttpError(409, 'Draft project changed', 'draft_version_conflict');
+          if (draft.targetProjectId !== current.targetProjectId) throw createHttpError(409, 'Draft project changed', 'draft_version_conflict', { conflictReason: 'target_changed' });
           replacedAttachments = attachmentRefs(draft)
             .filter((currentAttachment) => replacedDocumentKinds.includes(currentAttachment?.documentKind));
           const next = {

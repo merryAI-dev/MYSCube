@@ -1,5 +1,6 @@
 import * as Sentry from '@sentry/react';
 import { buildStandardHeaders, createRequestId } from './request-context';
+import { toSafeDiagnosticCode } from './devtools-transaction-log';
 
 export interface ObservabilityUserContext {
   id: string;
@@ -75,14 +76,26 @@ function getRuntimeHostname(): string {
     : '';
 }
 
-function getCurrentRoute(): string {
-  if (typeof window === 'undefined') return '';
-  return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+export function sanitizeDiagnosticUrl(value: string): string {
+  try {
+    const url = new URL(value, 'https://platform.invalid');
+    return /^https?:\/\//.test(value) ? `${url.origin}${url.pathname}` : url.pathname;
+  } catch {
+    return '';
+  }
 }
 
-function getCurrentHref(): string {
+function getCurrentRoute(platformApi = false): string {
   if (typeof window === 'undefined') return '';
-  return window.location.href;
+  if (!platformApi) return `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  const path = window.location.pathname.split(/[?#]/)[0];
+  const screen = path.match(/^\/portal\/(register-project|edit-project|project-approvals|project-settings)(?:\/|$)/)?.[1];
+  return screen ? `/portal/${screen}` : /^\/portal(?:\/|$)/.test(path) ? '/portal/*' : '/*';
+}
+
+function getCurrentHref(platformApi = false): string {
+  if (typeof window === 'undefined') return '';
+  return platformApi ? '' : window.location.href;
 }
 
 function toError(value: unknown, fallbackMessage: string): Error {
@@ -133,6 +146,35 @@ function normalizeExtra(
       .filter(([, value]) => value !== undefined),
   );
   return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function platformApiExtra(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  const safe: Record<string, unknown> = {};
+  for (const key of ['requestId', 'responseRequestId', 'tenantId', 'actorId', 'projectId', 'draftId', 'projectRequestId']) {
+    if (typeof extra[key] === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(extra[key])) safe[key] = extra[key];
+  }
+  for (const key of ['expectedDraftRevision', 'actualDraftRevision', 'expectedVersion', 'actualVersion', 'attempt', 'maxRetries']) {
+    if (typeof extra[key] === 'number' && Number.isSafeInteger(extra[key]) && extra[key] >= 0) safe[key] = extra[key];
+  }
+  if (typeof extra.status === 'number' && Number.isInteger(extra.status) && extra.status >= 100 && extra.status <= 599) safe.status = extra.status;
+  if (typeof extra.endpoint === 'string' && /^\/(?:api\/v1\/(?:[a-z][a-z-]{0,47}\/)?|external\/)\*$/.test(extra.endpoint)) safe.endpoint = extra.endpoint;
+  if (typeof extra.requestUrl === 'string') {
+    const path = sanitizeDiagnosticUrl(extra.requestUrl).replace(/^https?:\/\/[^/]+/, '');
+    const family = path.match(/^\/api\/v1\/([a-z][a-z-]{0,47})(?:\/|$)/)?.[1];
+    safe.endpoint = family ? `/api/v1/${family}/*` : path.startsWith('/api/v1/') ? '/api/v1/*' : '/external/*';
+    safe.requestUrl = safe.endpoint;
+  }
+  const code = extra.errorCode === 'forbidden' || extra.errorCode === 'unauthorized' ? extra.errorCode : toSafeDiagnosticCode(extra.errorCode);
+  if (code) safe.errorCode = code;
+  if (typeof extra.operation === 'string' && /^project_(?:info|registration)_draft_(?:read|create|save|discard|open|submit|rebase|withdraw|alias|attachment)$/.test(extra.operation)) safe.operation = extra.operation;
+  if (typeof extra.release === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(extra.release)) safe.release = extra.release;
+  if (['admin', 'finance', 'pm', 'viewer'].includes(String(extra.actorRole))) safe.actorRole = extra.actorRole;
+  if (['revision_changed', 'canonical_changed', 'source_changed', 'attachments_changed', 'registration_changed', 'target_changed'].includes(String(extra.conflictReason))) safe.conflictReason = extra.conflictReason;
+  return safe;
+}
+
+function platformApiTags(tags: Record<string, unknown> | undefined): Record<string, string> {
+  return { surface: 'platform_api', ...(['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'HEAD', 'OPTIONS'].includes(String(tags?.method)) ? { method: String(tags?.method) } : {}) };
 }
 
 function resolveObservabilityTenantId(): string {
@@ -202,8 +244,8 @@ function buildInternalErrorPayload(params: {
     stack: truncateText(params.stack, 16000),
     level: params.options?.level || (params.eventType === 'message' ? 'info' : 'error'),
     source: truncateText(String(params.options?.tags?.surface || 'application'), 120) || 'application',
-    route: truncateText(getCurrentRoute(), 500),
-    href: truncateText(getCurrentHref(), 2000),
+    route: truncateText(getCurrentRoute(params.options?.tags?.surface === 'platform_api'), 500),
+    href: truncateText(getCurrentHref(params.options?.tags?.surface === 'platform_api'), 2000),
     clientRequestId,
     fingerprint: (params.options?.fingerprint || [])
       .map((entry) => readEnvString(entry))
@@ -257,8 +299,8 @@ function applyScope(
   options: ObservabilityCaptureOptions | undefined,
 ): void {
   const state = globalState.__MYSC_OBSERVABILITY__;
-  const route = getCurrentRoute();
-  const href = getCurrentHref();
+  const route = getCurrentRoute(options?.tags?.surface === 'platform_api');
+  const href = getCurrentHref(options?.tags?.surface === 'platform_api');
 
   scope.setTag('app', 'inner-platform');
   if (route) scope.setTag('route', route);
@@ -304,6 +346,21 @@ export function initObservability(env: Record<string, unknown> = import.meta.env
     release: readEnvString(env.VITE_SENTRY_RELEASE) || readEnvString(env.VERCEL_GIT_COMMIT_SHA) || undefined,
     tracesSampleRate: readEnvNumber(env.VITE_SENTRY_TRACES_SAMPLE_RATE, 0),
     sendDefaultPii: true,
+    beforeSend(event) {
+      if (event.tags?.surface !== 'platform_api') return event;
+      return {
+        type: event.type,
+        event_id: event.event_id,
+        timestamp: event.timestamp,
+        level: event.level,
+        platform: event.platform,
+        release: platformApiExtra({ release: event.release }).release as string | undefined,
+        user: typeof event.user?.id === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(event.user.id) ? { id: event.user.id } : undefined,
+        tags: platformApiTags(event.tags),
+        extra: platformApiExtra(event.extra),
+        exception: { values: [{ type: 'PlatformApiError', value: '플랫폼 요청을 처리하지 못했습니다.' }] },
+      };
+    },
   });
 
   state.sentryEnabled = true;
@@ -346,11 +403,25 @@ export function captureException(
   if (alreadyCaptured(normalized)) return '';
   markCaptured(normalized);
 
+  const platformApi = options?.tags?.surface === 'platform_api';
+  const captured = platformApi ? new Error('플랫폼 요청을 처리하지 못했습니다.') : normalized;
+  if (platformApi) {
+    captured.name = 'PlatformApiError';
+    options = {
+      level: options?.level,
+      tags: platformApiTags(options?.tags),
+      extra: platformApiExtra({
+        ...options?.extra,
+        release: (readEnvString(import.meta.env.VITE_SENTRY_RELEASE) || readEnvString(import.meta.env.VERCEL_GIT_COMMIT_SHA)).match(/^[A-Za-z0-9._-]{1,128}$/)?.[0],
+      }),
+    };
+  }
+
   const payload = buildInternalErrorPayload({
     eventType: 'exception',
-    message: normalized.message,
-    name: normalized.name,
-    stack: normalized.stack,
+    message: captured.message,
+    name: captured.name,
+    stack: captured.stack,
     options,
   });
   void sendInternalClientError(payload);
@@ -360,7 +431,8 @@ export function captureException(
 
   return Sentry.withScope((scope) => {
     applyScope(scope, options);
-    return Sentry.captureException(normalized);
+    if (platformApi) scope.setUser(state.user ? { id: state.user.id, tenantId: state.user.tenantId, role: state.user.role } as Sentry.User : null);
+    return Sentry.captureException(captured);
   });
 }
 

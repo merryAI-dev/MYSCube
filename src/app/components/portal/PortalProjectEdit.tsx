@@ -34,6 +34,7 @@ import {
 } from '../../lib/project-info-draft-client';
 import { ProjectInfoRebaseDialog } from './ProjectInfoRebaseDialog';
 import { PlatformApiError } from '../../platform/api-client';
+import { resolveProjectErrorMessage } from '../../platform/api-error-message';
 
 function isDraftSourceConflict(error: unknown) {
   if (!(error instanceof PlatformApiError) || error.status !== 409) return false;
@@ -307,7 +308,7 @@ function ProjectInfoEditor({
     recordLoadedRef.current = false;
     setRecord(null);
     await lease.release();
-    toast.error(error instanceof Error ? error.message : fallback);
+    toast.error(resolveProjectErrorMessage(error, fallback));
   }, [lease.release]);
 
   useEffect(() => {
@@ -487,15 +488,13 @@ function ProjectInfoEditor({
         try {
           await refreshRebase(actionId);
         } catch (rebaseError) {
-          toast.error(rebaseError instanceof Error
-            ? rebaseError.message
-            : '프로젝트 변경 내역을 불러오지 못했습니다.');
+          toast.error(resolveProjectErrorMessage(rebaseError, '프로젝트 변경 내역을 불러오지 못했습니다.'));
         }
         // The submit did not go through. Rethrow so the caller keeps treating this as a
         // failure and leaves the local autosave and the unsaved-changes guard in place.
         throw error;
       }
-      toast.error(error instanceof Error ? error.message : '저장에 실패했습니다. 다시 시도해주세요.');
+      toast.error(resolveProjectErrorMessage(error, '저장 상태를 확인하지 못했습니다.'));
       throw error;
     } finally {
       setBusyActionId(null);
@@ -524,7 +523,7 @@ function ProjectInfoEditor({
       setWithdrawOpen(false);
       toast.success('수정 요청을 회수했습니다. 이어서 수정할 수 있습니다.');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '수정 요청을 회수하지 못했습니다.');
+      toast.error(resolveProjectErrorMessage(error, '수정 요청을 회수하지 못했습니다.'));
     } finally {
       setWithdrawBusy(false);
     }
@@ -556,10 +555,10 @@ function ProjectInfoEditor({
         try {
           await refreshRebase(actionId);
         } catch (refreshError) {
-          toast.error(refreshError instanceof Error ? refreshError.message : '최근 변경 내용을 불러오지 못했습니다. 입력 내용은 보관됩니다.');
+          toast.error(resolveProjectErrorMessage(refreshError, '최근 변경 내용을 불러오지 못했습니다. 입력 내용은 보관됩니다.'));
         }
       } else {
-        toast.error(error instanceof Error ? error.message : '변경 내용을 반영하지 못했습니다. 다시 시도해주세요.');
+        toast.error(resolveProjectErrorMessage(error, '변경 내용을 반영하지 못했습니다. 입력을 유지하고 최근 저장 내용을 확인해 주세요.'));
       }
     } finally {
       setRebaseBusy(false);

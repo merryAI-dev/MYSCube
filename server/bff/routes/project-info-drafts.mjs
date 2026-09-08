@@ -296,7 +296,7 @@ function sameFieldValue(left, right) {
 }
 
 function sourceConflict() {
-  return createHttpError(409, '최근 제출 또는 확정 내용이 변경되었습니다. 다시 비교해 주세요.', 'draft_source_conflict');
+  return createHttpError(409, '최근 제출 또는 확정 내용이 변경되었습니다. 다시 비교해 주세요.', 'draft_source_conflict', { conflictReason: 'source_changed' });
 }
 
 function assertDraftSource(draft, project, request) {
@@ -352,6 +352,7 @@ function assertRevision(draft, expected) {
       409,
       `Draft revision mismatch: expected ${expected}, actual ${actual}`,
       'draft_version_conflict',
+      { expectedDraftRevision: expected, actualDraftRevision: actual, conflictReason: 'revision_changed' },
     );
   }
   return actual;
@@ -866,7 +867,7 @@ export function createProjectInfoDraftService({
           if (!withdrawal || withdrawal.sourceDraftId !== sourceDraftId || withdrawal.submittedOutboxId !== submittedOutboxId
             || withdrawal.requestSnapshot !== JSON.stringify(registration) || withdrawal.draftRevision !== registrationDraft.draftRevision
             || JSON.stringify(withdrawal.attachmentRefs) !== JSON.stringify(sourceAttachmentRefs)) {
-            throw createHttpError(409, 'Registration changed during withdrawal', 'draft_version_conflict');
+            throw createHttpError(409, 'Registration changed during withdrawal', 'draft_version_conflict', { conflictReason: 'registration_changed' });
           }
           const restoredAttachmentRefs = restoredSnapshot;
 
@@ -1592,7 +1593,7 @@ export function createProjectInfoDraftService({
         await assertLease(tx, current, nowDate);
         const actualVersion = Number.isInteger(project.version) && project.version > 0 ? project.version : 1;
         if (draft.baseCanonicalVersion !== actualVersion || expectedVersion !== actualVersion) {
-          throw createHttpError(409, `Canonical version mismatch: expected ${expectedVersion}, actual ${actualVersion}`, 'canonical_version_conflict');
+          throw createHttpError(409, `Canonical version mismatch: expected ${expectedVersion}, actual ${actualVersion}`, 'canonical_version_conflict', { expectedVersion, actualVersion, conflictReason: 'canonical_changed' });
         }
         assertDraftSource(draft, project, requestSnap.exists ? requestSnap.data() : null);
         return { draft };
@@ -1629,11 +1630,12 @@ export function createProjectInfoDraftService({
             409,
             `Canonical version mismatch: expected ${expectedVersion}, actual ${actualVersion}`,
             'canonical_version_conflict',
+            { expectedVersion, actualVersion, conflictReason: 'canonical_changed' },
           );
         }
         assertDraftSource(draft, project, previousRequest);
         if (JSON.stringify(draftAttachments(draft)) !== JSON.stringify(draftAttachments(preflight.draft))) {
-          throw createHttpError(409, 'Draft attachments changed during submission', 'draft_version_conflict');
+          throw createHttpError(409, 'Draft attachments changed during submission', 'draft_version_conflict', { conflictReason: 'attachments_changed' });
         }
         const nextVersion = actualVersion + 1;
         const { projectRequest } = buildProjectInfoChangeSubmission({

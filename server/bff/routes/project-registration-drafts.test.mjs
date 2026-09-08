@@ -793,11 +793,9 @@ describe('project registration draft service', () => {
       draftRevision: 1,
       payload: patch.payload,
     });
-    await expectHttpError(
-      service.update({ ...patch, idempotencyKey: 'idem-stale', expectedDraftRevision: 0 }),
-      409,
-      'draft_version_conflict',
-    );
+    await expect(service.update({ ...patch, idempotencyKey: 'idem-stale', expectedDraftRevision: 0 }))
+      .rejects.toMatchObject({ statusCode: 409, code: 'draft_version_conflict', details: { expectedDraftRevision: 0, actualDraftRevision: 1, conflictReason: 'revision_changed' } });
+    expect(db.documents.get('orgs/tenant-a/projectRequestDrafts/draft-1')).toMatchObject({ draftRevision: 1, payload: patch.payload });
     await expectHttpError(
       service.update({ ...patch, idempotencyKey: 'idem-wrong-session', sessionId: 'session-b', expectedDraftRevision: 1 }),
       423,

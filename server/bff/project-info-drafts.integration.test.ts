@@ -319,6 +319,7 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
       .send({ expectedDraftRevision: 1, expectedVersion: 3 });
     expect(conflict.status).toBe(409);
     expect(conflict.body.error).toBe('canonical_version_conflict');
+    expect(conflict.body.details).toEqual({ expectedVersion: 3, actualVersion: 4, conflictReason: 'canonical_changed' });
     expect((await db.doc(`orgs/${tenantId}/project_requests/change-project-a`).get()).exists).toBe(false);
     expect((await db.collection('outbox').get()).empty).toBe(true);
 

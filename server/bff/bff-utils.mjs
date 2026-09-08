@@ -13,11 +13,12 @@ import { actorHasPermission } from './rbac-policy.mjs';
 // 이 함수로 만든 오류는 문구를 개발자가 직접 정한 것이므로 그대로 응답에 실어도 안전하다.
 // 예상하지 못한 예외(TypeError, Firestore 오류 등)는 이 표식이 없으므로 5xx에서 계속 가려진다.
 // app.mjs 의 최종 오류 핸들러가 이 표식을 읽는다.
-export function createHttpError(statusCode, message, code = 'request_error') {
+export function createHttpError(statusCode, message, code = 'request_error', details) {
   const error = new Error(message);
   error.statusCode = statusCode;
   error.code = code;
   error.expose = true;
+  if (details !== undefined) error.details = details;
   return error;
 }
 

@@ -54,11 +54,13 @@ describe('production deployment decisions', () => {
     });
 
     expect(live.args).toEqual(expect.arrayContaining([
+      `VITE_SENTRY_RELEASE=${'a'.repeat(40)}`,
       'BFF_MAINTENANCE_READ_ONLY=false',
       'BFF_WORKERS_ENABLED=true',
       'BFF_SCHEDULER_OWNER=vercel',
     ]));
     expect(maintenance.args).toEqual(expect.arrayContaining([
+      `VITE_SENTRY_RELEASE=${'b'.repeat(40)}`,
       'BFF_MAINTENANCE_READ_ONLY=true',
       'BFF_WORKERS_ENABLED=false',
       'BFF_SCHEDULER_OWNER=disabled',

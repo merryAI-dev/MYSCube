@@ -662,6 +662,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
       .send({ ...body, expectedDraftRevision: 0 });
     expect(stale.status).toBe(409);
     expect(stale.body.error).toBe('draft_version_conflict');
+    expect(stale.body.details).toEqual({ expectedDraftRevision: 0, actualDraftRevision: 1, conflictReason: 'revision_changed' });
 
     const wrongSession = await api
       .patch(path)

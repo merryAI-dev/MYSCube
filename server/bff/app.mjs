@@ -1272,27 +1272,49 @@ export function createBffApp(options = {}) {
       ? 'skipped'
       : (slackAlertService.enabled ? 'pending' : 'disabled');
 
+    const platformApi = parsed.source === 'platform_api';
+    const screenPath = typeof parsed.route === 'string' ? parsed.route.split(/[?#]/)[0] : '';
+    const projectScreen = screenPath.match(/^\/portal\/(register-project|edit-project|project-approvals|project-settings)(?:\/|$)/)?.[1];
+    const diagnosticText = (value, pattern) => typeof value === 'string' && pattern.test(value) ? value : undefined;
+    const diagnosticId = (value) => diagnosticText(value, /^[A-Za-z0-9_-]{1,128}$/);
+    const diagnosticMethod = diagnosticText(parsed.tags?.method, /^(?:GET|POST|PATCH|PUT|DELETE|HEAD|OPTIONS)$/);
+    const diagnostics = platformApi ? {
+      errorCode: typeof parsed.extra?.errorCode === 'string' && parsed.extra.errorCode.length <= 64 ? diagnosticText(parsed.extra.errorCode, /^(?:(?:[a-z]+_){1,7}[a-z]+|forbidden|unauthorized)$/) : undefined,
+      operation: diagnosticText(parsed.extra?.operation, /^project_(?:info|registration)_draft_(?:read|create|save|discard|open|submit|rebase|withdraw|alias|attachment)$/),
+      endpoint: diagnosticText(parsed.extra?.endpoint, /^\/(?:api\/v1\/(?:[a-z][a-z-]{0,47}\/)?|external\/)\*$/),
+      status: Number.isInteger(parsed.extra?.status) && parsed.extra.status >= 100 && parsed.extra.status <= 599 ? parsed.extra.status : undefined,
+      release: diagnosticText(parsed.extra?.release, /^[A-Za-z0-9._-]{1,128}$/),
+      responseRequestId: diagnosticId(parsed.extra?.responseRequestId),
+      projectId: diagnosticId(parsed.extra?.projectId),
+      draftId: diagnosticId(parsed.extra?.draftId),
+      projectRequestId: diagnosticId(parsed.extra?.projectRequestId),
+      ...Object.fromEntries(['expectedDraftRevision', 'actualDraftRevision', 'expectedVersion', 'actualVersion', 'attempt', 'maxRetries'].flatMap((key) => {
+        const value = parsed.extra?.[key];
+        return Number.isSafeInteger(value) && value >= 0 ? [[key, value]] : [];
+      })),
+      conflictReason: ['revision_changed', 'canonical_changed', 'source_changed', 'attachments_changed', 'registration_changed', 'target_changed'].includes(parsed.extra?.conflictReason) ? parsed.extra.conflictReason : undefined,
+    } : {};
     const event = stripUndefinedDeep({
       id: eventId,
       tenantId,
       actorId,
       actorRole,
-      actorEmail,
+      actorEmail: platformApi ? undefined : actorEmail,
       authSource,
       requestId,
       eventType: parsed.eventType || 'exception',
       level: parsed.level || 'error',
       source: parsed.source,
-      name: parsed.name,
-      message: parsed.message,
-      stack: parsed.stack,
-      route: parsed.route,
-      href: parsed.href,
-      clientRequestId: parsed.clientRequestId,
-      fingerprint: parsed.fingerprint,
-      tags: parsed.tags,
-      extra: parsed.extra,
-      userAgent: readOptionalText(req.header('user-agent')),
+      name: platformApi ? 'PlatformApiError' : parsed.name,
+      message: platformApi ? '플랫폼 요청을 처리하지 못했습니다.' : parsed.message,
+      stack: platformApi ? undefined : parsed.stack,
+      route: platformApi ? (projectScreen ? `/portal/${projectScreen}` : /^\/portal(?:\/|$)/.test(screenPath) ? '/portal/*' : '/*') : parsed.route,
+      href: platformApi ? undefined : parsed.href,
+      clientRequestId: platformApi ? diagnosticId(parsed.clientRequestId) : parsed.clientRequestId,
+      fingerprint: platformApi ? undefined : parsed.fingerprint,
+      tags: platformApi ? { surface: 'platform_api', method: diagnosticMethod } : parsed.tags,
+      extra: platformApi ? { ...diagnostics, actorRole } : parsed.extra,
+      userAgent: platformApi ? undefined : readOptionalText(req.header('user-agent')),
       occurredAt: parsed.occurredAt || timestamp,
       slackEligible,
       slackStatus: initialSlackStatus,
@@ -1312,10 +1334,12 @@ export function createBffApp(options = {}) {
       tenantId,
       actorId,
       actorRole,
-      actorEmailMasked: piiProtector.maskEmail(actorEmail || ''),
+      actorEmailMasked: platformApi ? undefined : piiProtector.maskEmail(actorEmail || ''),
       authSource,
       requestId,
-      clientRequestId: event.clientRequestId,
+      clientRequestId: platformApi ? diagnosticId(event.clientRequestId) : event.clientRequestId,
+      ...diagnostics,
+      method: platformApi ? diagnosticMethod : undefined,
       source: event.source,
       route: event.route,
       href: event.href,

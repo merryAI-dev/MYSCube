@@ -1,5 +1,6 @@
 import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
 import { PlatformApiError } from '../../platform/api-client';
+import { resolveProjectErrorMessage } from '../../platform/api-error-message';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { CheckCircle2, Clock3, LockKeyhole, Pencil, Send } from 'lucide-react';
@@ -300,7 +301,7 @@ function RegistrationEditor({
                 const saved = await draftClient.setAlias(record.draftId, ownership, nextAlias);
                 revisionRef.current = saved.draft.draftRevision;
                 setRecord(saved.draft);
-              })).catch(() => toast.error('임시저장 이름을 저장하지 못했습니다.'));
+              })).catch((error) => toast.error(resolveProjectErrorMessage(error, '임시저장 이름을 저장하지 못했습니다.')));
             }}
             placeholder="예: 관광벤처 멘토링"
             disabled={!lease.canEdit}
@@ -473,7 +474,7 @@ export function PortalProjectRegister() {
         const loaded = await client.get(draftId);
         if (!cancelled && session) setBootstrap({ actor, client, draft: loaded.draft, session });
       } catch (cause) {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : '등록 임시저장을 불러오지 못했습니다.');
+        if (!cancelled) setError(resolveProjectErrorMessage(cause, '등록 임시저장을 불러오지 못했습니다.'));
       }
     })();
     return () => {
@@ -575,7 +576,7 @@ export function PortalProjectRegister() {
                         });
                         toast.success('임시저장을 삭제했습니다.');
                       })
-                      .catch(() => toast.error('임시저장 삭제에 실패했습니다. 잠시 후 다시 시도해 주세요.'))
+                      .catch((error) => toast.error(resolveProjectErrorMessage(error, '임시저장 삭제 상태를 확인하지 못했습니다.')))
                       .finally(() => setDeletingDraftId(null));
                   }}
                 >

@@ -4,6 +4,33 @@ import { createHash } from 'node:crypto';
 
 const documents = JSON.parse(readFileSync(new URL('../../policies/project-documents.json', import.meta.url), 'utf8')) as Record<string, { field: string }>;
 
+test('rejected attachment upload shows correction guidance without repeating or removing the prior file', async ({ page }) => {
+  const contract = { documentKind: 'contract', path: 'server/original.pdf', name: 'original.pdf', size: 715, contentType: 'application/pdf' };
+  const record = { projectId: 'p009', resourceId: 'p009', resourceType: 'project-info', status: 'ACTIVE', baseCanonicalVersion: 1, draftRevision: 1, payload: { name: '첨부 실패 보존' }, attachmentRefs: [contract], stepIndex: 0 };
+  let uploads = 0;
+  let deletes = 0;
+  await page.route('**/api/v1/projects/p009/latest-request', route => route.fulfill({ json: { item: null } }));
+  await page.route('**/api/v1/edit-leases/**', route => route.fulfill({ json: { serverNow: new Date().toISOString(), state: 'ACTIVE', canEdit: true, expiresAt: new Date(Date.now() + 1_800_000).toISOString(), leaseId: 'test-lease', fence: 1 } }));
+  await page.route('**/api/v1/project-info-drafts/p009/open', route => route.fulfill({ json: { draft: record } }));
+  await page.route('**/api/v1/project-info-drafts/p009', route => route.fulfill({ json: { draft: record } }));
+  await page.route('**/api/v1/project-info-drafts/p009/attachments**', route => {
+    if (route.request().method() === 'DELETE') deletes += 1;
+    if (route.request().method() === 'POST') uploads += 1;
+    return route.fulfill({ status: 422, json: { error: 'draft_attachment_invalid', message: 'Internal invalid attachment bytes' } });
+  });
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'PM 샘플 로그인' }).click();
+  await page.goto('/portal/edit-project/p009');
+  await expect(page.getByPlaceholder('예: 26농식품AC')).toHaveValue('첨부 실패 보존');
+  await page.getByRole('button', { name: /^계약\/재무/ }).click();
+  await page.locator('input[type=file]').first().setInputFiles('server/bff/fixtures/project-registration-attachment.pdf');
+  await expect(page.getByText('파일 형식이나 저장된 첨부를 확인할 수 없어요. 첨부 목록과 허용 파일 형식을 확인해 주세요.', { exact: true }).first()).toBeVisible();
+  expect(uploads).toBe(1);
+  expect(deletes).toBe(0);
+  expect(record.attachmentRefs[0].path).toBe('server/original.pdf');
+  await expect(page.getByText('Internal invalid attachment bytes', { exact: true })).toHaveCount(0);
+});
+
 test('private draft GET to editor save preserves all twelve selected document fields', async ({ page }) => {
   const attachmentRefs = Object.keys(documents).map(documentKind => ({ documentKind, path: `selected/${documentKind}`, name: `${documentKind}.pdf`, size: 100, contentType: 'application/pdf' }));
   let record = { projectId: 'p009', resourceId: 'p009', resourceType: 'project-info', status: 'ACTIVE', baseCanonicalVersion: 1, draftRevision: 1, payload: { name: '열두 문서 확인' }, attachmentRefs, stepIndex: 0 };
@@ -76,10 +103,12 @@ for (const scenario of ['stale-apply', 'stale-submit', 'malformed-apply']) {
     await page.getByRole('button', { name: '최종 저장', exact: true }).click();
     const dialog = page.getByRole('dialog').filter({ hasText: '수정하는 동안 프로젝트가 변경되었습니다' });
     await expect(dialog).toContainText('B.pdf');
+    await expect(page.getByText('최근 제출·확정 내용이 변경됐어요. 비교 화면에서 최신 내용과 첨부파일을 확인하고 선택해 주세요.', { exact: true })).toBeVisible();
+    await expect(page.getByText('요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.', { exact: true })).toHaveCount(0);
     await dialog.getByRole('radio').nth(1).click();
     await dialog.getByRole('button', { name: '선택한 내용으로 계속', exact: true }).click();
     if (scenario === 'malformed-apply') {
-      await expect(page.getByText('Invalid project information rebase response', { exact: true })).toBeVisible();
+      await expect(page.getByText('서버의 프로젝트 저장·비교 결과를 확인하지 못했어요. 입력을 유지하고 최신 상태를 다시 확인해 주세요.', { exact: true })).toBeVisible();
       expect(submits).toHaveLength(1);
       expect(record.payload.contractDocument.name).toBe('A.pdf');
       await expect(dialog).toBeVisible();

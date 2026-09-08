@@ -29,6 +29,7 @@ import { useAuth } from '../../data/auth-store';
 import { useFirebase } from '../../lib/firebase-context';
 import { PlatformApiError } from '../../platform/api-client';
 import { resolveApiErrorPresentation } from '../../platform/api-error-messages';
+import { resolveProjectErrorMessage } from '../../platform/api-error-message';
 import {
   fetchParticipationSystemAccountViaBff,
   previewParticipationSheetByLinkViaBff,
@@ -855,7 +856,7 @@ export function ProjectEditorWizard({
       setComparison({ mine, server, stepIndex: nextStepIndex });
       setComparisonOpen(true);
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '최근 임시저장을 불러오지 못했습니다.');
+      toast.error(resolveProjectErrorMessage(error, '최근 임시저장을 불러오지 못했습니다.'));
     } finally {
       comparisonLoadingRef.current = false;
       setComparisonBusy(false);
@@ -903,12 +904,7 @@ export function ProjectEditorWizard({
       }
       return 'server';
     } catch (error) {
-      console.error('[ProjectEditorWizard] autosave failed:', error);
-      // 서버가 적어 준 원인을 실패 토스트가 보여줄 수 있게 남겨 둔다 - "잠시 후 다시"만으로는
-      // 리스 만료·검증 거부·네트워크를 구분할 수 없어 사람이 같은 실패를 반복한다.
-      autosaveErrorRef.current = error instanceof Error ? (
-        (error as { serverMessage?: string }).serverMessage || error.message
-      ) : String(error);
+      autosaveErrorRef.current = resolveProjectErrorMessage(error, '임시저장 결과를 확인하지 못했습니다. 입력을 유지하고 최근 저장 내용을 확인해 주세요.');
       setLastAutosavedAt(now);
       setAutosaveState('error');
       return false;
@@ -1067,8 +1063,7 @@ export function ProjectEditorWizard({
       setAutosaveState('idle');
       setLastAutosavedAt('');
     } catch (error) {
-      console.error('[ProjectEditorWizard] submit failed:', error);
-      toast.error(error instanceof Error ? error.message : '저장에 실패했습니다.');
+      toast.error(resolveProjectErrorMessage(error, '저장에 실패했습니다.'));
     } finally {
       submitInFlightRef.current = false;
       setSubmitting(false);
@@ -1491,8 +1486,7 @@ export function ProjectEditorWizard({
       if (input) input.value = '';
     } catch (error) {
       if (documentUploadRunRef.current[kind] !== runId) return;
-      console.error(`[ProjectEditorWizard] ${kind} upload failed:`, error);
-      const message = error instanceof Error ? error.message : `${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 업로드에 실패했습니다.`;
+      const message = resolveProjectErrorMessage(error, `${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 업로드에 실패했습니다.`);
       setDocumentUploadState((prev) => ({ ...prev, [kind]: 'error' }));
       setDocumentUploadError((prev) => ({ ...prev, [kind]: message }));
       toast.error(message);
@@ -1551,7 +1545,7 @@ export function ProjectEditorWizard({
       delete retryDocumentFileRef.current[kind];
       toast.success(`${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 첨부를 제거했습니다.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : `${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 첨부 제거에 실패했습니다.`;
+      const message = resolveProjectErrorMessage(error, `${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 첨부 제거에 실패했습니다.`);
       setDocumentUploadState((prev) => ({ ...prev, [kind]: 'error' }));
       setDocumentUploadError((prev) => ({ ...prev, [kind]: message }));
       toast.error('첨부 제거 실패', { description: message });

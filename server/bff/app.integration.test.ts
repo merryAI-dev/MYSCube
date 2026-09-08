@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { createServer } from 'node:http';
 import ExcelJS from 'exceljs';
 import { createBffApp } from './app.mjs';
 import { createFirestoreDb } from './firestore.mjs';
@@ -20,7 +21,17 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
 
   const db = createFirestoreDb({ projectId });
   const app = createBffApp({ projectId, workerSecret });
-  const api = request(app);
+  let api: ReturnType<typeof request>;
+  const servers: ReturnType<typeof createServer>[] = [];
+  async function createApi(application: ReturnType<typeof createBffApp>) {
+    const server = createServer(application);
+    servers.push(server);
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, '127.0.0.1', resolve);
+    });
+    return request(server);
+  }
 
   function parseBinaryResponse(res: any, callback: (err: Error | null, body?: Buffer) => void) {
     const chunks: Buffer[] = [];
@@ -291,6 +302,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   }
 
   beforeAll(async () => {
+    api = await createApi(app);
     await resetTenantData();
   });
 
@@ -310,7 +322,8 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   afterAll(async () => {
-    await resetTenantData();
+    try { await resetTenantData(); }
+    finally { await Promise.all(servers.map(server => new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())))); }
   });
 
   it('returns health metadata', async () => {
@@ -322,40 +335,103 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('ingests client error events into Firestore', async () => {
-    const response = await api
-      .post('/api/v1/client-errors')
-      .set({ ...defaultHeaders, 'idempotency-key': 'idem-client-error-001' })
-      .send({
-        eventType: 'exception',
-        message: 'Portal projects listen failed',
-        name: 'FirebaseError',
-        stack: 'Error: Portal projects listen failed',
-        level: 'error',
+    const logged = vi.spyOn(console, 'error');
+    try {
+      const response = await api
+        .post('/api/v1/client-errors')
+        .set({ ...defaultHeaders, 'idempotency-key': 'idem-client-error-001' })
+        .send({
+          eventType: 'exception',
+          message: 'Portal projects listen failed',
+          name: 'FirebaseError',
+          stack: 'Error: Portal projects listen failed',
+          level: 'error',
+          source: 'portal_store',
+          route: '/portal/project-settings?tab=old#section',
+          href: 'https://inner-platform.vercel.app/portal/project-settings?tab=old#section',
+          clientRequestId: 'ui:req.001',
+          tags: {
+            action: 'projects_listen',
+          },
+          extra: {
+            requestId: 'req_001',
+          },
+        });
+
+      expect(response.status).toBe(200);
+      expect(response.body.ok).toBe(true);
+      expect(response.body.id).toMatch(/^cerr_/);
+
+      const stored = await db.doc(`orgs/${tenantId}/client_error_events/${response.body.id}`).get();
+      expect(stored.exists).toBe(true);
+      expect(stored.data()).toMatchObject({
+        tenantId,
+        actorId,
         source: 'portal_store',
-        route: '/portal/project-settings',
-        href: 'https://inner-platform.vercel.app/portal/project-settings',
-        clientRequestId: 'ui_req_001',
-        tags: {
-          action: 'projects_listen',
-        },
-        extra: {
-          requestId: 'req_001',
-        },
+        message: 'Portal projects listen failed',
+        clientRequestId: 'ui:req.001',
+        route: '/portal/project-settings?tab=old#section',
+        href: 'https://inner-platform.vercel.app/portal/project-settings?tab=old#section',
       });
+      const event = logged.mock.calls.map(([line]) => { try { return JSON.parse(String(line)); } catch { return {}; } }).find((entry) => entry.message === 'client.error');
+      expect(event.clientRequestId).toBe('ui:req.001');
+      expect(event.route).toBe('/portal/project-settings?tab=old#section');
+      expect(event.href).toBe('https://inner-platform.vercel.app/portal/project-settings?tab=old#section');
+    } finally { logged.mockRestore(); }
+  });
 
-    expect(response.status).toBe(200);
-    expect(response.body.ok).toBe(true);
-    expect(response.body.id).toMatch(/^cerr_/);
+  it('logs safe project diagnostics with original failure correlation and server actor role', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await api.post('/api/v1/client-errors').set({ ...defaultHeaders, 'idempotency-key': 'diagnostics-valid' }).send({
+        eventType: 'exception', source: 'platform_api', message: '플랫폼 요청 실패',
+        route: '/portal/register-project/private-draft',
+        tags: { method: 'PATCH' },
+        clientRequestId: 'original-client-request',
+        extra: { errorCode: 'draft_version_conflict', operation: 'project_info_draft_save', endpoint: '/api/v1/project-info-drafts/*', status: 409, attempt: 0, maxRetries: 2, release: 'release-ssot', responseRequestId: 'original-server-request', actorRole: 'forged-admin', expectedDraftRevision: 1, actualDraftRevision: 2, body: 'private-body', fileName: 'private-file.pdf', sessionId: 'private-session', leaseId: 'private-lease', idempotencyKey: 'private-key' },
+      });
+      expect(response.status).toBe(200);
+      const event = logged.mock.calls.map(([line]) => { try { return JSON.parse(String(line)); } catch { return {}; } }).find((entry) => entry.message === 'client.error');
+      expect(event).toMatchObject({ errorCode: 'draft_version_conflict', operation: 'project_info_draft_save', release: 'release-ssot', clientRequestId: 'original-client-request', responseRequestId: 'original-server-request', actorRole: 'admin' });
+      expect(event.requestId).not.toBe(event.clientRequestId);
+      expect(event.route).toBe('/portal/register-project');
+      expect(event).toMatchObject({ endpoint: '/api/v1/project-info-drafts/*', method: 'PATCH', status: 409, attempt: 0, maxRetries: 2 });
+      const stored = (await db.doc(`orgs/${tenantId}/client_error_events/${response.body.id}`).get()).data();
+      expect(stored.extra).toMatchObject({ errorCode: 'draft_version_conflict', expectedDraftRevision: 1, actualDraftRevision: 2, status: 409, attempt: 0, maxRetries: 2 });
+      expect(stored.tags.method).toBe('PATCH');
+      expect(stored.route).toBe('/portal/register-project');
+      expect(stored.actorEmail).toBeUndefined();
+      expect(JSON.stringify(stored)).not.toMatch(/private-|forged-admin/);
+      const invalid = await api.post('/api/v1/client-errors').set({ ...defaultHeaders, 'idempotency-key': 'diagnostics-invalid' }).send({
+        source: 'platform_api', message: '플랫폼 요청 실패',
+        route: '/portal/private@example.com/private-file.pdf?token=x',
+        tags: { method: 'private-method' },
+        extra: { errorCode: 'private@example.com', operation: 'secret-token', release: 'private-file.pdf?token=private-token', responseRequestId: 'private@example.com', endpoint: '/api/v1/projects/private-user/private-file.pdf?token=private-token', status: 600, attempt: -1, maxRetries: '3' },
+      });
+      expect(invalid.status).toBe(200);
+      const invalidStored = (await db.doc(`orgs/${tenantId}/client_error_events/${invalid.body.id}`).get()).data();
+      expect(invalidStored.tags.method).toBeUndefined();
+      expect(invalidStored.route).toBe('/portal/*');
+      expect(JSON.stringify(invalidStored)).not.toMatch(/private@example|private-file/);
+      for (const key of ['endpoint', 'status', 'attempt', 'maxRetries']) expect(invalidStored.extra[key]).toBeUndefined();
+      const logs = JSON.stringify(logged.mock.calls);
+      expect(logs).not.toMatch(/private@example|private-file|private-token|secret-token|forged-admin/);
+    } finally { logged.mockRestore(); }
+  });
 
-    const stored = await db.doc(`orgs/${tenantId}/client_error_events/${response.body.id}`).get();
-    expect(stored.exists).toBe(true);
-    expect(stored.data()).toMatchObject({
-      tenantId,
-      actorId,
-      source: 'portal_store',
-      message: 'Portal projects listen failed',
-      clientRequestId: 'ui_req_001',
-    });
+  it('preserves generic API resource-family diagnostics in stored events and logs', async () => {
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const response = await api.post('/api/v1/client-errors').set({ ...defaultHeaders, 'idempotency-key': 'generic-diagnostics' }).send({
+        source: 'platform_api', message: '플랫폼 요청 실패', tags: { method: 'GET' },
+        extra: { endpoint: '/api/v1/transactions/*', status: 503, attempt: 1, maxRetries: 2 },
+      });
+      expect(response.status).toBe(200);
+      const stored = (await db.doc(`orgs/${tenantId}/client_error_events/${response.body.id}`).get()).data();
+      expect(stored).toMatchObject({ tags: { method: 'GET' }, extra: { endpoint: '/api/v1/transactions/*', status: 503, attempt: 1, maxRetries: 2 } });
+      const event = logged.mock.calls.map(([line]) => { try { return JSON.parse(String(line)); } catch { return {}; } }).find((entry) => entry.message === 'client.error');
+      expect(event).toMatchObject({ method: 'GET', endpoint: '/api/v1/transactions/*', status: 503, attempt: 1, maxRetries: 2 });
+    } finally { logged.mockRestore(); }
   });
 
   it('delivers project registration Slack notifications for stored project requests', async () => {
@@ -363,7 +439,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       enabled: true,
       notifyMessage: vi.fn(async () => {}),
     };
-    const notifyApi = request(createBffApp({
+    const notifyApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,
@@ -413,7 +489,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('requires organization-head approval before management planning can agree', async () => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     await db.doc(`orgs/${tenantId}/projects/p_management_gate_001`).set({
       id: 'p_management_gate_001',
       tenantId,
@@ -432,7 +508,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('lets management planning issue a code only after organization-head approval', async () => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     await db.doc(`orgs/${tenantId}/projects/p_exec_review_001`).set({
       id: 'p_exec_review_001',
       tenantId,
@@ -510,7 +586,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     projectReviewState,
     reviewBody,
   }) => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     const { oldSyncRef, manualRef, manualEntry } = await seedPortalParticipationChange({
       targetProjectId,
       requestId,
@@ -592,7 +668,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     reviewBody,
     expectedRequestStatus,
   }) => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     const { oldSyncRef, manualRef, oldSyncEntry, manualEntry } = await seedPortalParticipationChange({
       targetProjectId,
       requestId,
@@ -618,7 +694,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('requires a rejection reason for executive rejection and discard', async () => {
-    const reviewApi = request(createBffApp({
+    const reviewApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,
@@ -647,7 +723,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('rejects new planning-before-exec but lets organization heads finalise existing planning agreements', async () => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     await db.doc(`orgs/${tenantId}/projects/p_new_planning_001`).set({
       id: 'p_new_planning_001', tenantId, name: '신규 역순 차단', executiveApproverId: actorId, executiveReviewStatus: 'PENDING', executiveReviewHistory: [],
     });
@@ -685,7 +761,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('rejects duplicate project codes from management planning', async () => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     await db.doc(`orgs/${tenantId}/projects/p_code_owner_001`).set({
       id: 'p_code_owner_001', tenantId, name: '코드 소유 프로젝트', executiveApproverId: actorId, executiveReviewStatus: 'PENDING', executiveReviewHistory: [],
     });
@@ -718,7 +794,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('requires the designated organization head for new executive decisions', async () => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     await db.doc(`orgs/${tenantId}/projects/p_designated_exec_001`).set({
       id: 'p_designated_exec_001',
       tenantId,
@@ -737,7 +813,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('uses the resubmitted change request approver instead of a stale project approver', async () => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     await db.doc(`orgs/${tenantId}/projects/p_reassigned_exec_001`).set({
       id: 'p_reassigned_exec_001',
       tenantId,
@@ -778,7 +854,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('atomically trashes a project with its duplicate-discard review', async () => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     const projectRef = db.doc(`orgs/${tenantId}/projects/p_exec_discard_001`);
     await projectRef.set({
       id: 'p_exec_discard_001',
@@ -814,7 +890,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('resubmits an executive-rejected pm portal project back to pending', async () => {
-    const reviewApi = request(createBffApp({
+    const reviewApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,
@@ -947,7 +1023,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('resubmits a management-planning rejection without reopening organization-head review', async () => {
-    const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
+    const reviewApi = await createApi(createBffApp({ projectId, workerSecret, db }));
     const executiveHistory = [{
       status: 'APPROVED',
       previousStatus: 'PENDING',
@@ -1007,7 +1083,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('also resubmits an executive-rejected legacy project back to pending', async () => {
-    const reviewApi = request(createBffApp({
+    const reviewApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,
@@ -1794,7 +1870,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       enabled: true,
       notifyMessage: vi.fn(async () => {}),
     };
-    const projectsApi = request(createBffApp({
+    const projectsApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,
@@ -1869,7 +1945,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         ],
       })),
     };
-    const sheetsApi = request(createBffApp({ projectId, workerSecret, db, googleSheetsService }));
+    const sheetsApi = await createApi(createBffApp({ projectId, workerSecret, db, googleSheetsService }));
 
     await sheetsApi
       .post('/api/v1/projects')
@@ -1918,7 +1994,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         headerPreview: ['작성자', '입금합계 > 입금액'],
       })),
     };
-    const analysisApi = request(createBffApp({ projectId, workerSecret, db, googleSheetMigrationAiService }));
+    const analysisApi = await createApi(createBffApp({ projectId, workerSecret, db, googleSheetMigrationAiService }));
 
     await analysisApi
       .post('/api/v1/projects')
@@ -1961,7 +2037,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         uploadedAt: '2026-03-19T12:00:00.000Z',
       })),
     };
-    const sourceApi = request(createBffApp({ projectId, workerSecret, db, projectSheetSourceStorageService }));
+    const sourceApi = await createApi(createBffApp({ projectId, workerSecret, db, projectSheetSourceStorageService }));
 
     await sourceApi
       .post('/api/v1/projects')
@@ -2038,7 +2114,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         },
       })),
     };
-    const contractApi = request(createBffApp({
+    const contractApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,
@@ -2075,7 +2151,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
   });
 
   it('rejects disallowed CORS origin', async () => {
-    const corsApi = request(createBffApp({
+    const corsApi = await createApi(createBffApp({
       projectId,
       allowedOrigins: 'http://localhost:5173',
     }));
@@ -2101,7 +2177,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       };
     });
 
-    const secureApi = request(createBffApp({
+    const secureApi = await createApi(createBffApp({
       projectId,
       authMode: 'firebase_required',
       tokenVerifier: verifier,
@@ -2811,7 +2887,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         },
       ])),
     };
-    const driveApi = request(createBffApp({ projectId, workerSecret, db, driveService }));
+    const driveApi = await createApi(createBffApp({ projectId, workerSecret, db, driveService }));
 
     const createdProject = await driveApi
       .post('/api/v1/projects')
@@ -2953,7 +3029,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       }),
       listFolderFiles: vi.fn(async ({ folderId }) => folderState.get(folderId) || []),
     };
-    const driveApi = request(createBffApp({ projectId, workerSecret, db, driveService }));
+    const driveApi = await createApi(createBffApp({ projectId, workerSecret, db, driveService }));
 
     for (const project of [
       { id: 'p-upload-001', name: '온드림 교육사업' },
@@ -3263,7 +3339,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       name: 'Target User',
     });
 
-    const firebaseApi = request(createBffApp({
+    const firebaseApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,
@@ -3359,7 +3435,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       });
     expect(legacyStatus.status).toBe(200);
 
-    const missingMemberApi = request(createBffApp({
+    const missingMemberApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,
@@ -3406,7 +3482,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       executiveApproverId: 'u-jslee',
     });
 
-    const governanceApi = request(createBffApp({
+    const governanceApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,
@@ -3461,7 +3537,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     });
 
     const setCustomUserClaims = vi.fn(async () => {});
-    const governanceApi = request(createBffApp({
+    const governanceApi = await createApi(createBffApp({
       projectId,
       workerSecret,
       db,

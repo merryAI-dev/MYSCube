@@ -358,7 +358,9 @@ describe('project information private drafts', () => {
     if (change === 'version-only') h.db.documents.get(requestPath).requestVersion = 2;
     const token = change === 'missing' ? undefined : change === 'malformed' ? 'bad' : preview.body.sourceFingerprint;
     const before = clone([...h.db.documents]);
-    await expect(h.service.rebase({ ...h.base, idempotencyKey: 'apply-stale', expectedDraftRevision: 0, resolutions: {}, sourceFingerprint: token })).rejects.toMatchObject({ statusCode: 409, code: 'draft_source_conflict' });
+    const failure = await h.service.rebase({ ...h.base, idempotencyKey: 'apply-stale', expectedDraftRevision: 0, resolutions: {}, sourceFingerprint: token }).catch((error) => error);
+    expect(failure).toMatchObject({ statusCode: 409, code: 'draft_source_conflict' });
+    expect(failure.details).toEqual({ conflictReason: 'source_changed' });
     expect([...h.db.documents]).toEqual(before);
   });
 
@@ -949,7 +951,9 @@ describe('project information private drafts', () => {
       idempotencyKey: 'save-stale',
       expectedDraftRevision: 0,
       payload: validPayload({ name: 'Stale' }),
-    })).rejects.toMatchObject({ statusCode: 409, code: 'draft_version_conflict' });
+    })).rejects.toMatchObject({ statusCode: 409, code: 'draft_version_conflict', details: { expectedDraftRevision: 0, actualDraftRevision: 1, conflictReason: 'revision_changed' } });
+    expect([...h.db.documents.values()].find((value) => value?.resourceType === 'project-info' && value?.ownerUid))
+      .toMatchObject({ draftRevision: 1, payload: { name: 'Private changed name' } });
   });
 
   it('submits request, metadata-only draft, canonical version, lease, audit, idempotency and outbox atomically', async () => {
@@ -1697,7 +1701,7 @@ describe('project information private drafts', () => {
 
     await expect(h.service.submit({
       ...h.base, idempotencyKey: 'submit-conflict', expectedDraftRevision: 1, expectedVersion: 3,
-    })).rejects.toMatchObject({ statusCode: 409, code: 'canonical_version_conflict' });
+    })).rejects.toMatchObject({ statusCode: 409, code: 'canonical_version_conflict', details: { expectedVersion: 3, actualVersion: 4, conflictReason: 'canonical_changed' } });
     expect(h.db.documents.has('orgs/tenant-a/project_requests/change-project-a')).toBe(false);
     expect(h.db.documents.has('outbox/outbox-a')).toBe(false);
     expect([...h.db.documents.values()].find((value) => value?.resourceType === 'project-info' && value?.ownerUid))
