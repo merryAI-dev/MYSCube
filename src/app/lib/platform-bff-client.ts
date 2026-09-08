@@ -2353,6 +2353,21 @@ export async function saveParticipationRuleViaBff(params: {
   return response.data;
 }
 
+function isProjectLookupRecord(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === 'string' && Boolean(record.id.trim())
+    && ['requestKind', 'status', 'targetProjectId', 'approvedProjectId', 'requestedAt', 'requestedBy', 'requestedByName', 'requestedByEmail', 'attachmentReviewStatus', 'reviewedAt', 'reviewedBy', 'reviewedByName', 'reviewComment', 'rejectedReason', 'humanSummary', 'updatedAt', 'createdAt', 'reviewOutcome'].every((key) => record[key] == null || typeof record[key] === 'string')
+    && ['requestVersion', 'baseProjectVersion', 'targetProjectVersion', 'approvedProjectVersion'].every((key) => record[key] == null || (typeof record[key] === 'number' && Number.isFinite(record[key])))
+    && ['payload', 'proposedSnapshot', 'beforeSnapshot', 'approvedSnapshot'].every((key) => (
+      record[key] == null || (typeof record[key] === 'object' && !Array.isArray(record[key]))
+    ));
+}
+
+function isProjectLookupRecords(value: unknown): boolean {
+  return Array.isArray(value) && value.every(isProjectLookupRecord);
+}
+
 export async function fetchAssignedProjectRequestsViaBff(params: {
   tenantId: string;
   actor: ActorLike;
@@ -2367,10 +2382,10 @@ export async function fetchAssignedProjectRequestsViaBff(params: {
       timeoutMs: 10000,
     },
   );
-  return {
-    requests: Array.isArray(response.data?.items) ? response.data.items : [],
-    projects: Array.isArray(response.data?.projects) ? response.data.projects : [],
-  };
+  if (!isProjectLookupRecords(response.data?.items) || !isProjectLookupRecords(response.data?.projects)) {
+    throw new Error('프로젝트 접수 이력 응답이 올바르지 않습니다. 다시 시도해 주세요.');
+  }
+  return { requests: response.data.items, projects: response.data.projects };
 }
 
 const PROJECT_REQUEST_PROJECT_ID_BATCH_SIZE = 200;
@@ -2398,7 +2413,9 @@ async function fetchProjectRequestsByProjectIds(params: {
   )));
   const requestsById = new Map<string, ProjectRequest>();
   responses.forEach((response) => {
-    if (!Array.isArray(response.data?.items)) return;
+    if (!isProjectLookupRecords(response.data?.items)) {
+      throw new Error('프로젝트 접수 이력 응답이 올바르지 않습니다. 다시 시도해 주세요.');
+    }
     response.data.items.forEach((request) => requestsById.set(request.id, request));
   });
   return Array.from(requestsById.values()).sort((left, right) => (
@@ -2454,7 +2471,10 @@ export async function fetchLatestProjectRequestViaBff(params: {
       timeoutMs: 10000,
     },
   );
-  return response.data?.item || null;
+  if (response.data?.item !== null && !isProjectLookupRecord(response.data?.item)) {
+    throw new Error('프로젝트 접수 이력 응답이 올바르지 않습니다. 다시 시도해 주세요.');
+  }
+  return response.data.item;
 }
 
 let defaultPlatformApiClient: PlatformApiClientLike | undefined;

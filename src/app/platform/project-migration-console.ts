@@ -58,20 +58,26 @@ function deriveProjectRequestMap(requests: ProjectRequest[]): Map<string, Projec
   const map = new Map<string, ProjectRequest>();
   requests.forEach((request) => {
     const projectId = request.targetProjectId || request.approvedProjectId;
-    if (projectId) {
-      const previous = map.get(projectId);
-      if (!previous || String(request.requestedAt || '').localeCompare(String(previous.requestedAt || '')) > 0) {
-        map.set(projectId, request);
-      }
-    }
+    if (projectId && !map.has(projectId)) map.set(projectId, request);
   });
   return map;
+}
+
+export function resolveMigrationReviewApproverId(project: Project, request?: ProjectRequest | null) {
+  const payload = resolveProjectRequestPayload(request);
+  const modern = request?.requestKind === 'CHANGE'
+    || (request?.requestKind === 'REGISTRATION' && Number(payload?.registrationRequirementsVersion) === 2);
+  return modern ? payload?.executiveApproverId : payload?.executiveApproverId || project.executiveApproverId;
 }
 
 export function deriveMigrationAuditStatus(
   project: Project,
   request?: ProjectRequest | null,
 ): MigrationAuditConsoleStatus {
+  if (resolveProjectRequestKind(request) === 'CHANGE') {
+    if (request?.status === 'PENDING') return 'PENDING';
+    if (request?.status === 'REJECTED') return 'REVISION_REJECTED';
+  }
   if (
     project.executiveReviewStatus === 'PLANNING_AGREED'
     ||
@@ -79,10 +85,6 @@ export function deriveMigrationAuditStatus(
     || project.executiveReviewStatus === 'DUPLICATE_DISCARDED'
   ) {
     return project.executiveReviewStatus;
-  }
-  if (resolveProjectRequestKind(request) === 'CHANGE') {
-    if (request?.status === 'PENDING') return 'PENDING';
-    if (request?.status === 'REJECTED') return 'REVISION_REJECTED';
   }
   // A management-planning return reopens only that stage. The executive seal remains authoritative.
   if (project.executiveReviewStatus === 'APPROVED') return 'APPROVED';
@@ -162,15 +164,16 @@ export function buildMigrationAuditConsoleRecords(
     .filter((project) => !project.trashedAt)
     .map((project) => {
       const request = requestMap.get(project.id) || null;
+      const source = request ? resolveProjectRequestPayload(request) : project;
       return {
         id: project.id,
         project,
         request,
         status: deriveMigrationAuditStatus(project, request),
-        cic: normalizeCicLabel(project.cic || project.department),
-        title: normalizeText(project.officialContractName || project.name) || '이름 없음',
-        clientOrg: normalizeText(project.clientOrg),
-        managerName: normalizeText(project.registeredByName || project.managerName),
+        cic: normalizeCicLabel(request ? source?.department : project.cic || project.department),
+        title: normalizeText(source?.officialContractName || source?.name) || '이름 없음',
+        clientOrg: normalizeText(source?.clientOrg),
+        managerName: normalizeText(source?.registeredByName || source?.managerName),
         // The date a reviewer needs is when the request arrived. Falling back to the
         // project's creation date showed a months-old date for a request filed today.
         requestedAt: normalizeText(

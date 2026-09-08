@@ -15,6 +15,7 @@ import {
 } from '../../lib/platform-bff-client';
 import { downloadProjectAttachmentViaBff, downloadProjectRequestAttachmentViaBff } from '../../lib/project-request-attachment-client';
 import type { ProjectRequestDocumentKind } from '../../platform/project-contract-upload';
+import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
 import {
   type MigrationAuditConsoleRecord,
   type MigrationAuditConsoleStatus,
@@ -22,6 +23,7 @@ import {
   collectMigrationAuditCicOptions,
   deriveMigrationAuditStatus,
   filterMigrationAuditConsoleRecords,
+  resolveMigrationReviewApproverId,
   summarizeMigrationAuditConsole,
 } from '../../platform/project-migration-console';
 import { getManagementPlanningReview } from '../../platform/project-management-planning-review';
@@ -44,20 +46,10 @@ import {
 } from '../ui/alert-dialog';
 import { Textarea } from '../ui/textarea';
 import { Input } from '../ui/input';
+import { Button } from '../ui/button';
 
 type ReviewActionMode = 'approve' | 'reject' | 'discard';
 export type ProjectRegistrationReviewStage = 'executive' | 'managementPlanning';
-const REVIEW_DOCUMENT_FIELDS = {
-  contract: 'contractDocument',
-  customer_business_registration: 'customerBusinessRegistrationDocument',
-  quote: 'quoteDocument',
-  proposal: 'proposalDocument',
-  rfp_request_evidence: 'rfpRequestEvidenceDocument',
-  proposal_word_original: 'proposalWordOriginalDocument',
-  proposal_ppt_original: 'proposalPptOriginalDocument',
-  presentation_ppt_original: 'presentationPptOriginalDocument',
-} as const satisfies Partial<Record<ProjectRequestDocumentKind, keyof Project>>;
-type ReviewDocumentField = typeof REVIEW_DOCUMENT_FIELDS[keyof typeof REVIEW_DOCUMENT_FIELDS];
 
 type ReviewDocumentSource = {
   source: 'project' | 'request';
@@ -141,6 +133,7 @@ function ProjectMigrationAuditPageContent({
   const [assignedProjects, setAssignedProjects] = useState<Project[]>([]);
   const [loadingRequests, setLoadingRequests] = useState(true);
   const [requestLoadError, setRequestLoadError] = useState('');
+  const [loadedRequestKey, setLoadedRequestKey] = useState('');
   const [cicFilter, setCicFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | MigrationAuditConsoleStatus>('PENDING');
   const [searchQuery, setSearchQuery] = useState('');
@@ -153,8 +146,11 @@ function ProjectMigrationAuditPageContent({
   const [requestReloadVersion, setRequestReloadVersion] = useState(0);
   const isManagementPlanning = reviewStage === 'managementPlanning';
   const reviewProjectIds = useMemo(() => projects.map((project) => project.id).filter(Boolean), [projects]);
+  const requestKey = JSON.stringify([orgId, authUser?.uid, authUser?.email, authUser?.role, authUser?.idToken, assigneeOnly, reviewProjectIds, requestReloadVersion]);
+  const requestAuthorityReady = loadedRequestKey === requestKey && !loadingRequests && !requestLoadError;
 
   useEffect(() => {
+    setActionMode(null);
     if (!isPlatformApiEnabled() || !authUser?.uid) {
       setRequests([]);
       setAssignedProjects([]);
@@ -178,6 +174,7 @@ function ProjectMigrationAuditPageContent({
           if (!disposed) {
             setRequests(assignedInbox.requests);
             setAssignedProjects(assignedInbox.projects);
+            setLoadedRequestKey(requestKey);
           }
         } else {
           const nextRequests = await fetchProjectReviewInboxViaBff({
@@ -188,6 +185,7 @@ function ProjectMigrationAuditPageContent({
           if (!disposed) {
             setRequests(nextRequests);
             setAssignedProjects([]);
+            setLoadedRequestKey(requestKey);
           }
         }
       } catch (error) {
@@ -202,7 +200,7 @@ function ProjectMigrationAuditPageContent({
       }
     })();
     return () => { disposed = true; };
-  }, [assigneeOnly, authUser?.email, authUser?.idToken, authUser?.role, authUser?.uid, orgId, requestReloadVersion, reviewProjectIds]);
+  }, [assigneeOnly, authUser?.email, authUser?.idToken, authUser?.role, authUser?.uid, orgId, requestReloadVersion, reviewProjectIds, requestKey]);
 
   const recordProjects = useMemo(() => {
     if (assignedProjects.length === 0) return projects;
@@ -210,7 +208,7 @@ function ProjectMigrationAuditPageContent({
     assignedProjects.forEach((project) => projectsById.set(project.id, project));
     return Array.from(projectsById.values());
   }, [assignedProjects, projects]);
-  const records = useMemo(() => buildMigrationAuditConsoleRecords(recordProjects, requests), [recordProjects, requests]);
+  const records = useMemo(() => requestAuthorityReady ? buildMigrationAuditConsoleRecords(recordProjects, requests) : [], [recordProjects, requests, requestAuthorityReady]);
   const stageRecords = useMemo(() => {
     if (isManagementPlanning) return buildManagementPlanningRecords(records);
     return buildExecutiveRecords(records);
@@ -223,7 +221,7 @@ function ProjectMigrationAuditPageContent({
   const inboxRecords = useMemo(() => {
     if (isManagementPlanning || effectiveInboxScope === 'ALL') return scopedRecords;
     return scopedRecords.filter((record) => {
-      const approverId = resolveProjectRequestPayload(record.request)?.executiveApproverId || record.project.executiveApproverId;
+      const approverId = resolveMigrationReviewApproverId(record.project, record.request);
       return Boolean(authUser?.uid && approverId === authUser.uid);
     });
   }, [authUser?.uid, effectiveInboxScope, isManagementPlanning, scopedRecords]);
@@ -244,7 +242,7 @@ function ProjectMigrationAuditPageContent({
     const requestId = String(openRecord.request?.id || '').trim();
     const projectId = String(openRecord.project.id || '').trim();
     const source: ReviewDocumentSource['source'] = openRecord.request ? 'request' : 'project';
-    (Object.entries(REVIEW_DOCUMENT_FIELDS) as Array<[ProjectRequestDocumentKind, ReviewDocumentField]>).forEach(([documentKind, field]) => {
+    PROJECT_DOCUMENTS.forEach(({ documentKind, field }) => {
       const document = reviewPayload?.[field];
       const path = String(document?.path || '').trim();
       const downloadURL = String(document?.downloadURL || '').trim();
@@ -292,14 +290,16 @@ function ProjectMigrationAuditPageContent({
     enabled: Boolean(openRecord && isPlatformApiEnabled() && authUser?.uid),
     loadAttachment: loadReviewDocumentPreview,
   });
-  const designatedApproverId = resolveProjectRequestPayload(openRecord?.request)?.executiveApproverId || openRecord?.project.executiveApproverId;
+  const designatedApproverId = openRecord ? resolveMigrationReviewApproverId(openRecord.project, openRecord.request) : undefined;
   const canExecutiveFinalize = Boolean(authUser?.uid && designatedApproverId === authUser.uid);
   const role = String(authUser?.role || '').trim().toLowerCase();
   const canManagementPlanningFinalize = role === 'admin' || role === 'finance';
-  const canFinalize = isManagementPlanning ? canManagementPlanningFinalize : canExecutiveFinalize;
+  const canFinalize = requestAuthorityReady && (isManagementPlanning ? canManagementPlanningFinalize : canExecutiveFinalize);
+  const attachmentRepairRequired = openRecord?.request?.attachmentReviewStatus === 'REPAIR_REQUIRED';
 
   async function handleConfirmAction() {
     if (!openRecord || !actionMode) return;
+    if (actionMode === 'approve' && attachmentRepairRequired) return;
     if (!canFinalize) {
       toast.error(isManagementPlanning ? '경영기획실 담당자만 처리할 수 있습니다.' : '지정된 조직장만 처리할 수 있습니다.');
       return;
@@ -381,11 +381,11 @@ function ProjectMigrationAuditPageContent({
   return (
     <div className="space-y-6">
       {!embedded ? <PageHeader icon={ClipboardCheck} iconGradient={isManagementPlanning ? 'linear-gradient(135deg, #0f2f57 0%, #174a7c 100%)' : 'linear-gradient(135deg, #0f766e 0%, #0ea5e9 100%)'} title={pageTitle} description={pageDescription} badge={isManagementPlanning ? '경영기획실 합의' : '조직장 결재'} /> : null}
-      {requestLoadError ? <Card><CardContent className="p-4 text-[12px] text-muted-foreground">{requestLoadError}</CardContent></Card> : null}
+      {requestLoadError ? <Card><CardContent className="p-4 text-[12px] text-muted-foreground"><p>{requestLoadError}</p><Button className="mt-3" variant="outline" onClick={() => setRequestReloadVersion((value) => value + 1)}>접수 이력 다시 확인</Button></CardContent></Card> : null}
       <MigrationAuditControlBar cicOptions={cicOptions} cicFilter={cicFilter} onCicFilterChange={setCicFilter} inboxScope={effectiveInboxScope} onInboxScopeChange={setInboxScope} reviewerDepartment={reviewerDepartment} statusFilter={statusFilter} onStatusFilterChange={setStatusFilter} searchQuery={searchQuery} onSearchQueryChange={setSearchQuery} summary={summary} reviewStage={reviewStage} assigneeOnly={assigneeOnly} />
       {loadingRequests ? <Card><CardContent className="flex items-center justify-center gap-2 py-16 text-[12px] text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />PM 등록 프로젝트와 접수 이력을 불러오는 중입니다…</CardContent></Card> : <MigrationAuditRecordList records={filteredRecords} onOpen={(record) => setOpenRecordId(record.id)} reviewStage={reviewStage} />}
       <MigrationAuditDocumentDialog open={!!openRecord} record={openRecord} acting={acting} canFinalize={canFinalize} documentPreviewUrls={documentPreviewUrls} documentPreviewStates={documentPreviewStates} reviewStage={reviewStage} onLoadDocumentPreview={loadDocumentPreview} onOpenChange={(open) => { if (!open) setOpenRecordId(null); }} onApprove={() => { setActionMode('approve'); setReviewComment(''); setProjectCode(String(openRecord?.project.projectCode || '').trim()); }} onReject={() => { setActionMode('reject'); setReviewComment(isManagementPlanning ? '' : (openRecord?.project.executiveReviewComment || '')); setProjectCode(''); }} />
-      <AlertDialog open={!!actionMode} onOpenChange={(open) => { if (!open) { setActionMode(null); setReviewComment(''); setProjectCode(''); } }}>
+      <AlertDialog open={!!actionMode && !!openRecord && requestAuthorityReady} onOpenChange={(open) => { if (!open) { setActionMode(null); setReviewComment(''); setProjectCode(''); } }}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{getReviewDialogTitle(actionMode || 'approve', reviewStage)}</AlertDialogTitle><AlertDialogDescription>{getProjectRequestReviewDescription(actionMode || 'approve', openRecord?.request, reviewStage)}</AlertDialogDescription></AlertDialogHeader>
           <div className="space-y-2">

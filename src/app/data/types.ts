@@ -1017,6 +1017,7 @@ export interface ProjectRequestPayload {
 
 export interface ProjectRequest {
   id: string;
+  attachmentReviewStatus?: 'READY' | 'REPAIR_REQUIRED';
   tenantId?: string;
   requestKind?: ProjectRequestKind;
   targetProjectId?: string;

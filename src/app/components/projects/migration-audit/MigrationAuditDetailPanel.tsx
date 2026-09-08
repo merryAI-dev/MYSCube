@@ -206,18 +206,15 @@ export function MigrationAuditDetailPanel({
     fallbackActorName: record.managerName,
     fallbackRequestedAt: record.requestedAt,
   });
-  const useRequestPayloadAsCurrent = isChangeRequest && record.request?.status === 'PENDING';
-  const requestPayload = resolveProjectRequestPayload(record.request);
-  const totalActualCost = requestPayload?.totalActualCost ?? record.project.totalActualCost;
-  const financialYears = requestPayload?.financialYears ?? record.project.financialYears;
-  const interestRefundPolicy = requestPayload?.interestRefundPolicy ?? record.project.interestRefundPolicy;
-  const registrationNote = requestPayload?.note ?? record.project.note;
-  const quoteDocument = requestPayload?.quoteDocument !== undefined ? requestPayload.quoteDocument : record.project.quoteDocument;
-  const quoteSubmissionDeferred = requestPayload?.quoteSubmissionDeferred ?? record.project.quoteSubmissionDeferred;
-  const registrationConfirmations = requestPayload?.registrationConfirmations ?? record.project.registrationConfirmations;
-  const contractDocument = useRequestPayloadAsCurrent
-    ? (requestPayload?.contractDocument || record.project.contractDocument || null)
-    : (record.project.contractDocument || requestPayload?.contractDocument || null);
+  const requestPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
+  const totalActualCost = requestPayload?.totalActualCost;
+  const financialYears = requestPayload?.financialYears;
+  const interestRefundPolicy = requestPayload?.interestRefundPolicy;
+  const registrationNote = requestPayload?.note;
+  const quoteDocument = requestPayload?.quoteDocument;
+  const quoteSubmissionDeferred = requestPayload?.quoteSubmissionDeferred;
+  const registrationConfirmations = requestPayload?.registrationConfirmations;
+  const contractDocument = requestPayload?.contractDocument ?? null;
 
   return (
     <Card

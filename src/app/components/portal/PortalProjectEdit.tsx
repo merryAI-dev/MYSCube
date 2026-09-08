@@ -209,6 +209,7 @@ function ProjectInfoEditor({
   roster,
   project,
   requestDoc,
+  requestAuthorityReady,
   settlementSystemOptions,
   session,
 }: {
@@ -220,6 +221,7 @@ function ProjectInfoEditor({
   roster: ReturnType<typeof usePersonRoster>;
   project: Project;
   requestDoc: ProjectRequest | null;
+  requestAuthorityReady: boolean;
   settlementSystemOptions: string[];
   session: EditSession;
 }) {
@@ -244,6 +246,12 @@ function ProjectInfoEditor({
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
   const writesPausedRef = useRef(false);
   const finishedRef = useRef(false);
+  const requestAuthorityReadyRef = useRef(requestAuthorityReady);
+  requestAuthorityReadyRef.current = requestAuthorityReady;
+  useEffect(() => {
+    requestAuthorityReadyRef.current = requestAuthorityReady;
+    return () => { requestAuthorityReadyRef.current = false; };
+  }, [requestAuthorityReady]);
   const mutationEpochRef = useRef(0);
   const latestRecordRef = useRef<ProjectInfoDraft | null>(null);
   const [draftConflictCount, setDraftConflictCount] = useState(0);
@@ -281,6 +289,7 @@ function ProjectInfoEditor({
   // Show the action whenever the project is awaiting a decision; the server rejects it
   // with request_not_withdrawable if there is nothing pending to pull back.
   const canWithdrawRequest = changeRequestStatus === 'PENDING'
+    && requestAuthorityReady
     && lease.canEdit
     && !submitted;
   const reviewFeedback = useMemo(() => buildPortalProjectReviewFeedback(project, requestDoc), [project, requestDoc]);
@@ -289,7 +298,7 @@ function ProjectInfoEditor({
     [canonicalDraft, record],
   );
   const autosaveKey = `portal-edit-${orgId}-${project.id}-${actor.uid}`;
-  const editorCanEdit = lease.canEdit && record !== null && !submitted;
+  const editorCanEdit = requestAuthorityReady && lease.canEdit && record !== null && !submitted;
   const previewAttachments = useMemo(() => previewAttachmentsFromPrivateDraft(record), [record]);
   const loadDraftDocumentPreview = useCallback(({ documentKind, signal }: {
     documentKind: ProjectRequestDocumentKind;
@@ -318,10 +327,11 @@ function ProjectInfoEditor({
   }, [lease.release]);
 
   useEffect(() => {
+    if (!requestAuthorityReady) return;
     let cancelled = false;
     void (async () => {
       const status = await lease.checkStatus();
-      if (!status.canEdit || !status.ownership || recordLoadedRef.current) return;
+      if (cancelled || !requestAuthorityReadyRef.current || !status.canEdit || !status.ownership || recordLoadedRef.current) return;
       try {
         const opened = await draftClient.open(status.ownership);
         if (cancelled) return;
@@ -334,11 +344,12 @@ function ProjectInfoEditor({
       }
     })();
     return () => { cancelled = true; };
-  }, [draftClient, lease.checkStatus, releaseLeaseAfterDraftOpenFailure]);
+  }, [draftClient, lease.checkStatus, releaseLeaseAfterDraftOpenFailure, requestAuthorityReady]);
 
   const enqueueMutation = useCallback(<T,>(operation: () => Promise<T>): Promise<T> => {
     const epoch = mutationEpochRef.current;
     const checkedOperation = () => {
+      if (!requestAuthorityReadyRef.current) throw new Error('프로젝트 접수 이력을 확인한 뒤 다시 시도해 주세요.');
       if (epoch !== mutationEpochRef.current) throw new Error('수정 요청 회수 전 입력은 다시 확인한 뒤 저장해 주세요.');
       return operation();
     };
@@ -352,6 +363,7 @@ function ProjectInfoEditor({
   ) => {
     if (finishedRef.current || writesPausedRef.current) throw new Error('최근 임시저장과 비교한 뒤 다시 저장해 주세요.');
     const ownership = await lease.checkBeforeSave();
+    if (!requestAuthorityReadyRef.current) throw new Error('프로젝트 접수 이력을 확인한 뒤 다시 시도해 주세요.');
     if (!ownership) throw new Error('수정 세션이 종료되었거나 다른 세션이 사용 중입니다.');
     try {
       return await operation(ownership);
@@ -366,8 +378,9 @@ function ProjectInfoEditor({
   }, [lease.checkBeforeSave, lease.checkStatus]);
 
   const startEditing = useCallback(async () => {
+    if (!requestAuthorityReadyRef.current) return;
     const ownership = await lease.acquire();
-    if (!ownership) return;
+    if (!ownership || !requestAuthorityReadyRef.current) return;
     try {
       const opened = await draftClient.open(ownership);
       revisionRef.current = opened.draft.draftRevision;
@@ -576,7 +589,7 @@ function ProjectInfoEditor({
             </Button>
           </>
         ) : (
-          <Button type="button" size="sm" onClick={() => void startEditing()} disabled={lease.busy}>
+          <Button type="button" size="sm" onClick={() => void startEditing()} disabled={lease.busy || !requestAuthorityReady}>
             수정 시작
           </Button>
         )}
@@ -799,14 +812,23 @@ export function PortalProjectEdit() {
   const fallbackProject = projects.find((project) => project.id === activeProjectId) || sessionProject;
   const project = routeProjectId ? routeProject : fallbackProject;
   const currentPath = `${location.pathname}${location.search}${location.hash}`;
-  const [requestDoc, setRequestDoc] = useState<ProjectRequest | null>(null);
+  const [requestRetry, setRequestRetry] = useState(0);
+  const [requestLookup, setRequestLookup] = useState<{
+    scope: string; key: string; status: 'loading' | 'error' | 'none' | 'ready'; loaded: boolean; request: ProjectRequest | null;
+  } | null>(null);
   const [bootstrap, setBootstrap] = useState<{
+    scope: string;
     actor: ActorLike;
     draftClient: DraftClient;
     session: EditSession;
   } | null>(null);
   const [error, setError] = useState('');
   const identityKey = [user?.uid, user?.email, user?.name, user?.role].join('|');
+  const requestScope = [orgId, project?.id, identityKey].join('|');
+  const requestLookupKey = [requestScope, user?.idToken, requestRetry].join('|');
+  const scopedLookup = requestLookup?.scope === requestScope ? requestLookup : null;
+  const requestDoc = scopedLookup?.request ?? null;
+  const requestAuthorityReady = scopedLookup?.key === requestLookupKey && (scopedLookup.status === 'ready' || scopedLookup.status === 'none');
 
   useEffect(() => {
     if (routeProjectId || !project?.id) return;
@@ -815,10 +837,11 @@ export function PortalProjectEdit() {
 
   useEffect(() => {
     if (!project?.id || !user?.uid || !isPlatformApiEnabled()) {
-      setRequestDoc(null);
+      setRequestLookup({ scope: requestScope, key: requestLookupKey, status: 'error', loaded: false, request: null });
       return undefined;
     }
     let disposed = false;
+    setRequestLookup((current) => ({ scope: requestScope, key: requestLookupKey, status: 'loading', loaded: current?.scope === requestScope && current.loaded, request: current?.scope === requestScope ? current.request : null }));
     void (async () => {
       try {
         const idToken = user.idToken || await getAuthInstance()?.currentUser?.getIdToken() || undefined;
@@ -827,14 +850,14 @@ export function PortalProjectEdit() {
           actor: { uid: user.uid, email: user.email, role: user.role, idToken },
           projectId: project.id,
         });
-        if (!disposed) setRequestDoc(request);
+        if (!disposed) setRequestLookup({ scope: requestScope, key: requestLookupKey, status: request ? 'ready' : 'none', loaded: true, request });
       } catch (cause) {
         console.error('[PortalProjectEdit] latest project request fetch failed:', cause);
-        if (!disposed) setRequestDoc(null);
+        if (!disposed) setRequestLookup((current) => ({ scope: requestScope, key: requestLookupKey, status: 'error', loaded: current?.scope === requestScope && current.loaded, request: current?.scope === requestScope ? current.request : null }));
       }
     })();
     return () => { disposed = true; };
-  }, [orgId, project?.id, user?.email, user?.idToken, user?.role, user?.uid]);
+  }, [orgId, project?.id, user?.email, user?.idToken, user?.role, user?.uid, requestScope, requestLookupKey]);
 
   useEffect(() => {
     if (!user?.uid || !project?.id) {
@@ -852,7 +875,7 @@ export function PortalProjectEdit() {
         const draftClient = createProjectInfoDraftClient({
           tenantId: orgId, actor, sessionId: session.sessionId, projectId: project.id,
         });
-        if (!cancelled) setBootstrap({ actor, draftClient, session });
+        if (!cancelled) setBootstrap({ scope: requestScope, actor, draftClient, session });
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : '수정 세션을 준비하지 못했습니다.');
       }
@@ -868,7 +891,7 @@ export function PortalProjectEdit() {
     const idToken = user?.idToken;
     if (!user?.uid || !idToken || !project?.id) return;
     setBootstrap((current) => {
-      if (!current || current.actor.uid !== user.uid || current.actor.idToken === idToken) return current;
+      if (!current || current.scope !== requestScope || current.actor.uid !== user.uid || current.actor.idToken === idToken) return current;
       const actor = { ...current.actor, idToken };
       return {
         ...current,
@@ -885,10 +908,10 @@ export function PortalProjectEdit() {
 
   const canonicalDraft = useMemo(() => {
     if (!project) return createProjectEditorDraft();
-    const pendingChange = requestDoc?.status === 'PENDING' && resolveProjectRequestKind(requestDoc) === 'CHANGE';
-    return createProjectEditorDraft({
-      ...buildProjectEditorDraftFromProject(project, pendingChange ? resolveProjectRequestPayload(requestDoc) : undefined),
-    });
+    const unapprovedChange = (requestDoc?.status === 'PENDING' || requestDoc?.status === 'REJECTED') && resolveProjectRequestKind(requestDoc) === 'CHANGE';
+    return unapprovedChange
+      ? createProjectEditorDraft(resolveProjectRequestPayload(requestDoc))
+      : buildProjectEditorDraftFromProject(project);
   }, [project, requestDoc]);
 
   if (!project && portalLoading) {
@@ -909,10 +932,14 @@ export function PortalProjectEdit() {
     );
   }
   if (error) return <div className="rounded-lg border border-red-200 bg-white p-5 text-sm text-red-700">{error}</div>;
-  if (!bootstrap) return <div className="p-6 text-sm text-muted-foreground">읽기 모드를 준비하는 중...</div>;
+  const lookupNotice = !requestAuthorityReady ? <div role="status" className="rounded-lg border border-amber-200 bg-white p-5 text-sm text-amber-800"><p>{scopedLookup?.status === 'error' ? '프로젝트 접수 이력을 확인하지 못했습니다. 다시 시도해 주세요.' : '프로젝트 접수 이력을 확인하는 중...'}</p>{scopedLookup?.status === 'error' ? <Button className="mt-3" variant="outline" onClick={() => setRequestRetry((value) => value + 1)}>접수 이력 다시 확인</Button> : null}</div> : null;
+  if (!scopedLookup?.loaded) return lookupNotice;
+  if (!bootstrap || bootstrap.scope !== requestScope) return <div className="p-6 text-sm text-muted-foreground">읽기 모드를 준비하는 중...</div>;
   return (
+    <>
+    {lookupNotice}
     <ProjectInfoEditor
-      key={project.id}
+      key={requestScope}
       actor={bootstrap.actor}
       canonicalDraft={canonicalDraft}
       departmentOptions={departmentOptions}
@@ -921,8 +948,10 @@ export function PortalProjectEdit() {
       roster={roster}
       project={project}
       requestDoc={requestDoc}
+      requestAuthorityReady={requestAuthorityReady}
       settlementSystemOptions={projects.flatMap((item) => item.settlementSystem === 'OTHER' && item.settlementSystemOther && !item.trashedAt ? [item.settlementSystemOther] : [])}
       session={bootstrap.session}
     />
+    </>
   );
 }
