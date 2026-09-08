@@ -816,8 +816,6 @@ export function createBffApp(options = {}) {
       idempotencyService,
       draftStorageService: projectRegistrationDraftStorageService,
       rbacPolicy,
-      // Resolved lazily: the handler is defined further down in this factory.
-      publishSubmittedAttachments: (event) => projectInfoOutboxHandler(event),
     })
     : null);
   const cashflowEditDraftService = options.cashflowEditDraftService || (editLeasesEnabled
@@ -861,7 +859,8 @@ export function createBffApp(options = {}) {
   const projectInfoOutboxHandler = options.projectInfoOutboxHandler
     || createProjectInfoSubmittedOutboxHandler({
       db,
-      draftStorageService: projectRegistrationDraftStorageService,
+      driveService,
+      projectRegistrationAttachmentStorageService: projectRegistrationDraftStorageService,
       now,
     });
   const draftAttachmentCleanupOutboxHandler = options.draftAttachmentCleanupOutboxHandler
@@ -1672,7 +1671,6 @@ export function createBffApp(options = {}) {
     enabled: editLeasesEnabled,
     projectInfoDraftService,
     piiProtector,
-    processOutboxEventInline: processSubmitOutboxInline,
   });
   mountCashflowEditDraftRoutes(app, {
     enabled: editLeasesEnabled,

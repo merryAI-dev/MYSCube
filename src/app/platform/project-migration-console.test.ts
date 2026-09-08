@@ -183,6 +183,25 @@ describe('project-migration-console', () => {
     expect(records[0]?.status).toBe('APPROVED');
   });
 
+  it.each([
+    ['PENDING', 'PENDING'],
+    ['REJECTED', 'REVISION_REJECTED'],
+    ['APPROVED', 'APPROVED'],
+  ] as const)('shows an approved project by its latest %s change request', (requestStatus, expectedStatus) => {
+    const records = buildMigrationAuditConsoleRecords(
+      [makeProject({ id: 'p-change', executiveReviewStatus: 'APPROVED' })],
+      [makeRequest({
+        id: 'change-p-change',
+        requestKind: 'CHANGE',
+        targetProjectId: 'p-change',
+        approvedProjectId: 'p-change',
+        status: requestStatus,
+      })],
+    );
+
+    expect(records[0]?.status).toBe(expectedStatus);
+  });
+
   it('keeps rejected projects rejected until the project is explicitly resubmitted', () => {
     const records = buildMigrationAuditConsoleRecords(
       [

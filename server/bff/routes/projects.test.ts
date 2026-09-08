@@ -902,7 +902,7 @@ describe('project route helpers', () => {
     }).projectRequest.payload.executiveApproverId).toBe('pm-a');
   });
 
-  it('forces an organization-head rejection back to the organization-head queue even when a client omits resubmit', () => {
+  it('keeps an organization-head rejection unchanged while creating a pending request', () => {
     const canonical = registrationV2Canonical(
       registrationV2Payload(),
       registrationV2AttachmentKinds,
@@ -925,20 +925,19 @@ describe('project route helpers', () => {
       actorName: 'PM A',
       actorEmail: 'pm-a@example.com',
       timestamp: '2026-07-14T00:00:00.000Z',
-      targetProjectVersion: 2,
       resubmit: false,
       reviewComment: '계약 기간을 보완했습니다.',
     });
 
-    expect(submission.projectPatch).toMatchObject({
-      executiveReviewStatus: 'PENDING',
-      executiveReviewedAt: null,
-      executiveReviewedById: null,
-      executiveReviewedByName: null,
+    expect(submission).not.toHaveProperty('projectPatch');
+    expect(submission.projectRequest).toMatchObject({
+      status: 'PENDING',
+      baseProjectVersion: 1,
+      targetProjectVersion: 2,
     });
   });
 
-  it('preserves the organization-head approval and returns a planning rejection only to planning review when a client omits resubmit', () => {
+  it('keeps a planning rejection unchanged while creating a pending request', () => {
     const canonical = registrationV2Canonical(
       registrationV2Payload(),
       registrationV2AttachmentKinds,
@@ -965,19 +964,16 @@ describe('project route helpers', () => {
       actorName: 'PM A',
       actorEmail: 'pm-a@example.com',
       timestamp: '2026-07-14T00:00:00.000Z',
-      targetProjectVersion: 2,
       resubmit: false,
       reviewComment: '프로젝트 코드 확인 내용을 보완했습니다.',
     });
 
-    expect(submission.projectPatch).toEqual({
-      managementPlanningReviewStatus: 'PENDING',
-      managementPlanningReviewedAt: null,
-      managementPlanningReviewedById: null,
-      managementPlanningReviewedByName: null,
-      managementPlanningReviewComment: null,
+    expect(submission).not.toHaveProperty('projectPatch');
+    expect(submission.projectRequest).toMatchObject({
+      status: 'PENDING',
+      baseProjectVersion: 1,
+      targetProjectVersion: 2,
     });
-    expect(submission.projectPatch).not.toHaveProperty('executiveReviewStatus');
   });
 
   it('allows a v2 settlement-none basis with required contract confirmations', () => {
@@ -2027,14 +2023,19 @@ describe('project route helpers', () => {
     const projectRef = { path: 'orgs/mysc/projects/p001' };
     const requestRef = { path: 'orgs/mysc/project_requests/pr001' };
     const tx = {
-      get: vi.fn(async () => ({
+      get: vi.fn(async (ref: { path: string }) => ref === projectRef ? ({
         exists: true,
         data: () => ({
           id: 'p001',
-          version: 2,
+          version: 6,
           createdAt: '2026-05-01T00:00:00.000Z',
           createdBy: 'pm-1',
-          executiveReviewStatus: 'PENDING',
+          executiveReviewStatus: 'APPROVED',
+        }),
+      }) : ({
+        exists: true,
+        data: () => ({
+          requestKind: 'CHANGE', status: 'PENDING', baseProjectVersion: 6, targetProjectVersion: 7,
         }),
       })),
       set: vi.fn(),
@@ -2050,6 +2051,7 @@ describe('project route helpers', () => {
       buildProjectPatch: () => ({ executiveReviewStatus: 'APPROVED' }),
       buildRequestPatch: () => ({ status: 'APPROVED', approvedProjectId: 'p001' }),
       requestRefs: [requestRef],
+      enforceChangeRequestVersion: true,
       tenantId: 'mysc',
       actorId: 'admin-1',
       now: '2026-05-20T00:00:00.000Z',
@@ -2060,14 +2062,14 @@ describe('project route helpers', () => {
     expect(tx.set).toHaveBeenCalledTimes(2);
     expect(tx.set).toHaveBeenNthCalledWith(1, projectRef, expect.objectContaining({
       executiveReviewStatus: 'APPROVED',
-      version: 3,
+      version: 7,
       updatedBy: 'admin-1',
     }), { merge: true });
     expect(tx.set).toHaveBeenNthCalledWith(2, requestRef, {
       status: 'APPROVED',
       approvedProjectId: 'p001',
     }, { merge: true });
-    expect(result).toMatchObject({ version: 3, data: { executiveReviewStatus: 'APPROVED' } });
+    expect(result).toMatchObject({ version: 7, data: { executiveReviewStatus: 'APPROVED' } });
   });
 
   it('does not write a project when its transactional participation sync fails', async () => {
@@ -2104,8 +2106,8 @@ describe('project route helpers', () => {
       get: vi.fn(async (ref) => ({
         exists: true,
         data: () => ref === projectRef
-          ? { id: 'p001', version: 2, executiveReviewStatus: 'PENDING' }
-          : { requestKind: 'CHANGE', status: 'PENDING', baseProjectVersion: 1, targetProjectVersion: 2 },
+          ? { id: 'p001', version: 6, executiveReviewStatus: 'APPROVED' }
+          : { requestKind: 'CHANGE', status: 'PENDING', baseProjectVersion: 6, targetProjectVersion: 7 },
       })),
       set: vi.fn(),
     };
@@ -2120,6 +2122,7 @@ describe('project route helpers', () => {
       buildProjectPatch: () => ({ executiveReviewStatus: 'APPROVED' }),
       buildRequestPatch: () => ({ status: 'APPROVED' }),
       requestRefs: [requestRef],
+      enforceChangeRequestVersion: true,
       tenantId: 'mysc',
       actorId: 'admin-1',
       now: '2026-08-21T00:00:00.000Z',
@@ -2206,28 +2209,37 @@ describe('project route helpers', () => {
 
   it.each([
     {
-      label: 'change request with private draft paths',
+      label: 'change request whose canonical attachment is missing from storage',
       requestId: 'change-p001',
+      expectedStatus: 422,
+      expectedError: 'project_attachment_unavailable',
       projectRequest: {
         requestKind: 'CHANGE',
         targetProjectId: 'p001',
         approvedProjectId: 'p001',
         requestedBy: 'pm-a',
         status: 'PENDING',
-        baseProjectVersion: 2,
-        targetProjectVersion: 3,
+        requestVersion: 1,
+        baseProjectVersion: 3,
+        targetProjectVersion: 4,
         payload: {
           executiveApproverId: 'head-a',
           contractDocument: {
-            path: 'orgs/mysc/project-registration-drafts/private-change/contract.pdf',
+            attachmentId: 'contract-a',
+            path: 'orgs/mysc/project-registration-documents/p001/contract-a-contract.pdf',
             name: 'contract.pdf',
+            size: 123,
+            contentType: 'application/pdf',
           },
         },
         proposedSnapshot: {
           executiveApproverId: 'head-a',
           contractDocument: {
-            path: 'orgs/mysc/project-registration-drafts/private-change/contract.pdf',
+            attachmentId: 'contract-a',
+            path: 'orgs/mysc/project-registration-documents/p001/contract-a-contract.pdf',
             name: 'contract.pdf',
+            size: 123,
+            contentType: 'application/pdf',
           },
         },
         submittedOutboxId: 'outbox-change-p001',
@@ -2236,6 +2248,8 @@ describe('project route helpers', () => {
     {
       label: 'new registration before canonical attachments are published',
       requestId: 'registration-p001',
+      expectedStatus: 409,
+      expectedError: 'project_attachments_processing',
       projectRequest: {
         requestKind: 'REGISTRATION',
         targetProjectId: 'p001',
@@ -2256,6 +2270,8 @@ describe('project route helpers', () => {
     {
       label: 'markerless v2 registration missing the required quote',
       requestId: 'registration-p001',
+      expectedStatus: 409,
+      expectedError: 'project_attachments_processing',
       projectRequest: {
         requestKind: 'REGISTRATION',
         targetProjectId: 'p001',
@@ -2283,7 +2299,12 @@ describe('project route helpers', () => {
         submittedOutboxId: 'outbox-registration-p001',
       },
     },
-  ])('blocks organization-head approval until attachments are published: $label', async ({ requestId, projectRequest }) => {
+  ])('blocks organization-head approval when submitted attachments are unavailable: $label', async ({
+    requestId,
+    projectRequest,
+    expectedStatus,
+    expectedError,
+  }) => {
     const projectRef = { path: 'orgs/mysc/projects/p001' };
     const requestRef = { path: `orgs/mysc/project_requests/${requestId}` };
     const project = {
@@ -2291,7 +2312,7 @@ describe('project route helpers', () => {
       version: 3,
       executiveApproverId: 'head-a',
       executiveApproverName: '조직장 A',
-      executiveReviewStatus: 'PENDING',
+      executiveReviewStatus: projectRequest.requestKind === 'CHANGE' ? 'APPROVED' : 'PENDING',
     };
     const tx = {
       get: vi.fn(async (ref: { path: string }) => ref.path.includes('/projects/')
@@ -2315,6 +2336,9 @@ describe('project route helpers', () => {
       complete: vi.fn(),
       fail: vi.fn(),
     };
+    const inspectProjectRegistrationAttachment = vi.fn(async () => {
+      throw new Error('object not found');
+    });
     const app = express();
     app.use(express.json());
     app.use((req: any, _res, next) => {
@@ -2332,6 +2356,7 @@ describe('project route helpers', () => {
       db,
       now: () => '2026-07-14T00:00:00.000Z',
       idempotencyService,
+      projectRequestContractStorageService: { inspectProjectRegistrationAttachment },
     } as any);
     app.use((error: any, _req, res, _next) => {
       res.status(error.statusCode || 500).json({ error: error.code || 'internal_error' });
@@ -2342,8 +2367,8 @@ describe('project route helpers', () => {
       reviewStatus: 'APPROVED',
     });
 
-    expect(response.status).toBe(409);
-    expect(response.body.error).toBe('project_attachments_processing');
+    expect(response.status).toBe(expectedStatus);
+    expect(response.body.error).toBe(expectedError);
     expect(tx.set).not.toHaveBeenCalled();
   });
 
@@ -2733,12 +2758,12 @@ describe('project route helpers', () => {
     const requestRef = { path: 'orgs/mysc/project_requests/change-p001' };
     const tx = {
       get: vi.fn(async (ref: { path: string }) => ref.path.includes('/projects/')
-        ? { exists: true, data: () => ({ id: 'p001', version: 5 }) }
+        ? { exists: true, data: () => ({ id: 'p001', version: 7 }) }
         : {
             exists: true,
             data: () => ({
               id: 'change-p001', requestKind: 'CHANGE', status: 'PENDING',
-              baseProjectVersion: 3, targetProjectVersion: 4,
+              baseProjectVersion: 6, targetProjectVersion: 7,
             }),
           }),
       set: vi.fn(),
@@ -2763,20 +2788,17 @@ describe('project route helpers', () => {
     expect(tx.set).not.toHaveBeenCalled();
   });
 
-  it('records the post-approval canonical version after a current change request is approved', async () => {
+  it('rejects a change request without writing the project', async () => {
     const projectRef = { path: 'orgs/mysc/projects/p001' };
     const requestRef = { path: 'orgs/mysc/project_requests/change-p001' };
-    const missingMirrorRef = { path: 'orgs/mysc/projectRequests/change-p001' };
     const tx = {
       get: vi.fn(async (ref: { path: string }) => ref.path.includes('/projects/')
-        ? { exists: true, data: () => ({ id: 'p001', version: 4 }) }
-        : ref === missingMirrorRef
-          ? { exists: false, data: () => null }
+        ? { exists: true, data: () => ({ id: 'p001', version: 6, name: 'Original' }) }
         : {
             exists: true,
             data: () => ({
               id: 'change-p001', requestKind: 'CHANGE', status: 'PENDING',
-              baseProjectVersion: 3, targetProjectVersion: 4,
+              baseProjectVersion: 6, targetProjectVersion: 7,
             }),
           }),
       set: vi.fn(),
@@ -2789,23 +2811,20 @@ describe('project route helpers', () => {
     const result = await mergeProjectAndRequestDocs({
       db,
       projectPath: projectRef.path,
-      buildProjectPatch: () => ({ executiveReviewStatus: 'APPROVED' }),
-      buildRequestPatch: (_project, _request, nextVersion) => ({
-        status: 'APPROVED', approvedProjectVersion: nextVersion,
-      }),
-      requestRefs: [requestRef, missingMirrorRef],
+      buildProjectPatch: () => ({ executiveReviewStatus: 'REVISION_REJECTED' }),
+      buildRequestPatch: () => ({ status: 'REJECTED' }),
+      requestRefs: [requestRef],
       enforceChangeRequestVersion: true,
+      writeProject: false,
       tenantId: 'mysc',
       actorId: 'admin-1',
       now: '2026-07-12T00:00:00.000Z',
     });
 
-    expect(result.version).toBe(5);
-    expect(tx.set).toHaveBeenCalledTimes(2);
-    expect(tx.set).toHaveBeenNthCalledWith(2, requestRef, {
-      status: 'APPROVED', approvedProjectVersion: 5,
-    }, { merge: true });
-    expect(tx.set).not.toHaveBeenCalledWith(missingMirrorRef, expect.anything(), expect.anything());
+    expect(result).toMatchObject({ version: 6, data: { version: 6, name: 'Original' } });
+    expect(tx.set).toHaveBeenCalledTimes(1);
+    expect(tx.set).toHaveBeenCalledWith(requestRef, { status: 'REJECTED' }, { merge: true });
+    expect(tx.set).not.toHaveBeenCalledWith(projectRef, expect.anything(), expect.anything());
   });
 
   it('fails closed when duplicate request collections both exist during approval', async () => {
@@ -3060,7 +3079,18 @@ describe('project route helpers', () => {
           status: 'PENDING',
           requestedAt: '2026-07-20T01:00:00.000Z',
           targetProjectVersion: 4,
-          payload: { contractAmount: 999_000 },
+          payload: {
+            contractAmount: 999_000,
+            contractDocument: {
+              path: 'orgs/mysc/project-registration-documents/project-a/submitted-contract.pdf',
+            },
+          },
+          proposedSnapshot: {
+            contractAmount: 999_000,
+            contractDocument: {
+              path: 'orgs/mysc/project-registration-documents/project-a/submitted-contract.pdf',
+            },
+          },
         },
         {
           id: 'registration-latest',

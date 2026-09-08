@@ -262,8 +262,9 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       status: 'PENDING',
       targetProjectId,
       approvedProjectId: targetProjectId,
-      baseProjectVersion: 1,
-      targetProjectVersion: 2,
+      baseProjectVersion: 2,
+      targetProjectVersion: 3,
+      requestVersion: 1,
       proposedSnapshot: {
         name: '시트 참여율 반영 사업',
         executiveApproverId: actorId,
@@ -502,17 +503,6 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       },
       reviewBody: { reviewStatus: 'APPROVED' },
     },
-    {
-      label: 'management-planning agreement',
-      projectId: 'p_management_participation_sync_001',
-      requestId: 'pr_management_participation_sync_001',
-      path: '/api/v1/projects/p_management_participation_sync_001/management-planning-review',
-      projectReviewState: {
-        executiveReviewStatus: 'APPROVED',
-        managementPlanningReviewStatus: 'PENDING',
-      },
-      reviewBody: { reviewStatus: 'AGREED', projectCode: 'PRJ-2026-431' },
-    },
   ])('syncs approved portal change monthly rates through $label and preserves MANUAL entries', async ({
     projectId: targetProjectId,
     requestId,
@@ -559,6 +549,18 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
 
   it.each([
     {
+      label: 'management-planning agreement',
+      projectId: 'p_management_participation_sync_001',
+      requestId: 'pr_management_participation_sync_001',
+      path: '/api/v1/projects/p_management_participation_sync_001/management-planning-review',
+      projectReviewState: {
+        executiveReviewStatus: 'APPROVED',
+        managementPlanningReviewStatus: 'PENDING',
+      },
+      reviewBody: { reviewStatus: 'AGREED', projectCode: 'PRJ-2026-431' },
+      requestRemainsPending: true,
+    },
+    {
       label: 'organization-head rejection',
       projectId: 'p_exec_participation_reject_001',
       requestId: 'pr_exec_participation_reject_001',
@@ -568,6 +570,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         executiveApproverId: actorId,
       },
       reviewBody: { reviewStatus: 'REVISION_REJECTED', reviewComment: '참여율을 확인해 주세요' },
+      requestRemainsPending: false,
     },
     {
       label: 'management-planning rejection',
@@ -579,6 +582,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         managementPlanningReviewStatus: 'PENDING',
       },
       reviewBody: { reviewStatus: 'REVISION_REJECTED', reviewComment: '참여율을 확인해 주세요' },
+      requestRemainsPending: false,
     },
   ])('does not sync portal change participation entries on $label', async ({
     projectId: targetProjectId,
@@ -586,6 +590,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     path,
     projectReviewState,
     reviewBody,
+    requestRemainsPending,
   }) => {
     const reviewApi = request(createBffApp({ projectId, workerSecret, db }));
     const { oldSyncRef, manualRef, oldSyncEntry, manualEntry } = await seedPortalParticipationChange({
@@ -606,6 +611,9 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     expect((await oldSyncRef.get()).data()).toEqual(oldSyncEntry);
     expect((await manualRef.get()).data()).toEqual(manualEntry);
     expect((await db.doc(`orgs/${tenantId}/partEntries/pte-${targetProjectId}-able__2026-01`).get()).exists).toBe(false);
+    if (requestRemainsPending) {
+      expect((await db.doc(`orgs/${tenantId}/project_requests/${requestId}`).get()).data()?.status).toBe('PENDING');
+    }
   });
 
   it('requires a rejection reason for executive rejection and discard', async () => {
@@ -746,8 +754,9 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       status: 'PENDING',
       targetProjectId: 'p_reassigned_exec_001',
       approvedProjectId: 'p_reassigned_exec_001',
-      baseProjectVersion: 1,
-      targetProjectVersion: 2,
+      baseProjectVersion: 2,
+      targetProjectVersion: 3,
+      requestVersion: 1,
       proposedSnapshot: {
         executiveApproverId: actorId,
         executiveApproverName: '새 조직장',

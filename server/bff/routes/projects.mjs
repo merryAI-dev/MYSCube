@@ -382,6 +382,7 @@ export async function mergeProjectAndRequestDocs({
   buildRequestPatch,
   requestRefs,
   enforceChangeRequestVersion = false,
+  writeProject = true,
   tenantId,
   actorId,
   now,
@@ -419,7 +420,8 @@ export async function mergeProjectAndRequestDocs({
         || baseProjectVersion < 1
         || !Number.isSafeInteger(targetProjectVersion)
         || targetProjectVersion !== baseProjectVersion + 1
-        || targetProjectVersion !== currentVersion
+        || baseProjectVersion !== currentVersion
+        || targetProjectVersion !== nextVersion
       ) {
         throw createHttpError(
           409,
@@ -429,16 +431,18 @@ export async function mergeProjectAndRequestDocs({
       }
     }
     const projectPatch = await buildProjectPatch(current, currentRequest, nextVersion, tx);
-    const document = {
-      ...current, ...projectPatch, tenantId, version: nextVersion,
-      createdBy: current.createdBy || actorId, createdAt: current.createdAt || now,
-      updatedBy: actorId, updatedAt: now,
-    };
+    const document = writeProject
+      ? {
+          ...current, ...projectPatch, tenantId, version: nextVersion,
+          createdBy: current.createdBy || actorId, createdAt: current.createdAt || now,
+          updatedBy: actorId, updatedAt: now,
+        }
+      : current;
     const sanitizedProject = stripUndefinedDeep(document);
 
     const requestPatch = buildRequestPatch?.(current, currentRequest, nextVersion) || null;
     const sanitizedRequestPatch = requestPatch ? stripUndefinedDeep(requestPatch) : null;
-    if (typeof stageTransactionWrites === 'function') {
+    if (writeProject && typeof stageTransactionWrites === 'function') {
       await stageTransactionWrites({
         tx,
         document: sanitizedProject,
@@ -448,12 +452,16 @@ export async function mergeProjectAndRequestDocs({
       });
     }
 
-    tx.set(projectRef, sanitizedProject, { merge: true });
+    if (writeProject) tx.set(projectRef, sanitizedProject, { merge: true });
     if (requestPatch && currentRequestRef) {
       tx.set(currentRequestRef, sanitizedRequestPatch, { merge: true });
     }
 
-    return { version: nextVersion, data: sanitizedProject, request: currentRequest };
+    return {
+      version: writeProject ? nextVersion : currentVersion,
+      data: sanitizedProject,
+      request: currentRequest,
+    };
   });
 }
 
@@ -1131,6 +1139,7 @@ function registrationPrivateDocuments(attachmentRefs) {
       size: Number.isSafeInteger(attachment?.size) && attachment.size >= 0 ? attachment.size : 0,
       contentType: readOptionalText(attachment?.contentType),
       uploadedAt: readOptionalText(attachment?.uploadedAt),
+      attachmentId: readOptionalText(attachment?.attachmentId),
       visibility: 'PRIVATE',
     }));
   }
@@ -1795,7 +1804,7 @@ export function normalizeProjectOrganizationLabel(value) {
   return normalized;
 }
 
-function buildProjectRequestPayloadFromProject(project, existingPayload = {}) {
+export function buildProjectRequestPayloadFromProject(project, existingPayload = {}) {
   const { finalPaymentExpectedWeek: _historicalWeek, ...existingRequestPayload } = existingPayload && typeof existingPayload === 'object'
     ? existingPayload
     : {};
@@ -2287,7 +2296,6 @@ export function buildProjectInfoChangeSubmission({
   actorName,
   actorEmail,
   timestamp,
-  targetProjectVersion,
   resubmit = false,
   reviewComment,
 }) {
@@ -2302,11 +2310,6 @@ export function buildProjectInfoChangeSubmission({
   if (registrationRequirementsVersion(payload.registrationRequirementsVersion) !== 2) {
     invalidRegistration('Project information changes require registration requirements version 2');
   }
-  const ownerId = readOptionalText(payload.registeredById)
-    || readOptionalText(payload.managerId)
-    || readOptionalText(project.registeredById)
-    || readOptionalText(project.managerId)
-    || actorId;
   assertTrustedProjectInfoDocumentReferences(
     project,
     payload,
@@ -2339,62 +2342,11 @@ export function buildProjectInfoChangeSubmission({
     : 1;
   const managementPlanningResubmission = isManagementPlanningRevisionRejected(project);
   const executiveResubmission = isExecutiveRevisionRejected(project);
-  if (resubmit && !managementPlanningResubmission && !executiveResubmission) {
+  const rejectedChangeRequest = isProjectChangeRequest(previousRequest)
+    && readOptionalText(previousRequest?.status) === 'REJECTED';
+  if (resubmit && !managementPlanningResubmission && !executiveResubmission && !rejectedChangeRequest) {
     throw createHttpError(409, 'Project is not awaiting resubmission', 'invalid_resubmit_state');
   }
-  const shouldResubmit = resubmit || managementPlanningResubmission || executiveResubmission;
-  const previousExecutiveReviewStatus = readOptionalText(project.executiveReviewStatus) || 'PENDING';
-  const executiveReviewReopens = !shouldResubmit
-    && ['APPROVED', 'PLANNING_AGREED'].includes(previousExecutiveReviewStatus);
-  const currentExecutiveHistory = Array.isArray(project.executiveReviewHistory)
-    ? project.executiveReviewHistory
-    : [];
-  const previousReviewedAt = readOptionalText(project.executiveReviewedAt);
-  const previousReviewedById = readOptionalText(project.executiveReviewedById);
-  const previousReviewedByName = readOptionalText(project.executiveReviewedByName);
-  const previousReviewComment = readOptionalText(project.executiveReviewComment);
-  const previousDecisionAlreadyRecorded = currentExecutiveHistory.some((entry) => (
-    readOptionalText(entry?.status) === previousExecutiveReviewStatus
-      && readOptionalText(entry?.reviewedAt) === previousReviewedAt
-      && readOptionalText(entry?.reviewedById) === previousReviewedById
-  ));
-  const previousDecisionHistory = executiveReviewReopens
-    && !previousDecisionAlreadyRecorded
-    && (previousReviewedAt || previousReviewedById || previousReviewedByName || previousReviewComment)
-    ? [{
-        status: previousExecutiveReviewStatus,
-        previousStatus: null,
-        reviewedAt: previousReviewedAt || null,
-        reviewedById: previousReviewedById || null,
-        reviewedByName: previousReviewedByName || null,
-        reviewComment: previousReviewComment || null,
-      }]
-    : [];
-  const executivePendingPatch = {
-    executiveReviewStatus: 'PENDING',
-    executiveReviewedAt: null,
-    executiveReviewedById: null,
-    executiveReviewedByName: null,
-    executiveReviewComment: null,
-    executiveReviewHistory: [
-      ...currentExecutiveHistory,
-      ...previousDecisionHistory,
-      {
-        status: 'PENDING',
-        previousStatus: previousExecutiveReviewStatus,
-        reviewedAt: timestamp,
-        reviewedById: actorId,
-        reviewedByName: actorName,
-        reviewComment: readOptionalText(reviewComment) || null,
-        ...(changedFields.length ? { changes: changedFields } : {}),
-      },
-    ],
-  };
-  const projectPatch = shouldResubmit
-    ? (managementPlanningResubmission
-      ? buildManagementPlanningResubmissionPatch()
-      : executivePendingPatch)
-    : (executiveReviewReopens ? executivePendingPatch : {});
   const projectRequestId = `change-${readOptionalText(project.id)}`;
   const projectRequest = stripUndefinedDeep({
     id: projectRequestId,
@@ -2403,7 +2355,7 @@ export function buildProjectInfoChangeSubmission({
     targetProjectId: project.id,
     approvedProjectId: project.id,
     baseProjectVersion: currentVersion,
-    targetProjectVersion,
+    targetProjectVersion: currentVersion + 1,
     requestVersion,
     beforeSnapshot,
     proposedSnapshot,
@@ -2424,7 +2376,7 @@ export function buildProjectInfoChangeSubmission({
     createdAt: previousRequest?.createdAt || timestamp,
     updatedAt: timestamp,
   });
-  return { projectPatch, projectRequest };
+  return { projectRequest };
 }
 
 function isProjectChangeRequest(request) {
@@ -2457,6 +2409,40 @@ function assertProjectRequestAttachmentsPublished(request, tenantId) {
       409,
       'Submitted attachments are still being prepared for review',
       'project_attachments_processing',
+    );
+  }
+}
+
+async function assertProjectChangeRequestAttachmentsStored(request, tenantId, storageService) {
+  if (!isProjectChangeRequest(request)) return;
+  const projectId = readOptionalText(request?.targetProjectId || request?.approvedProjectId);
+  const payload = resolveProjectRequestPayloadForReview(request);
+  const documents = PROJECT_INFO_DOCUMENT_FIELDS
+    .map((field) => payload?.[field])
+    .filter((document) => readOptionalText(document?.path));
+  if (documents.length === 0) return;
+  try {
+    if (!projectId || typeof storageService?.inspectProjectRegistrationAttachment !== 'function') {
+      throw new Error('Project attachment storage inspection is not configured');
+    }
+    await Promise.all(documents.map(async (document) => {
+      const stored = await storageService.inspectProjectRegistrationAttachment({
+        tenantId,
+        projectId,
+        path: document.path,
+      });
+      if (
+        readOptionalText(stored?.path) !== readOptionalText(document?.path)
+        || readOptionalText(stored?.attachmentId) !== readOptionalText(document?.attachmentId)
+        || Number(stored?.size) !== Number(document?.size)
+        || readOptionalText(stored?.contentType) !== readOptionalText(document?.contentType)
+      ) throw new Error('Project attachment metadata does not match');
+    }));
+  } catch {
+    throw createHttpError(
+      422,
+      '제출 파일을 확인할 수 없습니다. 다시 첨부해 주세요.',
+      'project_attachment_unavailable',
     );
   }
 }
@@ -3926,13 +3912,30 @@ export function mountProjectRoutes(app, {
       requestId: parsed.requestId,
       projectId,
     });
+    if (parsed.reviewStatus === 'APPROVED') {
+      await assertProjectChangeRequestAttachmentsStored(
+        request,
+        tenantId,
+        projectRequestContractStorageService,
+      );
+    }
 
     const projectResult = await mergeProjectAndRequestDocs({
       db,
       projectPath,
       buildProjectPatch: async (currentProject, currentRequest, _nextVersion, tx) => {
         const reviewRequest = currentRequest || request;
-        const previousStatus = readOptionalText(currentProject.executiveReviewStatus) || 'PENDING';
+        if (
+          isProjectChangeRequest(reviewRequest)
+          && Number(reviewRequest?.requestVersion) !== Number(request?.requestVersion)
+        ) {
+          throw createHttpError(409, 'Project request changed before approval', 'canonical_version_conflict');
+        }
+        const pendingChangeRequest = isProjectChangeRequest(reviewRequest)
+          && readOptionalText(reviewRequest?.status) === 'PENDING';
+        const previousStatus = pendingChangeRequest
+          ? 'PENDING'
+          : (readOptionalText(currentProject.executiveReviewStatus) || 'PENDING');
         const currentHistory = Array.isArray(currentProject.executiveReviewHistory) ? currentProject.executiveReviewHistory : [];
         const isLegacyPlanningAgreement = previousStatus === 'PLANNING_AGREED';
         const requestPayload = resolveProjectRequestPayloadForReview(reviewRequest);
@@ -3940,7 +3943,7 @@ export function mountProjectRoutes(app, {
         const designatedApproverId = !isLegacyPlanningAgreement && requestApproverId
           ? requestApproverId
           : readOptionalText(currentProject.executiveApproverId);
-        if (!['PENDING', 'PLANNING_AGREED'].includes(previousStatus)) {
+        if (!pendingChangeRequest && !['PENDING', 'PLANNING_AGREED'].includes(previousStatus)) {
           throw createHttpError(409, 'Project is not awaiting an organization-head decision', 'invalid_executive_review_state');
         }
         if (designatedApproverId && designatedApproverId !== actorId) {
@@ -4018,7 +4021,8 @@ export function mountProjectRoutes(app, {
           })
       ),
       requestRefs: resolvedRequestId ? refs : [],
-      enforceChangeRequestVersion: parsed.reviewStatus === 'APPROVED',
+      enforceChangeRequestVersion: isProjectChangeRequest(request),
+      writeProject: parsed.reviewStatus === 'APPROVED' || !isProjectChangeRequest(request),
       tenantId,
       actorId,
       now,
@@ -4099,10 +4103,6 @@ export function mountProjectRoutes(app, {
       requestId: parsed.requestId,
       projectId,
     });
-    const appliesResubmittedChange = parsed.reviewStatus === 'AGREED'
-      && isProjectChangeRequest(request)
-      && readOptionalText(request?.status) === 'PENDING';
-
     let projectCodeClaimWrite = null;
     const projectResult = await mergeProjectAndRequestDocs({
       db,
@@ -4130,18 +4130,6 @@ export function mountProjectRoutes(app, {
           ? currentProject.managementPlanningReviewHistory
           : [];
         const isAgreed = parsed.reviewStatus === 'AGREED';
-        const appliesCurrentChange = isAgreed
-          && isProjectChangeRequest(reviewRequest)
-          && readOptionalText(reviewRequest?.status) === 'PENDING';
-        if (appliesCurrentChange) {
-          assertProjectRequestAttachmentsPublished(reviewRequest, tenantId);
-        }
-        const approvedChangePatch = appliesCurrentChange
-          ? buildProjectPatchFromChangeRequestPayload(
-            resolveProjectRequestPayloadForReview(reviewRequest),
-            currentProject,
-          )
-          : {};
         if (isAgreed && projectCode && projectCodeClaimRef) {
           const existingProjectCode = normalizeProjectCode(currentProject.projectCode);
           if (existingProjectCode && existingProjectCode !== projectCode) {
@@ -4177,7 +4165,6 @@ export function mountProjectRoutes(app, {
         }
 
         return {
-          ...approvedChangePatch,
           managementPlanningReviewStatus: parsed.reviewStatus,
           managementPlanningReviewedAt: now,
           managementPlanningReviewedById: actorId,
@@ -4200,6 +4187,7 @@ export function mountProjectRoutes(app, {
       },
       buildRequestPatch: (_currentProject, currentRequest, nextVersion) => {
         if (!resolvedRequestId) return null;
+        if (isProjectChangeRequest(currentRequest || request)) return null;
         const isAgreed = parsed.reviewStatus === 'AGREED';
         const reviewComment = readOptionalText(parsed.reviewComment);
         if (!isAgreed) {
@@ -4235,25 +4223,11 @@ export function mountProjectRoutes(app, {
         };
       },
       requestRefs: resolvedRequestId ? refs : [],
-      enforceChangeRequestVersion: appliesResubmittedChange,
       tenantId,
       actorId,
       now,
       notFoundMessage: `Project not found: ${projectId}`,
-      stageTransactionWrites: async ({ tx, document, currentRequest }) => {
-        if (
-          parsed.reviewStatus === 'AGREED'
-          && isProjectChangeRequest(currentRequest || request)
-          && readOptionalText((currentRequest || request)?.status) === 'PENDING'
-        ) {
-          await syncProjectParticipationEntries({
-            db,
-            transaction: tx,
-            tenantId,
-            project: document,
-            now,
-          });
-        }
+      stageTransactionWrites: async ({ tx }) => {
         if (projectCodeClaimWrite) {
           tx.set(projectCodeClaimWrite.ref, projectCodeClaimWrite.value, { merge: true });
         }

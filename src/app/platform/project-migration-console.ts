@@ -4,7 +4,7 @@ import type {
   ProjectRequest,
 } from '../data/types';
 import { normalizeProjectDepartment } from './project-cic';
-import { resolveProjectRequestPayload } from './project-change-request';
+import { resolveProjectRequestKind, resolveProjectRequestPayload } from './project-change-request';
 
 export type MigrationAuditConsoleStatus = ProjectExecutiveReviewStatus;
 
@@ -79,6 +79,10 @@ export function deriveMigrationAuditStatus(
     || project.executiveReviewStatus === 'DUPLICATE_DISCARDED'
   ) {
     return project.executiveReviewStatus;
+  }
+  if (resolveProjectRequestKind(request) === 'CHANGE') {
+    if (request?.status === 'PENDING') return 'PENDING';
+    if (request?.status === 'REJECTED') return 'REVISION_REJECTED';
   }
   // A management-planning return reopens only that stage. The executive seal remains authoritative.
   if (project.executiveReviewStatus === 'APPROVED') return 'APPROVED';

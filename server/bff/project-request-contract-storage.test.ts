@@ -40,7 +40,7 @@ describe('project-request-contract-storage', () => {
     expect(result.downloadURL).toContain('firebasestorage.googleapis.com');
   });
 
-  it('uploads a private draft attachment without a Firebase download token', async () => {
+  it('uploads a private project change attachment with owning draft metadata', async () => {
     const save = vi.fn(async () => undefined);
     const bucket = {
       file: vi.fn((path: string) => ({ path, save })),
@@ -51,8 +51,9 @@ describe('project-request-contract-storage', () => {
       storage: { bucket: vi.fn(() => bucket) },
     });
 
-    const result = await service.uploadDraftAttachment({
+    const result = await service.uploadProjectRegistrationAttachment({
       tenantId: 'tenant-a',
+      projectId: 'project-a',
       draftId: 'draft-a',
       attachmentId: 'attachment-a',
       fileName: ' 계약서 최종.pdf ',
@@ -61,7 +62,7 @@ describe('project-request-contract-storage', () => {
     });
 
     expect(result).toMatchObject({
-      path: 'orgs/tenant-a/project-registration-drafts/draft-a/attachment-a-계약서_최종.pdf',
+      path: 'orgs/tenant-a/project-registration-documents/project-a/attachment-a-계약서_최종.pdf',
       name: '계약서 최종.pdf',
       size: Buffer.byteLength('private-pdf'),
       contentType: 'application/pdf',
@@ -73,6 +74,7 @@ describe('project-request-contract-storage', () => {
         contentType: 'application/pdf',
         metadata: {
           tenantId: 'tenant-a',
+          projectId: 'project-a',
           draftId: 'draft-a',
           attachmentId: 'attachment-a',
         },
@@ -81,46 +83,70 @@ describe('project-request-contract-storage', () => {
     expect(save.mock.calls[0]?.[1]?.metadata?.metadata).not.toHaveProperty('firebaseStorageDownloadTokens');
   });
 
-  it('deletes a private draft attachment idempotently within its draft prefix', async () => {
+  it('inspects and deletes only a permanent attachment owned by the current draft', async () => {
     const deleteFile = vi.fn(async () => undefined);
+    const getMetadata = vi.fn(async () => [{
+      size: '11',
+      contentType: 'application/pdf',
+      metadata: { tenantId: 'tenant-a', projectId: 'project-a', draftId: 'draft-a', attachmentId: 'attachment-a' },
+    }]);
     const bucket = {
-      file: vi.fn((path: string) => ({ path, delete: deleteFile })),
+      file: vi.fn((path: string) => ({ path, delete: deleteFile, getMetadata })),
     };
     const service = createProjectRequestContractStorageService({
       projectId: 'demo-bff-it',
       bucketName: 'demo-bff-it.firebasestorage.app',
       storage: { bucket: vi.fn(() => bucket) },
     });
-    const path = 'orgs/tenant-a/project-registration-drafts/draft-a/attachment-a-contract.pdf';
+    const path = 'orgs/tenant-a/project-registration-documents/project-a/attachment-a-contract.pdf';
 
-    await service.deleteDraftAttachment({ tenantId: 'tenant-a', draftId: 'draft-a', path });
+    await expect(service.inspectProjectRegistrationAttachment({
+      tenantId: 'tenant-a', projectId: 'project-a', path,
+    })).resolves.toMatchObject({
+      path, size: 11, contentType: 'application/pdf', attachmentId: 'attachment-a', draftId: 'draft-a',
+    });
+    await service.deleteProjectRegistrationAttachment({
+      tenantId: 'tenant-a', projectId: 'project-a', draftId: 'draft-a', path,
+    });
 
     expect(bucket.file).toHaveBeenCalledWith(path);
     expect(deleteFile).toHaveBeenCalledWith({ ignoreNotFound: true });
+    await expect(service.deleteProjectRegistrationAttachment({
+      tenantId: 'tenant-a', projectId: 'project-a', draftId: 'draft-b', path,
+    })).rejects.toThrow('project registration attachment belongs to another draft');
+    expect(deleteFile).toHaveBeenCalledTimes(1);
   });
 
   it('deletes every path in a validated cleanup outbox payload', async () => {
     const deleteDraftAttachment = vi.fn(async () => undefined);
+    const deleteProjectRegistrationAttachment = vi.fn(async () => undefined);
     const handler = createDraftAttachmentCleanupOutboxHandler({
-      draftStorageService: { deleteDraftAttachment },
+      draftStorageService: { deleteDraftAttachment, deleteProjectRegistrationAttachment },
     });
 
     await handler({
       tenantId: 'tenant-a',
       payload: {
         draftId: 'draft-a',
+        projectId: 'project-a',
         paths: [
           'orgs/tenant-a/project-registration-drafts/draft-a/contract.pdf',
-          'orgs/tenant-a/project-registration-drafts/draft-a/quote.pdf',
+          'orgs/tenant-a/project-registration-documents/project-a/quote.pdf',
         ],
       },
     });
 
-    expect(deleteDraftAttachment).toHaveBeenCalledTimes(2);
-    expect(deleteDraftAttachment).toHaveBeenNthCalledWith(1, {
+    expect(deleteDraftAttachment).toHaveBeenCalledOnce();
+    expect(deleteDraftAttachment).toHaveBeenCalledWith({
       tenantId: 'tenant-a',
       draftId: 'draft-a',
       path: 'orgs/tenant-a/project-registration-drafts/draft-a/contract.pdf',
+    });
+    expect(deleteProjectRegistrationAttachment).toHaveBeenCalledWith({
+      tenantId: 'tenant-a',
+      projectId: 'project-a',
+      draftId: 'draft-a',
+      path: 'orgs/tenant-a/project-registration-documents/project-a/quote.pdf',
     });
     await expect(handler({ tenantId: 'tenant-a', payload: { draftId: 'draft-a', paths: [] } }))
       .rejects.toThrow('Draft attachment cleanup payload is invalid');

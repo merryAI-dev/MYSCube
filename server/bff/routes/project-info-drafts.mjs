@@ -54,6 +54,7 @@ const DOCUMENT_FIELD_BY_KIND = {
   performance_certificate: 'performanceCertificateDocument',
   tax_invoice: 'taxInvoiceDocument',
   final_settlement_report: 'finalSettlementReportDocument',
+  final_report: 'finalReportDocument',
 };
 const MAX_DRAFT_BYTES = 900 * 1024;
 const MAX_ATTACHMENT_REFS = 100;
@@ -147,7 +148,7 @@ function publicAttachmentRefs(draft = {}) {
   ));
 }
 
-function resumableDraftAttachments(tenantId, draftId, request = {}) {
+function resumableDraftAttachments(tenantId, projectId, draftId, request = {}) {
   if (
     readOptionalText(request.requestKind) !== 'CHANGE'
     || !['PENDING', 'REJECTED'].includes(readOptionalText(request.status))
@@ -155,11 +156,23 @@ function resumableDraftAttachments(tenantId, draftId, request = {}) {
   const source = request.proposedSnapshot && typeof request.proposedSnapshot === 'object'
     ? request.proposedSnapshot
     : request.payload;
+  const before = request.beforeSnapshot && typeof request.beforeSnapshot === 'object'
+    ? request.beforeSnapshot
+    : {};
   if (!source || typeof source !== 'object' || Array.isArray(source)) return [];
   return Object.entries(DOCUMENT_FIELD_BY_KIND).flatMap(([documentKind, field]) => {
     const document = source[field];
     const path = readOptionalText(document?.path);
-    if (!path || draftIdFromTrustedAttachmentPath(tenantId, path) !== draftId) return [];
+    const permanentPrefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
+    const changedPermanentDocument = path.startsWith(permanentPrefix)
+      && path !== readOptionalText(before?.[field]?.path);
+    if (
+      !path
+      || (
+        draftIdFromTrustedAttachmentPath(tenantId, path) !== draftId
+        && !changedPermanentDocument
+      )
+    ) return [];
     const attachmentId = readOptionalText(document?.attachmentId);
     return [{
       ...(attachmentId ? { attachmentId } : {}),
@@ -333,36 +346,6 @@ export function mergeProjectInfoDraftFields({ base, mine, theirs }) {
   return { merged, autoMerged, conflicts };
 }
 
-// Submitting a change request moves the project to PENDING and clears the recorded
-// decision. Withdrawing puts back the last real decision so the project does not sit
-// in "awaiting approval" with no request behind it.
-export function restoreExecutiveReviewAfterWithdraw(project) {
-  const history = Array.isArray(project?.executiveReviewHistory) ? project.executiveReviewHistory : [];
-  const lastDecision = history
-    .slice()
-    .reverse()
-    .find((entry) => {
-      const status = readOptionalText(entry?.status);
-      return status && status !== 'PENDING';
-    });
-  if (!lastDecision) {
-    return {
-      executiveReviewStatus: 'PENDING',
-      executiveReviewedAt: null,
-      executiveReviewedById: null,
-      executiveReviewedByName: null,
-      executiveReviewComment: null,
-    };
-  }
-  return {
-    executiveReviewStatus: readOptionalText(lastDecision.status),
-    executiveReviewedAt: readOptionalText(lastDecision.reviewedAt) || null,
-    executiveReviewedById: readOptionalText(lastDecision.reviewedById) || null,
-    executiveReviewedByName: readOptionalText(lastDecision.reviewedByName) || null,
-    executiveReviewComment: readOptionalText(lastDecision.reviewComment) || null,
-  };
-}
-
 function assertRevision(draft, expected) {
   const actual = Number.isInteger(draft.draftRevision) ? draft.draftRevision : 0;
   if (actual !== expected) {
@@ -379,35 +362,6 @@ function idempotencyError(lock) {
   if (lock.mode === 'conflict') return createHttpError(409, lock.reason, 'idempotency_conflict');
   if (lock.mode === 'in_progress') return createHttpError(409, lock.reason, 'idempotency_in_progress');
   return null;
-}
-
-function privateDocuments(attachments) {
-  const latest = new Map();
-  for (const attachment of attachments) {
-    if (!DOCUMENT_KINDS.includes(readOptionalText(attachment?.documentKind))) continue;
-    latest.set(attachment.documentKind, {
-      documentKind: attachment.documentKind,
-      path: readOptionalText(attachment.path),
-      name: readOptionalText(attachment.name),
-      size: Number.isSafeInteger(attachment.size) && attachment.size >= 0 ? attachment.size : 0,
-      contentType: readOptionalText(attachment.contentType) || 'application/octet-stream',
-      uploadedAt: readOptionalText(attachment.uploadedAt),
-      visibility: 'PRIVATE',
-    });
-  }
-  return {
-    contractDocument: latest.get('contract'),
-    customerBusinessRegistrationDocument: latest.get('customer_business_registration'),
-    quoteDocument: latest.get('quote'),
-    proposalDocument: latest.get('proposal'),
-    proposalWordOriginalDocument: latest.get('proposal_word_original'),
-    proposalPptOriginalDocument: latest.get('proposal_ppt_original'),
-    presentationPptOriginalDocument: latest.get('presentation_ppt_original'),
-    rfpRequestEvidenceDocument: latest.get('rfp_request_evidence'),
-    performanceCertificateDocument: latest.get('performance_certificate'),
-    taxInvoiceDocument: latest.get('tax_invoice'),
-    finalSettlementReportDocument: latest.get('final_settlement_report'),
-  };
 }
 
 function auditEntry(current, actorRole, action, revision, timestamp, metadata = {}) {
@@ -439,26 +393,27 @@ function attachmentCleanupEvent(createEvent, current, paths, timestamp) {
     eventType: DRAFT_ATTACHMENT_CLEANUP_EVENT_TYPE,
     entityType: 'project_info_draft',
     entityId: current.draftDocumentId,
-    payload: { draftId: current.draftDocumentId, paths: uniquePaths },
+    payload: { draftId: current.draftDocumentId, projectId: current.projectId, paths: uniquePaths },
     createdAt: timestamp,
   });
 }
 
 export function createProjectInfoSubmittedOutboxHandler({
   db,
-  draftStorageService,
+  driveService,
+  projectRegistrationAttachmentStorageService,
   now = () => new Date().toISOString(),
 }) {
   return async (event) => {
+    const outboxId = readOptionalText(event?.id);
     const tenantId = readOptionalText(event?.tenantId);
     const projectId = readOptionalText(event?.payload?.projectId);
     const projectRequestId = readOptionalText(event?.payload?.projectRequestId);
-    const sourceDraftId = readOptionalText(event?.payload?.draftId);
     const requestVersion = Number(event?.payload?.requestVersion);
     const targetProjectVersion = Number(event?.payload?.targetProjectVersion);
-    const attachmentRefs = Array.isArray(event?.payload?.attachmentRefs) ? event.payload.attachmentRefs : [];
     if (
-      !tenantId
+      !outboxId
+      || !tenantId
       || !projectId
       || !projectRequestId
       || !Number.isSafeInteger(requestVersion)
@@ -466,59 +421,132 @@ export function createProjectInfoSubmittedOutboxHandler({
       || !Number.isSafeInteger(targetProjectVersion)
       || targetProjectVersion < 1
     ) throw new Error('Project information outbox identity is missing');
-    if (attachmentRefs.length === 0) return;
-    if (!sourceDraftId || typeof draftStorageService?.relocateDraftAttachments !== 'function') {
-      throw new Error('Project information attachment relocation is not configured');
-    }
     const requestRef = db.doc(`orgs/${tenantId}/project_requests/${projectRequestId}`);
-    const outboxRef = db.doc(`outbox/${event.id}`);
-    const deliveryIsCurrent = async (tx) => {
-      const [requestSnap, outboxSnap] = await Promise.all([tx.get(requestRef), tx.get(outboxRef)]);
-      if (!requestSnap.exists || !outboxSnap.exists) throw new Error('Project information delivery records are missing');
+    const projectRef = db.doc(`orgs/${tenantId}/projects/${projectId}`);
+    const outboxRef = db.doc(`outbox/${outboxId}`);
+    const currentDelivery = async (tx) => {
+      const [requestSnap, projectSnap, outboxSnap] = await Promise.all([
+        tx.get(requestRef), tx.get(projectRef), tx.get(outboxRef),
+      ]);
+      if (!requestSnap.exists || !projectSnap.exists || !outboxSnap.exists) {
+        throw new Error('Project information delivery records are missing');
+      }
       const outbox = outboxSnap.data() || {};
       if (event.claimToken && (outbox.status !== 'PROCESSING' || outbox.claimToken !== event.claimToken)) {
         throw new Error('Project information outbox claim is no longer current');
       }
       const request = requestSnap.data() || {};
-      if (readOptionalText(request.targetProjectId) !== projectId) {
+      if (readOptionalText(request.requestKind) !== 'CHANGE' || readOptionalText(request.targetProjectId) !== projectId) {
         throw new Error('Project information request does not match its project');
       }
-      return readOptionalText(request.submittedOutboxId) === readOptionalText(event.id)
+      const current = readOptionalText(request.submittedOutboxId) === outboxId
         && Number(request.requestVersion) === requestVersion
         && Number(request.targetProjectVersion) === targetProjectVersion;
+      return current ? { request, project: projectSnap.data() || {} } : null;
     };
-    const currentBeforeRelocation = await db.runTransaction(deliveryIsCurrent);
-    if (!currentBeforeRelocation) return;
+    const delivery = await db.runTransaction(currentDelivery);
+    if (!delivery || (
+      readOptionalText(delivery.request.driveArchiveFolderId)
+      && readOptionalText(delivery.request.driveArchivedAt)
+    )) return;
+    if (!driveService?.getConfig?.().enabled) return;
+    if (
+      typeof driveService.ensureProjectChangeRequestFolder !== 'function'
+      || typeof driveService.listFolderFiles !== 'function'
+      || typeof driveService.uploadFileToFolder !== 'function'
+    ) throw new Error('Project information Drive archive is not configured');
 
-    const prefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
-    // A resubmit inherits whatever the previous submission already published, so only the
-    // files still sitting in the owner's private folder are moved. Copying an already
-    // published file would fail because its path is outside the draft prefix.
-    const published = attachmentRefs.filter((ref) => readOptionalText(ref?.path).startsWith(prefix));
-    const pending = attachmentRefs.filter((ref) => !readOptionalText(ref?.path).startsWith(prefix));
-    const moved = pending.length > 0
-      ? await draftStorageService.relocateDraftAttachments({ tenantId, projectId, draftId: sourceDraftId, attachmentRefs: pending })
-      : [];
-    if (!Array.isArray(moved) || moved.length !== pending.length) {
-      throw new Error('Project information attachment relocation returned an incomplete result');
+    const source = delivery.request.proposedSnapshot && typeof delivery.request.proposedSnapshot === 'object'
+      ? delivery.request.proposedSnapshot
+      : delivery.request.payload || {};
+    const documents = Object.entries(DOCUMENT_FIELD_BY_KIND).flatMap(([documentKind, field]) => {
+      const document = source[field];
+      const path = readOptionalText(document?.path);
+      return path ? [{ documentKind, path, document }] : [];
+    });
+    if (documents.length > 0 && typeof projectRegistrationAttachmentStorageService?.downloadProjectRegistrationAttachment !== 'function') {
+      throw new Error('Project information attachment download is not configured');
     }
-    const relocated = [...published, ...moved];
-    if (relocated.some((attachment) => {
-      const path = readOptionalText(attachment?.path);
-      const objectName = path.startsWith(prefix) ? path.slice(prefix.length) : '';
-      return !DOCUMENT_KINDS.includes(readOptionalText(attachment?.documentKind)) || !objectName || objectName.includes('/');
-    })) throw new Error('Project information attachment relocation returned an invalid path');
-    const documents = privateDocuments(relocated);
-    const timestamp = new Date(now()).toISOString();
+    const ensured = await driveService.ensureProjectChangeRequestFolder({
+      tenantId,
+      projectId,
+      projectName: readOptionalText(delivery.project.name) || projectId,
+      projectFolderId: readOptionalText(delivery.project.evidenceDriveRootFolderId),
+      requestId: projectRequestId,
+      requestVersion,
+      requestedAt: readOptionalText(delivery.request.requestedAt),
+    });
+    const folder = ensured?.folder;
+    const folderId = readOptionalText(folder?.id);
+    if (!folderId) throw new Error('Project information Drive archive folder was not created');
+    const existingFiles = await driveService.listFolderFiles({ folderId });
+    const existingKeys = new Set((Array.isArray(existingFiles) ? existingFiles : [])
+      .map((file) => readOptionalText(file?.appProperties?.archiveFileKey))
+      .filter(Boolean));
+    const archiveProperties = {
+      managedBy: 'mysc-platform', tenantId, projectId,
+      requestId: projectRequestId, requestVersion: String(requestVersion),
+    };
+    const summary = [
+      `프로젝트 변경 요청: ${projectRequestId}`,
+      `요청 버전: ${requestVersion}`,
+      `요청자: ${readOptionalText(delivery.request.requestedByName) || readOptionalText(delivery.request.requestedBy) || '확인 불가'}`,
+      `요청 시각: ${readOptionalText(delivery.request.requestedAt) || '확인 불가'}`,
+      `변경 항목: ${(Array.isArray(delivery.request.changedFields) ? delivery.request.changedFields : []).join(', ') || '없음'}`,
+    ].join('\n');
+    const archiveFiles = [
+      {
+        key: 'request-json', fileName: '요청내용.json', mimeType: 'application/json',
+        contentBase64: Buffer.from(`${JSON.stringify(delivery.request, null, 2)}\n`, 'utf8').toString('base64'),
+      },
+      {
+        key: 'request-summary', fileName: '요청요약.txt', mimeType: 'text/plain',
+        contentBase64: Buffer.from(`${summary}\n`, 'utf8').toString('base64'),
+      },
+      ...documents.map(({ documentKind, path, document }) => ({
+        key: `document-${documentKind}`,
+        fileName: `${documentKind}_${(readOptionalText(document.name) || path.split('/').at(-1) || 'attachment').replace(/[\\/]/g, '_')}`,
+        mimeType: readOptionalText(document.contentType) || 'application/octet-stream',
+        path,
+      })),
+    ];
+    for (const file of archiveFiles) {
+      if (existingKeys.has(file.key)) continue;
+      let contentBase64 = file.contentBase64;
+      let mimeType = file.mimeType;
+      if (file.path) {
+        const downloaded = await projectRegistrationAttachmentStorageService.downloadProjectRegistrationAttachment({
+          tenantId, projectId, path: file.path,
+        });
+        const buffer = Buffer.isBuffer(downloaded?.buffer)
+          ? downloaded.buffer
+          : downloaded?.buffer instanceof Uint8Array ? Buffer.from(downloaded.buffer) : null;
+        if (!buffer?.length) throw new Error('Project information Drive archive attachment is empty');
+        contentBase64 = buffer.toString('base64');
+        mimeType = readOptionalText(downloaded.contentType) || mimeType;
+      }
+      const uploaded = await driveService.uploadFileToFolder({
+        folderId,
+        fileName: file.fileName,
+        mimeType,
+        contentBase64,
+        appProperties: { ...archiveProperties, archiveFileKey: file.key },
+      });
+      if (!readOptionalText(uploaded?.id)) throw new Error('Project information Drive archive upload was not created');
+    }
+
     await db.runTransaction(async (tx) => {
-      if (!await deliveryIsCurrent(tx)) return;
-      const requestSnap = await tx.get(requestRef);
-      const request = requestSnap.data() || {};
-      const documentPatch = Object.fromEntries(Object.entries(documents).filter(([, value]) => value));
+      const latest = await currentDelivery(tx);
+      if (!latest || (
+        readOptionalText(latest.request.driveArchiveFolderId)
+        && readOptionalText(latest.request.driveArchivedAt)
+      )) return;
+      const timestamp = new Date(now()).toISOString();
       tx.set(requestRef, {
-        payload: { ...(request.payload || {}), ...documentPatch },
-        proposedSnapshot: { ...(request.proposedSnapshot || {}), ...documentPatch },
-        attachmentsPublishedAt: timestamp,
+        driveArchiveFolderId: folderId,
+        driveArchiveFolderLink: readOptionalText(folder.webViewLink)
+          || `https://drive.google.com/drive/folders/${folderId}`,
+        driveArchivedAt: timestamp,
         updatedAt: timestamp,
       }, { merge: true });
     });
@@ -550,9 +578,6 @@ export function createProjectInfoDraftService({
   idempotencyService,
   draftStorageService,
   rbacPolicy,
-  // Moves the submitted files to the shared folder as part of saving, so the approver can
-  // open them immediately instead of waiting for the background queue.
-  publishSubmittedAttachments = null,
 } = {}) {
   if (!db?.runTransaction) throw new Error('Firestore is required for project information drafts');
   if (!auditChainService?.appendManyInTransaction) throw new Error('Atomic audit chain service is required');
@@ -658,6 +683,35 @@ export function createProjectInfoDraftService({
     });
   }
 
+  async function assertSubmittedAttachmentsStored(current, draft) {
+    const attachments = draftAttachments(draft);
+    if (attachments.length === 0) return;
+    if (typeof draftStorageService?.inspectProjectRegistrationAttachment !== 'function') {
+      throw new Error('Project registration attachment inspection is required');
+    }
+    try {
+      await Promise.all(attachments.map(async (attachment) => {
+        const stored = await draftStorageService.inspectProjectRegistrationAttachment({
+          tenantId: current.tenantId,
+          projectId: current.projectId,
+          path: attachment.path,
+        });
+        if (
+          readOptionalText(stored?.path) !== readOptionalText(attachment?.path)
+          || readOptionalText(stored?.attachmentId) !== readOptionalText(attachment?.attachmentId)
+          || Number(stored?.size) !== Number(attachment?.size)
+          || readOptionalText(stored?.contentType) !== readOptionalText(attachment?.contentType)
+        ) throw new Error('Project information attachment metadata does not match');
+      }));
+    } catch {
+      throw createHttpError(
+        422,
+        '제출 파일을 확인할 수 없습니다. 다시 첨부해 주세요.',
+        'project_attachment_unavailable',
+      );
+    }
+  }
+
   return {
     async open(input) {
       const current = context(input);
@@ -697,6 +751,7 @@ export function createProjectInfoDraftService({
             payload: seed,
             attachmentRefs: resumableDraftAttachments(
               current.tenantId,
+              current.projectId,
               current.draftDocumentId,
               previousRequest,
             ),
@@ -852,26 +907,6 @@ export function createProjectInfoDraftService({
           throw createHttpError(403, 'Only the requester can withdraw this change request', 'request_owner_mismatch');
         }
         const actualVersion = Number.isInteger(project.version) && project.version > 0 ? project.version : 1;
-        const nextVersion = actualVersion + 1;
-        const restoredReview = restoreExecutiveReviewAfterWithdraw(project);
-        const nextProject = stripUndefinedDeep({
-          ...project,
-          ...restoredReview,
-          executiveReviewHistory: [
-            ...(Array.isArray(project.executiveReviewHistory) ? project.executiveReviewHistory : []),
-            {
-              status: restoredReview.executiveReviewStatus,
-              previousStatus: 'PENDING',
-              reviewedAt: timestamp,
-              reviewedById: current.actorId,
-              reviewedByName: current.actorDisplayName || null,
-              reviewComment: '요청자가 수정 요청을 회수했습니다.',
-            },
-          ],
-          version: nextVersion,
-          updatedBy: current.actorId,
-          updatedAt: timestamp,
-        });
         const withdrawnRequest = stripUndefinedDeep({
           ...request,
           status: 'WITHDRAWN',
@@ -880,16 +915,21 @@ export function createProjectInfoDraftService({
           withdrawnByName: current.actorDisplayName || null,
           updatedAt: timestamp,
         });
-        // Hand the submitted payload back to the owner, rebased onto the restored project
+        // Hand the submitted payload back to the owner, rebased onto the unchanged project
         // so the very next submit does not trip the canonical version gate again.
         const restoredDraft = stripUndefinedDeep({
           ...draft,
           status: 'ACTIVE',
           payload: request.payload && typeof request.payload === 'object' ? request.payload : draft.payload,
-          baseSnapshot: buildProjectInfoDraftSeed({ ...nextProject, id: current.projectId }, {}),
-          baseCanonicalVersion: nextVersion,
+          baseSnapshot: buildProjectInfoDraftSeed({ ...project, id: current.projectId }, {}),
+          baseCanonicalVersion: actualVersion,
           draftRevision: (Number.isInteger(draft.draftRevision) ? draft.draftRevision : 0) + 1,
-          attachmentRefs: resumableDraftAttachments(current.tenantId, current.draftDocumentId, request),
+          attachmentRefs: resumableDraftAttachments(
+            current.tenantId,
+            current.projectId,
+            current.draftDocumentId,
+            request,
+          ),
           submittedAt: null,
           submittedProjectRequestId: null,
           submittedProjectVersion: null,
@@ -901,18 +941,16 @@ export function createProjectInfoDraftService({
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_WITHDRAW', restoredDraft.draftRevision, timestamp, {
             fence: current.fence,
             projectRequestId: readOptionalText(request.id) || null,
-            restoredExecutiveReviewStatus: restoredReview.executiveReviewStatus,
-            canonicalVersion: nextVersion,
+            canonicalVersion: actualVersion,
           }),
         ]);
-        tx.set(projectRef, nextProject);
         tx.set(requestRef, withdrawnRequest);
         tx.set(draftRef, restoredDraft);
         const body = {
           withdrawn: true,
           draft: draftContract(restoredDraft),
-          canonicalVersion: nextVersion,
-          executiveReviewStatus: restoredReview.executiveReviewStatus,
+          canonicalVersion: actualVersion,
+          executiveReviewStatus: readOptionalText(project.executiveReviewStatus) || 'PENDING',
         };
         completeIdempotency(tx, current, lock, { method, path, status: 200, body }, nowDate);
         return { status: 200, body, replayed: false };
@@ -1039,7 +1077,10 @@ export function createProjectInfoDraftService({
         const { draft, project } = await ownedDraft(tx, current);
         const match = draftAttachments(draft).findLast((item) => item?.documentKind === documentKind);
         if (match && readOptionalText(match.path)) {
-          return { source: 'draft', attachment: match };
+          const permanentPrefix = `orgs/${current.tenantId}/project-registration-documents/${current.projectId}/`;
+          return readOptionalText(match.path).startsWith(permanentPrefix)
+            ? { source: 'project', attachment: match }
+            : { source: 'draft', attachment: match };
         }
 
         const payloadDocument = draft.payload?.[field];
@@ -1127,7 +1168,10 @@ export function createProjectInfoDraftService({
     },
 
     async addAttachment(input) {
-      if (!draftStorageService?.uploadDraftAttachment || !draftStorageService?.deleteDraftAttachment) {
+      if (
+        !draftStorageService?.uploadProjectRegistrationAttachment
+        || !draftStorageService?.deleteProjectRegistrationAttachment
+      ) {
         throw new Error('Draft attachment storage service is required');
       }
       const current = context(input);
@@ -1198,8 +1242,11 @@ export function createProjectInfoDraftService({
       const cleanup = async () => {
         if (!uploaded?.path) return;
         try {
-          await draftStorageService.deleteDraftAttachment({
-            tenantId: current.tenantId, draftId: current.draftDocumentId, path: uploaded.path,
+          await draftStorageService.deleteProjectRegistrationAttachment({
+            tenantId: current.tenantId,
+            projectId: current.projectId,
+            draftId: current.draftDocumentId,
+            path: uploaded.path,
           });
         } catch {
           console.warn('[bff] project info draft attachment cleanup failed', {
@@ -1208,8 +1255,9 @@ export function createProjectInfoDraftService({
         }
       };
       try {
-        uploaded = await draftStorageService.uploadDraftAttachment({
+        uploaded = await draftStorageService.uploadProjectRegistrationAttachment({
           tenantId: current.tenantId,
+          projectId: current.projectId,
           draftId: current.draftDocumentId,
           attachmentId,
           fileName,
@@ -1218,9 +1266,9 @@ export function createProjectInfoDraftService({
           buffer,
           actorId: current.actorId,
         });
-        const prefix = `orgs/${current.tenantId}/project-registration-drafts/${current.draftDocumentId}/`;
+        const prefix = `orgs/${current.tenantId}/project-registration-documents/${current.projectId}/`;
         const storagePath = readOptionalText(uploaded?.path);
-        if (!storagePath.startsWith(prefix)) throw new Error('Draft storage returned a path outside the private draft prefix');
+        if (!storagePath.startsWith(prefix)) throw new Error('Draft storage returned a path outside the private project prefix');
         const attachment = {
           attachmentId, documentKind, path: storagePath, name: fileName, size: buffer.byteLength,
           contentType: mimeType, uploadedAt: readOptionalText(uploaded.uploadedAt) || clockDate(now).toISOString(),
@@ -1284,8 +1332,9 @@ export function createProjectInfoDraftService({
               || replaced.path === attachment.path
             ) return;
             try {
-              await draftStorageService.deleteDraftAttachment({
+              await draftStorageService.deleteProjectRegistrationAttachment({
                 tenantId: current.tenantId,
+                projectId: current.projectId,
                 draftId: current.draftDocumentId,
                 path: replaced.path,
               });
@@ -1333,7 +1382,7 @@ export function createProjectInfoDraftService({
     },
 
     async removeAttachment(input) {
-      if (!draftStorageService?.deleteDraftAttachment) {
+      if (!draftStorageService?.deleteProjectRegistrationAttachment) {
         throw new Error('Draft attachment storage service is required');
       }
       const current = context(input);
@@ -1413,8 +1462,9 @@ export function createProjectInfoDraftService({
       await Promise.all(result.removedAttachments.map(async (attachment) => {
         if (attachment?.inheritedFromProjectRequest === true) return;
         try {
-          await draftStorageService.deleteDraftAttachment({
+          await draftStorageService.deleteProjectRegistrationAttachment({
             tenantId: current.tenantId,
+            projectId: current.projectId,
             draftId: current.draftDocumentId,
             path: attachment.path,
           });
@@ -1477,8 +1527,9 @@ export function createProjectInfoDraftService({
             'canonical_version_conflict',
           );
         }
+        await assertSubmittedAttachmentsStored(current, draft);
         const nextVersion = actualVersion + 1;
-        const { projectPatch, projectRequest } = buildProjectInfoChangeSubmission({
+        const { projectRequest } = buildProjectInfoChangeSubmission({
           tenantId: current.tenantId,
           project: { ...project, id: current.projectId },
           previousRequest,
@@ -1488,23 +1539,12 @@ export function createProjectInfoDraftService({
           actorName: current.actorDisplayName,
           actorEmail: current.actorEmail,
           timestamp,
-          targetProjectVersion: nextVersion,
           resubmit: input?.resubmit === true,
           reviewComment: input?.reviewComment,
         });
         const submittedProjectRequest = {
           ...projectRequest,
           submittedOutboxId: eventTemplate.id,
-        };
-        const nextProject = {
-          ...project,
-          ...projectPatch,
-          tenantId: current.tenantId,
-          version: nextVersion,
-          createdBy: project.createdBy || current.actorId,
-          createdAt: project.createdAt || timestamp,
-          updatedBy: current.actorId,
-          updatedAt: timestamp,
         };
         const revision = expectedDraftRevision + 1;
         const submittedDraft = {
@@ -1534,10 +1574,8 @@ export function createProjectInfoDraftService({
           payload: {
             projectId: current.projectId,
             projectRequestId: submittedProjectRequest.id,
-            draftId: current.draftDocumentId,
             requestVersion: submittedProjectRequest.requestVersion,
             targetProjectVersion: submittedProjectRequest.targetProjectVersion,
-            attachmentRefs: publicAttachmentRefs(draft),
           },
           createdAt: timestamp,
           nextAttemptAt: timestamp,
@@ -1547,7 +1585,7 @@ export function createProjectInfoDraftService({
           status: 'SUBMITTED',
           projectId: current.projectId,
           projectRequestId: projectRequest.id,
-          projectVersion: nextVersion,
+          projectVersion: actualVersion,
           draftRevision: revision,
           submittedAt: timestamp,
           lease: { state: 'RELEASED', canEdit: false },
@@ -1555,42 +1593,23 @@ export function createProjectInfoDraftService({
         };
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_SUBMIT', revision, timestamp, {
-            fence: current.fence, projectRequestId: projectRequest.id, projectVersion: nextVersion,
+            fence: current.fence,
+            projectRequestId: projectRequest.id,
+            projectVersion: actualVersion,
+            targetProjectVersion: nextVersion,
           }),
           buildEditLeaseAuditEntry({ ...current, resourceType: RESOURCE_TYPE, resourceId: current.projectId }, actorRole, 'release', {
             state: 'RELEASED', fence: current.fence, resultCode: 'edit_lease_released_on_submit', timestamp,
           }),
         ]);
-        tx.set(projectRef, nextProject);
         tx.set(requestRef, submittedProjectRequest);
         tx.set(draftRef, submittedDraft);
         tx.set(refs(current).lease, releasedLease);
         tx.create(outboxRef, outboxEvent);
         completeIdempotency(tx, current, lock, { method, path, status: 200, body, ttlSeconds: 86_400 }, nowDate);
-        return { status: 200, body, replayed: false, outboxEvent };
+        return { status: 200, body, replayed: false };
       });
-
-      const { outboxEvent: submittedEvent, ...response } = outcome;
-      if (!outcome.replayed && submittedEvent && typeof publishSubmittedAttachments === 'function') {
-        try {
-          await publishSubmittedAttachments(submittedEvent);
-          // Close the queue entry so the worker does not repeat work already done here.
-          const doneAt = clockDate(now).toISOString();
-          await outboxRef.set({
-            status: 'DONE', processedAt: doneAt, updatedAt: doneAt, lastError: null,
-          }, { merge: true });
-        } catch (error) {
-          // Saving already succeeded. Leave the queue entry pending so the worker retries,
-          // and record why the immediate move failed.
-          // eslint-disable-next-line no-console
-          console.error('[bff] project info attachment publish failed', JSON.stringify({
-            projectId: current.projectId,
-            outboxId: submittedEvent.id,
-            message: error?.message || String(error),
-          }));
-        }
-      }
-      return response;
+      return outcome;
     },
   };
 }
@@ -1659,7 +1678,6 @@ export function mountProjectInfoDraftRoutes(app, {
   enabled = false,
   projectInfoDraftService,
   piiProtector,
-  processOutboxEventInline,
 } = {}) {
   if (!enabled) return;
   if (!projectInfoDraftService) throw new Error('Project information draft routes require a service');
@@ -1749,15 +1767,6 @@ export function mountProjectInfoDraftRoutes(app, {
     const outcome = await projectInfoDraftService.submit({
       ...await routeContext(req, piiProtector), ...routeOwnership(req), projectId: routeProjectId(req), ...parsed,
     });
-    // 첨부 공개 이관을 같은 요청 안에서 처리한다. 실패해도 크론이 안전망이라 응답은 성공 그대로.
-    const outboxId = !outcome.replayed ? outcome.body?.outbox?.id : null;
-    if (outboxId && processOutboxEventInline) {
-      await processOutboxEventInline(outboxId).catch((error) => {
-        console.warn('[bff] inline info submit outbox processing failed', {
-          outboxId, errorCode: 'submit_outbox_inline_failed', message: error?.message,
-        });
-      });
-    }
     sendOutcome(res, outcome);
   }));
 }

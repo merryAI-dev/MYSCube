@@ -91,6 +91,15 @@ export function buildDriveProjectFolderName(projectName, projectId) {
   return idToken ? `${nameToken}_${idToken}` : nameToken;
 }
 
+export function buildDriveProjectChangeRequestFolderName({ requestedAt, requestId, requestVersion }) {
+  const dateToken = readOptionalText(requestedAt).match(/^\d{4}-\d{2}-\d{2}/)?.[0] || 'undated';
+  const requestToken = normalizeSegment(requestId, 'request');
+  const versionToken = Number.isSafeInteger(Number(requestVersion)) && Number(requestVersion) > 0
+    ? Number(requestVersion)
+    : 1;
+  return `${dateToken}_${requestToken}_v${versionToken}`;
+}
+
 export function buildDriveTransactionFolderName(transaction) {
   const dateToken = formatDriveDateToken(transaction?.dateTime);
   const budgetToken = normalizeSegment(transaction?.budgetCategory || transaction?.counterparty || '미분류', '미분류');
@@ -707,6 +716,57 @@ export function createGoogleDriveService(options = {}) {
     };
   }
 
+  async function ensureProjectChangeRequestFolder({
+    tenantId,
+    projectId,
+    projectName,
+    projectFolderId,
+    requestId,
+    requestVersion,
+    requestedAt,
+  }) {
+    const projectRootFolder = await ensureProjectRootFolder({
+      tenantId,
+      projectId,
+      projectName,
+      existingFolderId: projectFolderId,
+    });
+    const requestsProperties = {
+      managedBy: 'mysc-platform',
+      tenantId,
+      projectId,
+      folderRole: 'project-change-requests',
+    };
+    const requestsFolder = await findFolder({
+      parentFolderId: projectRootFolder.id,
+      name: '변경 요청',
+      appProperties: requestsProperties,
+    }) || await createFolder({
+      name: '변경 요청',
+      parentFolderId: projectRootFolder.id,
+      appProperties: requestsProperties,
+    });
+    const folderName = buildDriveProjectChangeRequestFolderName({ requestedAt, requestId, requestVersion });
+    const requestProperties = {
+      managedBy: 'mysc-platform',
+      tenantId,
+      projectId,
+      requestId,
+      requestVersion: String(requestVersion),
+      folderRole: 'project-change-request',
+    };
+    const folder = await findFolder({
+      parentFolderId: requestsFolder.id,
+      name: folderName,
+      appProperties: requestProperties,
+    }) || await createFolder({
+      name: folderName,
+      parentFolderId: requestsFolder.id,
+      appProperties: requestProperties,
+    });
+    return { folder, projectRootFolder };
+  }
+
   async function listFolderFiles({ folderId }) {
     const normalizedFolderId = readOptionalText(folderId);
     if (!normalizedFolderId) {
@@ -753,6 +813,7 @@ export function createGoogleDriveService(options = {}) {
     ensureProjectRootFolder,
     renameManagedProjectRootFolder,
     ensureTransactionFolder,
+    ensureProjectChangeRequestFolder,
     listFolderFiles,
     uploadFileToFolder,
   };

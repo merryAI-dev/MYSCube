@@ -238,19 +238,18 @@ function ProjectMigrationAuditPageContent({
     const attachments: Array<{ documentKind: ProjectRequestDocumentKind; path: string }> = [];
     if (!openRecord) return { attachments, sources };
 
-    const payload = resolveProjectRequestPayload(openRecord.request);
+    const reviewPayload = openRecord.request
+      ? resolveProjectRequestPayload(openRecord.request)
+      : openRecord.project;
     const requestId = String(openRecord.request?.id || '').trim();
     const projectId = String(openRecord.project.id || '').trim();
+    const source: ReviewDocumentSource['source'] = openRecord.request ? 'request' : 'project';
     (Object.entries(REVIEW_DOCUMENT_FIELDS) as Array<[ProjectRequestDocumentKind, ReviewDocumentField]>).forEach(([documentKind, field]) => {
-      const requestDocument = payload?.[field];
-      const projectDocument = openRecord.project[field];
-      const document = requestDocument !== undefined ? requestDocument : projectDocument;
+      const document = reviewPayload?.[field];
       const path = String(document?.path || '').trim();
       const downloadURL = String(document?.downloadURL || '').trim();
       if (!path || downloadURL) return;
 
-      const requestPath = String(requestDocument?.path || '').trim();
-      const source = requestId && requestPath === path ? 'request' : 'project';
       if ((source === 'request' && !requestId) || (source === 'project' && !projectId)) return;
       attachments.push({ documentKind, path });
       sources.set(documentKind, { source, projectId, requestId });
