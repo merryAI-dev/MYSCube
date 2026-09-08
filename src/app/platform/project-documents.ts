@@ -12,3 +12,13 @@ export const PROJECT_DOCUMENTS = Object.entries(documents).map(([documentKind, d
 export function projectDocumentFields(source: object) {
   return Object.fromEntries(PROJECT_DOCUMENTS.map(({ field }) => [field, (source as Record<string, FileAttachment | null | undefined>)[field]])) as Partial<Record<ProjectDocumentField, FileAttachment | null>>;
 }
+
+export function projectUpdatePayload(existing: Project, updates: Partial<Project>) {
+  const payload = { ...existing, ...updates };
+  const expectedProjectDocuments: Partial<Record<ProjectDocumentField, FileAttachment | null>> = {};
+  for (const { field } of PROJECT_DOCUMENTS) {
+    if (Object.hasOwn(updates, field)) expectedProjectDocuments[field] = existing[field] ?? null;
+    else delete payload[field];
+  }
+  return { ...payload, expectedProjectDocuments };
+}

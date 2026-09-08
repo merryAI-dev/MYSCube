@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { getStorage } from 'firebase-admin/storage';
 import { createFirestoreDb, getOrInitAdminApp } from '../server/bff/firestore.mjs';
 import { sha256, stableStringify } from '../server/bff/utils.mjs';
-import { PROJECT_REGISTRATION_DOCUMENT_KINDS, PROJECT_DOCUMENT_FIELD_BY_KIND } from '../server/bff/project-document-validation.mjs';
+import { PROJECT_REGISTRATION_DOCUMENT_KINDS, PROJECT_DOCUMENT_FIELD_BY_KIND, assertNoActiveProjectInfoDraft } from '../server/bff/project-document-validation.mjs';
 
 const hash = value => sha256(stableStringify(JSON.parse(JSON.stringify(value))));
 const updateTime = value => typeof value === 'string' ? value : `${value?.seconds}:${value?.nanoseconds}`;
@@ -26,6 +26,7 @@ function pathsFor(target) {
 }
 
 async function readSources(tx, db, target) {
+  await assertNoActiveProjectInfoDraft({ tx, db, tenantId: target.tenantId, projectId: target.projectId });
   const records = {};
   for (const [key, path] of Object.entries(pathsFor(target))) {
     const snap = await tx.get(db.doc(path));

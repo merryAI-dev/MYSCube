@@ -47,6 +47,7 @@ describeIfEmulator('outbox worker integration (Firestore emulator)', () => {
     await clearCollection(`orgs/${tenantId}/notifications`);
     await clearCollection(`orgs/${tenantId}/projects`);
     await clearCollection(`orgs/${tenantId}/project_requests`);
+    await clearCollection(`orgs/${tenantId}/privateEditDrafts`);
     await clearCollection(`orgs/${tenantId}/partEntries`);
   }
 
@@ -640,7 +641,7 @@ describeIfEmulator('outbox worker integration (Firestore emulator)', () => {
     expect((await db.doc(`outbox/${event.id}`).get()).data()?.status).toBe('DONE');
   });
 
-  it.each(['APPROVED', 'WITHDRAWN', 'project-approved', 'planning-agreed', 'project-file', 'request-file', 'request-version', 'new-change-request', 'existing-request-file', 'same-file', 'unrelated-file', 'unchanged'])('guards deferred legacy attachment publication against %s', async (change) => {
+  it.each(['APPROVED', 'WITHDRAWN', 'project-approved', 'planning-agreed', 'project-file', 'request-file', 'request-version', 'new-change-request', 'existing-request-file', 'same-file', 'unrelated-file', 'unchanged', 'active-draft', 'submitted-draft', 'other-project-draft', 'other-resource-draft'])('guards deferred legacy attachment publication against %s', async (change) => {
     const projectRef = db.doc(`orgs/${tenantId}/projects/guard-project`);
     const requestRef = db.doc(`orgs/${tenantId}/project_requests/guard-request`);
     await projectRef.set({ id: 'guard-project', name: 'Guard', executiveReviewStatus: 'PENDING', managementPlanningReviewStatus: 'PENDING', contractDocument: null });
@@ -679,11 +680,17 @@ describeIfEmulator('outbox worker integration (Firestore emulator)', () => {
       requestKind: 'CHANGE', status: 'PENDING', approvedProjectId: 'guard-project', payload: { contractDocument: null },
     });
     if (change === 'unrelated-file') await projectRef.update({ finalReportDocument: otherFile });
+    if (change.endsWith('-draft')) await db.doc(`orgs/${tenantId}/privateEditDrafts/guard-edit`).set({
+      resourceId: change === 'other-project-draft' ? 'other-project' : 'guard-project',
+      resourceType: change === 'other-resource-draft' ? 'cashflow' : 'project-info',
+      status: change === 'submitted-draft' ? 'SUBMITTED' : 'ACTIVE',
+      expiresAt: '2000-01-01',
+    });
     const beforeProject = await projectRef.get();
     const beforeRequest = await requestRef.get();
     release.resolve();
     const error = await processing;
-    if (['unchanged', 'unrelated-file', 'same-file'].includes(change)) {
+    if (['unchanged', 'unrelated-file', 'same-file', 'submitted-draft', 'other-project-draft', 'other-resource-draft'].includes(change)) {
       expect(error).toBeNull();
       expect((await projectRef.get()).data()?.contractDocument?.path).toContain('/guard-project/contract.pdf');
       if (change === 'unrelated-file') expect((await projectRef.get()).data()?.finalReportDocument).toEqual(otherFile);
@@ -700,12 +707,13 @@ describeIfEmulator('outbox worker integration (Firestore emulator)', () => {
     }
   });
 
-  it.each(['APPROVED', 'WITHDRAWN', 'CHANGE', 'project-approved', 'planning-agreed', 'existing-change-request'])('rejects %s before starting legacy storage copies', async (state) => {
+  it.each(['APPROVED', 'WITHDRAWN', 'CHANGE', 'project-approved', 'planning-agreed', 'existing-change-request', 'active-draft'])('rejects %s before starting legacy storage copies', async (state) => {
     const projectRef = db.doc(`orgs/${tenantId}/projects/pre-copy`);
     const requestRef = db.doc(`orgs/${tenantId}/project_requests/pre-copy`);
     await projectRef.set({ executiveReviewStatus: state === 'project-approved' ? 'APPROVED' : 'PENDING', managementPlanningReviewStatus: state === 'planning-agreed' ? 'AGREED' : 'PENDING' });
     await requestRef.set({ approvedProjectId: 'pre-copy', requestKind: state === 'CHANGE' ? 'CHANGE' : 'REGISTRATION', status: ['APPROVED', 'WITHDRAWN'].includes(state) ? state : 'PENDING' });
     if (state === 'existing-change-request') await db.doc(`orgs/${tenantId}/project_requests/change-pre-copy`).set({ requestKind: 'CHANGE', status: 'PENDING', payload: { contractDocument: null } });
+    if (state === 'active-draft') await db.doc(`orgs/${tenantId}/privateEditDrafts/pre-copy`).set({ resourceId: 'pre-copy', resourceType: 'project-info', status: 'ACTIVE', expiresAt: '2000-01-01' });
     const event = createOutboxEvent({ tenantId, requestId: 'pre-copy', eventType: 'project.registration.submitted', entityType: 'project', entityId: 'pre-copy',
       payload: { projectId: 'pre-copy', projectRequestId: 'pre-copy', draftId: 'draft', attachmentRefs: [{ documentKind: 'contract', path: 'source' }] }, createdAt: new Date().toISOString() });
     await enqueueOutboxEvent(db, event);
@@ -719,6 +727,7 @@ describeIfEmulator('outbox worker integration (Firestore emulator)', () => {
     expect(ensureProjectRootFolder).not.toHaveBeenCalled();
     expect(notifyMessage).not.toHaveBeenCalled();
     expect((await db.doc(`outbox/${event.id}`).get()).data()?.sideEffects?.registrationAttachments).not.toBe('DONE');
+    if (state === 'active-draft') expect((await db.doc(`outbox/${event.id}`).get()).data()).toEqual(event);
   });
 
   it('relocates private registration attachments before atomically publishing canonical metadata', async () => {

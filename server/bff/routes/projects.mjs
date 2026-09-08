@@ -23,6 +23,8 @@ import {
   PROJECT_DOCUMENT_LABEL_BY_FIELD,
   PROJECT_REGISTRATION_REQUIRED_DOCUMENT_KINDS,
   missingProjectRegistrationRequiredDocumentKind,
+  assertProjectDocumentOriginals,
+  assertNoActiveProjectInfoDraft,
 } from '../project-document-validation.mjs';
 import {
   asyncHandler, createMutatingRoute, assertActorRoleAllowed,
@@ -2742,7 +2744,7 @@ export function createProjectRegistrationSubmittedOutboxHandler({
       const current = outbox.sideEffects && typeof outbox.sideEffects === 'object'
         ? outbox.sideEffects
         : {};
-      const next = mutate({ ...current });
+      const next = await mutate({ ...current }, tx);
       if (!next) return false;
       tx.set(ref, { sideEffects: next }, { merge: true });
       return true;
@@ -2788,9 +2790,10 @@ export function createProjectRegistrationSubmittedOutboxHandler({
         throw new Error('Project registration attachment relocation is not configured');
       }
       const attachmentIdempotencyKey = `outbox:${event.id}:registrationAttachments`;
-      const shouldRelocate = await mutateSideEffects(event, (sideEffects) => {
+      const shouldRelocate = await mutateSideEffects(event, async (sideEffects, tx) => {
         if (sideEffects.registrationAttachments === 'DONE') return null;
         assertAttachmentPublicationPending(project, projectRequest);
+        await assertNoActiveProjectInfoDraft({ tx, db, tenantId, projectId });
         return {
           ...sideEffects,
           registrationAttachments: 'PROCESSING',
@@ -2840,6 +2843,7 @@ export function createProjectRegistrationSubmittedOutboxHandler({
             ? outbox.sideEffects
             : {};
           if (sideEffects.registrationAttachments === 'DONE') return;
+          await assertNoActiveProjectInfoDraft({ tx, db, tenantId, projectId });
           if (changeRequestSnap.exists) {
             throw new Error('A project change request supersedes registration attachment publication');
           }
@@ -3305,6 +3309,8 @@ export function mountProjectRoutes(app, {
     const { tenantId, actorId, actorRole, actorEmail, requestId } = req.context;
     const timestamp = now();
     const parsed = parseWithSchema(projectUpsertSchema, req.body, 'Invalid project payload');
+    const { expectedProjectDocuments } = parsed;
+    delete parsed.expectedProjectDocuments;
     const expectedVersion = parsed.expectedVersion;
     const driveConfig = typeof driveService?.getConfig === 'function' ? driveService.getConfig() : null;
     const projectRef = db.doc(`orgs/${tenantId}/projects/${parsed.id.trim()}`);
@@ -3422,15 +3428,19 @@ export function mountProjectRoutes(app, {
       now: timestamp,
       expectedVersion,
       outboxEvent,
-      stageTransactionWrites: updatesTeamMembers && Array.isArray(projectPayload.teamMembersDetailed)
-        ? ({ tx, document }) => syncProjectParticipationEntries({
+      stageTransactionWrites: async ({ tx, document, current }) => {
+        const changedDocuments = assertProjectDocumentOriginals(current, projectPayload, expectedProjectDocuments);
+        if (updatesTeamMembers && Array.isArray(projectPayload.teamMembersDetailed)) {
+          await syncProjectParticipationEntries({
             db,
             transaction: tx,
             tenantId,
             project: document,
             now: timestamp,
-          })
-        : undefined,
+          });
+        }
+        if (Object.keys(changedDocuments).length) tx.update(projectRef, changedDocuments);
+      },
     });
 
     const existingName = readOptionalText(existingProject?.name);

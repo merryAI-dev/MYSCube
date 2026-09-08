@@ -1,7 +1,31 @@
 import projectDocuments from '../../policies/project-documents.json' with { type: 'json' };
+import { isDeepStrictEqual } from 'node:util';
+import { createHttpError } from './bff-utils.mjs';
 
 export const PROJECT_DOCUMENT_FIELD_BY_KIND = Object.freeze(Object.fromEntries(Object.entries(projectDocuments).map(([kind, document]) => [kind, document.field])));
 export const PROJECT_DOCUMENT_LABEL_BY_FIELD = Object.freeze(Object.fromEntries(Object.values(projectDocuments).map((document) => [document.field, document.label])));
+
+export function assertProjectDocumentOriginals(current, patch, originals) {
+  const changedDocuments = {};
+  if (!current) return changedDocuments;
+  for (const field of Object.values(PROJECT_DOCUMENT_FIELD_BY_KIND)) {
+    if (!Object.hasOwn(patch, field) || isDeepStrictEqual(current[field] ?? null, patch[field] ?? null)) continue;
+    if (!originals || !Object.hasOwn(originals, field) || !isDeepStrictEqual(current[field] ?? null, originals[field])) {
+      throw createHttpError(409, '사업 첨부파일이 변경되었습니다. 최신 정보를 불러온 후 다시 저장해주세요.', 'project_document_conflict');
+    }
+    changedDocuments[field] = patch[field];
+  }
+  return changedDocuments;
+}
+
+export async function assertNoActiveProjectInfoDraft({ tx, db, tenantId, projectId }) {
+  const query = db.collection(`orgs/${tenantId}/privateEditDrafts`).where('resourceId', '==', projectId);
+  const snapshot = await tx.get(query);
+  if (snapshot.docs.some(snap => {
+    const draft = snap.data();
+    return draft.resourceType === 'project-info' && draft.status === 'ACTIVE';
+  })) throw createHttpError(409, 'An active project-info draft blocks registration attachment publication', 'project_info_draft_active');
+}
 
 export const PROJECT_REGISTRATION_DOCUMENT_KINDS = Object.freeze(Object.keys(projectDocuments).filter((kind) => projectDocuments[kind].registration));
 

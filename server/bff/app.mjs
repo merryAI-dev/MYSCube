@@ -1,5 +1,6 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
+import { assertProjectDocumentOriginals } from './project-document-validation.mjs';
 import { createFirestoreDb, isFirestoreEmulatorEnabled, resolveProjectId } from './firestore.mjs';
 import {
   createFirebaseAuthAdminService,
@@ -1398,6 +1399,8 @@ export function createBffApp(options = {}) {
 
     const entityType = normalizeEntityType(parsed.entityType);
     const payloadPatch = stripServerManagedFields(parsed.patch || {});
+    const expectedProjectDocuments = entityType === 'project' ? payloadPatch.expectedProjectDocuments : undefined;
+    if (entityType === 'project') delete payloadPatch.expectedProjectDocuments;
     const patchId = typeof payloadPatch.id === 'string' ? payloadPatch.id.trim() : '';
     const bodyEntityId = typeof parsed.entityId === 'string' ? parsed.entityId.trim() : '';
     const entityId = bodyEntityId || patchId;
@@ -1446,6 +1449,9 @@ export function createBffApp(options = {}) {
         }
       }
 
+      const changedProjectDocuments = entityType === 'project'
+        ? assertProjectDocumentOriginals(snap.exists ? current : null, payloadPatch, expectedProjectDocuments)
+        : {};
       const changedFields = detectChangedFields(current, payloadPatch);
       const nextVersion = currentVersion + 1;
       const document = {
@@ -1460,6 +1466,7 @@ export function createBffApp(options = {}) {
         updatedAt: timestamp,
       };
       tx.set(ref, document, { merge: true });
+      if (Object.keys(changedProjectDocuments).length) tx.update(ref, changedProjectDocuments);
 
       const changeEvent = {
         id: eventId,

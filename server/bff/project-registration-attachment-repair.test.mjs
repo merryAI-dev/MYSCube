@@ -59,6 +59,30 @@ function harness() {
 }
 
 describe('scoped registration attachment repair', () => {
+  it.each(['before-copy', 'during-copy'])('rejects an ACTIVE project-info draft %s without publishing', async timing => {
+    const h = harness();
+    const plan = await buildRegistrationAttachmentRepairPlan(h);
+    const before = structuredClone([...h.documents]);
+    const openDraft = () => h.documents.set('orgs/tenant/privateEditDrafts/edit', { resourceId: 'project', resourceType: 'project-info', status: 'ACTIVE', expiresAt: '2000-01-01' });
+    if (timing === 'before-copy') openDraft();
+    else h.setBeforeCommit(() => { if (h.copies.length) openDraft(); });
+    await expect(applyRegistrationAttachmentRepairPlan({ ...h, plan, reason: 'test' })).rejects.toThrow(/draft/i);
+    expect(h.updates).toHaveLength(0);
+    expect(h.copies).toHaveLength(timing === 'before-copy' ? 0 : 1);
+    for (const [path, value] of before) expect(h.documents.get(path)).toEqual(value);
+    expect(h.files.has(h.source)).toBe(true);
+  });
+
+  it.each([
+    { resourceId: 'other', resourceType: 'project-info', status: 'ACTIVE' },
+    { resourceId: 'project', resourceType: 'cashflow', status: 'ACTIVE' },
+    { resourceId: 'project', resourceType: 'project-info', status: 'SUBMITTED' },
+  ])('allows unrelated or inactive drafts: %j', async draft => {
+    const h = harness();
+    h.documents.set('orgs/tenant/privateEditDrafts/edit', draft);
+    const plan = await buildRegistrationAttachmentRepairPlan(h);
+    expect(await applyRegistrationAttachmentRepairPlan({ ...h, plan, reason: 'test' })).toMatchObject({ applied: 1 });
+  });
   it('backs up without writes; applies only attachments atomically and repeats as a no-op', async () => {
     const h = harness();
     const plan = await buildRegistrationAttachmentRepairPlan(h);

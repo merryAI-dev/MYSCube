@@ -34,6 +34,18 @@ suite('registration repair with real Firestore and Storage emulators', () => {
     await batch.commit();
     const plan = await buildRegistrationAttachmentRepairPlan({ db, bucket, target });
     expect((await projectRef.get()).data()?.contractDocument).toBeNull();
+    const editDraftRef = db.doc(`orgs/${id}/privateEditDrafts/${id}`);
+    await editDraftRef.set({ resourceId: id, resourceType: 'project-info', status: 'ACTIVE', expiresAt: '2000-01-01' });
+    const beforeBlocked = await projectRef.get();
+    const requestBeforeBlocked = await requestRef.get();
+    const outboxBeforeBlocked = await outboxRef.get();
+    await expect(applyRegistrationAttachmentRepairPlan({ db, bucket, plan, reason: 'active draft must block' })).rejects.toThrow(/draft/i);
+    expect((await projectRef.get()).updateTime).toEqual(beforeBlocked.updateTime);
+    expect((await requestRef.get()).updateTime).toEqual(requestBeforeBlocked.updateTime);
+    expect((await outboxRef.get()).updateTime).toEqual(outboxBeforeBlocked.updateTime);
+    expect((await bucket.file(plan.attachments[0].document.path).exists())[0]).toBe(false);
+    expect((await bucket.file(original.path).download())[0]).toEqual(buffer);
+    await editDraftRef.update({ status: 'SUBMITTED' });
     expect(await applyRegistrationAttachmentRepairPlan({ db, bucket, plan, reason: 'emulator verification' })).toMatchObject({ applied: 1 });
     const project = (await projectRef.get()).data()!;
     expect(project).toMatchObject({ version: 2, name: 'Keep business state', executiveReviewStatus: 'PENDING', managementPlanningReviewStatus: 'PENDING' });

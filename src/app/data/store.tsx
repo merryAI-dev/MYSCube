@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, type ReactNode } from 'react';
+import { projectUpdatePayload } from '../platform/project-documents';
 import type {
   Project,
   Ledger,
@@ -492,12 +493,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (writeStrategy.target === 'bff') {
         const existing = projects.find((project) => project.id === id);
         if (existing) {
-          const merged = normalizeProjectRevenueFields({ ...existing, ...updates } as Project, 'totalRevenueAmount');
+          const { expectedProjectDocuments, ...payload } = projectUpdatePayload(existing, updates);
+          const merged = normalizeProjectRevenueFields(payload, 'totalRevenueAmount');
           const result = await upsertProjectViaBff({
             tenantId: orgId,
             actor: bffActor,
             project: {
               ...merged,
+              expectedProjectDocuments,
               expectedVersion: existing.version ?? 1,
             },
           });
