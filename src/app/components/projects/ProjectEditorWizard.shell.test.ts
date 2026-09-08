@@ -548,7 +548,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).toContain('readOnly?: boolean');
     expect(source).toContain('<fieldset disabled={readOnly} className="contents">');
     expect(source).toContain('disabled={readOnly || autosaveState');
-    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled}');
+    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled || Boolean(restoreCandidate)}');
     expect(source).toContain('shouldResetProjectEditorDraft({');
     expect(source).toContain('autosave?.onSave, draftKey, hasPendingRetryFile, hasRequiredRegistrationDocuments, mode, readOnly, uploadInProgress');
   });
@@ -570,7 +570,8 @@ describe('ProjectEditorWizard dropdown contract', () => {
   });
 
   it('never double-submits or final-submits after the latest private draft save fails', () => {
-    expect(source).toContain('if (submitInFlightRef.current || finishedRef.current || writesPausedRef.current || restoreCandidate) return');
+    expect(source).toContain('if (submitInFlightRef.current || finishedRef.current || writesPausedRef.current) return');
+    expect(source).toContain("if (restoreCandidate) {\n      toast.info('최종 저장 전에 이전 임시저장을 불러오거나 버려 주세요.');\n      return;");
     expect(source).toContain("throw new Error('최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다.')");
     expect(source.indexOf('persistAutosaveSnapshot(snapshot, stepIndex, true)')).toBeLessThan(source.indexOf('await onSubmit(snapshot, actionId)'));
   });
@@ -586,7 +587,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
   });
 
   it('keeps the final save button pressable and explains every reason it cannot submit yet', () => {
-    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled}');
+    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled || Boolean(restoreCandidate)}');
     expect(source).toContain('const submitBlocked = !canSubmit || Boolean(submitBlockedStatusReason);');
     expect(source).toContain('if (submitBlocked) {');
     expect(source).toContain('setSubmitBlockedNotice(true);');

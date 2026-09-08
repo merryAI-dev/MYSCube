@@ -631,6 +631,19 @@ export function ProjectEditorWizard({
   const [teamSyncPreview, setTeamSyncPreview] = useState<ParticipationSheetPreview | null>(null);
   const [teamSyncSignature, setTeamSyncSignature] = useState<string | null>(null);
   const [teamSyncYear, setTeamSyncYear] = useState('');
+  const sheetRestoreAttemptedRef = useRef(false);
+  const sheetRequestRunRef = useRef(0);
+  const invalidateTeamSync = useCallback(() => {
+    sheetRequestRunRef.current += 1;
+    sheetRestoreAttemptedRef.current = false;
+    setTeamSyncing(false);
+    setTeamSyncPreview(null);
+    setTeamSyncSignature(null);
+    setTeamSyncYear('');
+    setTeamSyncNotice('');
+    setTeamSyncError('');
+    setTeamSyncWarning('');
+  }, []);
   // 시트를 공유해야 할 상대. 오류가 난 뒤에 알려주면 늦다 - 링크를 넣는 그 자리에 있어야 한다.
   const [sheetSystemAccount, setSheetSystemAccount] = useState('');
   const [stepIndex, setStepIndexState] = useState(0);
@@ -782,11 +795,14 @@ export function ProjectEditorWizard({
     draftRef.current = nextDraft;
     setDraft(nextDraft);
     if (isNewEditorSession) setStepIndex(0);
-    setTeamSyncPreview(null);
-    setTeamSyncSignature(null);
-    setTeamSyncYear('');
-    setTeamSyncNotice('');
-    setTeamSyncError('');
+    const incomingSheetSignature = participationSheetSyncSignature({
+      sheetLink: nextDraft.participationSheetLink,
+      contractStart: nextDraft.contractStart,
+      contractEnd: nextDraft.contractEnd,
+      teamMembersDetailed: nextDraft.teamMembersDetailed,
+    });
+    if (isNewEditorSession || !teamSyncSignature || teamSyncSignature !== incomingSheetSignature
+      || draft.contractEndUndecided !== nextDraft.contractEndUndecided) invalidateTeamSync();
     setDocumentUploadState({
       contract: 'idle',
       customer_business_registration: 'idle',
@@ -1044,7 +1060,11 @@ export function ProjectEditorWizard({
   };
 
   const handleActionSubmit = async (actionId: string) => {
-    if (submitInFlightRef.current || finishedRef.current || writesPausedRef.current || restoreCandidate) return;
+    if (restoreCandidate) {
+      toast.info('최종 저장 전에 이전 임시저장을 불러오거나 버려 주세요.');
+      return;
+    }
+    if (submitInFlightRef.current || finishedRef.current || writesPausedRef.current) return;
     if (uploadInProgress || hasPendingRetryFile) {
       toast.error('첨부파일 처리를 완료한 뒤 최종 저장해 주세요.');
       return;
@@ -1304,41 +1324,64 @@ export function ProjectEditorWizard({
    * "다시 연동해 주세요" 가 뜨면 이미 연동한 사실 자체를 못 믿게 된다. 시트가 저장본과
    * 같으면 조용히 연동 상태로 인정하고, 달라졌으면 명단은 덮지 않은 채 갱신을 안내한다.
    */
-  const sheetRestoreAttemptedRef = useRef(false);
+  const sheetSessionKey = JSON.stringify([draftKey, autosave?.key, orgId, user?.uid, draft.contractEndUndecided]);
+  const sheetInputSignature = participationSheetSyncSignature({
+    sheetLink: draft.participationSheetLink,
+    contractStart: draft.contractStart,
+    contractEnd: draft.contractEnd,
+    teamMembersDetailed: draft.teamMembersDetailed,
+  });
+  const priorSheetSessionRef = useRef(sheetSessionKey);
+  useEffect(() => {
+    const sameSession = priorSheetSessionRef.current === sheetSessionKey;
+    priorSheetSessionRef.current = sheetSessionKey;
+    sheetRequestRunRef.current += 1;
+    sheetRestoreAttemptedRef.current = false;
+    setTeamSyncing(false);
+    if (!sameSession || teamSyncSignature !== sheetInputSignature) invalidateTeamSync();
+    return () => { sheetRequestRunRef.current += 1; };
+    // 로딩·검증 결과 변경은 요청 대상 변경이 아니므로, 진행 중인 자기 요청을 취소하지 않는다.
+  }, [sheetSessionKey, sheetInputSignature, invalidateTeamSync]);
+
   useEffect(() => {
     if (sheetRestoreAttemptedRef.current) return;
     const sheetLink = String(draft.participationSheetLink || '').trim();
     if (!sheetLink || !draft.contractStart || (!draft.contractEnd && !draft.contractEndUndecided) || !orgId || !user) return;
     if (teamSyncPreview || teamSyncing) return;
-    sheetRestoreAttemptedRef.current = true;
-    const { contractStart, contractEnd, teamMembersDetailed } = draft;
-    setTeamSyncing(true);
-    void previewParticipationSheetByLinkViaBff({
-      tenantId: orgId, actor: user, sheetLink, contractStart, contractEnd,
-      contractEndUndecided: draft.contractEndUndecided,
-    })
-      .then((preview) => {
-        if (!preview.ok) return;
-        const mapped = mapParticipationSheetPreviewToProjectTeamMembers(preview);
-        const sheetSignature = participationSheetSyncSignature({
-          sheetLink, contractStart, contractEnd, teamMembersDetailed: mapped,
-        });
-        const persistedSignature = participationSheetSyncSignature({
-          sheetLink, contractStart, contractEnd, teamMembersDetailed,
-        });
-        setTeamSyncPreview(preview);
-        setTeamSyncYear(preview.months[0]?.slice(0, 4) || '');
-        setTeamSyncWarning((preview.warnings || []).map((warning) => warning.message).slice(0, 2).join(' / '));
-        if (sheetSignature === persistedSignature) {
-          setTeamSyncSignature(sheetSignature);
-          setTeamSyncNotice(`저장된 참여율 시트 연동을 확인했습니다. 참여인력 ${preview.rows.length}명.`);
-        } else {
-          setTeamSyncNotice('시트 내용이 저장된 명단과 달라졌습니다. [연동하기]를 눌러 갱신해 주세요.');
-        }
+    const timer = window.setTimeout(() => {
+      sheetRestoreAttemptedRef.current = true;
+      const run = ++sheetRequestRunRef.current;
+      const { contractStart, contractEnd, teamMembersDetailed } = draft;
+      setTeamSyncing(true);
+      void previewParticipationSheetByLinkViaBff({
+        tenantId: orgId, actor: user, sheetLink, contractStart, contractEnd,
+        contractEndUndecided: draft.contractEndUndecided,
       })
-      .catch(() => { /* 자동 복원 실패는 화면을 막지 않는다. 연동하기 버튼이 그대로 있다. */ })
-      .finally(() => setTeamSyncing(false));
-  }, [draft, orgId, user, teamSyncPreview, teamSyncing]);
+        .then((preview) => {
+          if (run !== sheetRequestRunRef.current) return;
+          if (!preview.ok) return;
+          const mapped = mapParticipationSheetPreviewToProjectTeamMembers(preview);
+          const sheetSignature = participationSheetSyncSignature({
+            sheetLink, contractStart, contractEnd, teamMembersDetailed: mapped,
+          });
+          const persistedSignature = participationSheetSyncSignature({
+            sheetLink, contractStart, contractEnd, teamMembersDetailed,
+          });
+          setTeamSyncPreview(preview);
+          setTeamSyncYear(preview.months[0]?.slice(0, 4) || '');
+          setTeamSyncWarning((preview.warnings || []).map((warning) => warning.message).slice(0, 2).join(' / '));
+          if (sheetSignature === persistedSignature) {
+            setTeamSyncSignature(sheetSignature);
+            setTeamSyncNotice(`저장된 참여율 시트 연동을 확인했습니다. 참여인력 ${preview.rows.length}명.`);
+          } else {
+            setTeamSyncNotice('시트 내용이 저장된 명단과 달라졌습니다. [연동하기]를 눌러 갱신해 주세요.');
+          }
+        })
+        .catch(() => { /* 자동 복원 실패는 화면을 막지 않는다. 연동하기 버튼이 그대로 있다. */ })
+        .finally(() => { if (run === sheetRequestRunRef.current) setTeamSyncing(false); });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [sheetSessionKey, sheetInputSignature, teamSyncPreview, teamSyncing]);
 
   const syncTeamFromSheet = () => {
     if (teamSyncing) return;
@@ -1357,6 +1400,8 @@ export function ProjectEditorWizard({
       return;
     }
     setTeamSyncing(true);
+    sheetRestoreAttemptedRef.current = true;
+    const run = ++sheetRequestRunRef.current;
     setTeamSyncSignature(null);
     setTeamSyncError('');
     setTeamSyncWarning('');
@@ -1369,6 +1414,7 @@ export function ProjectEditorWizard({
       contractEndUndecided: draft.contractEndUndecided,
     })
       .then((preview) => {
+        if (run !== sheetRequestRunRef.current) return;
         if (!preview.ok) {
           // 막는 이유를 서버가 적어 준 대로 보여 준다. 화면이 다시 판정하지 않는다.
           setTeamSyncPreview(null);
@@ -1395,6 +1441,7 @@ export function ProjectEditorWizard({
           : `참여인력 ${preview.rows.length}명을 가져왔습니다.`);
       })
       .catch((error) => {
+        if (run !== sheetRequestRunRef.current) return;
         setTeamSyncPreview(null);
         const status = error instanceof PlatformApiError ? error.status : 500;
         const code = error instanceof PlatformApiError ? error.code : '';
@@ -1402,7 +1449,7 @@ export function ProjectEditorWizard({
         const serverMessage = error instanceof PlatformApiError ? String(error.serverMessage || '').trim() : '';
         setTeamSyncError(serverMessage || resolveApiErrorPresentation(code, status).guide);
       })
-      .finally(() => setTeamSyncing(false));
+      .finally(() => { if (run === sheetRequestRunRef.current) setTeamSyncing(false); });
   };
 
 
@@ -3658,6 +3705,7 @@ export function ProjectEditorWizard({
               <p className={cn('mt-1', FORM_HINT_CLASS)}>
                 {formatAutosaveTime(restoreCandidate.updatedAt) || '최근'}에 저장된 작성 내용을 불러올 수 있습니다.
               </p>
+              <p className={cn('mt-1', FORM_HINT_CLASS)}>최종 저장 전에 이전 임시저장을 불러오거나 버려 주세요.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" size="sm" onClick={discardLocalDraft}>
@@ -3876,7 +3924,7 @@ export function ProjectEditorWizard({
                     key={action.id}
                     type="button"
                     variant={action.variant || 'default'}
-                    disabled={readOnly || !!busyActionId || action.disabled}
+                    disabled={readOnly || !!busyActionId || action.disabled || Boolean(restoreCandidate)}
                     onClick={() => {
                       if (submitBlocked) {
                         setSubmitBlockedNotice(true);

@@ -1,8 +1,283 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 
 const documents = JSON.parse(readFileSync(new URL('../../policies/project-documents.json', import.meta.url), 'utf8')) as Record<string, { field: string }>;
+
+async function openSheetRecoveryDraft(page: Page, backup = false, acknowledgedChanges: Record<string, unknown> = {}) {
+  const draftId = 'sheet-recovery-test';
+  const payload = {
+    name: '시트 복구 검증', officialContractName: '계약명', clientOrg: '고객사', department: 'CIC1',
+    projectPurpose: '목적', description: '내용', type: 'I1', contractStart: '2026-01-01', contractEnd: '2026-12-31',
+    contractAmount: 0, salesVatAmount: 0, totalRevenueAmount: 0, totalActualCost: 0, supportAmount: 0,
+    financialYears: [{ year: 2026, contractAmount: 0, salesVatAmount: 0, totalRevenueAmount: 0, totalActualCost: 0, supportAmount: 0, profitRate: 0, confirmed: true }],
+    settlementType: 'TYPE1', managerName: '데이나', executiveApproverId: 'u001', executiveApproverName: '관리자',
+    participationSheetLink: 'https://docs.google.com/spreadsheets/d/original', teamMembersDetailed: [],
+    registrationConfirmations: { modusignContractUsed: true },
+  };
+  let record = { draftId, resourceType: 'project-registration', resourceId: draftId, draftRevision: 1, payload, attachmentRefs: ['contract', 'customer_business_registration', 'quote'].map(documentKind => ({ documentKind, path: `server/${documentKind}`, name: `${documentKind}.pdf`, size: 100, contentType: 'application/pdf' })), stepIndex: 0 };
+  const writes: any[] = [];
+  const submits: any[] = [];
+  if (backup) await page.addInitScript(({ draftId, payload }) => localStorage.setItem(`mysc:project-editor-autosave:portal-register-mysc-u002-${draftId}`, JSON.stringify({ schemaVersion: 1, draftKey: 'backup', draft: payload, stepIndex: 3, updatedAt: '2026-09-01T00:00:00.000Z' })), { draftId, payload });
+  await page.route('**/api/v1/edit-leases/**', route => route.fulfill({ json: { serverNow: new Date().toISOString(), state: 'ACTIVE', canEdit: true, expiresAt: new Date(Date.now() + 1_800_000).toISOString(), leaseId: 'test-lease', fence: 1 } }));
+  await page.route(`**/api/v1/project-registration-drafts/${draftId}`, route => {
+    if (route.request().method() === 'PATCH') {
+      const body = route.request().postDataJSON();
+      writes.push(body);
+      // A server-normalized field unrelated to the verified sheet must still hydrate.
+      record = { ...record, draftRevision: record.draftRevision + 1, payload: { ...body.payload, name: '서버 정규화 이름', ...acknowledgedChanges } };
+    }
+    return route.fulfill({ json: { draft: record } });
+  });
+  await page.route(`**/api/v1/project-registration-drafts/${draftId}/submit`, route => {
+    submits.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, json: { draftId, requestId: 'sheet-request', projectId: 'sheet-project', status: 'SUBMITTED' } });
+  });
+  await page.goto('/login');
+  await page.getByRole('button', { name: 'PM 샘플 로그인' }).click();
+  await page.goto(`/portal/register-project/${draftId}`);
+  await expect(page.getByPlaceholder('예: 26농식품AC')).toHaveValue(payload.name);
+  return { writes, submits };
+}
+
+const sheetPreview = (name = '') => ({
+  ok: true, months: ['2026-01'], warnings: [], blocking: [],
+  summary: { period: { start: '2026-01', end: '2026-12' }, pendingLinkCount: 0 },
+  rows: name ? [{ rowIndex: 1, name, nickname: '', role: '운영매니저', stintStart: '2026-01', stintEnd: '2026-12', baseRate: 10, personId: 'sheet-person', linkState: 'LINKED', monthlyRates: { '2026-01': 10 } }] : [],
+});
+
+test('typing schedules only the latest sheet and immediately rejects the previous response', async ({ page }) => {
+  let previews = 0;
+  let releaseOld!: () => void;
+  const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+  await page.route('**/api/v1/participation-dashboard/sheet-preview?**', async route => {
+    previews += 1;
+    if (previews === 2) { await oldGate; return route.fulfill({ json: sheetPreview('이전 명단') }); }
+    return route.fulfill({ json: sheetPreview() });
+  });
+  await openSheetRecoveryDraft(page, true);
+  await page.getByRole('button', { name: /^팀\/인력/ }).click();
+  await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+  await page.getByRole('button', { name: '연동하기', exact: true }).click();
+  await expect.poll(() => previews).toBe(2);
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  const link = page.getByPlaceholder('https://docs.google.com/spreadsheets/d/...');
+  await link.fill('https://docs.google.com/spreadsheets/d/');
+  await link.pressSequentially('replacement', { delay: 5 });
+  const oldFinished = page.waitForResponse(response => response.url().includes('/sheet-preview?') && response.url().includes('original'));
+  releaseOld();
+  await oldFinished;
+  await page.clock.runFor(50);
+  expect(previews).toBe(2);
+  await expect(page.getByText('이전 명단', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toHaveCount(0);
+  await page.clock.runFor(250);
+  await expect.poll(() => previews).toBe(3);
+  await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+});
+
+test('manual sync takes a pending automatic slot immediately and a failure does not auto-loop', async ({ page }) => {
+  let previews = 0;
+  await page.route('**/api/v1/participation-dashboard/sheet-preview?**', route => {
+    previews += 1;
+    return route.fulfill(previews === 2 ? { status: 422, json: { error: 'sheet_invalid', message: '현재 시트 오류' } } : { json: sheetPreview() });
+  });
+  await openSheetRecoveryDraft(page, true);
+  await page.getByRole('button', { name: /^팀\/인력/ }).click();
+  await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  const link = page.getByPlaceholder('https://docs.google.com/spreadsheets/d/...');
+  await link.fill('https://docs.google.com/spreadsheets/d/replacement');
+  await page.getByRole('button', { name: '연동하기', exact: true }).click();
+  await expect(page.getByText('현재 시트 오류', { exact: true })).toBeVisible();
+  expect(previews).toBe(2);
+  await page.clock.runFor(1000);
+  expect(previews).toBe(2);
+  await link.fill('https://docs.google.com/spreadsheets/d/another');
+  await page.clock.runFor(300);
+  await expect.poll(() => previews).toBe(3);
+  await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+});
+
+test('an unrelated normalized acknowledgement does not postpone the pending sheet request', async ({ page }) => {
+  let previews = 0;
+  await page.route('**/api/v1/participation-dashboard/sheet-preview?**', route => { previews += 1; return route.fulfill({ json: sheetPreview() }); });
+  const { writes, submits } = await openSheetRecoveryDraft(page);
+  await page.getByRole('button', { name: /^팀\/인력/ }).click();
+  await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  await page.getByPlaceholder('https://docs.google.com/spreadsheets/d/...').fill('https://docs.google.com/spreadsheets/d/replacement');
+  await page.clock.runFor(100);
+  expect(previews).toBe(1);
+  await page.getByRole('button', { name: '검토 및 저장', exact: true }).click();
+  await page.getByRole('button', { name: '최종 저장', exact: true }).click();
+  expect(submits).toHaveLength(0);
+  expect(writes).toHaveLength(0);
+  await expect(page.getByRole('button', { name: /^참여율 시트를 다시 연동해 주세요\./ })).toBeVisible();
+  await page.getByRole('button', { name: /^팀\/인력/ }).click();
+  await page.getByRole('button', { name: '임시저장', exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  await expect(page.getByText('서버 정규화 이름', { exact: true }).first()).toBeVisible();
+  await page.clock.runFor(200);
+  await expect.poll(() => previews).toBe(2);
+  await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+});
+
+test('leaving the editor cancels its scheduled sheet request', async ({ page }) => {
+  let previews = 0;
+  await page.route('**/api/v1/participation-dashboard/sheet-preview?**', route => { previews += 1; return route.fulfill({ json: sheetPreview() }); });
+  await openSheetRecoveryDraft(page, true);
+  await page.route('**/api/v1/edit-leases/**/release', route => route.fulfill({ json: { serverNow: new Date().toISOString(), state: 'RELEASED', canEdit: false, expiresAt: null } }));
+  await page.getByRole('button', { name: /^팀\/인력/ }).click();
+  await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+  await page.clock.install();
+  await page.clock.pauseAt(new Date(Date.now() + 1000));
+  await page.getByPlaceholder('https://docs.google.com/spreadsheets/d/...').fill('https://docs.google.com/spreadsheets/d/replacement');
+  await page.getByRole('link', { name: '마이페이지', exact: true }).click();
+  await page.getByRole('button', { name: '저장하지 않고 종료', exact: true }).click();
+  await expect(page).toHaveURL(/\/portal\/career-profile$/);
+  await page.clock.runFor(1000);
+  expect(previews).toBe(1);
+});
+
+test('clearing the no-end-date choice invalidates verification even while the end date stays empty', async ({ page }) => {
+  let previews = 0;
+  await page.route('**/api/v1/participation-dashboard/sheet-preview?**', route => { previews += 1; return route.fulfill({ json: sheetPreview() }); });
+  await openSheetRecoveryDraft(page, true);
+  await page.getByRole('button', { name: /^팀\/인력/ }).click();
+  const verified = page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.');
+  await expect(verified).toBeVisible();
+  await page.getByRole('button', { name: /^계약\/재무/ }).click();
+  await page.getByRole('checkbox', { name: '종료 기간 없음', exact: true }).check();
+  await expect.poll(() => previews).toBe(2);
+  await page.getByRole('button', { name: /^팀\/인력/ }).click();
+  await expect(verified).toBeVisible();
+  await page.getByRole('button', { name: /^계약\/재무/ }).click();
+  await page.getByRole('checkbox', { name: '종료 기간 없음', exact: true }).uncheck();
+  await expect(page.locator('input[type="date"]').nth(1)).toHaveValue('');
+  await page.getByRole('button', { name: /^팀\/인력/ }).click();
+  await expect(verified).toHaveCount(0);
+  expect(previews).toBe(2);
+  await page.getByRole('button', { name: /^계약\/재무/ }).click();
+  await page.locator('input[type="date"]').nth(1).fill('2026-12-31');
+  await expect.poll(() => previews).toBe(3);
+  await page.getByRole('button', { name: /^팀\/인력/ }).click();
+  await expect(verified).toBeVisible();
+});
+
+for (const change of ['date', 'roster']) {
+  test(`acknowledged ${change} change invalidates the prior verified sheet and revalidates`, async ({ page }) => {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let previews = 0;
+    await page.route('**/api/v1/participation-dashboard/sheet-preview?**', async route => {
+      previews += 1;
+      if (previews > 1) await gate;
+      return route.fulfill({ json: sheetPreview(change === 'roster' && previews > 1 ? '변경 명단' : '') });
+    });
+    const changedRoster = [{ personId: 'sheet-person', memberName: '변경 명단', memberNickname: '', role: '운영매니저', participationRate: 10, laborAllocationStartMonth: '2026-01', laborAllocationEndMonth: '2026-12', monthlyRates: { '2026-01': 10 } }];
+    await openSheetRecoveryDraft(page, false, change === 'date' ? { contractEnd: '2026-11-30' } : { teamMembersDetailed: changedRoster });
+    await page.getByRole('button', { name: /^팀\/인력/ }).click();
+    await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+    await page.getByRole('button', { name: '임시저장', exact: true }).click();
+    await expect.poll(() => previews).toBe(2);
+    await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '연동 중', exact: true })).toBeDisabled();
+    release();
+    await expect(page.getByText(`저장된 참여율 시트 연동을 확인했습니다. 참여인력 ${change === 'roster' ? 1 : 0}명.`)).toBeVisible();
+    expect(previews).toBe(2);
+  });
+}
+
+for (const choice of ['discard', 'compare']) {
+  test(`verified sheet survives normalized draft acknowledgement after backup ${choice}`, async ({ page }) => {
+    let previews = 0;
+    await page.route('**/api/v1/participation-dashboard/sheet-preview?**', route => { previews += 1; return route.fulfill({ json: sheetPreview() }); });
+    const { writes, submits } = await openSheetRecoveryDraft(page, true);
+    await page.getByRole('button', { name: /^팀\/인력/ }).click();
+    await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+    await page.getByRole('button', { name: '검토 및 저장', exact: true }).click();
+    const submit = page.getByRole('button', { name: '최종 저장', exact: true });
+    await expect(submit).toBeDisabled();
+    await expect(page.getByText('최종 저장 전에 이전 임시저장을 불러오거나 버려 주세요.', { exact: true }).first()).toBeVisible();
+    await submit.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `test-results/sheet-recovery-${choice}-blocked.png` });
+    await submit.dispatchEvent('click');
+    expect(writes).toHaveLength(0);
+    expect(submits).toHaveLength(0);
+    if (choice === 'discard') await page.getByRole('button', { name: '버리기', exact: true }).click();
+    else {
+      await page.getByRole('button', { name: '임시저장 불러오기', exact: true }).click();
+      await page.getByRole('button', { name: '내 입력으로 계속', exact: true }).click();
+    }
+    await page.getByRole('button', { name: '임시저장', exact: true }).click();
+    await expect.poll(() => writes.length).toBeGreaterThan(0);
+    await page.getByRole('button', { name: '기본 정보', exact: true }).click();
+    await expect(page.getByPlaceholder('예: 26농식품AC')).toHaveValue('서버 정규화 이름');
+    await page.getByRole('button', { name: /^팀\/인력/ }).click();
+    await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+    await expect(page.getByText('이전에 작성 중이던 임시저장이 있습니다')).toHaveCount(0);
+    await page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: `test-results/sheet-recovery-${choice}-verified.png` });
+    expect(previews).toBe(1);
+    await page.getByRole('button', { name: '검토 및 저장', exact: true }).click();
+    await submit.click();
+    await expect(page.getByRole('heading', { name: '프로젝트 등록 요청이 최종 제출되었습니다' })).toBeVisible();
+    expect(submits).toHaveLength(1);
+    expect(previews).toBe(1);
+  });
+}
+
+for (const origin of ['automatic', 'manual']) for (const outcome of ['success', 'failure']) {
+  test(`changed sheet rejects late ${origin} ${outcome} without clearing the newer loading state`, async ({ page }) => {
+    let releaseOld!: () => void;
+    let releaseNew!: () => void;
+    const oldGate = new Promise<void>(resolve => { releaseOld = resolve; });
+    const newGate = new Promise<void>(resolve => { releaseNew = resolve; });
+    let originals = 0;
+    let replacements = 0;
+    await page.route('**/api/v1/participation-dashboard/sheet-preview?**', async route => {
+      const replacement = new URL(route.request().url()).searchParams.get('sheetLink')?.endsWith('/replacement');
+      if (replacement) {
+        replacements += 1;
+        if (replacements === 1) await newGate;
+        return route.fulfill({ json: sheetPreview('새 명단') });
+      }
+      originals += 1;
+      if (origin === 'manual' && originals === 1) return route.fulfill({ json: sheetPreview() });
+      await oldGate;
+      return route.fulfill(outcome === 'success'
+        ? { json: sheetPreview('이전 명단') }
+        : { status: 422, json: { error: 'sheet_invalid', message: '늦은 이전 오류' } });
+    });
+    await openSheetRecoveryDraft(page, true);
+    await page.getByRole('button', { name: /^팀\/인력/ }).click();
+    if (origin === 'manual') {
+      await expect(page.getByText('저장된 참여율 시트 연동을 확인했습니다. 참여인력 0명.')).toBeVisible();
+      await page.getByRole('button', { name: '연동하기', exact: true }).click();
+    }
+    await expect.poll(() => originals).toBe(origin === 'manual' ? 2 : 1);
+    await page.getByPlaceholder('https://docs.google.com/spreadsheets/d/...').fill('https://docs.google.com/spreadsheets/d/replacement');
+    await expect.poll(() => replacements).toBe(1);
+    const oldFinished = page.waitForResponse(response => response.url().includes('/sheet-preview?') && response.url().includes('original'));
+    releaseOld();
+    await oldFinished;
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(page.getByRole('button', { name: '연동 중', exact: true })).toBeDisabled();
+    await expect(page.getByText('이전 명단', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('늦은 이전 오류', { exact: true })).toHaveCount(0);
+    releaseNew();
+    await expect(page.getByText('시트 내용이 저장된 명단과 달라졌습니다. [연동하기]를 눌러 갱신해 주세요.')).toBeVisible();
+    await page.getByRole('button', { name: '연동하기', exact: true }).click();
+    await expect(page.getByText('참여인력 1명을 가져왔습니다.', { exact: true })).toBeVisible();
+    await expect(page.getByText('새 명단', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText('이전 명단', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('늦은 이전 오류', { exact: true })).toHaveCount(0);
+  });
+}
 
 test('rejected attachment upload shows correction guidance without repeating or removing the prior file', async ({ page }) => {
   const contract = { documentKind: 'contract', path: 'server/original.pdf', name: 'original.pdf', size: 715, contentType: 'application/pdf' };
