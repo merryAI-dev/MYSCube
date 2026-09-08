@@ -3,12 +3,19 @@ import {
   missingProjectRegistrationRequiredDocumentKind,
   projectDocumentValidationError,
 } from './project-document-validation.mjs';
+import { projectInfoDraftAttachmentSchema, projectRegistrationDraftAttachmentSchema } from './schemas.mjs';
 
 const pdf = Buffer.from('%PDF-1.7\n');
 const zip = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]);
 const msg = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0x00]);
 
 describe('project document validation', () => {
+  it.each(['performance_certificate', 'tax_invoice', 'final_settlement_report', 'final_report'])('keeps %s exclusive to the edit attachment schema', (documentKind) => {
+    const input = { expectedDraftRevision: 0, documentKind, fileName: 'report.pdf', mimeType: 'application/pdf', fileSize: 1, contentBase64: 'YQ==' };
+    expect(projectInfoDraftAttachmentSchema.safeParse(input).success).toBe(true);
+    expect(projectRegistrationDraftAttachmentSchema.safeParse(input).success).toBe(false);
+  });
+
   it('requires only slots 1 to 3 and accepts a deferred quote', () => {
     const refs = (kinds) => kinds.map((documentKind) => ({ documentKind }));
 

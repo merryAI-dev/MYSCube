@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { CheckCircle2, Clock3, LockKeyhole, Pencil, Send } from 'lucide-react';
@@ -65,14 +66,7 @@ function draftForEditor(record: ProjectRegistrationDraft): ProjectEditorDraft {
   }
   return createProjectEditorDraft({
     ...(record.payload as Partial<ProjectEditorDraft>),
-    contractDocument: documents.contract || null,
-    quoteDocument: documents.quote || null,
-    proposalDocument: documents.proposal || null,
-    proposalWordOriginalDocument: documents.proposal_word_original || null,
-    proposalPptOriginalDocument: documents.proposal_ppt_original || null,
-    presentationPptOriginalDocument: documents.presentation_ppt_original || null,
-    rfpRequestEvidenceDocument: documents.rfp_request_evidence || null,
-    customerBusinessRegistrationDocument: documents.customer_business_registration || null,
+    ...Object.fromEntries(PROJECT_DOCUMENTS.filter(({ registration }) => registration).map(({ documentKind, field }) => [field, documents[documentKind] || null])),
     registrationRequirementsVersion: 2,
   });
 }

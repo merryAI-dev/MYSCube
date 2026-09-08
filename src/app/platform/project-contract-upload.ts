@@ -1,21 +1,10 @@
+import type { ProjectDocumentKind } from './project-documents';
 import { getDownloadURL, ref, uploadBytesResumable, type UploadTaskSnapshot } from 'firebase/storage';
 import { getStorageInstance } from '../lib/firebase';
 import type { FileAttachment } from '../data/types';
 import type { ActorLike } from '../lib/platform-bff-client';
 
-export type ProjectRequestDocumentKind =
-  | 'contract'
-  | 'customer_business_registration'
-  | 'quote'
-  | 'proposal'
-  | 'proposal_word_original'
-  | 'proposal_ppt_original'
-  | 'presentation_ppt_original'
-  | 'rfp_request_evidence'
-  | 'performance_certificate'
-  | 'tax_invoice'
-  | 'final_settlement_report'
-  | 'final_report';
+export type ProjectRequestDocumentKind = ProjectDocumentKind;
 
 export const PROJECT_REQUEST_DOCUMENT_UPLOAD_MAX_SIZE_BYTES = 1024 * 1024 * 1024;
 export const PROJECT_REQUEST_DOCUMENT_UPLOAD_MAX_SIZE_LABEL = '1GB';

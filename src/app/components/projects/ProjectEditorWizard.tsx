@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
 import {
   ArrowLeft,
   ArrowRight,
@@ -253,48 +254,9 @@ const CHECKOUT_DOCUMENT_KINDS: ProjectRequestDocumentKind[] = [
   'tax_invoice',
   'final_settlement_report',
 ];
-const PROJECT_DOCUMENT_LABELS: Record<ProjectRequestDocumentKind, string> = {
-  contract: '계약서 PDF',
-  customer_business_registration: '고객사 사업자등록증 PDF',
-  quote: '산출내역서(견적서) PDF',
-  proposal: '제안서 PDF',
-  proposal_word_original: '제안서 Word 원본',
-  proposal_ppt_original: '제안서 PPT 원본',
-  presentation_ppt_original: '발표자료 PPT 원본',
-  rfp_request_evidence: 'RFP/요청 메일 증빙',
-  performance_certificate: '수행확인서 PDF',
-  tax_invoice: '세금계산서 PDF',
-  final_settlement_report: '최종 정산보고서 PDF',
-  final_report: '최종 결과보고서',
-};
-const PROJECT_DOCUMENT_BUTTON_LABELS: Record<ProjectRequestDocumentKind, string> = {
-  contract: '계약서',
-  customer_business_registration: '사업자등록증',
-  quote: '산출내역서(견적서)',
-  proposal: '제안서',
-  proposal_word_original: '제안서 Word 원본',
-  proposal_ppt_original: '제안서 PPT 원본',
-  presentation_ppt_original: '발표자료 PPT 원본',
-  rfp_request_evidence: 'RFP/요청 메일 증빙',
-  performance_certificate: '수행확인서',
-  tax_invoice: '세금계산서',
-  final_settlement_report: '최종 정산보고서',
-  final_report: '최종 결과보고서',
-};
-const PROJECT_DOCUMENT_FIELD: Record<ProjectRequestDocumentKind, keyof ProjectEditorDraft> = {
-  contract: 'contractDocument',
-  customer_business_registration: 'customerBusinessRegistrationDocument',
-  quote: 'quoteDocument',
-  proposal: 'proposalDocument',
-  proposal_word_original: 'proposalWordOriginalDocument',
-  proposal_ppt_original: 'proposalPptOriginalDocument',
-  presentation_ppt_original: 'presentationPptOriginalDocument',
-  rfp_request_evidence: 'rfpRequestEvidenceDocument',
-  performance_certificate: 'performanceCertificateDocument',
-  tax_invoice: 'taxInvoiceDocument',
-  final_settlement_report: 'finalSettlementReportDocument',
-  final_report: 'finalReportDocument',
-};
+const PROJECT_DOCUMENT_LABELS = Object.fromEntries(PROJECT_DOCUMENTS.map(({ documentKind, label }) => [documentKind, label])) as Record<ProjectRequestDocumentKind, string>;
+const PROJECT_DOCUMENT_BUTTON_LABELS = Object.fromEntries(PROJECT_DOCUMENTS.map(({ documentKind, buttonLabel }) => [documentKind, buttonLabel])) as Record<ProjectRequestDocumentKind, string>;
+const PROJECT_DOCUMENT_FIELD = Object.fromEntries(PROJECT_DOCUMENTS.map(({ documentKind, field }) => [documentKind, field])) as Record<ProjectRequestDocumentKind, keyof ProjectEditorDraft>;
 const OPTIONAL_REGISTRATION_DOCUMENT_NOTE_FIELD = {
   proposal_word_original: 'proposalWordOriginal',
   proposal_ppt_original: 'proposalPptOriginal',

@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENTS, type ProjectDocumentKind } from '../platform/project-documents';
 import type { RequestActor } from '../platform/request-context';
 import { resolveProjectDocumentMimeType } from '../platform/project-contract-upload';
 import {
@@ -10,19 +11,7 @@ import {
 export /** Vercel 본문 4.5MB - base64 팽창 여유. 넘으면 서명 URL 직접 업로드로 우회한다. */
 const DIRECT_UPLOAD_THRESHOLD_BYTES = 3 * 1024 * 1024;
 const PROJECT_INFO_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
-export type ProjectInfoDocumentKind =
-  | 'contract'
-  | 'customer_business_registration'
-  | 'quote'
-  | 'proposal'
-  | 'proposal_word_original'
-  | 'proposal_ppt_original'
-  | 'presentation_ppt_original'
-  | 'rfp_request_evidence'
-  | 'performance_certificate'
-  | 'tax_invoice'
-  | 'final_settlement_report'
-  | 'final_report';
+export type ProjectInfoDocumentKind = ProjectDocumentKind;
 
 export interface ProjectInfoAttachment {
   attachmentId?: string;
@@ -177,19 +166,7 @@ function parseRebaseBody(value: unknown, projectId: string): ProjectInfoRebaseRe
 function parseAttachment(value: unknown): ProjectInfoAttachment {
   const attachment = object(value, 'project information attachment');
   if (
-    ![
-      'contract',
-      'customer_business_registration',
-      'quote',
-      'proposal',
-      'proposal_word_original',
-      'proposal_ppt_original',
-      'presentation_ppt_original',
-      'rfp_request_evidence',
-      'performance_certificate',
-      'tax_invoice',
-      'final_settlement_report',
-    ].includes(String(attachment.documentKind))
+    !PROJECT_DOCUMENTS.some(({ documentKind }) => documentKind === attachment.documentKind)
     || typeof attachment.path !== 'string'
     || !attachment.path.trim()
     || typeof attachment.name !== 'string'

@@ -35,6 +35,7 @@ import {
 } from './projects.mjs';
 import {
   PROJECT_INFO_DOCUMENT_KINDS,
+  PROJECT_DOCUMENT_FIELD_BY_KIND,
   projectDocumentValidationError,
 } from '../project-document-validation.mjs';
 
@@ -42,20 +43,7 @@ const RESOURCE_TYPE = 'project-info';
 // Every member works across all projects; see CROSS_PROJECT_ROLES in src/app/platform/rbac.ts.
 const CROSS_PROJECT_ROLES = new Set(['admin', 'finance', 'pm', 'viewer']);
 const DOCUMENT_KINDS = PROJECT_INFO_DOCUMENT_KINDS;
-const DOCUMENT_FIELD_BY_KIND = {
-  contract: 'contractDocument',
-  customer_business_registration: 'customerBusinessRegistrationDocument',
-  quote: 'quoteDocument',
-  proposal: 'proposalDocument',
-  proposal_word_original: 'proposalWordOriginalDocument',
-  proposal_ppt_original: 'proposalPptOriginalDocument',
-  presentation_ppt_original: 'presentationPptOriginalDocument',
-  rfp_request_evidence: 'rfpRequestEvidenceDocument',
-  performance_certificate: 'performanceCertificateDocument',
-  tax_invoice: 'taxInvoiceDocument',
-  final_settlement_report: 'finalSettlementReportDocument',
-  final_report: 'finalReportDocument',
-};
+const DOCUMENT_FIELD_BY_KIND = PROJECT_DOCUMENT_FIELD_BY_KIND;
 const MAX_DRAFT_BYTES = 900 * 1024;
 const MAX_ATTACHMENT_REFS = 100;
 const MAX_PAYLOAD_DEPTH = 20;

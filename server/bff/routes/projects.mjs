@@ -18,6 +18,9 @@ import {
 import { stableStringify } from '../utils.mjs';
 import {
   PROJECT_INFO_DOCUMENT_KINDS,
+  PROJECT_REGISTRATION_DOCUMENT_KINDS,
+  PROJECT_DOCUMENT_FIELD_BY_KIND,
+  PROJECT_DOCUMENT_LABEL_BY_FIELD,
   PROJECT_REGISTRATION_REQUIRED_DOCUMENT_KINDS,
   missingProjectRegistrationRequiredDocumentKind,
 } from '../project-document-validation.mjs';
@@ -1143,19 +1146,7 @@ function registrationPrivateDocuments(attachmentRefs) {
       visibility: 'PRIVATE',
     }));
   }
-  return {
-    contractDocument: latest.get('contract') || null,
-    customerBusinessRegistrationDocument: latest.get('customer_business_registration') || null,
-    quoteDocument: latest.get('quote') || null,
-    proposalDocument: latest.get('proposal') || null,
-    proposalWordOriginalDocument: latest.get('proposal_word_original') || null,
-    proposalPptOriginalDocument: latest.get('proposal_ppt_original') || null,
-    presentationPptOriginalDocument: latest.get('presentation_ppt_original') || null,
-    rfpRequestEvidenceDocument: latest.get('rfp_request_evidence') || null,
-    performanceCertificateDocument: latest.get('performance_certificate') || null,
-    taxInvoiceDocument: latest.get('tax_invoice') || null,
-    finalSettlementReportDocument: latest.get('final_settlement_report') || null,
-  };
+  return Object.fromEntries(Object.entries(PROJECT_DOCUMENT_FIELD_BY_KIND).map(([kind, field]) => [field, latest.get(kind) || null]));
 }
 
 function registrationRequirementsVersion(value) {
@@ -1422,25 +1413,9 @@ function assertRegistrationV2Requirements(payload, attachmentRefs, validateAttac
 
 }
 
-const REGISTRATION_REQUIREMENT_DOCUMENT_FIELDS = {
-  contract: 'contractDocument',
-  customer_business_registration: 'customerBusinessRegistrationDocument',
-  quote: 'quoteDocument',
-  proposal: 'proposalDocument',
-  proposal_word_original: 'proposalWordOriginalDocument',
-  proposal_ppt_original: 'proposalPptOriginalDocument',
-  presentation_ppt_original: 'presentationPptOriginalDocument',
-  rfp_request_evidence: 'rfpRequestEvidenceDocument',
-};
+const REGISTRATION_REQUIREMENT_DOCUMENT_FIELDS = Object.fromEntries(PROJECT_REGISTRATION_DOCUMENT_KINDS.map((kind) => [kind, PROJECT_DOCUMENT_FIELD_BY_KIND[kind]]));
 
-const PROJECT_INFO_DOCUMENT_FIELDS = [
-  ...new Set([
-    ...Object.values(REGISTRATION_REQUIREMENT_DOCUMENT_FIELDS),
-    'performanceCertificateDocument',
-    'taxInvoiceDocument',
-    'finalSettlementReportDocument',
-  ]),
-];
+const PROJECT_INFO_DOCUMENT_FIELDS = Object.values(PROJECT_DOCUMENT_FIELD_BY_KIND);
 
 function trustedStoredChangeRequestDocuments(previousRequest) {
   if (
@@ -1892,31 +1867,7 @@ export function buildProjectRequestPayloadFromProject(project, existingPayload =
     teamMembersDetailed,
     participantCondition: pickText('participantCondition'),
     note: pickText('note'),
-    contractDocument: project?.contractDocument ?? existingPayload.contractDocument ?? null,
-    customerBusinessRegistrationDocument: project?.customerBusinessRegistrationDocument
-      ?? existingPayload.customerBusinessRegistrationDocument
-      ?? null,
-    quoteDocument: project?.quoteDocument ?? existingPayload.quoteDocument ?? null,
-    proposalDocument: project?.proposalDocument ?? existingPayload.proposalDocument ?? null,
-    proposalWordOriginalDocument: project?.proposalWordOriginalDocument
-      ?? existingPayload.proposalWordOriginalDocument
-      ?? null,
-    proposalPptOriginalDocument: project?.proposalPptOriginalDocument
-      ?? existingPayload.proposalPptOriginalDocument
-      ?? null,
-    presentationPptOriginalDocument: project?.presentationPptOriginalDocument
-      ?? existingPayload.presentationPptOriginalDocument
-      ?? null,
-    rfpRequestEvidenceDocument: project?.rfpRequestEvidenceDocument
-      ?? existingPayload.rfpRequestEvidenceDocument
-      ?? null,
-    performanceCertificateDocument: project?.performanceCertificateDocument
-      ?? existingPayload.performanceCertificateDocument
-      ?? null,
-    taxInvoiceDocument: project?.taxInvoiceDocument ?? existingPayload.taxInvoiceDocument ?? null,
-    finalSettlementReportDocument: project?.finalSettlementReportDocument
-      ?? existingPayload.finalSettlementReportDocument
-      ?? null,
+    ...Object.fromEntries(PROJECT_INFO_DOCUMENT_FIELDS.map((field) => [field, project?.[field] === undefined ? existingPayload[field] ?? null : project[field]])),
     contractAnalysis: project?.contractAnalysis ?? existingPayload.contractAnalysis ?? null,
   };
 }
@@ -2069,17 +2020,7 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
     ...(updatesTeamMembers ? { teamMembersDetailed } : {}),
     participantCondition: readOptionalText(payload.participantCondition),
     note: readOptionalText(payload.note),
-    contractDocument: payload.contractDocument || null,
-    customerBusinessRegistrationDocument: payload.customerBusinessRegistrationDocument || null,
-    quoteDocument: payload.quoteDocument || null,
-    proposalDocument: payload.proposalDocument || null,
-    proposalWordOriginalDocument: payload.proposalWordOriginalDocument || null,
-    proposalPptOriginalDocument: payload.proposalPptOriginalDocument || null,
-    presentationPptOriginalDocument: payload.presentationPptOriginalDocument || null,
-    rfpRequestEvidenceDocument: payload.rfpRequestEvidenceDocument || null,
-    performanceCertificateDocument: payload.performanceCertificateDocument || null,
-    taxInvoiceDocument: payload.taxInvoiceDocument || null,
-    finalSettlementReportDocument: payload.finalSettlementReportDocument || null,
+    ...Object.fromEntries(PROJECT_INFO_DOCUMENT_FIELDS.map((field) => [field, payload[field] === undefined ? currentProject[field] ?? null : payload[field] || null])),
     contractAnalysis: payload.contractAnalysis || null,
     budgetCurrentYear: Number.isFinite(Number(payload.contractAmount))
       ? Math.max(0, Math.round(Number(payload.contractAmount)))
@@ -2138,21 +2079,11 @@ const PROJECT_INFO_CHANGE_LABELS = {
   projectPurpose: '프로젝트 목적',
   description: '주요 내용',
   note: '비고',
-  contractDocument: '계약서 PDF',
-  quoteDocument: '견적서 PDF',
-  proposalDocument: '제안서 PDF',
-  proposalWordOriginalDocument: '제안서 Word 원본',
-  proposalPptOriginalDocument: '제안서 PPT 원본',
-  presentationPptOriginalDocument: '발표자료 PPT 원본',
-  rfpRequestEvidenceDocument: 'RFP 또는 요청 메일 증빙',
   registrationOptionalDocumentNotes: '원본 파일 미첨부 사유',
-  customerBusinessRegistrationDocument: '고객사 사업자등록증 PDF',
   financialYears: '연도별 재무',
   registrationConfirmations: '등록 확인사항',
   checkout: '종료사업 체크아웃',
-  performanceCertificateDocument: '수행확인서 PDF',
-  taxInvoiceDocument: '세금계산서 PDF',
-  finalSettlementReportDocument: '최종 정산보고서 PDF',
+  ...PROJECT_DOCUMENT_LABEL_BY_FIELD,
 };
 
 const PROJECT_INFO_PAYLOAD_FIELDS = [
@@ -2168,11 +2099,7 @@ const PROJECT_INFO_PAYLOAD_FIELDS = [
   'finalPaymentNote', 'projectPurpose', 'registeredById', 'registeredByName',
   'registeredByEmail', 'executiveApproverId', 'executiveApproverName', 'executiveApproverEmail',
   'managerId', 'managerName', 'teamName', 'teamMembers',
-  'teamMembersDetailed', 'staffing', 'participantCondition', 'note', 'contractDocument',
-  'customerBusinessRegistrationDocument', 'quoteDocument', 'proposalDocument',
-  'proposalWordOriginalDocument', 'proposalPptOriginalDocument',
-  'presentationPptOriginalDocument', 'rfpRequestEvidenceDocument',
-  'performanceCertificateDocument', 'taxInvoiceDocument', 'finalSettlementReportDocument',
+  'teamMembersDetailed', 'staffing', 'participantCondition', 'note', ...PROJECT_INFO_DOCUMENT_FIELDS,
   'contractAnalysis',
 ];
 
@@ -2245,17 +2172,7 @@ function projectInfoPayloadWithDocuments(
     : (contractWasReplaced ? null : project.contractAnalysis);
   return stripUndefinedDeep({
     ...proposed,
-    contractDocument,
-    customerBusinessRegistrationDocument: effectiveDocument('customerBusinessRegistrationDocument'),
-    quoteDocument: effectiveDocument('quoteDocument'),
-    proposalDocument: effectiveDocument('proposalDocument'),
-    proposalWordOriginalDocument: effectiveDocument('proposalWordOriginalDocument'),
-    proposalPptOriginalDocument: effectiveDocument('proposalPptOriginalDocument'),
-    presentationPptOriginalDocument: effectiveDocument('presentationPptOriginalDocument'),
-    rfpRequestEvidenceDocument: effectiveDocument('rfpRequestEvidenceDocument'),
-    performanceCertificateDocument: effectiveDocument('performanceCertificateDocument'),
-    taxInvoiceDocument: effectiveDocument('taxInvoiceDocument'),
-    finalSettlementReportDocument: effectiveDocument('finalSettlementReportDocument'),
+    ...Object.fromEntries(PROJECT_INFO_DOCUMENT_FIELDS.map((field) => [field, effectiveDocument(field)])),
     contractAnalysis: contractAnalysis && typeof contractAnalysis === 'object'
       ? contractAnalysis
       : null,
@@ -3171,20 +3088,7 @@ export function mountProjectRoutes(app, {
     const { tenantId, actorId } = req.context;
     const projectId = readOptionalText(req.params.projectId);
     const documentKind = readOptionalText(req.params.documentKind);
-    const field = {
-      contract: 'contractDocument',
-      customer_business_registration: 'customerBusinessRegistrationDocument',
-      quote: 'quoteDocument',
-      proposal: 'proposalDocument',
-      proposal_word_original: 'proposalWordOriginalDocument',
-      proposal_ppt_original: 'proposalPptOriginalDocument',
-      presentation_ppt_original: 'presentationPptOriginalDocument',
-      rfp_request_evidence: 'rfpRequestEvidenceDocument',
-      performance_certificate: 'performanceCertificateDocument',
-      tax_invoice: 'taxInvoiceDocument',
-      final_settlement_report: 'finalSettlementReportDocument',
-      final_report: 'finalReportDocument',
-    }[documentKind];
+    const field = Object.hasOwn(PROJECT_DOCUMENT_FIELD_BY_KIND, documentKind) ? PROJECT_DOCUMENT_FIELD_BY_KIND[documentKind] : undefined;
     if (!projectId || !field) {
       throw createHttpError(400, 'Project attachment request is invalid', 'project_attachment_invalid');
     }
@@ -3326,19 +3230,7 @@ export function mountProjectRoutes(app, {
     const { tenantId, actorId } = req.context;
     const requestId = readOptionalText(req.params.requestId);
     const documentKind = readOptionalText(req.params.documentKind);
-    const field = {
-      contract: 'contractDocument',
-      customer_business_registration: 'customerBusinessRegistrationDocument',
-      quote: 'quoteDocument',
-      proposal: 'proposalDocument',
-      proposal_word_original: 'proposalWordOriginalDocument',
-      proposal_ppt_original: 'proposalPptOriginalDocument',
-      presentation_ppt_original: 'presentationPptOriginalDocument',
-      rfp_request_evidence: 'rfpRequestEvidenceDocument',
-      performance_certificate: 'performanceCertificateDocument',
-      tax_invoice: 'taxInvoiceDocument',
-      final_settlement_report: 'finalSettlementReportDocument',
-    }[documentKind];
+    const field = Object.hasOwn(PROJECT_DOCUMENT_FIELD_BY_KIND, documentKind) ? PROJECT_DOCUMENT_FIELD_BY_KIND[documentKind] : undefined;
     if (!requestId || requestId.includes('/') || !field) {
       throw createHttpError(400, 'Project request attachment is invalid', 'project_request_attachment_invalid');
     }

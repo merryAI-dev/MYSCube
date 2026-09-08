@@ -47,6 +47,16 @@ function harness() {
 }
 
 describe('project information draft client', () => {
+  it('accepts final report upload metadata and rejects an unknown kind', async () => {
+    const { api, client } = harness();
+    const attachment = { documentKind: 'final_report', path: 'private/report.pdf', name: 'report.pdf', size: 3, contentType: 'application/pdf' };
+    vi.mocked(api.post).mockReset().mockResolvedValue({ data: { draft: DRAFT, attachment } });
+    const input = { expectedDraftRevision: 2, documentKind: 'final_report' as const, file: { name: 'report.pdf', type: 'application/pdf', size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer } };
+    expect((await client.upload({ leaseId: 'lease-a', fence: 3 }, input)).attachment).toEqual(attachment);
+    vi.mocked(api.post).mockResolvedValue({ data: { draft: DRAFT, attachment: { ...attachment, documentKind: 'unknown' } } });
+    await expect(client.upload({ leaseId: 'lease-a', fence: 3 }, input)).rejects.toThrow('Invalid project information attachment response');
+  });
+
   it('gets, opens, saves, uploads, removes and submits only through the project-scoped BFF contract', async () => {
     const { api, client } = harness();
     const ownership = { leaseId: 'lease-a', fence: 3 };

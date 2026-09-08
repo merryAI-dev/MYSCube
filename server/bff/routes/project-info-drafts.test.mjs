@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createIdempotencyService } from '../idempotency.mjs';
 import { buildActiveEditLeaseDocument, resolveEditLeaseDocumentId } from '../edit-lease.mjs';
 import { loadRbacPolicy } from '../rbac-policy.mjs';
+import { mountProjectRoutes } from './projects.mjs';
 import {
   createProjectInfoDraftService,
   createProjectInfoSubmittedOutboxHandler,
@@ -267,6 +268,87 @@ async function openedDraft(h, key = 'open-a') {
 }
 
 describe('project information private drafts', () => {
+  it.each(['projects/project-a', 'project-requests/change-project-a'])('downloads final report over HTTP from %s and rejects unknown kinds', async (resource) => {
+    const attachment = { path: 'orgs/tenant-a/project-registration-documents/project-a/report.pdf', name: 'report.pdf', contentType: 'application/pdf' };
+    const h = harness();
+    h.db.documents.get('orgs/tenant-a/projects/project-a').finalReportDocument = attachment;
+    h.db.documents.set('orgs/tenant-a/project_requests/change-project-a', {
+      id: 'change-project-a', requestKind: 'CHANGE', status: 'PENDING', targetProjectId: 'project-a',
+      proposedSnapshot: { finalReportDocument: attachment },
+    });
+    const download = vi.fn(async () => ({ buffer: VALID_PDF, contentType: 'application/pdf' }));
+    const app = express();
+    app.use((req, _res, next) => { req.context = { ...h.base, actorId: 'actor-admin', actorRole: 'admin' }; next(); });
+    mountProjectRoutes(app, { db: h.db, projectRequestContractStorageService: { downloadProjectRegistrationAttachment: download } });
+    app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.code }));
+    const response = await request(app).get(`/api/v1/${resource}/attachments/final_report`);
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(VALID_PDF);
+    expect(response.headers['cache-control']).toContain('no-store');
+    for (const kind of ['unknown', 'constructor', '__proto__']) {
+      expect((await request(app).get(`/api/v1/${resource}/attachments/${kind}`)).status).toBe(400);
+    }
+    expect(download).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['contract', 'contractDocument'],
+    ['customer_business_registration', 'customerBusinessRegistrationDocument'],
+    ['quote', 'quoteDocument'],
+    ['proposal', 'proposalDocument'],
+    ['proposal_word_original', 'proposalWordOriginalDocument'],
+    ['proposal_ppt_original', 'proposalPptOriginalDocument'],
+    ['presentation_ppt_original', 'presentationPptOriginalDocument'],
+    ['rfp_request_evidence', 'rfpRequestEvidenceDocument'],
+    ['performance_certificate', 'performanceCertificateDocument'],
+    ['tax_invoice', 'taxInvoiceDocument'],
+    ['final_settlement_report', 'finalSettlementReportDocument'],
+    ['final_report', 'finalReportDocument'],
+  ])('persists and submits %s into %s with private download', async (documentKind, field) => {
+    const office = documentKind.includes('original');
+    const buffer = office ? Buffer.from([0x50, 0x4b, 0x03, 0x04, 0]) : VALID_PDF;
+    const ext = documentKind === 'proposal_word_original' ? 'docx' : office ? 'pptx' : 'pdf';
+    const mimeType = ext === 'docx' ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+      : ext === 'pptx' ? 'application/vnd.openxmlformats-officedocument.presentationml.presentation' : 'application/pdf';
+    const storage = {
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.fileName}`,
+        name: input.fileName, size: input.buffer.byteLength, contentType: input.mimeType,
+      })),
+      downloadProjectRegistrationAttachment: vi.fn(async () => ({ buffer, contentType: mimeType })),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
+    };
+    const h = harness({ storageService: storage });
+    await openedDraft(h);
+    const uploaded = await h.service.addAttachment({
+      ...h.base, idempotencyKey: 'roundtrip-upload', expectedDraftRevision: 0,
+      documentKind, fileName: `new-${documentKind}.${ext}`, mimeType, fileSize: buffer.byteLength, buffer,
+    });
+    const saved = await h.service.update({
+      ...h.base, idempotencyKey: 'roundtrip-save', expectedDraftRevision: 1,
+      payload: uploaded.body.draft.payload,
+    });
+    expect(saved.body.draft.attachmentRefs).toContainEqual(expect.objectContaining({ documentKind }));
+    const downloaded = await h.service.readAttachment({ ...h.base, documentKind });
+    expect(downloaded.buffer).toEqual(buffer);
+    await h.service.submit({
+      ...h.base, idempotencyKey: 'roundtrip-submit', expectedDraftRevision: 2, expectedVersion: 3,
+    });
+    const persisted = h.db.documents.get('orgs/tenant-a/project_requests/change-project-a');
+    expect(persisted.proposedSnapshot[field]).toMatchObject({ documentKind, name: `new-${documentKind}.${ext}` });
+    expect(persisted.payload[field]).toEqual(persisted.proposedSnapshot[field]);
+  });
+
+  it('rejects unknown attachment kinds before storage access', async () => {
+    const storage = { uploadProjectRegistrationAttachment: vi.fn(), deleteProjectRegistrationAttachment: vi.fn() };
+    const h = harness({ storageService: storage });
+    await openedDraft(h);
+    await expect(h.service.addAttachment({
+      ...h.base, idempotencyKey: 'unknown-kind', expectedDraftRevision: 0, documentKind: 'unknown',
+      fileName: 'a.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.byteLength, buffer: VALID_PDF,
+    })).rejects.toMatchObject({ code: 'draft_attachment_invalid' });
+    expect(storage.uploadProjectRegistrationAttachment).not.toHaveBeenCalled();
+  });
   it('keeps an inherited unpublished attachment immutable when the next draft removes it', async () => {
     const storageService = {
       uploadProjectRegistrationAttachment: vi.fn(async (input) => ({

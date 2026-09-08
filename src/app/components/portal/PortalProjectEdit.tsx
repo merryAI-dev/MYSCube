@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import {
@@ -85,23 +86,7 @@ import { usePrivateDraftDocumentPreviews } from './usePrivateDraftDocumentPrevie
 
 type DraftClient = ReturnType<typeof createProjectInfoDraftClient>;
 
-const PROJECT_INFO_PREVIEW_FIELDS: Array<{
-  documentKind: ProjectRequestDocumentKind;
-  field: keyof ProjectEditorDraft;
-}> = [
-  { documentKind: 'contract', field: 'contractDocument' },
-  { documentKind: 'customer_business_registration', field: 'customerBusinessRegistrationDocument' },
-  { documentKind: 'quote', field: 'quoteDocument' },
-  { documentKind: 'proposal', field: 'proposalDocument' },
-  { documentKind: 'proposal_word_original', field: 'proposalWordOriginalDocument' },
-  { documentKind: 'proposal_ppt_original', field: 'proposalPptOriginalDocument' },
-  { documentKind: 'presentation_ppt_original', field: 'presentationPptOriginalDocument' },
-  { documentKind: 'rfp_request_evidence', field: 'rfpRequestEvidenceDocument' },
-  { documentKind: 'performance_certificate', field: 'performanceCertificateDocument' },
-  { documentKind: 'tax_invoice', field: 'taxInvoiceDocument' },
-  { documentKind: 'final_settlement_report', field: 'finalSettlementReportDocument' },
-  { documentKind: 'final_report', field: 'finalReportDocument' },
-];
+const PROJECT_INFO_PREVIEW_FIELDS = PROJECT_DOCUMENTS;
 
 function resolveExecutiveBanner(
   project: Project,
@@ -187,36 +172,9 @@ function editorDraftFromPrivate(record: ProjectInfoDraft): ProjectEditorDraft {
   const latestAlternativeKind = latestPrivateAlternativeDocumentKind(record.attachmentRefs);
   return createProjectEditorDraft({
     ...(record.payload as Partial<ProjectEditorDraft>),
-    ...(documents.contract ? { contractDocument: documents.contract } : {}),
-    ...(documents.quote ? { quoteDocument: documents.quote } : {}),
-    ...(latestAlternativeKind === 'proposal'
-      ? { proposalDocument: documents.proposal }
-      : latestAlternativeKind === 'rfp_request_evidence' ? { proposalDocument: null } : {}),
-    ...(documents.proposal_word_original
-      ? { proposalWordOriginalDocument: documents.proposal_word_original }
-      : {}),
-    ...(documents.proposal_ppt_original
-      ? { proposalPptOriginalDocument: documents.proposal_ppt_original }
-      : {}),
-    ...(documents.presentation_ppt_original
-      ? { presentationPptOriginalDocument: documents.presentation_ppt_original }
-      : {}),
-    ...(latestAlternativeKind === 'rfp_request_evidence'
-      ? { rfpRequestEvidenceDocument: documents.rfp_request_evidence }
-      : latestAlternativeKind === 'proposal' ? { rfpRequestEvidenceDocument: null } : {}),
-    ...(documents.customer_business_registration
-      ? { customerBusinessRegistrationDocument: documents.customer_business_registration }
-      : {}),
-    ...(documents.performance_certificate
-      ? { performanceCertificateDocument: documents.performance_certificate }
-      : {}),
-    ...(documents.tax_invoice ? { taxInvoiceDocument: documents.tax_invoice } : {}),
-    ...(documents.final_report
-      ? { finalReportDocument: documents.final_report }
-      : {}),
-    ...(documents.final_settlement_report
-      ? { finalSettlementReportDocument: documents.final_settlement_report }
-      : {}),
+    ...Object.fromEntries(PROJECT_DOCUMENTS.filter(({ documentKind }) => documents[documentKind]).map(({ documentKind, field }) => [field, documents[documentKind]])),
+    ...(latestAlternativeKind === 'proposal' ? { rfpRequestEvidenceDocument: null } : {}),
+    ...(latestAlternativeKind === 'rfp_request_evidence' ? { proposalDocument: null } : {}),
     registrationRequirementsVersion: 2,
   });
 }

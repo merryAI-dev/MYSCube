@@ -30,21 +30,13 @@ import { DRAFT_ATTACHMENT_CLEANUP_EVENT_TYPE, createOutboxEvent } from '../outbo
 import { buildProjectRegistrationCanonicalDocuments } from './projects.mjs';
 import {
   PROJECT_REGISTRATION_DOCUMENT_KINDS,
+  PROJECT_DOCUMENT_FIELD_BY_KIND,
   missingProjectRegistrationRequiredDocumentKind,
   projectDocumentValidationError,
 } from '../project-document-validation.mjs';
 
 const RESOURCE_TYPE = 'project-registration';
-const DOCUMENT_FIELD_BY_KIND = {
-  contract: 'contractDocument',
-  customer_business_registration: 'customerBusinessRegistrationDocument',
-  quote: 'quoteDocument',
-  proposal: 'proposalDocument',
-  proposal_word_original: 'proposalWordOriginalDocument',
-  proposal_ppt_original: 'proposalPptOriginalDocument',
-  presentation_ppt_original: 'presentationPptOriginalDocument',
-  rfp_request_evidence: 'rfpRequestEvidenceDocument',
-};
+const DOCUMENT_FIELD_BY_KIND = Object.fromEntries(PROJECT_REGISTRATION_DOCUMENT_KINDS.map((kind) => [kind, PROJECT_DOCUMENT_FIELD_BY_KIND[kind]]));
 const MAX_DRAFT_DOCUMENT_BYTES = 900 * 1024;
 const MAX_ATTACHMENT_REFS = 100;
 const MAX_DRAFT_PAYLOAD_DEPTH = 20;

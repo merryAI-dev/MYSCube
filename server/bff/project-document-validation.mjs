@@ -1,13 +1,9 @@
-export const PROJECT_REGISTRATION_DOCUMENT_KINDS = Object.freeze([
-  'contract',
-  'customer_business_registration',
-  'quote',
-  'proposal',
-  'proposal_word_original',
-  'proposal_ppt_original',
-  'presentation_ppt_original',
-  'rfp_request_evidence',
-]);
+import projectDocuments from '../../policies/project-documents.json' with { type: 'json' };
+
+export const PROJECT_DOCUMENT_FIELD_BY_KIND = Object.freeze(Object.fromEntries(Object.entries(projectDocuments).map(([kind, document]) => [kind, document.field])));
+export const PROJECT_DOCUMENT_LABEL_BY_FIELD = Object.freeze(Object.fromEntries(Object.values(projectDocuments).map((document) => [document.field, document.label])));
+
+export const PROJECT_REGISTRATION_DOCUMENT_KINDS = Object.freeze(Object.keys(projectDocuments).filter((kind) => projectDocuments[kind].registration));
 
 export const PROJECT_REGISTRATION_REQUIRED_DOCUMENT_KINDS = Object.freeze([
   'contract',
@@ -24,13 +20,7 @@ export function missingProjectRegistrationRequiredDocumentKind(attachmentRefs, {
   )) || '';
 }
 
-export const PROJECT_INFO_DOCUMENT_KINDS = Object.freeze([
-  ...PROJECT_REGISTRATION_DOCUMENT_KINDS,
-  'performance_certificate',
-  'tax_invoice',
-  'final_settlement_report',
-  'final_report',
-]);
+export const PROJECT_INFO_DOCUMENT_KINDS = Object.freeze(Object.keys(projectDocuments).filter((kind) => projectDocuments[kind].edit));
 
 const PDF_ONLY_KINDS = new Set([
   'contract',
