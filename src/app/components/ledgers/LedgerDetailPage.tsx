@@ -576,7 +576,7 @@ export function LedgerDetailPage() {
                 </div>
                 <div className="flex gap-2 mt-2">
                   <Input
-                    value={commentText}
+                    aria-required="true" value={commentText}
                     onChange={e => setCommentText(e.target.value)}
                     placeholder="코멘트 입력..."
                     className="h-8 text-sm"
@@ -608,7 +608,7 @@ export function LedgerDetailPage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label>일자 *</Label>
-              <Input type="date" value={txForm.dateTime} onChange={e => setTxForm(f => ({ ...f, dateTime: e.target.value }))} />
+              <Input type="date" aria-required="true" value={txForm.dateTime} onChange={e => setTxForm(f => ({ ...f, dateTime: e.target.value }))} />
             </div>
             <div>
               <Label>구분 *</Label>
@@ -634,7 +634,7 @@ export function LedgerDetailPage() {
             <div>
               <Label>캐시플로 항목 *</Label>
               <Select value={txForm.cashflowCategory} onValueChange={v => setTxForm(f => ({ ...f, cashflowCategory: v as CashflowCategory }))}>
-                <SelectTrigger><SelectValue placeholder="선택" /></SelectTrigger>
+                <SelectTrigger aria-required="true"><SelectValue placeholder="선택" /></SelectTrigger>
                 <SelectContent>
                   {categoryOptions.map(k => (
                     <SelectItem key={k} value={k}>{CASHFLOW_CATEGORY_LABELS[k]}</SelectItem>
@@ -646,7 +646,7 @@ export function LedgerDetailPage() {
               <Label>거래금액 (원) *</Label>
               <Input
                 type="number"
-                value={txForm.bankAmount}
+                aria-required="true" value={txForm.bankAmount}
                 onChange={e => setTxForm(f => ({ ...f, bankAmount: e.target.value }))}
                 placeholder="0"
               />
@@ -657,7 +657,7 @@ export function LedgerDetailPage() {
             </div>
             <div className="col-span-2">
               <Label>거래처 *</Label>
-              <Input value={txForm.counterparty} onChange={e => setTxForm(f => ({ ...f, counterparty: e.target.value }))} placeholder="거래처명" />
+              <Input aria-required="true" value={txForm.counterparty} onChange={e => setTxForm(f => ({ ...f, counterparty: e.target.value }))} placeholder="거래처명" />
             </div>
             <div className="col-span-2">
               <Label>메모</Label>
@@ -698,7 +698,7 @@ export function LedgerDetailPage() {
             <DialogDescription>반려 사유를 입력하세요.</DialogDescription>
           </DialogHeader>
           <Textarea
-            value={rejectReason}
+            aria-required="true" value={rejectReason}
             onChange={e => setRejectReason(e.target.value)}
             placeholder="반려 사유를 입력하세요..."
             rows={3}

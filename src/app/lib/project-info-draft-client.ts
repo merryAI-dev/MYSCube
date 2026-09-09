@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENTS, type ProjectDocumentKind } from '../platform/project-documents';
 import type { RequestActor } from '../platform/request-context';
 import { resolveProjectDocumentMimeType } from '../platform/project-contract-upload';
 import {
@@ -10,19 +11,7 @@ import {
 export /** Vercel 본문 4.5MB - base64 팽창 여유. 넘으면 서명 URL 직접 업로드로 우회한다. */
 const DIRECT_UPLOAD_THRESHOLD_BYTES = 3 * 1024 * 1024;
 const PROJECT_INFO_ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
-export type ProjectInfoDocumentKind =
-  | 'contract'
-  | 'customer_business_registration'
-  | 'quote'
-  | 'proposal'
-  | 'proposal_word_original'
-  | 'proposal_ppt_original'
-  | 'presentation_ppt_original'
-  | 'rfp_request_evidence'
-  | 'performance_certificate'
-  | 'tax_invoice'
-  | 'final_settlement_report'
-  | 'final_report';
+export type ProjectInfoDocumentKind = ProjectDocumentKind;
 
 export interface ProjectInfoAttachment {
   attachmentId?: string;
@@ -141,6 +130,7 @@ export interface ProjectInfoRebaseConflict {
 
 export interface ProjectInfoRebaseResult {
   rebased: boolean;
+  sourceFingerprint: string;
   canonicalVersion: number;
   baseCanonicalVersion?: number;
   autoMerged: Array<{ field: string; value: unknown }>;
@@ -148,48 +138,58 @@ export interface ProjectInfoRebaseResult {
   draft?: ProjectInfoDraft;
 }
 
-function parseRebaseBody(value: unknown, projectId: string): ProjectInfoRebaseResult {
+function parseRebaseBody(value: unknown, projectId: string, applying: boolean): ProjectInfoRebaseResult {
   const body = object(value, 'project information rebase');
-  const list = (input: unknown) => (Array.isArray(input) ? input : []);
+  const positiveVersion = (input: unknown): input is number => typeof input === 'number' && Number.isSafeInteger(input) && input > 0;
+  if (body.rebased !== applying
+    || typeof body.sourceFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(body.sourceFingerprint)
+    || !positiveVersion(body.canonicalVersion)
+    || (body.baseCanonicalVersion !== undefined && !positiveVersion(body.baseCanonicalVersion))
+    || !Array.isArray(body.autoMerged) || !Array.isArray(body.conflicts)) {
+    throw new Error('Invalid project information rebase response');
+  }
+  const fieldName = (input: unknown) => {
+    if (typeof input !== 'string' || !input.trim()) throw new Error('Invalid project information rebase field');
+    return input;
+  };
+  let draft: ProjectInfoDraft | undefined;
+  if (applying) {
+    const raw = object(body.draft, 'project information rebase draft');
+    object(raw.payload, 'project information rebase draft payload');
+    if (raw.status !== 'ACTIVE' || !Array.isArray(raw.attachmentRefs)
+      || typeof raw.draftRevision !== 'number' || !Number.isSafeInteger(raw.draftRevision) || raw.draftRevision < 1
+      || raw.baseCanonicalVersion !== body.canonicalVersion) throw new Error('Invalid project information rebase draft response');
+    draft = parseDraft(raw, projectId);
+    draft.attachmentRefs = raw.attachmentRefs.map(parseAttachment);
+  }
   return {
-    rebased: body.rebased === true,
-    canonicalVersion: Number(body.canonicalVersion) || 0,
+    rebased: applying,
+    sourceFingerprint: body.sourceFingerprint,
+    canonicalVersion: body.canonicalVersion,
     ...(body.baseCanonicalVersion === undefined
       ? {}
-      : { baseCanonicalVersion: Number(body.baseCanonicalVersion) || 0 }),
-    autoMerged: list(body.autoMerged).map((entry) => {
+      : { baseCanonicalVersion: body.baseCanonicalVersion as number }),
+    autoMerged: body.autoMerged.map((entry) => {
       const row = object(entry, 'project information rebase merge');
-      return { field: String(row.field ?? ''), value: row.value ?? null };
+      return { field: fieldName(row.field), value: row.value ?? null };
     }),
-    conflicts: list(body.conflicts).map((entry) => {
+    conflicts: body.conflicts.map((entry) => {
       const row = object(entry, 'project information rebase conflict');
       return {
-        field: String(row.field ?? ''),
+        field: fieldName(row.field),
         base: row.base ?? null,
         mine: row.mine ?? null,
         theirs: row.theirs ?? null,
       };
     }),
-    ...(body.draft === undefined ? {} : { draft: parseDraft(body.draft, projectId) }),
+    ...(draft ? { draft } : {}),
   };
 }
 
 function parseAttachment(value: unknown): ProjectInfoAttachment {
   const attachment = object(value, 'project information attachment');
   if (
-    ![
-      'contract',
-      'customer_business_registration',
-      'quote',
-      'proposal',
-      'proposal_word_original',
-      'proposal_ppt_original',
-      'presentation_ppt_original',
-      'rfp_request_evidence',
-      'performance_certificate',
-      'tax_invoice',
-      'final_settlement_report',
-    ].includes(String(attachment.documentKind))
+    !PROJECT_DOCUMENTS.some(({ documentKind }) => documentKind === attachment.documentKind)
     || typeof attachment.path !== 'string'
     || !attachment.path.trim()
     || typeof attachment.name !== 'string'
@@ -360,6 +360,7 @@ export function createProjectInfoDraftClient(options: {
       input: {
         expectedDraftRevision: number;
         resolutions?: Record<string, ProjectInfoRebaseResolution>;
+        sourceFingerprint?: string;
       },
     ): Promise<ProjectInfoRebaseResult> {
       const response = await client.post<unknown>(`${path}/rebase`, {
@@ -368,9 +369,10 @@ export function createProjectInfoDraftClient(options: {
         body: {
           expectedDraftRevision: revision(input.expectedDraftRevision),
           ...(input.resolutions ? { resolutions: input.resolutions } : {}),
+          ...(input.sourceFingerprint === undefined ? {} : { sourceFingerprint: input.sourceFingerprint }),
         },
       });
-      return parseRebaseBody(response.data, projectId);
+      return parseRebaseBody(response.data, projectId, input.resolutions !== undefined);
     },
 
     async submit(

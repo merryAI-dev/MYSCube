@@ -4,6 +4,7 @@ import type {
   CashflowSheetLineId,
   Project,
   ProjectRequest,
+  ProjectClosureSubmission,
   ProjectExecutiveReviewStatus,
   ProjectManagementPlanningReviewStatus,
   ProjectSheetSourceSnapshot,
@@ -1776,6 +1777,7 @@ export interface CashflowWeeklyOverviewResult {
   monthCloseTargetLabel: string;
   items: Array<{
     projectId: string;
+    settlementEligibility?: { status: 'ACTIVE' | 'CLOSED' | 'UNAVAILABLE'; weekly: boolean; monthly: boolean; writable: boolean };
     settlementStatuses: CashflowSettlementStatusesResult;
     projectionActualSummary: CashflowProjectionActualSummary | null;
     sheetCapturedAt: string | null;
@@ -2353,6 +2355,21 @@ export async function saveParticipationRuleViaBff(params: {
   return response.data;
 }
 
+function isProjectLookupRecord(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === 'string' && Boolean(record.id.trim())
+    && ['requestKind', 'status', 'targetProjectId', 'approvedProjectId', 'requestedAt', 'requestedBy', 'requestedByName', 'requestedByEmail', 'attachmentReviewStatus', 'reviewedAt', 'reviewedBy', 'reviewedByName', 'reviewComment', 'rejectedReason', 'humanSummary', 'updatedAt', 'createdAt', 'reviewOutcome'].every((key) => record[key] == null || typeof record[key] === 'string')
+    && ['requestVersion', 'baseProjectVersion', 'targetProjectVersion', 'approvedProjectVersion'].every((key) => record[key] == null || (typeof record[key] === 'number' && Number.isFinite(record[key])))
+    && ['payload', 'proposedSnapshot', 'beforeSnapshot', 'approvedSnapshot'].every((key) => (
+      record[key] == null || (typeof record[key] === 'object' && !Array.isArray(record[key]))
+    ));
+}
+
+function isProjectLookupRecords(value: unknown): boolean {
+  return Array.isArray(value) && value.every(isProjectLookupRecord);
+}
+
 export async function fetchAssignedProjectRequestsViaBff(params: {
   tenantId: string;
   actor: ActorLike;
@@ -2367,10 +2384,10 @@ export async function fetchAssignedProjectRequestsViaBff(params: {
       timeoutMs: 10000,
     },
   );
-  return {
-    requests: Array.isArray(response.data?.items) ? response.data.items : [],
-    projects: Array.isArray(response.data?.projects) ? response.data.projects : [],
-  };
+  if (!isProjectLookupRecords(response.data?.items) || !isProjectLookupRecords(response.data?.projects)) {
+    throw new Error('프로젝트 접수 이력 응답이 올바르지 않습니다. 다시 시도해 주세요.');
+  }
+  return { requests: response.data.items, projects: response.data.projects };
 }
 
 const PROJECT_REQUEST_PROJECT_ID_BATCH_SIZE = 200;
@@ -2398,7 +2415,9 @@ async function fetchProjectRequestsByProjectIds(params: {
   )));
   const requestsById = new Map<string, ProjectRequest>();
   responses.forEach((response) => {
-    if (!Array.isArray(response.data?.items)) return;
+    if (!isProjectLookupRecords(response.data?.items)) {
+      throw new Error('프로젝트 접수 이력 응답이 올바르지 않습니다. 다시 시도해 주세요.');
+    }
     response.data.items.forEach((request) => requestsById.set(request.id, request));
   });
   return Array.from(requestsById.values()).sort((left, right) => (
@@ -2443,18 +2462,76 @@ export async function fetchLatestProjectRequestViaBff(params: {
   tenantId: string;
   actor: ActorLike;
   projectId: string;
+  requestKind?: 'CLOSURE';
   client?: PlatformApiClientLike;
 }): Promise<ProjectRequest | null> {
   const apiClient = resolveClient(params.client);
   const response = await apiClient.get<{ item: ProjectRequest | null }>(
-    `/api/v1/projects/${encodeURIComponent(params.projectId)}/latest-request`,
+    `/api/v1/projects/${encodeURIComponent(params.projectId)}/latest-request${params.requestKind === 'CLOSURE' ? '?requestKind=CLOSURE' : ''}`,
     {
       tenantId: params.tenantId,
       actor: toRequestActor(params.actor),
       timeoutMs: 10000,
     },
   );
-  return response.data?.item || null;
+  if (response.data?.item !== null && !isProjectLookupRecord(response.data?.item)) {
+    throw new Error('프로젝트 접수 이력 응답이 올바르지 않습니다. 다시 시도해 주세요.');
+  }
+  return response.data.item;
+}
+
+export interface ProjectClosureDriveContents {
+  rootFolderId: string;
+  items: { id: string; name: string; mimeType: string; modifiedTime?: string; size?: string }[];
+  nextPageToken: string | null;
+}
+
+export async function fetchProjectClosureDriveViaBff(params: {
+  tenantId: string; actor: ActorLike; projectId: string; link?: string; pageToken?: string;
+  googleAccessToken: string;
+  client?: PlatformApiClientLike;
+}): Promise<ProjectClosureDriveContents> {
+  const query = new URLSearchParams({ pageSize: '50' });
+  if (params.link?.trim()) query.set('link', params.link.trim());
+  if (params.pageToken) query.set('pageToken', params.pageToken);
+  const response = await resolveClient(params.client).get<ProjectClosureDriveContents>(
+    `/api/v1/projects/${encodeURIComponent(params.projectId)}/closure-drive?${query}`,
+    { tenantId: params.tenantId, actor: toRequestActor(params.actor), timeoutMs: 45000, retries: 0,
+      headers: { 'x-google-access-token': params.googleAccessToken } },
+  );
+  const data = response.data;
+  if (!data || typeof data.rootFolderId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(data.rootFolderId)
+    || !Array.isArray(data.items) || data.items.length > 100
+    || data.items.some((item) => !item || typeof item.id !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(item.id)
+      || typeof item.name !== 'string' || typeof item.mimeType !== 'string')
+    || (data.nextPageToken !== null && typeof data.nextPageToken !== 'string')) {
+    throw new Error('자료 목록 응답이 올바르지 않습니다. 다시 조회해 주세요.');
+  }
+  return data;
+}
+
+export async function submitProjectClosureViaBff(params: {
+  tenantId: string; actor: ActorLike; projectId: string; expectedProjectVersion: number;
+  submission: ProjectClosureSubmission;
+}): Promise<ProjectRequest> {
+  const response = await resolveClient().post<{ item: ProjectRequest }>(
+    `/api/v1/projects/${encodeURIComponent(params.projectId)}/closure-requests`,
+    { tenantId: params.tenantId, actor: toRequestActor(params.actor),
+      body: { ...params.submission, expectedProjectVersion: params.expectedProjectVersion }, retries: 0 },
+  );
+  return response.data.item;
+}
+
+export async function reviewProjectClosureViaBff(params: {
+  tenantId: string; actor: ActorLike; projectId: string; requestId: string;
+  expectedRequestVersion: number; decision: 'APPROVED' | 'REJECTED'; comment: string;
+}): Promise<ProjectRequest> {
+  const response = await resolveClient().post<{ item: ProjectRequest }>(
+    `/api/v1/projects/${encodeURIComponent(params.projectId)}/closure-requests/${encodeURIComponent(params.requestId)}/review`,
+    { tenantId: params.tenantId, actor: toRequestActor(params.actor),
+      body: { decision: params.decision, expectedRequestVersion: params.expectedRequestVersion, comment: params.comment }, retries: 0 },
+  );
+  return response.data.item;
 }
 
 let defaultPlatformApiClient: PlatformApiClientLike | undefined;

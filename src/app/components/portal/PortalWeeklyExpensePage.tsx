@@ -1049,6 +1049,7 @@ function VarianceFlagBanner({
                 <input
                   type="text"
                   value={replyText}
+                  aria-required
                   onChange={(e) => setReplyText(e.target.value)}
                   placeholder="사유를 입력하세요..."
                   className="flex-1 h-8 rounded-md border bg-background px-2.5 text-[11px] outline-none focus:ring-1 focus:ring-ring"

@@ -24,8 +24,11 @@ describe('project info draft rebase contract', () => {
 
   it('routes a canonical version conflict into the rebase dialog instead of a dead-end error', () => {
     expect(editSource).toContain("body?.error === 'canonical_version_conflict'");
-    expect(editSource).toContain('function isCanonicalVersionConflict');
-    expect(editSource).toContain('if (isCanonicalVersionConflict(error)) {');
+    expect(editSource).toContain("body?.error === 'draft_source_conflict'");
+    expect(editSource).toContain('function isDraftSourceConflict');
+    expect(editSource).toContain('if (isDraftSourceConflict(error)) {');
+    expect(editSource).toContain('sourceFingerprint: rebaseState.sourceFingerprint');
+    expect(editSource).toContain('await refreshRebase(actionId)');
     // A conflict means the submit did not go through, so it must stay a failure for the
     // caller; swallowing it made the wizard clear the autosave and the unsaved guard.
     expect(editSource).toContain('        throw error;');
@@ -43,13 +46,13 @@ describe('project info draft rebase contract', () => {
   it('blocks confirmation until the owner has chosen a value for every conflict', () => {
     expect(dialogSource).toContain('disabled={busy || unresolvedCount > 0}');
     expect(dialogSource).toContain('내가 입력한 값');
-    expect(dialogSource).toContain('임시저장된 최근 값');
+    expect(dialogSource).toContain('최근 제출·확정된 값');
     expect(dialogSource).toContain('자동으로 반영되는 항목');
   });
 
   it('shows form wording and recognizable values instead of stored field names', () => {
     expect(dialogSource).toContain("teamMembersDetailed: '참여인력'");
-    expect(dialogSource).toContain("customerBusinessRegistrationDocument: '고객사 사업자등록증'");
+    expect(dialogSource).toContain('PROJECT_DOCUMENTS.map(({ field, label }) => [field, label])');
     expect(dialogSource).toContain("finalPaymentNote: '잔금 관련 메모'");
     expect(dialogSource).toContain("settlementSystemOther: '기타 정산 시스템 이름'");
     // Attachments read as a file, amount maps as 선금/중도금/잔금 — never raw JSON.

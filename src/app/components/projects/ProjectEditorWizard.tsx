@@ -1,3 +1,7 @@
+import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
+import { recoverProjectEditorDraft, projectEditorRecoveryDifferences } from '../../platform/project-editor-recovery';
+import { fieldLabel, displayValue } from '../portal/ProjectInfoRebaseDialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '../ui/dialog';
 import {
   ArrowLeft,
   ArrowRight,
@@ -20,11 +24,12 @@ import {
   CircleCheck,
   Clock3,
 } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode, type SetStateAction } from 'react';
 import { useAuth } from '../../data/auth-store';
 import { useFirebase } from '../../lib/firebase-context';
 import { PlatformApiError } from '../../platform/api-client';
 import { resolveApiErrorPresentation } from '../../platform/api-error-messages';
+import { resolveProjectErrorMessage } from '../../platform/api-error-message';
 import {
   fetchParticipationSystemAccountViaBff,
   previewParticipationSheetByLinkViaBff,
@@ -205,6 +210,7 @@ interface ProjectEditorWizardProps {
   showCheckoutEntry?: boolean;
   actions: ProjectEditorAction[];
   busyActionId?: string | null;
+  completed?: boolean;
   readOnly?: boolean;
   trustedParticipationSheetDraft?: ProjectEditorDraft;
   onContractFileUpload?: (file: File) => Promise<{
@@ -228,7 +234,11 @@ interface ProjectEditorWizardProps {
   autosave?: {
     key: string;
     disabled?: boolean;
+    ready?: boolean;
+    conflictCount?: number;
     onSave?: (draft: ProjectEditorDraft, stepIndex: number) => void | Promise<void>;
+    onLoadLatest?: () => Promise<ProjectEditorDraft>;
+    onResume?: () => void;
     onDiscard?: () => void | Promise<void>;
   };
   onCancel?: () => void | Promise<void>;
@@ -253,48 +263,9 @@ const CHECKOUT_DOCUMENT_KINDS: ProjectRequestDocumentKind[] = [
   'tax_invoice',
   'final_settlement_report',
 ];
-const PROJECT_DOCUMENT_LABELS: Record<ProjectRequestDocumentKind, string> = {
-  contract: '계약서 PDF',
-  customer_business_registration: '고객사 사업자등록증 PDF',
-  quote: '산출내역서(견적서) PDF',
-  proposal: '제안서 PDF',
-  proposal_word_original: '제안서 Word 원본',
-  proposal_ppt_original: '제안서 PPT 원본',
-  presentation_ppt_original: '발표자료 PPT 원본',
-  rfp_request_evidence: 'RFP/요청 메일 증빙',
-  performance_certificate: '수행확인서 PDF',
-  tax_invoice: '세금계산서 PDF',
-  final_settlement_report: '최종 정산보고서 PDF',
-  final_report: '최종 결과보고서',
-};
-const PROJECT_DOCUMENT_BUTTON_LABELS: Record<ProjectRequestDocumentKind, string> = {
-  contract: '계약서',
-  customer_business_registration: '사업자등록증',
-  quote: '산출내역서(견적서)',
-  proposal: '제안서',
-  proposal_word_original: '제안서 Word 원본',
-  proposal_ppt_original: '제안서 PPT 원본',
-  presentation_ppt_original: '발표자료 PPT 원본',
-  rfp_request_evidence: 'RFP/요청 메일 증빙',
-  performance_certificate: '수행확인서',
-  tax_invoice: '세금계산서',
-  final_settlement_report: '최종 정산보고서',
-  final_report: '최종 결과보고서',
-};
-const PROJECT_DOCUMENT_FIELD: Record<ProjectRequestDocumentKind, keyof ProjectEditorDraft> = {
-  contract: 'contractDocument',
-  customer_business_registration: 'customerBusinessRegistrationDocument',
-  quote: 'quoteDocument',
-  proposal: 'proposalDocument',
-  proposal_word_original: 'proposalWordOriginalDocument',
-  proposal_ppt_original: 'proposalPptOriginalDocument',
-  presentation_ppt_original: 'presentationPptOriginalDocument',
-  rfp_request_evidence: 'rfpRequestEvidenceDocument',
-  performance_certificate: 'performanceCertificateDocument',
-  tax_invoice: 'taxInvoiceDocument',
-  final_settlement_report: 'finalSettlementReportDocument',
-  final_report: 'finalReportDocument',
-};
+const PROJECT_DOCUMENT_LABELS = Object.fromEntries(PROJECT_DOCUMENTS.map(({ documentKind, label }) => [documentKind, label])) as Record<ProjectRequestDocumentKind, string>;
+const PROJECT_DOCUMENT_BUTTON_LABELS = Object.fromEntries(PROJECT_DOCUMENTS.map(({ documentKind, buttonLabel }) => [documentKind, buttonLabel])) as Record<ProjectRequestDocumentKind, string>;
+const PROJECT_DOCUMENT_FIELD = Object.fromEntries(PROJECT_DOCUMENTS.map(({ documentKind, field }) => [documentKind, field])) as Record<ProjectRequestDocumentKind, keyof ProjectEditorDraft>;
 const OPTIONAL_REGISTRATION_DOCUMENT_NOTE_FIELD = {
   proposal_word_original: 'proposalWordOriginal',
   proposal_ppt_original: 'proposalPptOriginal',
@@ -350,7 +321,7 @@ const REGISTRATION_DOCUMENT_SLOTS: RegistrationDocumentSlot[] = [
     kinds: ['rfp_request_evidence'],
   },
 ];
-type AutosaveState = 'idle' | 'saving' | 'saved' | 'error';
+type AutosaveState = 'idle' | 'saving' | 'saved' | 'local' | 'error';
 type StoredProjectEditorDraft = {
   schemaVersion: number;
   draftKey: string;
@@ -369,13 +340,6 @@ const STEPS: Array<{
   { id: 'team', label: '팀/인력', icon: Users },
   { id: 'review', label: '검토 및 저장', icon: ClipboardList },
 ];
-
-/*
- * 강조색 #0176D3 은 단 하나의 의미만 갖는다: "여기가 지금 초점" — 필수 마커 · 포커스 링 ·
- * 활성 단계 칩. 그 밖에는 회색조를 쓴다. 상태(오류)는 red 하나로만 말하고,
- * 계산된 값은 색이 아니라 형태(입력칸 없음 + 세로선)로 구분한다.
- * Tailwind 임의값은 리터럴이어야 해서 상수로 빼지 않고 클래스 문자열로 직접 쓴다.
- */
 
 /**
  * 글자는 네 역할만 쓴다. 예전에는 text-sm / text-xs / text-[12px] / text-[11px] / text-[10px] 가
@@ -444,8 +408,8 @@ function getProjectEditorAutosaveStorageKey(key: string) {
 }
 
 function readStoredProjectEditorDraft(key: string): StoredProjectEditorDraft | null {
-  if (typeof localStorage === 'undefined') return null;
   try {
+    if (typeof localStorage === 'undefined') return null;
     const parsed = JSON.parse(localStorage.getItem(getProjectEditorAutosaveStorageKey(key)) || 'null') as StoredProjectEditorDraft | null;
     if (!parsed || parsed.schemaVersion !== PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION || !parsed.draft) return null;
     return parsed;
@@ -455,13 +419,18 @@ function readStoredProjectEditorDraft(key: string): StoredProjectEditorDraft | n
 }
 
 function writeStoredProjectEditorDraft(key: string, value: StoredProjectEditorDraft) {
-  if (typeof localStorage === 'undefined') return;
+  if (typeof localStorage === 'undefined') throw new Error('이 기기에 작성 내용을 보관할 수 없습니다.');
   localStorage.setItem(getProjectEditorAutosaveStorageKey(key), JSON.stringify(value));
 }
 
 function removeStoredProjectEditorDraft(key: string) {
-  if (typeof localStorage === 'undefined') return;
-  localStorage.removeItem(getProjectEditorAutosaveStorageKey(key));
+  try {
+    if (typeof localStorage !== 'undefined') localStorage.removeItem(getProjectEditorAutosaveStorageKey(key));
+    return true;
+  } catch {
+    toast.warning('이 기기에 보관된 사본을 정리하지 못했습니다.');
+    return false;
+  }
 }
 
 function normalizeRestoredProjectEditorDraft(draft: ProjectEditorDraft, mode: ProjectEditorMode) {
@@ -628,6 +597,7 @@ export function ProjectEditorWizard({
   showCheckoutEntry = false,
   actions,
   busyActionId,
+  completed = false,
   readOnly = false,
   trustedParticipationSheetDraft,
   onContractFileUpload,
@@ -654,10 +624,23 @@ export function ProjectEditorWizard({
   const [teamSyncPreview, setTeamSyncPreview] = useState<ParticipationSheetPreview | null>(null);
   const [teamSyncSignature, setTeamSyncSignature] = useState<string | null>(null);
   const [teamSyncYear, setTeamSyncYear] = useState('');
+  const sheetRestoreAttemptedRef = useRef(false);
+  const sheetRequestRunRef = useRef(0);
+  const invalidateTeamSync = useCallback(() => {
+    sheetRequestRunRef.current += 1;
+    sheetRestoreAttemptedRef.current = false;
+    setTeamSyncing(false);
+    setTeamSyncPreview(null);
+    setTeamSyncSignature(null);
+    setTeamSyncYear('');
+    setTeamSyncNotice('');
+    setTeamSyncError('');
+    setTeamSyncWarning('');
+  }, []);
   // 시트를 공유해야 할 상대. 오류가 난 뒤에 알려주면 늦다 - 링크를 넣는 그 자리에 있어야 한다.
   const [sheetSystemAccount, setSheetSystemAccount] = useState('');
-  const [stepIndex, setStepIndex] = useState(0);
-  const [draft, setDraft] = useState<ProjectEditorDraft>(() => createProjectEditorWizardDraft(initialDraft));
+  const [stepIndex, setStepIndexState] = useState(0);
+  const [draft, setDraftState] = useState<ProjectEditorDraft>(() => createProjectEditorWizardDraft(initialDraft));
   const [documentUploadState, setDocumentUploadState] = useState<Record<ProjectRequestDocumentKind, ContractUploadState>>({
     contract: 'idle',
     customer_business_registration: 'idle',
@@ -687,6 +670,14 @@ export function ProjectEditorWizard({
     final_report: '',
   });
   const [restoreCandidate, setRestoreCandidate] = useState<StoredProjectEditorDraft | null>(null);
+  const [comparison, setComparison] = useState<{ mine: ProjectEditorDraft; server: ProjectEditorDraft; stepIndex: number } | null>(null);
+  const [comparisonOpen, setComparisonOpen] = useState(false);
+  const [comparisonBusy, setComparisonBusy] = useState(false);
+  const comparisonLoadingRef = useRef(false);
+  const handledConflictRef = useRef(0);
+  const writesPausedRef = useRef(false);
+  const [submitting, setSubmitting] = useState(false);
+  const finishedRef = useRef(false);
   const [autosaveState, setAutosaveState] = useState<AutosaveState>('idle');
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [exitIntent, setExitIntent] = useState<'cancel' | 'route' | null>(null);
@@ -717,6 +708,14 @@ export function ProjectEditorWizard({
   const exitInFlightRef = useRef(false);
   const leaveApprovedRef = useRef(false);
   const draftRef = useRef(draft);
+  const setDraft = useCallback((next: SetStateAction<ProjectEditorDraft>) => {
+    if (submitInFlightRef.current || comparisonLoadingRef.current || finishedRef.current) return;
+    setDraftState(next);
+  }, []);
+  const setStepIndex = useCallback((next: SetStateAction<number>) => {
+    if (submitInFlightRef.current || comparisonLoadingRef.current || finishedRef.current) return;
+    setStepIndexState(next);
+  }, []);
   const autosaveErrorRef = useRef<string>('');
   const lastPersistedFingerprintRef = useRef(JSON.stringify(createProjectEditorDraft(initialDraft)));
   const lastResetKeyRef = useRef<string | null>(null);
@@ -756,13 +755,21 @@ export function ProjectEditorWizard({
   const hasPendingRetryFile = [...registrationDocumentKinds, ...checkoutDocumentKinds]
     .some((kind) => Boolean(retryDocumentFileRef.current[kind]));
   const hasUnsavedInput = currentDraftFingerprint !== lastPersistedFingerprintRef.current;
-  const shouldBlockNavigation = hasUnsavedInput || uploadInProgress || hasPendingRetryFile;
+  const shouldBlockNavigation = !completed && (hasUnsavedInput || uploadInProgress || hasPendingRetryFile);
   const shouldConfirmExit = shouldBlockNavigation || (Boolean(onLeave) && !readOnly);
   const blocker = useBlocker(shouldConfirmExit);
 
   useEffect(() => {
     draftRef.current = draft;
   }, [draft]);
+
+  useEffect(() => {
+    if (!completed) return;
+    finishedRef.current = true;
+    if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
+    lastPersistedFingerprintRef.current = JSON.stringify(createProjectEditorDraft(draftRef.current));
+    setAutosaveState('idle');
+  }, [completed, autosave?.key]);
 
   useEffect(() => {
     const resetKey = `${draftKey}::${autosave?.key || ''}`;
@@ -781,11 +788,14 @@ export function ProjectEditorWizard({
     draftRef.current = nextDraft;
     setDraft(nextDraft);
     if (isNewEditorSession) setStepIndex(0);
-    setTeamSyncPreview(null);
-    setTeamSyncSignature(null);
-    setTeamSyncYear('');
-    setTeamSyncNotice('');
-    setTeamSyncError('');
+    const incomingSheetSignature = participationSheetSyncSignature({
+      sheetLink: nextDraft.participationSheetLink,
+      contractStart: nextDraft.contractStart,
+      contractEnd: nextDraft.contractEnd,
+      teamMembersDetailed: nextDraft.teamMembersDetailed,
+    });
+    if (isNewEditorSession || !teamSyncSignature || teamSyncSignature !== incomingSheetSignature
+      || draft.contractEndUndecided !== nextDraft.contractEndUndecided) invalidateTeamSync();
     setDocumentUploadState({
       contract: 'idle',
       customer_business_registration: 'idle',
@@ -814,11 +824,11 @@ export function ProjectEditorWizard({
       final_settlement_report: '',
       final_report: '',
     });
-    setAutosaveState('idle');
+    setAutosaveState(!isNewEditorSession && autosave?.onSave && autosave.ready !== false ? 'saved' : 'idle');
     setLastAutosavedAt('');
     setPreloadWarningVisible(false);
-    setRestoreCandidate(autosave?.key ? readStoredProjectEditorDraft(autosave.key) : null);
-  }, [autosave?.key, draftKey, initialDraft, initialDraftFingerprint]);
+    if (isNewEditorSession) setRestoreCandidate(autosave?.key ? readStoredProjectEditorDraft(autosave.key) : null);
+  }, [autosave?.key, autosave?.onSave, autosave?.ready, draftKey, initialDraft, initialDraftFingerprint]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -827,17 +837,62 @@ export function ProjectEditorWizard({
     return () => window.removeEventListener('mysc:preloadError', handlePreloadError);
   }, []);
 
+  const writeLocalBackup = useCallback((nextDraft: ProjectEditorDraft, nextStepIndex: number) => {
+    if (!autosave?.key || finishedRef.current) return false;
+    try {
+      const now = new Date().toISOString();
+      writeStoredProjectEditorDraft(autosave.key, {
+        schemaVersion: PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION, draftKey,
+        draft: createProjectEditorDraft(nextDraft), stepIndex: nextStepIndex, updatedAt: now,
+      });
+      setLastAutosavedAt(now);
+      setAutosaveState('local');
+      return true;
+    } catch (error) {
+      autosaveErrorRef.current = error instanceof Error ? error.message : String(error);
+      setAutosaveState('error');
+      return false;
+    }
+  }, [autosave?.key, draftKey]);
+
+  const openComparison = useCallback(async (mine: ProjectEditorDraft, nextStepIndex: number) => {
+    if (comparisonLoadingRef.current) return;
+    comparisonLoadingRef.current = true;
+    writesPausedRef.current = true;
+    setComparisonBusy(true);
+    try {
+      const server = autosave?.onLoadLatest ? await autosave.onLoadLatest() : initialDraft;
+      setComparison({ mine, server, stepIndex: nextStepIndex });
+      setComparisonOpen(true);
+    } catch (error) {
+      toast.error(resolveProjectErrorMessage(error, '최근 임시저장을 불러오지 못했습니다.'));
+    } finally {
+      comparisonLoadingRef.current = false;
+      setComparisonBusy(false);
+    }
+  }, [autosave?.onLoadLatest, initialDraft]);
+
+  useEffect(() => {
+    const count = autosave?.conflictCount || 0;
+    if (count <= handledConflictRef.current) return;
+    handledConflictRef.current = count;
+    void openComparison(draftRef.current, stepIndex);
+  }, [autosave?.conflictCount, openComparison, stepIndex]);
+
   const persistAutosaveSnapshot = useCallback(async (
     nextDraft: ProjectEditorDraft,
     nextStepIndex: number,
+    forSubmit = false,
   ) => {
+    if (finishedRef.current || restoreCandidate || (submitInFlightRef.current && !forSubmit)) return false;
+    const localSaved = writeLocalBackup(nextDraft, nextStepIndex);
     // 재시도 대기 여부는 렌더 시점 값이 아니라 ref 를 즉석에서 본다 - 나가기 직전에
     // 대기 파일을 버린 경우에도 임시저장이 진행돼야 한다.
     const pendingRetryNow = [...registrationDocumentKinds, ...checkoutDocumentKinds]
       .some((kind) => Boolean(retryDocumentFileRef.current[kind]));
-    if (uploadInProgress || pendingRetryNow) return false;
-    if (readOnly || !autosave?.key || autosave.disabled) return false;
-    if (mode === 'portal-register' && !hasRequiredRegistrationDocuments) return false;
+    if (uploadInProgress || pendingRetryNow || readOnly || !autosave?.key || autosave.disabled || writesPausedRef.current
+      || (mode === 'portal-register' && !hasRequiredRegistrationDocuments)) return forSubmit ? false : localSaved ? 'local' : false;
+    if (!autosave.onSave) return localSaved ? 'local' : false;
     const now = new Date().toISOString();
     const storedDraft: StoredProjectEditorDraft = {
       schemaVersion: PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION,
@@ -848,25 +903,22 @@ export function ProjectEditorWizard({
     };
     setAutosaveState('saving');
     try {
-      writeStoredProjectEditorDraft(autosave.key, storedDraft);
       await autosave.onSave?.(storedDraft.draft, nextStepIndex);
-      lastPersistedFingerprintRef.current = JSON.stringify(storedDraft.draft);
+      const savedFingerprint = JSON.stringify(storedDraft.draft);
+      lastPersistedFingerprintRef.current = savedFingerprint;
       autosaveErrorRef.current = '';
-      setLastAutosavedAt(now);
-      setAutosaveState('saved');
-      return true;
+      if (JSON.stringify(createProjectEditorDraft(draftRef.current)) === savedFingerprint) {
+        setLastAutosavedAt(now);
+        setAutosaveState('saved');
+      }
+      return 'server';
     } catch (error) {
-      console.error('[ProjectEditorWizard] autosave failed:', error);
-      // 서버가 적어 준 원인을 실패 토스트가 보여줄 수 있게 남겨 둔다 - "잠시 후 다시"만으로는
-      // 리스 만료·검증 거부·네트워크를 구분할 수 없어 사람이 같은 실패를 반복한다.
-      autosaveErrorRef.current = error instanceof Error ? (
-        (error as { serverMessage?: string }).serverMessage || error.message
-      ) : String(error);
+      autosaveErrorRef.current = resolveProjectErrorMessage(error, '임시저장 결과를 확인하지 못했습니다. 입력을 유지하고 최근 저장 내용을 확인해 주세요.');
       setLastAutosavedAt(now);
       setAutosaveState('error');
       return false;
     }
-  }, [autosave?.disabled, autosave?.key, autosave?.onSave, draftKey, hasPendingRetryFile, hasRequiredRegistrationDocuments, mode, readOnly, uploadInProgress]);
+  }, [autosave?.disabled, autosave?.key, autosave?.onSave, draftKey, hasPendingRetryFile, hasRequiredRegistrationDocuments, mode, readOnly, uploadInProgress, restoreCandidate, writeLocalBackup]);
 
   const saveDraftAndRelease = useCallback(async () => {
     if (uploadInProgress) {
@@ -879,7 +931,7 @@ export function ProjectEditorWizard({
       retryDocumentFileRef.current = {};
       toast.info('업로드에 실패했던 첨부파일은 저장되지 않았습니다. 다음에 다시 첨부해 주세요.');
     }
-    if (hasUnsavedInput && autosave?.key && !autosave.disabled && !readOnly) {
+    if (hasUnsavedInput && autosave?.key) {
       if (!await persistAutosaveSnapshot(draft, stepIndex)) {
         toast.error(`임시저장에 실패해 수정 세션을 종료하지 않았습니다.${autosaveErrorRef.current ? ` (${autosaveErrorRef.current})` : ''}`);
         return false;
@@ -887,6 +939,7 @@ export function ProjectEditorWizard({
     }
     try {
       await onLeave?.();
+      finishedRef.current = true;
       return true;
     } catch (error) {
       console.error('[ProjectEditorWizard] edit session release failed:', error);
@@ -902,6 +955,7 @@ export function ProjectEditorWizard({
     }
     try {
       await onLeave?.();
+      finishedRef.current = true;
       if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
       return true;
     } catch (error) {
@@ -932,7 +986,7 @@ export function ProjectEditorWizard({
   }, [blocker, exitIntent, onCancel, releaseWithoutSaving, saveDraftAndRelease]);
 
   const requestCancel = () => {
-    if (exitInFlightRef.current) return;
+    if (exitInFlightRef.current || submitInFlightRef.current) return;
     if (!shouldConfirmExit) {
       void onCancel?.();
       return;
@@ -963,7 +1017,10 @@ export function ProjectEditorWizard({
   }, [blocker]);
 
   useEffect(() => {
-    if (readOnly || !autosave?.key || autosave.disabled || restoreCandidate || uploadInProgress || hasPendingRetryFile) return undefined;
+    if (!autosave?.key || restoreCandidate || autosave.ready === false || submitting || finishedRef.current) return undefined;
+    if (!hasUnsavedInput) return undefined;
+    writeLocalBackup(draft, stepIndex);
+    if (readOnly || autosave.disabled || writesPausedRef.current || uploadInProgress || hasPendingRetryFile) return undefined;
     const isInitialDraft = stepIndex === 0 && JSON.stringify(createProjectEditorDraft(draft)) === initialDraftFingerprint;
     if (isInitialDraft) return undefined;
 
@@ -971,19 +1028,15 @@ export function ProjectEditorWizard({
       void persistAutosaveSnapshot(draft, stepIndex);
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [autosave?.disabled, autosave?.key, draft, hasPendingRetryFile, initialDraftFingerprint, persistAutosaveSnapshot, readOnly, restoreCandidate, stepIndex, uploadInProgress]);
+  }, [autosave?.disabled, autosave?.key, autosave?.ready, draft, hasPendingRetryFile, initialDraftFingerprint, persistAutosaveSnapshot, readOnly, restoreCandidate, stepIndex, uploadInProgress, hasUnsavedInput, submitting, writeLocalBackup]);
 
   const restoreLocalDraft = () => {
-    if (!restoreCandidate) return;
-    setDraft(normalizeRestoredProjectEditorDraft(restoreCandidate.draft, mode));
-    setStepIndex(Math.max(0, Math.min(STEPS.length - 1, restoreCandidate.stepIndex || 0)));
-    setLastAutosavedAt(restoreCandidate.updatedAt);
-    setAutosaveState('saved');
-    setRestoreCandidate(null);
+    if (!restoreCandidate || autosave?.ready === false || comparisonBusy) return;
+    void openComparison(restoreCandidate.draft, restoreCandidate.stepIndex);
   };
 
   const discardLocalDraft = () => {
-    if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
+    if (autosave?.key && !removeStoredProjectEditorDraft(autosave.key)) return;
     setRestoreCandidate(null);
     void autosave?.onDiscard?.();
   };
@@ -994,31 +1047,39 @@ export function ProjectEditorWizard({
       return;
     }
     const saved = await persistAutosaveSnapshot(draft, stepIndex);
-    if (saved) toast.success('임시저장되었습니다.');
+    if (saved === 'local') toast.info('이 기기에 보관됨');
+    else if (saved) toast.success('임시저장되었습니다.');
     else toast.error(`임시저장에 실패했습니다.${autosaveErrorRef.current ? ` (${autosaveErrorRef.current})` : ' 잠시 후 다시 시도해 주세요.'}`);
   };
 
   const handleActionSubmit = async (actionId: string) => {
-    if (submitInFlightRef.current) return;
+    if (restoreCandidate) {
+      toast.info('최종 저장 전에 이전 임시저장을 불러오거나 버려 주세요.');
+      return;
+    }
+    if (submitInFlightRef.current || finishedRef.current || writesPausedRef.current) return;
     if (uploadInProgress || hasPendingRetryFile) {
       toast.error('첨부파일 처리를 완료한 뒤 최종 저장해 주세요.');
       return;
     }
     submitInFlightRef.current = true;
+    setSubmitting(true);
+    const snapshot = createProjectEditorDraft(draftRef.current);
     try {
-      if (autosave?.key && !await persistAutosaveSnapshot(draft, stepIndex)) {
+      if (autosave?.key && !await persistAutosaveSnapshot(snapshot, stepIndex, true)) {
         throw new Error('최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다.');
       }
-      await onSubmit(createProjectEditorDraft(draft), actionId);
-      lastPersistedFingerprintRef.current = JSON.stringify(createProjectEditorDraft(draft));
+      await onSubmit(snapshot, actionId);
+      finishedRef.current = true;
+      lastPersistedFingerprintRef.current = JSON.stringify(snapshot);
       if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
       setAutosaveState('idle');
       setLastAutosavedAt('');
     } catch (error) {
-      console.error('[ProjectEditorWizard] submit failed:', error);
-      toast.error(error instanceof Error ? error.message : '저장에 실패했습니다.');
+      toast.error(resolveProjectErrorMessage(error, '저장에 실패했습니다.'));
     } finally {
       submitInFlightRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -1256,41 +1317,64 @@ export function ProjectEditorWizard({
    * "다시 연동해 주세요" 가 뜨면 이미 연동한 사실 자체를 못 믿게 된다. 시트가 저장본과
    * 같으면 조용히 연동 상태로 인정하고, 달라졌으면 명단은 덮지 않은 채 갱신을 안내한다.
    */
-  const sheetRestoreAttemptedRef = useRef(false);
+  const sheetSessionKey = JSON.stringify([draftKey, autosave?.key, orgId, user?.uid, draft.contractEndUndecided]);
+  const sheetInputSignature = participationSheetSyncSignature({
+    sheetLink: draft.participationSheetLink,
+    contractStart: draft.contractStart,
+    contractEnd: draft.contractEnd,
+    teamMembersDetailed: draft.teamMembersDetailed,
+  });
+  const priorSheetSessionRef = useRef(sheetSessionKey);
+  useEffect(() => {
+    const sameSession = priorSheetSessionRef.current === sheetSessionKey;
+    priorSheetSessionRef.current = sheetSessionKey;
+    sheetRequestRunRef.current += 1;
+    sheetRestoreAttemptedRef.current = false;
+    setTeamSyncing(false);
+    if (!sameSession || teamSyncSignature !== sheetInputSignature) invalidateTeamSync();
+    return () => { sheetRequestRunRef.current += 1; };
+    // 로딩·검증 결과 변경은 요청 대상 변경이 아니므로, 진행 중인 자기 요청을 취소하지 않는다.
+  }, [sheetSessionKey, sheetInputSignature, invalidateTeamSync]);
+
   useEffect(() => {
     if (sheetRestoreAttemptedRef.current) return;
     const sheetLink = String(draft.participationSheetLink || '').trim();
     if (!sheetLink || !draft.contractStart || (!draft.contractEnd && !draft.contractEndUndecided) || !orgId || !user) return;
     if (teamSyncPreview || teamSyncing) return;
-    sheetRestoreAttemptedRef.current = true;
-    const { contractStart, contractEnd, teamMembersDetailed } = draft;
-    setTeamSyncing(true);
-    void previewParticipationSheetByLinkViaBff({
-      tenantId: orgId, actor: user, sheetLink, contractStart, contractEnd,
-      contractEndUndecided: draft.contractEndUndecided,
-    })
-      .then((preview) => {
-        if (!preview.ok) return;
-        const mapped = mapParticipationSheetPreviewToProjectTeamMembers(preview);
-        const sheetSignature = participationSheetSyncSignature({
-          sheetLink, contractStart, contractEnd, teamMembersDetailed: mapped,
-        });
-        const persistedSignature = participationSheetSyncSignature({
-          sheetLink, contractStart, contractEnd, teamMembersDetailed,
-        });
-        setTeamSyncPreview(preview);
-        setTeamSyncYear(preview.months[0]?.slice(0, 4) || '');
-        setTeamSyncWarning((preview.warnings || []).map((warning) => warning.message).slice(0, 2).join(' / '));
-        if (sheetSignature === persistedSignature) {
-          setTeamSyncSignature(sheetSignature);
-          setTeamSyncNotice(`저장된 참여율 시트 연동을 확인했습니다. 참여인력 ${preview.rows.length}명.`);
-        } else {
-          setTeamSyncNotice('시트 내용이 저장된 명단과 달라졌습니다. [연동하기]를 눌러 갱신해 주세요.');
-        }
+    const timer = window.setTimeout(() => {
+      sheetRestoreAttemptedRef.current = true;
+      const run = ++sheetRequestRunRef.current;
+      const { contractStart, contractEnd, teamMembersDetailed } = draft;
+      setTeamSyncing(true);
+      void previewParticipationSheetByLinkViaBff({
+        tenantId: orgId, actor: user, sheetLink, contractStart, contractEnd,
+        contractEndUndecided: draft.contractEndUndecided,
       })
-      .catch(() => { /* 자동 복원 실패는 화면을 막지 않는다. 연동하기 버튼이 그대로 있다. */ })
-      .finally(() => setTeamSyncing(false));
-  }, [draft, orgId, user, teamSyncPreview, teamSyncing]);
+        .then((preview) => {
+          if (run !== sheetRequestRunRef.current) return;
+          if (!preview.ok) return;
+          const mapped = mapParticipationSheetPreviewToProjectTeamMembers(preview);
+          const sheetSignature = participationSheetSyncSignature({
+            sheetLink, contractStart, contractEnd, teamMembersDetailed: mapped,
+          });
+          const persistedSignature = participationSheetSyncSignature({
+            sheetLink, contractStart, contractEnd, teamMembersDetailed,
+          });
+          setTeamSyncPreview(preview);
+          setTeamSyncYear(preview.months[0]?.slice(0, 4) || '');
+          setTeamSyncWarning((preview.warnings || []).map((warning) => warning.message).slice(0, 2).join(' / '));
+          if (sheetSignature === persistedSignature) {
+            setTeamSyncSignature(sheetSignature);
+            setTeamSyncNotice(`저장된 참여율 시트 연동을 확인했습니다. 참여인력 ${preview.rows.length}명.`);
+          } else {
+            setTeamSyncNotice('시트 내용이 저장된 명단과 달라졌습니다. [연동하기]를 눌러 갱신해 주세요.');
+          }
+        })
+        .catch(() => { /* 자동 복원 실패는 화면을 막지 않는다. 연동하기 버튼이 그대로 있다. */ })
+        .finally(() => { if (run === sheetRequestRunRef.current) setTeamSyncing(false); });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [sheetSessionKey, sheetInputSignature, teamSyncPreview, teamSyncing]);
 
   const syncTeamFromSheet = () => {
     if (teamSyncing) return;
@@ -1309,6 +1393,8 @@ export function ProjectEditorWizard({
       return;
     }
     setTeamSyncing(true);
+    sheetRestoreAttemptedRef.current = true;
+    const run = ++sheetRequestRunRef.current;
     setTeamSyncSignature(null);
     setTeamSyncError('');
     setTeamSyncWarning('');
@@ -1321,6 +1407,7 @@ export function ProjectEditorWizard({
       contractEndUndecided: draft.contractEndUndecided,
     })
       .then((preview) => {
+        if (run !== sheetRequestRunRef.current) return;
         if (!preview.ok) {
           // 막는 이유를 서버가 적어 준 대로 보여 준다. 화면이 다시 판정하지 않는다.
           setTeamSyncPreview(null);
@@ -1347,6 +1434,7 @@ export function ProjectEditorWizard({
           : `참여인력 ${preview.rows.length}명을 가져왔습니다.`);
       })
       .catch((error) => {
+        if (run !== sheetRequestRunRef.current) return;
         setTeamSyncPreview(null);
         const status = error instanceof PlatformApiError ? error.status : 500;
         const code = error instanceof PlatformApiError ? error.code : '';
@@ -1354,7 +1442,7 @@ export function ProjectEditorWizard({
         const serverMessage = error instanceof PlatformApiError ? String(error.serverMessage || '').trim() : '';
         setTeamSyncError(serverMessage || resolveApiErrorPresentation(code, status).guide);
       })
-      .finally(() => setTeamSyncing(false));
+      .finally(() => { if (run === sheetRequestRunRef.current) setTeamSyncing(false); });
   };
 
 
@@ -1438,8 +1526,7 @@ export function ProjectEditorWizard({
       if (input) input.value = '';
     } catch (error) {
       if (documentUploadRunRef.current[kind] !== runId) return;
-      console.error(`[ProjectEditorWizard] ${kind} upload failed:`, error);
-      const message = error instanceof Error ? error.message : `${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 업로드에 실패했습니다.`;
+      const message = resolveProjectErrorMessage(error, `${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 업로드에 실패했습니다.`);
       setDocumentUploadState((prev) => ({ ...prev, [kind]: 'error' }));
       setDocumentUploadError((prev) => ({ ...prev, [kind]: message }));
       toast.error(message);
@@ -1498,7 +1585,7 @@ export function ProjectEditorWizard({
       delete retryDocumentFileRef.current[kind];
       toast.success(`${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 첨부를 제거했습니다.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : `${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 첨부 제거에 실패했습니다.`;
+      const message = resolveProjectErrorMessage(error, `${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 첨부 제거에 실패했습니다.`);
       setDocumentUploadState((prev) => ({ ...prev, [kind]: 'error' }));
       setDocumentUploadError((prev) => ({ ...prev, [kind]: message }));
       toast.error('첨부 제거 실패', { description: message });
@@ -1731,7 +1818,7 @@ export function ProjectEditorWizard({
     <ProjectFormSection title="기본 정보">
       <ProjectFormRow label="담당조직(CIC)" required issueLabel="담당조직(CIC)" errors={fieldIssues('담당조직(CIC)')}>
       <Select value={canUseSelectedDepartment ? selectedDepartment : undefined} onValueChange={(value) => update('department', value)}>
-        <SelectTrigger className={cn(FIELD_W_SM, FORM_CONTROL_CLASS)}>
+        <SelectTrigger aria-required className={cn(FIELD_W_SM, FORM_CONTROL_CLASS)}>
           <SelectValue placeholder="담당조직 선택" />
         </SelectTrigger>
         <SelectContent>
@@ -1743,7 +1830,7 @@ export function ProjectEditorWizard({
     </ProjectFormRow>
       <ProjectFormRow label="프로젝트 유형" required>
       <Select value={draft.type} onValueChange={(value) => update('type', value as ProjectType)}>
-        <SelectTrigger className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-required className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue /></SelectTrigger>
         <SelectContent>
           {projectTypeOptions.map((type) => (
             <SelectItem key={type} value={type}>{PROJECT_TYPE_LABELS[type]}</SelectItem>
@@ -2346,6 +2433,7 @@ export function ProjectEditorWizard({
                         <Input
                           inputMode="numeric"
                           aria-label={`${row.year}년 ${label}`}
+                          aria-required={field === 'contractAmount' && draft.type !== 'I1'}
                           value={formatProjectAmountInput(row[field], true)}
                           onChange={(event) => updateFinancialYear(index, field, parseProjectAmountInput(event.target.value))}
                           className={cn('min-w-[116px]', FORM_NUMERIC_CONTROL_CLASS)}
@@ -2474,12 +2562,12 @@ export function ProjectEditorWizard({
         기간 / 통화 / 금액으로 나눠 말할 뿐이라 제목을 세 번 끊으면 관계가 보이지 않았다.
       */}
       <ProjectFormSection title="계약 정보">
-        <ProjectFormRow label="계약 시작일" required issueLabel="계약 시작일" errors={fieldIssues('계약 시작일')}>
+        <ProjectFormRow label="계약 시작일" required={usesRegistrationV2 || draft.type !== 'I1'} issueLabel="계약 시작일" errors={fieldIssues('계약 시작일')}>
           <Input type="date" value={draft.contractStart} onChange={(event) => updateContractPeriod('contractStart', event.target.value)} className={cn(FIELD_W_XS, FORM_NUMERIC_CONTROL_CLASS, 'text-left')} />
         </ProjectFormRow>
         <ProjectFormRow
           label="계약 종료일"
-          required
+          required={(usesRegistrationV2 || draft.type !== 'I1') && !draft.contractEndUndecided}
           issueLabel="계약 종료일"
           errors={fieldIssues('계약 종료일', '계약 종료일은 시작일 이후여야 합니다.')}
         >
@@ -2530,7 +2618,7 @@ export function ProjectEditorWizard({
           <>
             <ProjectFormRow
               label="계약금액"
-              required
+              required={draft.type !== 'I1'}
               issueLabel="계약금액"
               errors={fieldIssues('계약금액')}
               hints={[
@@ -2666,7 +2754,7 @@ export function ProjectEditorWizard({
           value={usesRegistrationV2 && draft.settlementType === 'NONE' ? undefined : draft.settlementType}
           onValueChange={(value) => update('settlementType', value as SettlementType)}
         >
-          <SelectTrigger className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue placeholder={usesRegistrationV2 ? '사업유형 선택' : '정산 유형 선택'} /></SelectTrigger>
+          <SelectTrigger aria-required={usesRegistrationV2} className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue placeholder={usesRegistrationV2 ? '사업유형 선택' : '정산 유형 선택'} /></SelectTrigger>
           <SelectContent>
             {(Object.entries(SETTLEMENT_TYPE_LABELS) as [SettlementType, string][]).filter(([key]) => !usesRegistrationV2 || key !== 'NONE').map(([key, value]) => (
               <SelectItem key={key} value={key}>{value}</SelectItem>
@@ -2754,6 +2842,7 @@ export function ProjectEditorWizard({
                   onChange={(event) => update('settlementSystemOther', event.target.value)}
                   placeholder="정산 시스템 이름 직접 입력"
                   aria-label="기타 정산 시스템 이름"
+                  aria-required={usesRegistrationV2}
                   className={cn('mt-2 w-full', FORM_CONTROL_CLASS)}
                 />
               ) : null}
@@ -2806,6 +2895,7 @@ export function ProjectEditorWizard({
           <MemberPicker
             className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}
             options={ownerOptions}
+            required
             value={draft.registeredById}
             placeholder="구성원 원장에서 선택"
             onChange={(value) => {
@@ -2837,6 +2927,7 @@ export function ProjectEditorWizard({
           <MemberPicker
             className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}
             options={executiveApproverOptions}
+            required
             value={draft.executiveApproverId}
             placeholder="구성원 원장에서 선택"
             onChange={(value) => {
@@ -2868,6 +2959,7 @@ export function ProjectEditorWizard({
             시트 안에는 사업 식별자를 적지 않는다 - 사람이 적는 식별자는 어긋난다. */}
         <ProjectFormRow
           label="참여율 시트 링크"
+          required={requiresParticipationSheetLink}
           hints={[
             '월별 참여율은 이 시트의 [참여율 관리] 탭에 적습니다. 표준양식을 복사해 이 사업 전용 시트를 만든 뒤 링크를 넣어 주세요.',
             sheetSystemAccount
@@ -3531,7 +3623,12 @@ export function ProjectEditorWizard({
   };
 
   return (
-    <div className="mx-auto w-full max-w-6xl space-y-5">
+    <div className="mx-auto w-full max-w-6xl space-y-5"
+      onClickCapture={(event) => { if (submitInFlightRef.current) { event.preventDefault(); event.stopPropagation(); } }}
+      onChangeCapture={(event) => { if (submitInFlightRef.current) event.stopPropagation(); }}
+      onKeyDownCapture={(event) => { if (submitInFlightRef.current) { event.preventDefault(); event.stopPropagation(); } }}
+    >
+      <fieldset disabled={submitting || comparisonBusy || Boolean(busyActionId)} className="contents">
       {embeddedInShell ? (
         onCancel ? (
           <div className="flex justify-end">
@@ -3606,18 +3703,65 @@ export function ProjectEditorWizard({
               <p className={cn('mt-1', FORM_HINT_CLASS)}>
                 {formatAutosaveTime(restoreCandidate.updatedAt) || '최근'}에 저장된 작성 내용을 불러올 수 있습니다.
               </p>
+              <p className={cn('mt-1', FORM_HINT_CLASS)}>최종 저장 전에 이전 임시저장을 불러오거나 버려 주세요.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="outline" size="sm" onClick={discardLocalDraft}>
                 버리기
               </Button>
-              <Button type="button" size="sm" onClick={restoreLocalDraft}>
+              <Button type="button" size="sm" onClick={restoreLocalDraft} disabled={autosave?.ready === false || comparisonBusy}>
                 임시저장 불러오기
               </Button>
             </div>
           </div>
         </div>
       ) : null}
+
+      {writesPausedRef.current && !restoreCandidate ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm">
+          최근 임시저장과 비교할 때까지 서버 저장을 중단했습니다. 내 입력은 이 화면에 남아 있습니다.
+          <Button type="button" variant="outline" className="ml-3" disabled={comparisonBusy}
+            onClick={() => void openComparison(draftRef.current, stepIndex)}>
+            입력 비교하기
+          </Button>
+        </div>
+      ) : null}
+      <Dialog open={comparisonOpen} onOpenChange={setComparisonOpen}>
+        <DialogContent className="max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>내 입력과 최근 임시저장 비교</DialogTitle>
+            <DialogDescription>계속 사용할 입력 전체를 선택해 주세요. 첨부파일은 최근 서버 임시저장을 유지합니다. 닫으면 서버 저장은 계속 중단됩니다.</DialogDescription>
+          </DialogHeader>
+          <div className="max-h-[50vh] space-y-3 overflow-y-auto">
+            {comparison ? projectEditorRecoveryDifferences(comparison.mine, comparison.server).map((entry) => (
+              <div key={entry.field} className="rounded border p-3 text-sm">
+                <p className="font-medium">{fieldLabel(entry.field)}</p>
+                <p className="whitespace-pre-wrap">내 입력 · {displayValue(entry.mine)}</p>
+                <p className="whitespace-pre-wrap">최근 임시저장 · {displayValue(entry.theirs)}</p>
+              </div>
+            )) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setComparisonOpen(false)}>닫기</Button>
+            {(['server', 'mine'] as const).map((source) => (
+              <Button key={source} onClick={() => {
+                if (!comparison) return;
+                const next = normalizeRestoredProjectEditorDraft(recoverProjectEditorDraft(comparison[source], comparison.server), mode);
+                draftRef.current = next;
+                setDraft(next);
+                setStepIndex(Math.max(0, Math.min(STEPS.length - 1, comparison.stepIndex || 0)));
+                lastPersistedFingerprintRef.current = JSON.stringify(createProjectEditorDraft(comparison.server));
+                writeLocalBackup(next, comparison.stepIndex);
+                setRestoreCandidate(null);
+                setComparisonOpen(false);
+                setComparison(null);
+                writesPausedRef.current = false;
+                autosave?.onResume?.();
+              }}>{source === 'mine' ? '내 입력으로 계속' : '최근 임시저장으로 계속'}</Button>
+            ))}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="space-y-4">
       <Card className="border-slate-200/80 shadow-sm">
@@ -3732,7 +3876,9 @@ export function ProjectEditorWizard({
                   {autosaveState === 'saving'
                     ? '임시저장 중'
                     : autosaveState === 'saved'
-                      ? `임시저장됨${lastAutosavedAt ? ` ${formatAutosaveTime(lastAutosavedAt)}` : ''}`
+                      ? (hasUnsavedInput ? '이 기기에 보관됨' : `임시저장됨${lastAutosavedAt ? ` ${formatAutosaveTime(lastAutosavedAt)}` : ''}`)
+                      : autosaveState === 'local'
+                        ? '이 기기에 보관됨'
                       : autosaveState === 'error'
                         ? '임시저장 실패'
                         : '임시저장 대기'}
@@ -3776,7 +3922,7 @@ export function ProjectEditorWizard({
                     key={action.id}
                     type="button"
                     variant={action.variant || 'default'}
-                    disabled={readOnly || !!busyActionId || action.disabled}
+                    disabled={readOnly || !!busyActionId || action.disabled || Boolean(restoreCandidate)}
                     onClick={() => {
                       if (submitBlocked) {
                         setSubmitBlockedNotice(true);
@@ -3836,6 +3982,7 @@ export function ProjectEditorWizard({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+      </fieldset>
     </div>
   );
 }

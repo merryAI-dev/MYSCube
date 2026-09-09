@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   filterCashflowProjectsByDepartment,
+  filterCashflowProjectsByEligibility,
   formatCashflowExecutiveApprover,
   formatCashflowManager,
 } from './CashflowWeeklyPage';
@@ -11,6 +12,13 @@ import type { PersonRecord } from '../../lib/platform-bff-client';
 const source = readFileSync(resolve(import.meta.dirname, 'CashflowWeeklyPage.tsx'), 'utf8');
 
 describe('CashflowWeeklyPage settlement status surface', () => {
+  it('excludes only approved closures, independent of contract dates, while retaining history', () => {
+    const projects = [{ id: 'closed', contractEnd: '2030-12-31' }, { id: 'pending', contractEnd: '2020-01-01' }, { id: 'unknown' }];
+    const items = [{ projectId: 'closed', settlementEligibility: { status: 'CLOSED', weekly: false, monthly: false, writable: false } },
+      { projectId: 'pending', settlementEligibility: { status: 'ACTIVE', weekly: true, monthly: true, writable: true } }] as Parameters<typeof filterCashflowProjectsByEligibility>[1];
+    expect(filterCashflowProjectsByEligibility(projects, items).map((p) => p.id)).toEqual(['pending', 'unknown']);
+    expect(filterCashflowProjectsByEligibility(projects, items, true)).toEqual(projects);
+  });
   it('filters both visible rows and compliance requests by normalized department', () => {
     expect(source).toContain("const [deptFilter, setDeptFilter] = useState('ALL')");
     expect(source).toContain('getProjectRegistrationCicOptions()');

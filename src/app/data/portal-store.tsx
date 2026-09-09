@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { projectUpdatePayload } from '../platform/project-documents';
 import { isPermissionDenied } from '../platform/firestore-error';
 import {
   collection,
@@ -3397,8 +3398,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             idToken,
           },
           project: {
-            ...existingProject,
-            ...patch,
+            ...projectUpdatePayload(existingProject, patch),
             expectedVersion: existingProject.version ?? 1,
           } as UpsertProjectPayload,
         });
@@ -3484,8 +3484,7 @@ export function PortalProvider({ children }: { children: ReactNode }) {
             idToken,
           },
           project: {
-            ...latest,
-            ...projectPatch,
+            ...projectUpdatePayload(latest, projectPatch),
             expectedVersion: latest.version ?? 1,
           } as UpsertProjectPayload,
         });

@@ -3,6 +3,7 @@ package dev.merryai.innerplatform.weekly.storage;
 import dev.merryai.innerplatform.weekly.domain.CashflowAnnualCellSet;
 import dev.merryai.innerplatform.weekly.service.command.CashflowSheetAnnualApplyCommand;
 import dev.merryai.innerplatform.weekly.domain.CashflowCumulativeCloseHead;
+import dev.merryai.innerplatform.weekly.domain.ProjectSettlementEligibility;
 import dev.merryai.innerplatform.weekly.service.port.CashflowReadPort;
 import dev.merryai.innerplatform.weekly.domain.CashflowLedgerSource;
 import dev.merryai.innerplatform.weekly.domain.CashflowMonthLock;
@@ -437,9 +438,26 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
                 "Cashflow write permission validation must run inside the canonical Firestore transaction."
             );
         }
+        requireProjectSettlementWritable(authority.tenantId(), authority.projectId());
         currentCashflowWriteScope.set(new CashflowWriteScope(
             authority.tenantId(), authority.projectId(), authority.actorUid()
         ));
+    }
+
+    @Override
+    public Map<String, ProjectSettlementEligibility> findProjectSettlementEligibility(
+        String tenantId, List<String> projectIds
+    ) {
+        if (projectIds.isEmpty()) return Map.of();
+        DocumentReference[] refs = projectIds.stream()
+            .map(projectId -> db.document("orgs/" + tenantId + "/projects/" + projectId))
+            .toArray(DocumentReference[]::new);
+        Map<String, ProjectSettlementEligibility> result = new LinkedHashMap<>();
+        for (DocumentSnapshot snapshot : getAll(refs)) {
+            Map<String, Object> project = snapshot.exists() ? data(snapshot) : null;
+            result.put(snapshot.getId(), ProjectSettlementEligibility.fromProject(project));
+        }
+        return Map.copyOf(result);
     }
 
     @Override
@@ -2431,6 +2449,7 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             projectId,
             monthCloseOnly && actor.id().equals(text(project.get("executiveApproverId"), ""))
         );
+        requireProjectSettlementWritable(actor.tenantId(), projectId);
         currentCashflowWriteScope.set(new CashflowWriteScope(actor.tenantId(), projectId, actor.id()));
         return storedRole;
     }
@@ -8538,6 +8557,21 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
                 "cashflow_write_scope_mismatch",
                 "The validated cashflow write permission does not match this project."
             );
+        }
+        requireProjectSettlementWritable(tenantId, projectId);
+    }
+
+    private void requireProjectSettlementWritable(String tenantId, String projectId) {
+        DocumentReference projectRef = db.document("orgs/" + tenantId + "/projects/" + projectId);
+        Map<String, Object> project = cachedDocumentIfPresent(projectRef).orElseGet(() -> {
+            DocumentSnapshot snapshot = get(projectRef);
+            return snapshot.exists() ? data(snapshot) : null;
+        });
+        ProjectSettlementEligibility eligibility = ProjectSettlementEligibility.fromProject(project);
+        if (!eligibility.writable()) {
+            boolean closed = "CLOSED".equals(eligibility.status());
+            throw leaseError(409, closed ? "project_closed" : "project_closure_unavailable",
+                closed ? "종료 승인된 사업은 수정할 수 없습니다." : "사업 종료 정보를 확인할 수 없어 수정을 중단했습니다.");
         }
     }
 

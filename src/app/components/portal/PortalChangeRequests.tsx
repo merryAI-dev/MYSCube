@@ -643,7 +643,7 @@ export function PortalChangeRequests() {
           <div className="space-y-3 py-2">
             <div>
               <Label className="text-[12px]">신청 제목</Label>
-              <Input value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} placeholder="예: 홍길동 투입율 변경 요청" className="h-9 text-[12px] mt-1" />
+              <Input aria-required value={form.title} onChange={e => setForm(p => ({ ...p, title: e.target.value }))} placeholder="예: 홍길동 투입율 변경 요청" className="h-9 text-[12px] mt-1" />
             </div>
             <div>
               <Label className="text-[12px]">변경 유형</Label>
@@ -658,7 +658,7 @@ export function PortalChangeRequests() {
             </div>
             <div>
               <Label className="text-[12px]">대상자</Label>
-              <Input value={form.staffName} onChange={e => setForm(p => ({ ...p, staffName: e.target.value }))} placeholder="인력 이름" className="h-9 text-[12px] mt-1" />
+              <Input aria-required value={form.staffName} onChange={e => setForm(p => ({ ...p, staffName: e.target.value }))} placeholder="인력 이름" className="h-9 text-[12px] mt-1" />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>

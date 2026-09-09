@@ -81,6 +81,7 @@ function formatKstSentence(iso: string): string {
 }
 
 export function resolveProjectRequestKind(request: ProjectRequest | null | undefined): ProjectRequestKind {
+  if (request?.requestKind === 'CLOSURE') return 'CLOSURE';
   return request?.requestKind === 'CHANGE' ? 'CHANGE' : 'REGISTRATION';
 }
 
@@ -108,7 +109,7 @@ export function describeProjectRequestVersion(input: {
   ) || '요청자';
   const requestedAt = text(request?.requestedAt || input.fallbackRequestedAt || project?.createdAt);
   const action = request
-    ? resolveProjectRequestKind(request) === 'CHANGE' ? '수정 요청' : '등록 요청'
+    ? resolveProjectRequestKind(request) === 'CLOSURE' ? '종료 요청' : resolveProjectRequestKind(request) === 'CHANGE' ? '수정 요청' : '등록 요청'
     : '등록';
   const version = request?.requestVersion || request?.targetProjectVersion || request?.baseProjectVersion;
   return `${actorName} 님이 ${formatKstSentence(requestedAt)}에 ${action}한 버전입니다${version ? ` · v${version}` : ''}`;

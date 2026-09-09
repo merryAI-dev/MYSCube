@@ -3,7 +3,7 @@ import {
   type BuildStandardHeadersInput,
   type RequestActor,
 } from './request-context';
-import { captureException } from './observability';
+import { captureException, sanitizeDiagnosticUrl } from './observability';
 import { recordDevtoolsLog, toDevtoolsError, toSafeDiagnosticCode } from './devtools-transaction-log';
 
 const DEFAULT_RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -81,7 +81,38 @@ function parseJwtClaims(token: string): JwtClaimsSummary | undefined {
 function readErrorCode(body: unknown): string | undefined {
   if (!body || typeof body !== 'object') return undefined;
   const response = body as { code?: unknown; error?: unknown };
-  return toSafeDiagnosticCode(response.code) || toSafeDiagnosticCode(response.error);
+  const safeCode = (value: unknown) => value === 'forbidden' || value === 'unauthorized' ? value : toSafeDiagnosticCode(value);
+  return safeCode(response.code) || safeCode(response.error);
+}
+
+function safeDiagnosticId(value: unknown): string | undefined {
+  return typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value) ? value : undefined;
+}
+
+function projectDiagnostics(path: string, method: string, error: unknown, body: unknown): Record<string, unknown> {
+  const pathname = sanitizeDiagnosticUrl(path).replace(/^https?:\/\/[^/]+/, '');
+  const match = pathname.match(/^\/api\/v1\/(project-info-drafts|project-registration-drafts)(?:\/([^/]+))?(?:\/(.*))?$/);
+  if (!match) return {};
+  const suffix = match[3] || '';
+  const action = suffix.startsWith('attachments') ? 'attachment'
+    : ['open', 'submit', 'rebase', 'withdraw', 'alias'].includes(suffix) ? suffix
+      : method === 'PATCH' ? 'save' : method === 'DELETE' ? 'discard' : method === 'POST' ? 'create' : 'read';
+  const response = error instanceof PlatformApiError && error.body && typeof error.body === 'object'
+    ? error.body as Record<string, unknown> : {};
+  const details = response.details && typeof response.details === 'object' ? response.details as Record<string, unknown> : {};
+  const input = body && typeof body === 'object' ? body as Record<string, unknown> : {};
+  const numeric = Object.fromEntries(['expectedDraftRevision', 'actualDraftRevision', 'expectedVersion', 'actualVersion']
+    .flatMap((key) => {
+      const value = details[key] ?? (key.startsWith('expected') ? input[key] : undefined);
+      return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? [[key, value]] : [];
+    }));
+  return {
+    operation: `project_${match[1] === 'project-info-drafts' ? 'info' : 'registration'}_draft_${action}`,
+    [match[1] === 'project-info-drafts' ? 'projectId' : 'draftId']: safeDiagnosticId(match[2]),
+    projectRequestId: safeDiagnosticId(input.projectRequestId),
+    ...numeric,
+    conflictReason: ['revision_changed', 'canonical_changed', 'source_changed', 'attachments_changed', 'registration_changed', 'target_changed'].includes(String(details.conflictReason)) ? details.conflictReason : undefined,
+  };
 }
 
 function readErrorMessage(body: unknown): string | undefined {
@@ -301,6 +332,8 @@ export class PlatformApiClient {
   async request<T>(path: string, options: PlatformRequestOptions): Promise<ApiResponse<T>> {
     const method = (options.method || 'GET').toUpperCase();
     const requestUrl = buildRequestUrl(this.baseUrl, path);
+    const diagnosticUrl = sanitizeDiagnosticUrl(requestUrl).replace(/(\/project-(?:info|registration)-drafts)\/[^/]+/, '$1/:resourceId');
+    const diagnosticPath = diagnosticUrl.replace(/^https?:\/\/[^/]+/, '');
     const startedAt = Date.now();
 
     const headerInput: BuildStandardHeadersInput = {
@@ -340,7 +373,7 @@ export class PlatformApiClient {
         phase: 'info',
         operation: 'bff.authorization.missing',
         method,
-        path,
+        path: diagnosticPath,
         requestId: clientRequestId,
         tenantId: options.tenantId,
         actorId: options.actor.id,
@@ -354,9 +387,9 @@ export class PlatformApiClient {
     recordDevtoolsLog({
       kind: 'bff_request',
       phase: 'start',
-      operation: path,
+      operation: diagnosticPath,
       method,
-      path,
+      path: diagnosticPath,
       requestId: clientRequestId,
       tenantId: options.tenantId,
       actorId: options.actor.id,
@@ -365,8 +398,8 @@ export class PlatformApiClient {
         hasBody: options.body !== undefined && options.body !== null,
         hasAuthorizationHeader,
         actorHasIdToken: Boolean(actorIdToken && actorIdToken.trim()),
-        apiBaseUrl: this.baseUrl,
-        requestUrl,
+        apiBaseUrl: this.baseUrl ? sanitizeDiagnosticUrl(this.baseUrl) : '',
+        requestUrl: diagnosticUrl,
         tokenClaims: tokenClaims
           ? {
             aud: tokenClaims.aud,
@@ -412,7 +445,7 @@ export class PlatformApiClient {
               phase: 'info',
               operation: 'bff.authorization.rejected',
               method,
-              path,
+              path: diagnosticPath,
               requestId: clientRequestId,
               responseRequestId: requestId,
               status: response.status,
@@ -428,10 +461,9 @@ export class PlatformApiClient {
           // The browser console is where operators copy failures from, so print the
           // fields needed to find the matching server log instead of a bare message.
           // eslint-disable-next-line no-console
-          console.error(`[bff] ${method} ${path} → ${response.status}`, {
+          console.error(`[bff] ${method} ${diagnosticUrl} → ${response.status}`, {
             code: responseCode || '(none)',
-            message: responseMessage || '(none)',
-            requestId: requestId || clientRequestId || '(none)',
+            requestId: safeDiagnosticId(requestId) || safeDiagnosticId(clientRequestId) || '(none)',
             tenantId: options.tenantId,
           });
           throw new PlatformApiError(
@@ -447,9 +479,9 @@ export class PlatformApiClient {
         recordDevtoolsLog({
           kind: 'bff_request',
           phase: 'success',
-          operation: path,
+          operation: diagnosticPath,
           method,
-          path,
+          path: diagnosticPath,
           requestId: clientRequestId,
           responseRequestId: requestId,
           status: response.status,
@@ -485,9 +517,9 @@ export class PlatformApiClient {
           recordDevtoolsLog({
             kind: 'bff_request',
             phase: 'error',
-            operation: path,
+            operation: diagnosticPath,
             method,
-            path,
+            path: diagnosticPath,
             requestId: clientRequestId,
             responseRequestId: error instanceof PlatformApiError ? error.requestId : undefined,
             status: error instanceof PlatformApiError ? error.status : undefined,
@@ -509,14 +541,17 @@ export class PlatformApiClient {
               method,
             },
             extra: {
-              requestUrl,
+              requestUrl: diagnosticUrl,
               attempt,
               maxRetries,
-              requestId: headers.get('x-request-id') || '',
-              tenantId: options.tenantId,
-              actorId: options.actor.id,
+              requestId: safeDiagnosticId(clientRequestId),
+              tenantId: safeDiagnosticId(options.tenantId),
+              actorId: safeDiagnosticId(options.actor.id),
+              actorRole: ['admin', 'finance', 'pm', 'viewer'].includes(options.actor.role || '') ? options.actor.role : undefined,
+              errorCode: error instanceof PlatformApiError ? readErrorCode(error.body) : undefined,
+              ...projectDiagnostics(path, method, error, options.body),
               status: error instanceof PlatformApiError ? error.status : undefined,
-              responseRequestId: error instanceof PlatformApiError ? error.requestId : undefined,
+              responseRequestId: error instanceof PlatformApiError ? safeDiagnosticId(error.requestId) : undefined,
             },
           });
           throw error;
@@ -525,9 +560,9 @@ export class PlatformApiClient {
         recordDevtoolsLog({
           kind: 'bff_request',
           phase: 'retry',
-          operation: path,
+          operation: diagnosticPath,
           method,
-          path,
+          path: diagnosticPath,
           requestId: clientRequestId,
           responseRequestId: error instanceof PlatformApiError ? error.requestId : undefined,
           status: error instanceof PlatformApiError ? error.status : undefined,

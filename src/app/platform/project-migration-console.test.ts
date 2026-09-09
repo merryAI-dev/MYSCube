@@ -11,6 +11,7 @@ import {
   isMigrationAuditPmRegistration,
   isSameMigrationAuditCic,
   normalizeCicLabel,
+  resolveMigrationReviewApproverId,
   summarizeMigrationAuditConsole,
 } from './project-migration-console';
 
@@ -99,6 +100,20 @@ function makeRequest(overrides: Partial<ProjectRequest> = {}): ProjectRequest {
 }
 
 describe('project-migration-console', () => {
+  it('requires modern request approvers from the submitted source and preserves legacy fallback', () => {
+    const project = makeProject({ executiveApproverId: 'old-head' });
+    expect(resolveMigrationReviewApproverId(project, makeRequest({ requestKind: 'CHANGE' }))).toBeUndefined();
+    expect(resolveMigrationReviewApproverId(project, makeRequest({ requestKind: 'REGISTRATION', payload: { ...makeRequest().payload, registrationRequirementsVersion: 2 } }))).toBeUndefined();
+    expect(resolveMigrationReviewApproverId(project, makeRequest())).toBe('old-head');
+    expect(resolveMigrationReviewApproverId(project, null)).toBe('old-head');
+  });
+  it.each(['REVISION_REJECTED', 'PLANNING_AGREED'] as const)('uses new pending CHANGE over old %s project stage', (executiveReviewStatus) => {
+    expect(deriveMigrationAuditStatus(makeProject({ executiveReviewStatus }), makeRequest({ requestKind: 'CHANGE', status: 'PENDING' }))).toBe('PENDING');
+  });
+  it('uses submitted identity without falling back to confirmed project values', () => {
+    const records = buildMigrationAuditConsoleRecords([makeProject({ name: 'OLD', cic: 'OLD', clientOrg: 'OLD', managerName: 'OLD' })], [makeRequest({ payload: { ...makeRequest().payload, name: '', officialContractName: '', department: '', clientOrg: '', managerName: '' } })]);
+    expect(records[0]).toMatchObject({ title: '이름 없음', cic: '미지정', clientOrg: '', managerName: '' });
+  });
   it('keeps planning-agreed registrations out of the unreviewed queue', () => {
     expect(deriveMigrationAuditStatus(makeProject({ executiveReviewStatus: 'PLANNING_AGREED' }))).toBe('PLANNING_AGREED');
   });
@@ -288,7 +303,7 @@ describe('project-migration-console', () => {
     }).map((record) => record.id)).toEqual(['p-cts']);
   });
 
-  it('uses the latest project request when multiple requests point to the same project', () => {
+  it('preserves the first authoritative BFF record even when client timestamp comparison differs', () => {
     const records = buildMigrationAuditConsoleRecords(
       [makeProject({ id: 'p-1' })],
       [
@@ -307,8 +322,8 @@ describe('project-migration-console', () => {
       ],
     );
 
-    expect(records[0].request?.id).toBe('new-request');
-    expect(records[0].request?.payload.note).toBe('new');
+    expect(records[0].request?.id).toBe('old-request');
+    expect(records[0].request?.payload.note).toBe('old');
   });
 
   it('summarizes review queue counts by executive outcome across all projects', () => {

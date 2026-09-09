@@ -140,7 +140,7 @@ export function TenantManagementTab() {
               </Label>
               <Input
                 id="tenant-id"
-                value={newId}
+                aria-required="true" value={newId}
                 onChange={(e) => { setNewId(e.target.value); setIdError(''); }}
                 placeholder="예: acme-corp"
                 className="font-mono text-[13px] h-8"

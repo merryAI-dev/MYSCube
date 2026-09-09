@@ -16,6 +16,145 @@ import {
   tryRenameManagedProjectRootFolder,
 } from './projects.mjs';
 import { upsertVersionedDoc } from '../bff-utils.mjs';
+import { PROJECT_DOCUMENT_FIELD_BY_KIND } from '../project-document-validation.mjs';
+
+describe('project executive review SSOT', () => {
+  function harness(kind = 'REGISTRATION') {
+    const document = { path: 'orgs/mysc/project-registration-documents/p001/contract.pdf', attachmentId: 'contract', size: 123, contentType: 'application/pdf' };
+    const payload = registrationV2Payload({ teamMembersDetailed: [], executiveApproverId: 'head-a',
+      contractDocument: document, customerBusinessRegistrationDocument: document, quoteDocument: document });
+    const rows = new Map<string, any>([
+      ['orgs/mysc/projects/p001', { id: 'p001', version: 3, executiveApproverId: 'head-a', executiveReviewStatus: 'PENDING' }],
+      ['orgs/mysc/members/head-a', { uid: 'head-a', role: 'viewer', status: 'ACTIVE' }],
+      ['orgs/mysc/project_requests/pr001', { id: 'forged-id', requestKind: kind, requestVersion: 1,
+        approvedProjectId: 'p001', targetProjectId: 'p001', status: 'PENDING', baseProjectVersion: 3,
+        targetProjectVersion: 4, payload, ...(kind === 'CHANGE' ? { proposedSnapshot: payload } : {}) }],
+    ]);
+    const snapshot = (path: string) => ({ exists: rows.has(path), data: () => structuredClone(rows.get(path)) });
+    const tx = { get: vi.fn(async (ref: any) => ref.query ? { docs: [] } : snapshot(ref.path)), set: vi.fn(), update: vi.fn() };
+    const db = { doc: (path: string) => ({ path, id: path.split('/').at(-1), get: async () => snapshot(path) }),
+      runTransaction: vi.fn(async (handler) => handler(tx)),
+      collection: vi.fn(() => ({ query: true, where: () => ({ query: true }) })),
+    };
+    const inspect = vi.fn(async ({ path }) => ({ ...document, path }));
+    const notifyMessage = vi.fn();
+    const app = express();
+    app.use(express.json());
+    app.use((req: any, _res, next) => {
+      req.context = { tenantId: 'mysc', actorId: 'head-a', actorRole: 'viewer', requestId: 'review-ssot', idempotencyKey: 'review-ssot' };
+      next();
+    });
+    mountProjectRoutes(app, { db, now: () => '2026-09-08T00:00:00Z',
+      idempotencyService: { begin: async () => ({ mode: 'acquired' }), complete: vi.fn(), fail: vi.fn() },
+      projectRequestContractStorageService: { inspectProjectRegistrationAttachment: inspect },
+      projectRegistrationSlackService: { enabled: true, notifyMessage },
+    } as any);
+    app.use((error: any, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.code || error.message }));
+    return { rows, tx, db, inspect, notifyMessage, document,
+      approve: () => request(app).post('/api/v1/projects/p001/executive-review').send({ requestId: 'pr001', reviewStatus: 'APPROVED' }) };
+  }
+
+  it.each(['REGISTRATION', 'CHANGE'])('rejects same-version %s mutations after inspecting attachments', async (kind) => {
+    for (const mutation of ['metadata', 'path', 'null', 'payload', 'status', 'kind', 'delete', 'duplicate']) {
+      const h = harness(kind);
+      h.inspect.mockImplementation(async ({ path }) => {
+        const row = h.rows.get('orgs/mysc/project_requests/pr001');
+        if (row) {
+          if (mutation === 'metadata') row.payload.contractDocument.downloadURL = 'https://changed.example';
+          if (mutation === 'path') row.payload.contractDocument.path = `${path}-changed`;
+          if (mutation === 'null') row.payload.contractDocument = null;
+          if (mutation === 'payload') row.payload.name = 'changed';
+          if (mutation === 'status') row.status = 'REJECTED';
+          if (mutation === 'kind') row.requestKind = kind === 'CHANGE' ? 'REGISTRATION' : 'CHANGE';
+          if (mutation === 'delete') h.rows.delete('orgs/mysc/project_requests/pr001');
+          if (mutation === 'duplicate') h.rows.set('orgs/mysc/projectRequests/pr001', structuredClone(row));
+        }
+        return { ...h.document, path };
+      });
+      const response = await h.approve();
+      expect(response.status, `${kind}: ${mutation}: ${JSON.stringify(response.body)}`).toBe(409);
+      expect(h.tx.set).not.toHaveBeenCalled();
+      expect(h.tx.update).not.toHaveBeenCalled();
+      expect(h.notifyMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['status', 'uid', 'role'])('checks current member %s in the approval transaction', async (field) => {
+    const h = harness();
+    h.inspect.mockImplementation(async ({ path }) => {
+      h.rows.get('orgs/mysc/members/head-a')[field] = 'revoked';
+      return { ...h.document, path };
+    });
+    expect((await h.approve()).status).toBe(403);
+    expect(h.tx.set).not.toHaveBeenCalled();
+    expect(h.tx.update).not.toHaveBeenCalled();
+    expect(h.notifyMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(['REGISTRATION', 'CHANGE'])('denies a missing modern %s approver despite the Project fallback', async (kind) => {
+    for (const executiveApproverId of [null, 'head-b']) {
+      const h = harness(kind);
+      const row = h.rows.get('orgs/mysc/project_requests/pr001');
+      row.payload.executiveApproverId = executiveApproverId;
+      row.payload.quoteDocument = null;
+      expect((await h.approve()).status).toBe(403);
+      expect(h.inspect).not.toHaveBeenCalled();
+      expect(h.tx.set).not.toHaveBeenCalled();
+      expect(h.notifyMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it('requires canonical required and optional slots even with the published marker', async () => {
+    for (const field of ['quoteDocument', 'proposalDocument']) {
+      const h = harness();
+      const row = h.rows.get('orgs/mysc/project_requests/pr001');
+      row.registrationAttachmentsPublishedAt = '2026-09-08T00:00:00Z';
+      row.payload[field] = field === 'quoteDocument' ? null : { name: 'missing path.pdf' };
+      expect((await h.approve()).status).toBe(409);
+      expect(h.tx.set).not.toHaveBeenCalled();
+      expect(h.notifyMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it('checks explicit v2 Storage and preserves active designated viewer approval', async () => {
+    const h = harness();
+    expect((await h.approve()).status).toBe(200);
+    expect(h.inspect).toHaveBeenCalledTimes(3);
+    expect(h.tx.get).toHaveBeenCalledWith(expect.objectContaining({ path: 'orgs/mysc/members/head-a' }));
+    expect(h.notifyMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('inspects every non-null document policy field and rejects existing duplicate registrations', async () => {
+    const h = harness();
+    Object.assign(h.rows.get('orgs/mysc/project_requests/pr001').payload,
+      Object.fromEntries(Object.values(PROJECT_DOCUMENT_FIELD_BY_KIND).map((field: string) => [field, h.document])));
+    expect((await h.approve()).status).toBe(200);
+    expect(h.inspect).toHaveBeenCalledTimes(Object.keys(PROJECT_DOCUMENT_FIELD_BY_KIND).length);
+    const duplicate = harness();
+    duplicate.rows.set('orgs/mysc/projectRequests/pr001', structuredClone(duplicate.rows.get('orgs/mysc/project_requests/pr001')));
+    expect((await duplicate.approve()).status).toBe(409);
+    expect(duplicate.tx.set).not.toHaveBeenCalled();
+    expect(duplicate.notifyMessage).not.toHaveBeenCalled();
+  });
+
+  it('preserves unversioned URL-only legacy registration approval without Storage inspection', async () => {
+    const h = harness();
+    const row = h.rows.get('orgs/mysc/project_requests/pr001');
+    delete row.requestKind;
+    row.payload = { contractDocument: { downloadURL: 'https://legacy.example/contract.pdf' } };
+    expect((await h.approve()).status).toBe(200);
+    expect(h.inspect).not.toHaveBeenCalled();
+  });
+
+  it('replaces every CHANGE document map before merging the Project', async () => {
+    const h = harness('CHANGE');
+    const response = await h.approve();
+    expect(response.status, JSON.stringify(response.body)).toBe(200);
+    expect(h.tx.update).toHaveBeenCalledWith(expect.objectContaining({ path: 'orgs/mysc/projects/p001' }),
+      expect.objectContaining(Object.fromEntries(Object.values(PROJECT_DOCUMENT_FIELD_BY_KIND).map((field: string) => [field,
+        ['contractDocument', 'customerBusinessRegistrationDocument', 'quoteDocument'].includes(field) ? h.document : null]))));
+  });
+});
 
 const registrationV2AttachmentKinds = [
   'contract',
@@ -2003,7 +2142,10 @@ describe('project route helpers', () => {
     };
     const db = {
       collection: vi.fn(() => query),
-      doc: vi.fn((path: string) => ({ path })),
+      doc: vi.fn((path: string) => ({ path, get: async () => ({
+        exists: path === requestRef.path,
+        data: () => ({ approvedProjectId: 'p001', payload: { name: 'Legacy shape' } }),
+      }) })),
     };
 
     await expect(resolveProjectRequestDocuments({
@@ -2015,8 +2157,8 @@ describe('project route helpers', () => {
       requestId: 'pr001',
       request: { approvedProjectId: 'p001', payload: { name: 'Legacy shape' } },
     });
-    expect(orderedGet).toHaveBeenCalledTimes(1);
-    expect(unorderedGet).toHaveBeenCalledTimes(1);
+    expect(orderedGet).not.toHaveBeenCalled();
+    expect(unorderedGet).toHaveBeenCalledTimes(4);
   });
 
   it('writes executive review project and request patches in one transaction', async () => {
@@ -2146,7 +2288,11 @@ describe('project route helpers', () => {
     };
     const projectRequest = { targetProjectId: 'p001', approvedProjectId: 'p001', payload: { name: '등록 요청' } };
     const tx = {
-      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/projects/')
+      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/members/')
+        ? { exists: true, data: () => ({ uid: 'head-a', role: 'admin', status: 'ACTIVE' }) }
+        : ref.path.includes('/projectRequests/')
+          ? { exists: false, data: () => null }
+        : ref.path.includes('/projects/')
         ? { exists: true, data: () => project }
         : { exists: true, data: () => projectRequest }),
       set: vi.fn(),
@@ -2391,10 +2537,10 @@ describe('project route helpers', () => {
       payload: {
         registrationRequirementsVersion: 2,
         executiveApproverId: 'head-a',
-        contractDocument: { path: `${canonicalPrefix}contract.pdf`, name: 'contract.pdf' },
-        customerBusinessRegistrationDocument: { path: `${canonicalPrefix}customer.pdf`, name: 'customer.pdf' },
-        quoteDocument: { path: `${canonicalPrefix}quote.pdf`, name: 'quote.pdf' },
-        proposalDocument: { path: `${canonicalPrefix}proposal.pdf`, name: 'proposal.pdf' },
+        contractDocument: { path: `${canonicalPrefix}contract.pdf`, name: 'contract.pdf', size: 123 },
+        customerBusinessRegistrationDocument: { path: `${canonicalPrefix}customer.pdf`, name: 'customer.pdf', size: 123 },
+        quoteDocument: { path: `${canonicalPrefix}quote.pdf`, name: 'quote.pdf', size: 123 },
+        proposalDocument: { path: `${canonicalPrefix}proposal.pdf`, name: 'proposal.pdf', size: 123 },
         rfpRequestEvidenceDocument: null,
         registrationOptionalDocumentNotes: {
           proposalWordOriginal: '고객사 미제공',
@@ -2404,7 +2550,11 @@ describe('project route helpers', () => {
       },
     };
     const tx = {
-      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/projects/')
+      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/members/')
+        ? { exists: true, data: () => ({ uid: 'head-a', role: 'pm', status: 'ACTIVE' }) }
+        : ref.path.includes('/projectRequests/')
+          ? { exists: false, data: () => null }
+        : ref.path.includes('/projects/')
         ? { exists: true, data: () => project }
         : { exists: true, data: () => projectRequest }),
       set: vi.fn(),
@@ -2442,6 +2592,7 @@ describe('project route helpers', () => {
       db,
       now: () => '2026-07-14T00:00:00.000Z',
       idempotencyService,
+      projectRequestContractStorageService: { inspectProjectRegistrationAttachment: async ({ path }: { path: string }) => ({ path, size: 123 }) },
     } as any);
     app.use((error: any, _req, res, _next) => {
       res.status(error.statusCode || 500).json({ error: error.code || 'internal_error' });
@@ -2468,7 +2619,11 @@ describe('project route helpers', () => {
     };
     const projectRequest = { targetProjectId: 'p001', approvedProjectId: 'p001', payload: { name: '등록 요청' } };
     const tx = {
-      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/projects/')
+      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/members/')
+        ? { exists: true, data: () => ({ uid: 'admin-a', role: 'admin', status: 'ACTIVE' }) }
+        : ref.path.includes('/projectRequests/')
+          ? { exists: false, data: () => null }
+        : ref.path.includes('/projects/')
         ? { exists: true, data: () => project }
         : { exists: true, data: () => projectRequest }),
       set: vi.fn(),
@@ -2545,7 +2700,11 @@ describe('project route helpers', () => {
       },
     };
     const tx = {
-      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/projects/')
+      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/members/')
+        ? { exists: true, data: () => ({ uid: 'pm-a', role: 'pm', status: 'ACTIVE' }) }
+        : ref.path.includes('/projectRequests/')
+          ? { exists: false, data: () => null }
+        : ref.path.includes('/projects/')
         ? { exists: true, data: () => project }
         : { exists: true, data: () => projectRequest }),
       set: vi.fn(),
@@ -2626,7 +2785,11 @@ describe('project route helpers', () => {
       },
     };
     const tx = {
-      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/projects/')
+      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/members/')
+        ? { exists: true, data: () => ({ uid: 'head-a', role: 'viewer', status: 'ACTIVE' }) }
+        : ref.path.includes('/projectRequests/')
+          ? { exists: false, data: () => null }
+        : ref.path.includes('/projects/')
         ? { exists: true, data: () => project }
         : { exists: true, data: () => projectRequest }),
       set: vi.fn(),
@@ -2693,7 +2856,11 @@ describe('project route helpers', () => {
     };
     const projectRequest = { targetProjectId: 'p001', approvedProjectId: 'p001', payload: { name: '레거시 등록 요청' } };
     const tx = {
-      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/projects/')
+      get: vi.fn(async (ref: { path: string }) => ref.path.includes('/members/')
+        ? { exists: true, data: () => ({ uid: 'admin-a', role: 'admin', status: 'ACTIVE' }) }
+        : ref.path.includes('/projectRequests/')
+          ? { exists: false, data: () => null }
+        : ref.path.includes('/projects/')
         ? { exists: true, data: () => project }
         : { exists: true, data: () => projectRequest }),
       set: vi.fn(),
@@ -2928,10 +3095,20 @@ describe('project route helpers', () => {
         { id: 'project-change', executiveApproverId: 'head-a' },
         { id: 'project-legacy', executiveApproverId: 'head-a' },
         { id: 'project-processing', executiveApproverId: 'head-a' },
+        { id: 'project-missing-approver', executiveApproverId: 'head-a' },
+        { id: 'project-only-legacy', executiveApproverId: 'head-a' },
         { id: 'project-payload-only', executiveApproverId: 'head-b', name: '요청 기준 배정 프로젝트' },
         { id: 'project-other', executiveApproverId: 'head-b' },
       ],
       project_requests: [
+        {
+          id: 'request-missing-approver', requestKind: 'CHANGE', targetProjectId: 'project-missing-approver',
+          requestedAt: '2026-07-21T00:00:00.000Z', proposedSnapshot: {},
+        },
+        {
+          id: 'request-old-other-approver', requestKind: 'CHANGE', targetProjectId: 'project-change',
+          requestedAt: '2026-07-19T00:00:00.000Z', proposedSnapshot: { executiveApproverId: 'head-b' },
+        },
         {
           id: 'request-assigned',
           approvedProjectId: 'project-a',
@@ -2940,6 +3117,7 @@ describe('project route helpers', () => {
         },
         {
           id: 'request-processing',
+          registrationAttachmentsPublishedAt: '2026-07-20T05:00:00.000Z',
           requestKind: 'REGISTRATION',
           approvedProjectId: 'project-processing',
           requestedAt: '2026-07-20T04:30:00.000Z',
@@ -2952,7 +3130,7 @@ describe('project route helpers', () => {
           targetProjectId: 'project-change',
           requestedAt: '2026-07-20T04:00:00.000Z',
           payload: { executiveApproverId: 'head-b', contractAmount: 500_000 },
-          proposedSnapshot: { executiveApproverId: 'head-a', contractAmount: 200_000 },
+          proposedSnapshot: { executiveApproverId: 'head-a', contractAmount: 200_000, proposalDocument: { name: 'missing-path.pdf' } },
         },
         {
           id: 'request-other',
@@ -3048,6 +3226,7 @@ describe('project route helpers', () => {
     expect(response.status).toBe(200);
     expect(response.headers['cache-control']).toBe('private, no-store');
     expect(response.body.items.map((item: { id: string }) => item.id)).toEqual([
+      'request-processing',
       'request-change-assigned',
       'request-payload-only',
       'request-assigned',
@@ -3060,9 +3239,13 @@ describe('project route helpers', () => {
       'project-a',
       'project-change',
       'project-legacy',
+      'project-only-legacy',
       'project-payload-only',
       'project-processing',
     ]);
+    expect(response.body.items[0].attachmentReviewStatus).toBe('REPAIR_REQUIRED');
+    expect(response.body.items[1].attachmentReviewStatus).toBe('REPAIR_REQUIRED');
+    expect(JSON.stringify(response.body)).not.toContain('project-missing-approver');
     expect(queryCalls).not.toContainEqual(expect.objectContaining({ clauses: [] }));
     expect(requestQueryLimits.length).toBeGreaterThan(0);
     expect(new Set(requestQueryLimits)).toEqual(new Set([500]));
@@ -3212,7 +3395,9 @@ describe('project route helpers', () => {
     expect(JSON.stringify(pending.body)).not.toContain('777000');
     expect(JSON.stringify(pending.body)).not.toContain('shadowed-cross-project');
     expect(inbox.status).toBe(200);
-    expect(inbox.body.items.map((item: { id: string }) => item.id)).toEqual(['registration-latest', 'change-pending']);
+    expect(inbox.body.items.map((item: { id: string }) => item.id)).toEqual(['registration-latest', 'change-pending', 'registration-processing']);
+    expect(inbox.body.items.at(-1).attachmentReviewStatus).toBe('REPAIR_REQUIRED');
+    expect(latest.body.item.attachmentReviewStatus).toBe('READY');
     expect(JSON.stringify(inbox.body)).not.toContain('shadowed-cross-project');
     expect(latest.status).toBe(200);
     expect(latest.body.item).toEqual(expect.objectContaining({ id: 'registration-latest' }));

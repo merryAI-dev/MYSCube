@@ -65,6 +65,7 @@ export function MigrationAuditRecordList({ records, onOpen, reviewStage = 'execu
                   <td className="px-4 py-3"><span className={`inline-flex border px-2 py-1 text-[11px] font-semibold ${statusClass(record.status)}`}>{statusLabel(record.status)}</span></td>
                   <td className="px-4 py-3 text-[12px] text-slate-700">{record.cic}</td>
                   <td className="max-w-[330px] px-4 py-3">
+                    <span className="text-[11px] text-slate-500">{record.request?.requestKind === 'CLOSURE' ? '사업 종료' : record.request?.requestKind === 'CHANGE' ? '변경' : '등록'}</span>
                     <p className="truncate text-[13px] font-semibold text-slate-950">{record.title}</p>
                     <p className="mt-1 truncate text-[11px] text-slate-500">{record.clientOrg || '계약 대상 미지정'}</p>
                   </td>

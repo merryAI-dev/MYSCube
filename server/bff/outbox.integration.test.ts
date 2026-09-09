@@ -47,6 +47,7 @@ describeIfEmulator('outbox worker integration (Firestore emulator)', () => {
     await clearCollection(`orgs/${tenantId}/notifications`);
     await clearCollection(`orgs/${tenantId}/projects`);
     await clearCollection(`orgs/${tenantId}/project_requests`);
+    await clearCollection(`orgs/${tenantId}/privateEditDrafts`);
     await clearCollection(`orgs/${tenantId}/partEntries`);
   }
 
@@ -640,6 +641,95 @@ describeIfEmulator('outbox worker integration (Firestore emulator)', () => {
     expect((await db.doc(`outbox/${event.id}`).get()).data()?.status).toBe('DONE');
   });
 
+  it.each(['APPROVED', 'WITHDRAWN', 'project-approved', 'planning-agreed', 'project-file', 'request-file', 'request-version', 'new-change-request', 'existing-request-file', 'same-file', 'unrelated-file', 'unchanged', 'active-draft', 'submitted-draft', 'other-project-draft', 'other-resource-draft'])('guards deferred legacy attachment publication against %s', async (change) => {
+    const projectRef = db.doc(`orgs/${tenantId}/projects/guard-project`);
+    const requestRef = db.doc(`orgs/${tenantId}/project_requests/guard-request`);
+    await projectRef.set({ id: 'guard-project', name: 'Guard', executiveReviewStatus: 'PENDING', managementPlanningReviewStatus: 'PENDING', contractDocument: null });
+    await requestRef.set({ id: 'guard-request', approvedProjectId: 'guard-project', requestKind: 'REGISTRATION', status: 'PENDING', version: 1, payload: { contractDocument: null } });
+    if (change === 'existing-request-file') await requestRef.update({ 'payload.contractDocument': { path: 'different-existing-file' } });
+    if (change === 'same-file') {
+      const published = { documentKind: 'contract', path: `orgs/${tenantId}/project-registration-documents/guard-project/contract.pdf`, name: '', size: 3, contentType: 'application/pdf', uploadedAt: '', attachmentId: '', visibility: 'PRIVATE' };
+      await projectRef.update({ contractDocument: published });
+      await requestRef.update({ 'payload.contractDocument': published });
+    }
+    const event = createOutboxEvent({ tenantId, requestId: 'guard', eventType: 'project.registration.submitted', entityType: 'project', entityId: 'guard-project',
+      payload: { projectId: 'guard-project', projectRequestId: 'guard-request', draftId: 'guard-draft', attachmentRefs: [{ documentKind: 'contract', path: `orgs/${tenantId}/project-registration-drafts/guard-draft/contract.pdf` }] }, createdAt: new Date().toISOString() });
+    await enqueueOutboxEvent(db, event);
+    const captured = deferred();
+    const release = deferred();
+    const ensureProjectRootFolder = vi.fn(async () => ({ id: 'folder' }));
+    const notifyMessage = vi.fn();
+    const handler = createProjectRegistrationSubmittedOutboxHandler({ db,
+      driveService: { getConfig: () => ({ enabled: true, defaultParentFolderId: 'parent' }), ensureProjectRootFolder },
+      projectRegistrationSlackService: { enabled: true, notifyMessage },
+      projectRegistrationAttachmentStorageService: { relocateDraftAttachments: async () => {
+        captured.resolve(); await release.promise;
+        return [{ documentKind: 'contract', path: `orgs/${tenantId}/project-registration-documents/guard-project/contract.pdf`, size: 3, contentType: 'application/pdf' }];
+      } },
+    });
+    const processing = handler(event).then(() => null, (error) => error);
+    await captured.promise;
+    const otherFile = { path: `orgs/${tenantId}/project-registration-documents/guard-project/replacement.pdf`, size: 20, contentType: 'application/pdf' };
+    if (['APPROVED', 'WITHDRAWN'].includes(change)) await requestRef.update({ status: change, version: 2 });
+    if (change === 'project-approved') await projectRef.update({ executiveReviewStatus: 'APPROVED' });
+    if (change === 'planning-agreed') await projectRef.update({ managementPlanningReviewStatus: 'AGREED' });
+    if (change === 'project-file') await projectRef.update({ contractDocument: otherFile });
+    if (change === 'request-file') await requestRef.update({ 'payload.contractDocument': otherFile });
+    if (change === 'request-version') await requestRef.update({ version: 2 });
+    if (change === 'new-change-request') await db.doc(`orgs/${tenantId}/project_requests/change-guard-project`).set({
+      requestKind: 'CHANGE', status: 'PENDING', approvedProjectId: 'guard-project', payload: { contractDocument: null },
+    });
+    if (change === 'unrelated-file') await projectRef.update({ finalReportDocument: otherFile });
+    if (change.endsWith('-draft')) await db.doc(`orgs/${tenantId}/privateEditDrafts/guard-edit`).set({
+      resourceId: change === 'other-project-draft' ? 'other-project' : 'guard-project',
+      resourceType: change === 'other-resource-draft' ? 'cashflow' : 'project-info',
+      status: change === 'submitted-draft' ? 'SUBMITTED' : 'ACTIVE',
+      expiresAt: '2000-01-01',
+    });
+    const beforeProject = await projectRef.get();
+    const beforeRequest = await requestRef.get();
+    release.resolve();
+    const error = await processing;
+    if (['unchanged', 'unrelated-file', 'same-file', 'submitted-draft', 'other-project-draft', 'other-resource-draft'].includes(change)) {
+      expect(error).toBeNull();
+      expect((await projectRef.get()).data()?.contractDocument?.path).toContain('/guard-project/contract.pdf');
+      if (change === 'unrelated-file') expect((await projectRef.get()).data()?.finalReportDocument).toEqual(otherFile);
+      expect((await db.doc(`outbox/${event.id}`).get()).data()?.sideEffects.registrationAttachments).toBe('DONE');
+    } else {
+      expect(error).toBeInstanceOf(Error);
+      const afterProject = await projectRef.get();
+      const afterRequest = await requestRef.get();
+      expect(afterProject.updateTime!.isEqual(beforeProject.updateTime!)).toBe(true);
+      expect(afterRequest.updateTime!.isEqual(beforeRequest.updateTime!)).toBe(true);
+      expect((await db.doc(`outbox/${event.id}`).get()).data()?.sideEffects.registrationAttachments).not.toBe('DONE');
+      expect(ensureProjectRootFolder).not.toHaveBeenCalled();
+      expect(notifyMessage).not.toHaveBeenCalled();
+    }
+  });
+
+  it.each(['APPROVED', 'WITHDRAWN', 'CHANGE', 'project-approved', 'planning-agreed', 'existing-change-request', 'active-draft'])('rejects %s before starting legacy storage copies', async (state) => {
+    const projectRef = db.doc(`orgs/${tenantId}/projects/pre-copy`);
+    const requestRef = db.doc(`orgs/${tenantId}/project_requests/pre-copy`);
+    await projectRef.set({ executiveReviewStatus: state === 'project-approved' ? 'APPROVED' : 'PENDING', managementPlanningReviewStatus: state === 'planning-agreed' ? 'AGREED' : 'PENDING' });
+    await requestRef.set({ approvedProjectId: 'pre-copy', requestKind: state === 'CHANGE' ? 'CHANGE' : 'REGISTRATION', status: ['APPROVED', 'WITHDRAWN'].includes(state) ? state : 'PENDING' });
+    if (state === 'existing-change-request') await db.doc(`orgs/${tenantId}/project_requests/change-pre-copy`).set({ requestKind: 'CHANGE', status: 'PENDING', payload: { contractDocument: null } });
+    if (state === 'active-draft') await db.doc(`orgs/${tenantId}/privateEditDrafts/pre-copy`).set({ resourceId: 'pre-copy', resourceType: 'project-info', status: 'ACTIVE', expiresAt: '2000-01-01' });
+    const event = createOutboxEvent({ tenantId, requestId: 'pre-copy', eventType: 'project.registration.submitted', entityType: 'project', entityId: 'pre-copy',
+      payload: { projectId: 'pre-copy', projectRequestId: 'pre-copy', draftId: 'draft', attachmentRefs: [{ documentKind: 'contract', path: 'source' }] }, createdAt: new Date().toISOString() });
+    await enqueueOutboxEvent(db, event);
+    const relocateDraftAttachments = vi.fn();
+    const ensureProjectRootFolder = vi.fn();
+    const notifyMessage = vi.fn();
+    const handler = createProjectRegistrationSubmittedOutboxHandler({ db, projectRegistrationAttachmentStorageService: { relocateDraftAttachments },
+      driveService: { ensureProjectRootFolder }, projectRegistrationSlackService: { enabled: true, notifyMessage } });
+    await expect(handler(event)).rejects.toThrow();
+    expect(relocateDraftAttachments).not.toHaveBeenCalled();
+    expect(ensureProjectRootFolder).not.toHaveBeenCalled();
+    expect(notifyMessage).not.toHaveBeenCalled();
+    expect((await db.doc(`outbox/${event.id}`).get()).data()?.sideEffects?.registrationAttachments).not.toBe('DONE');
+    if (state === 'active-draft') expect((await db.doc(`outbox/${event.id}`).get()).data()).toEqual(event);
+  });
+
   it('relocates private registration attachments before atomically publishing canonical metadata', async () => {
     const sourcePath = 'orgs/mysc/project-registration-drafts/draft-relocate/contract.pdf';
     const canonicalPath = 'orgs/mysc/project-registration-documents/project-relocate/contract.pdf';
@@ -648,9 +738,10 @@ describeIfEmulator('outbox worker integration (Firestore emulator)', () => {
     });
     await db.doc(`orgs/${tenantId}/projects/project-relocate`).set({
       id: 'project-relocate', name: 'Attachment project', teamMembersDetailed: [], contractDocument: null,
+      executiveReviewStatus: 'PENDING', managementPlanningReviewStatus: 'PENDING',
     });
     await db.doc(`orgs/${tenantId}/project_requests/request-relocate`).set({
-      id: 'request-relocate', approvedProjectId: 'project-relocate', payload: { name: 'Attachment project', contractDocument: null },
+      id: 'request-relocate', approvedProjectId: 'project-relocate', requestKind: 'REGISTRATION', status: 'PENDING', payload: { name: 'Attachment project', contractDocument: null },
     });
     const attachmentStorageService = {
       relocateDraftAttachments: vi.fn(async () => [{

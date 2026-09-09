@@ -4760,6 +4760,19 @@ describe('cashflow sheet lab route', () => {
     expect(responses[0].body).toEqual(storedRun.applyResponse);
   });
 
+  it('does not start a staged apply after project closure approval', async () => {
+    const javaWeeklyClient = { applyCashflowSheetLab: vi.fn() };
+    const staged = await stageJanuaryApply(javaWeeklyClient, 'project-closed');
+    await staged.db.doc('orgs/tenant-a/projects/project-a').set({ closure: {
+      contractVersion: 'project-closure-v1', requestId: 'closure', approvedAt: '2026-09-09T00:00:00Z', approvedBy: 'head',
+    } }, { merge: true });
+    const response = await request(staged.app).post('/api/v1/projects/project-a/cashflow-sheet-lab/apply')
+      .send({ stageRunId: staged.stage.body.runId, idempotencyKey: 'apply-project-closed' });
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('project_closed');
+    expect(javaWeeklyClient.applyCashflowSheetLab).not.toHaveBeenCalled();
+  });
+
   it('replays the applied response when a concurrent request checkpoints after completion', async () => {
     let releaseSecond;
     let secondStarted;

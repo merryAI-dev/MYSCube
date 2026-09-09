@@ -204,7 +204,7 @@ export function SettingsPage() {
                   <div>
                     <Label className="text-xs">UID *</Label>
                     <Input
-                      value={memberDraft.uid}
+                      aria-required="true" value={memberDraft.uid}
                       onChange={(event) => setMemberDraft((prev) => ({ ...prev, uid: event.target.value }))}
                       placeholder="Firebase UID"
                       className="mt-1 border-slate-300"
@@ -213,7 +213,7 @@ export function SettingsPage() {
                   <div>
                     <Label className="text-xs">이름 *</Label>
                     <Input
-                      value={memberDraft.name}
+                      aria-required="true" value={memberDraft.name}
                       onChange={(event) => setMemberDraft((prev) => ({ ...prev, name: event.target.value }))}
                       placeholder="홍길동(닉네임)"
                       className="mt-1 border-slate-300"
@@ -222,7 +222,7 @@ export function SettingsPage() {
                   <div>
                     <Label className="text-xs">이메일 *</Label>
                     <Input
-                      value={memberDraft.email}
+                      aria-required="true" value={memberDraft.email}
                       onChange={(event) => setMemberDraft((prev) => ({ ...prev, email: event.target.value }))}
                       placeholder="name@mysc.co.kr"
                       className="mt-1 border-slate-300"

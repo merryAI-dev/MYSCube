@@ -34,6 +34,7 @@ import {
 import {
   buildBusinessCardConfirmPayload,
   canConfirmBusinessCardContact,
+  requiredBusinessCardFields,
   formStateFromBusinessCardExtraction,
   isLowConfidenceField,
 } from './business-card-quality';
@@ -160,6 +161,7 @@ export function BusinessCardLabPage() {
     idToken: user.idToken,
   } : null;
   const confirmPayload = useMemo(() => buildBusinessCardConfirmPayload(formState), [formState]);
+  const requiredFields = requiredBusinessCardFields(confirmPayload);
   const canSave = canConfirmBusinessCardContact(confirmPayload) && Boolean(currentImport?.importId);
   const bffEnabled = isPlatformApiEnabled();
   const busyLabel = preparing
@@ -636,6 +638,7 @@ export function BusinessCardLabPage() {
                                 )}
                               </span>
                               <Input
+                                aria-required={requiredFields[String(key)] ?? false}
                                 value={formState[key as keyof typeof formState]}
                                 onChange={(event) => updateFormField(key as keyof typeof formState, event.target.value)}
                               />
@@ -643,11 +646,11 @@ export function BusinessCardLabPage() {
                           ))}
                           <label className="space-y-1.5 text-[12px] font-semibold text-slate-700 dark:text-slate-200">
                             이메일
-                            <Input value={formState.emailsText} onChange={(event) => updateFormField('emailsText', event.target.value)} placeholder="email@example.com, ..." />
+                            <Input aria-required={requiredFields.emailsText} value={formState.emailsText} onChange={(event) => updateFormField('emailsText', event.target.value)} placeholder="email@example.com, ..." />
                           </label>
                           <label className="space-y-1.5 text-[12px] font-semibold text-slate-700 dark:text-slate-200">
                             전화번호
-                            <Input value={formState.phonesText} onChange={(event) => updateFormField('phonesText', event.target.value)} placeholder="010-0000-0000, ..." />
+                            <Input aria-required={requiredFields.phonesText} value={formState.phonesText} onChange={(event) => updateFormField('phonesText', event.target.value)} placeholder="010-0000-0000, ..." />
                           </label>
                           <label className="space-y-1.5 text-[12px] font-semibold text-slate-700 dark:text-slate-200 md:col-span-2">
                             주소
@@ -710,6 +713,7 @@ export function BusinessCardLabPage() {
                         {searchResults.map((contact) => {
                           const draft = contactDrafts[contact.id] || contactToFormState(contact);
                           const draftPayload = buildBusinessCardConfirmPayload(draft);
+                          const requiredFields = requiredBusinessCardFields(draftPayload);
                           const canSaveContact = canConfirmBusinessCardContact(draftPayload);
                           const isSavingContact = savingContactId === contact.id;
                           return (
@@ -745,6 +749,7 @@ export function BusinessCardLabPage() {
                                   <label key={`${contact.id}-${key}`} className="space-y-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
                                     {label}
                                     <Input
+                                      aria-required={requiredFields[key] ?? false}
                                       value={draft[key as keyof BusinessCardContactFormState]}
                                       onChange={(event) => updateContactDraft(contact.id, key as keyof BusinessCardContactFormState, event.target.value)}
                                       className="h-9 bg-white text-[12px] dark:bg-slate-950/60"

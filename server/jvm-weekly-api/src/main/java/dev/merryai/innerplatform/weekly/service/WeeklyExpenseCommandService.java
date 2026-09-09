@@ -30,6 +30,7 @@ import dev.merryai.innerplatform.weekly.api.CashflowProjectionActualSummaryBatch
 import dev.merryai.innerplatform.weekly.api.CashflowProjectionActualSummaryBatchResponse;
 import dev.merryai.innerplatform.weekly.api.CashflowWeeklyOverviewRequest;
 import dev.merryai.innerplatform.weekly.api.CashflowWeeklyOverviewResponse;
+import dev.merryai.innerplatform.weekly.domain.ProjectSettlementEligibility;
 import dev.merryai.innerplatform.weekly.api.CashflowSheetFormulaPreflightRequest;
 import dev.merryai.innerplatform.weekly.api.CashflowSheetFormulaPreflightResponse;
 import dev.merryai.innerplatform.weekly.api.CashflowSnapshotResponse;
@@ -780,8 +781,9 @@ public class WeeklyExpenseCommandService {
         authorizationService.requireProjectsAllowedForCommands(
             List.of(CASHFLOW_READ_COMMAND, CASHFLOW_MONTH_CLOSE_READ_COMMAND), actor, projectIds
         );
+        Map<String, ProjectSettlementEligibility> eligibility = readProjectSettlementEligibility(actor, projectIds);
         if (!request.settlementCycle()) {
-            return readLegacyCashflowWeeklyOverview(actor, request, projectIds);
+            return readLegacyCashflowWeeklyOverview(actor, request, projectIds, eligibility);
         }
         CashflowProjectionActualSummaryCalculator.FinanceWeek boundary =
             CashflowProjectionActualSummaryCalculator.currentFinanceWeek(Clock.systemUTC());
@@ -846,7 +848,8 @@ public class WeeklyExpenseCommandService {
             } else {
                 settlementCycle = settlementCycleResponse(cycle);
             }
-            items.add(new CashflowWeeklyOverviewResponse.Item(projectId, statuses, summary, settlementCycle));
+            items.add(new CashflowWeeklyOverviewResponse.Item(projectId, statuses, summary, settlementCycle,
+                eligibility.getOrDefault(projectId, ProjectSettlementEligibility.unavailable())));
         }
         return new CashflowWeeklyOverviewResponse("2", request.yearMonth(), items, errors);
     }
@@ -854,7 +857,8 @@ public class WeeklyExpenseCommandService {
     private CashflowWeeklyOverviewResponse readLegacyCashflowWeeklyOverview(
         TrustedActorContext actor,
         CashflowWeeklyOverviewRequest request,
-        List<String> projectIds
+        List<String> projectIds,
+        Map<String, ProjectSettlementEligibility> eligibility
     ) {
         CashflowProjectionActualSummaryCalculator.FinanceWeek boundary =
             CashflowProjectionActualSummaryCalculator.currentFinanceWeek(Clock.systemUTC());
@@ -908,7 +912,8 @@ public class WeeklyExpenseCommandService {
             } else {
                 summary = toProjectionActualSummary(projectId, source, boundary, request.yearMonth());
             }
-            items.add(new CashflowWeeklyOverviewResponse.Item(projectId, statuses, summary, null));
+            items.add(new CashflowWeeklyOverviewResponse.Item(projectId, statuses, summary, null,
+                eligibility.getOrDefault(projectId, ProjectSettlementEligibility.unavailable())));
         }
         return new CashflowWeeklyOverviewResponse("1", request.yearMonth(), items, errors);
     }
@@ -945,8 +950,20 @@ public class WeeklyExpenseCommandService {
                 cycle.weeklySettlements()
             ),
             null,
-            settlementCycleResponse(cycle)
+            settlementCycleResponse(cycle),
+            readProjectSettlementEligibility(actor, List.of(projectId))
+                .getOrDefault(projectId, ProjectSettlementEligibility.unavailable())
         );
+    }
+
+    private Map<String, ProjectSettlementEligibility> readProjectSettlementEligibility(
+        TrustedActorContext actor, List<String> projectIds
+    ) {
+        try {
+            return persistence.findProjectSettlementEligibility(actor.tenantId(), projectIds);
+        } catch (RuntimeException unavailable) {
+            return Map.of();
+        }
     }
 
     private CashflowWeeklyOverviewResponse.SettlementCycle settlementCycleResponse(

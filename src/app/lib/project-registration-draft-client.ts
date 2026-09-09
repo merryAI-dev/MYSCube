@@ -1,3 +1,4 @@
+import { PROJECT_DOCUMENTS } from '../platform/project-documents';
 import type { RequestActor } from '../platform/request-context';
 import { resolveProjectDocumentMimeType } from '../platform/project-contract-upload';
 import {
@@ -146,16 +147,7 @@ function parseLease(value: unknown): ProjectRegistrationLeaseOwnership {
 function parseAttachment(value: unknown): ProjectRegistrationAttachment {
   const attachment = requireObject(value, 'draft attachment');
   if (
-    ![
-      'contract',
-      'customer_business_registration',
-      'quote',
-      'proposal',
-      'proposal_word_original',
-      'proposal_ppt_original',
-      'presentation_ppt_original',
-      'rfp_request_evidence',
-    ].includes(String(attachment.documentKind))
+    !PROJECT_DOCUMENTS.some(({ documentKind, registration }) => registration && documentKind === attachment.documentKind)
     || typeof attachment.path !== 'string'
     || !attachment.path.trim()
     || typeof attachment.name !== 'string'

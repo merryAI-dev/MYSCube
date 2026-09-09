@@ -2,14 +2,16 @@ import { useEffect, useMemo, useState } from 'react';
 import { INTEREST_REFUND_POLICY_LABELS, type FileAttachment, type ProjectRegistrationOptionalDocumentNotes } from '../../../data/types';
 import type { MigrationAuditConsoleRecord } from '../../../platform/project-migration-console';
 import { getMigrationAuditStatusLabel } from '../../../platform/project-migration-console';
-import { resolveProjectRequestPayload } from '../../../platform/project-change-request';
+import { resolveProjectRequestKind, resolveProjectRequestPayload } from '../../../platform/project-change-request';
 import type { ProjectRequestDocumentKind } from '../../../platform/project-contract-upload';
+import { PROJECT_DOCUMENTS, type ProjectDocumentField } from '../../../platform/project-documents';
 import { buildMigrationReviewDossier } from '../../../platform/project-migration-review-dossier';
 import {
   getManagementPlanningReview,
   getManagementPlanningReviewLabel,
 } from '../../../platform/project-management-planning-review';
 import { ContractDocumentPreview } from '../ContractDocumentPreview';
+import { ProjectClosureDriveContents } from '../ProjectClosureDriveContents';
 import { FinancialYearsTable } from './FinancialYearsTable';
 import {
   Dialog,
@@ -37,19 +39,9 @@ interface MigrationAuditDocumentDialogProps {
   onReject: () => void;
 }
 
-type ReviewDocumentField =
-  | 'contractDocument'
-  | 'customerBusinessRegistrationDocument'
-  | 'quoteDocument'
-  | 'proposalDocument'
-  | 'rfpRequestEvidenceDocument'
-  | 'proposalWordOriginalDocument'
-  | 'proposalPptOriginalDocument'
-  | 'presentationPptOriginalDocument';
-
 type ReviewDocumentDefinition = {
   kind: ProjectRequestDocumentKind;
-  field: ReviewDocumentField;
+  field: ProjectDocumentField;
   label: string;
 };
 
@@ -72,16 +64,7 @@ type ReviewDocumentSlot = ReviewDocumentSlotDefinition & {
   conflict: boolean;
 };
 
-const REVIEW_DOCUMENT_DEFINITIONS: ReviewDocumentDefinition[] = [
-  { kind: 'contract', field: 'contractDocument', label: '계약서 PDF' },
-  { kind: 'customer_business_registration', field: 'customerBusinessRegistrationDocument', label: '고객사 사업자등록증 PDF' },
-  { kind: 'quote', field: 'quoteDocument', label: '견적서 PDF' },
-  { kind: 'proposal', field: 'proposalDocument', label: '제안서 PDF' },
-  { kind: 'rfp_request_evidence', field: 'rfpRequestEvidenceDocument', label: 'RFP/요청 메일 증빙' },
-  { kind: 'proposal_word_original', field: 'proposalWordOriginalDocument', label: '제안서 Word 원본' },
-  { kind: 'proposal_ppt_original', field: 'proposalPptOriginalDocument', label: '제안서 PPT 원본' },
-  { kind: 'presentation_ppt_original', field: 'presentationPptOriginalDocument', label: '발표자료 PPT 원본' },
-];
+const REVIEW_DOCUMENT_DEFINITIONS: ReviewDocumentDefinition[] = PROJECT_DOCUMENTS.map(({ documentKind, field, label }) => ({ kind: documentKind, field, label }));
 
 const REVIEW_DOCUMENT_SLOTS: ReviewDocumentSlotDefinition[] = [
   { number: 1, label: '계약서 PDF', kinds: ['contract'] },
@@ -113,7 +96,20 @@ export function buildMigrationReviewDocumentSlots(record: MigrationAuditConsoleR
     documentByKind.set(definition.kind, { ...definition, document });
   });
 
-  return REVIEW_DOCUMENT_SLOTS.map((slot) => {
+  if (record.request && resolveProjectRequestKind(record.request) === 'CLOSURE') {
+    const kinds: ProjectRequestDocumentKind[] = ['final_report', 'tax_invoice', 'performance_certificate', 'final_settlement_report'];
+    return kinds.map((kind, index) => ({
+      number: index + 1, label: PROJECT_DOCUMENTS.find((document) => document.documentKind === kind)!.label,
+      kinds: [kind], optional: index > 0, entries: documentByKind.has(kind) ? [documentByKind.get(kind)!] : [],
+      note: '', link: '', conflict: false,
+    }));
+  }
+
+  const representedKinds = new Set(REVIEW_DOCUMENT_SLOTS.flatMap((slot) => slot.kinds));
+  const extraSlots = REVIEW_DOCUMENT_DEFINITIONS
+    .filter(({ kind }) => !representedKinds.has(kind) && documentByKind.has(kind))
+    .map(({ kind, label }, index) => ({ number: REVIEW_DOCUMENT_SLOTS.length + index + 1, label, kinds: [kind], optional: true }));
+  return [...REVIEW_DOCUMENT_SLOTS, ...extraSlots].map((slot: ReviewDocumentSlotDefinition) => {
     const entries = slot.kinds.flatMap((kind) => {
       const entry = documentByKind.get(kind);
       return entry ? [entry] : [];
@@ -213,6 +209,8 @@ export function MigrationAuditDocumentDialog({
 
   if (!record) return null;
 
+  const isClosure = record.request?.requestKind === 'CLOSURE';
+
   const dossier = buildMigrationReviewDossier(record.project, record.request);
   const reviewPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
   const totalActualCost = reviewPayload?.totalActualCost;
@@ -221,22 +219,23 @@ export function MigrationAuditDocumentDialog({
   const registrationNote = reviewPayload?.note;
   const confirmations = reviewPayload?.registrationConfirmations;
   const checkout = reviewPayload?.checkout;
-  const checkoutVisible = record.project.status === 'COMPLETED' || record.project.status === 'COMPLETED_PENDING_PAYMENT';
+  const checkoutVisible = isClosure || record.project.status === 'COMPLETED' || record.project.status === 'COMPLETED_PENDING_PAYMENT';
   const quoteDocument = reviewPayload?.quoteDocument;
   const quoteSubmissionDeferred = reviewPayload?.quoteSubmissionDeferred;
   const designatedApproverName = reviewPayload?.executiveApproverName || '';
   const isManagementPlanning = reviewStage === 'managementPlanning';
-  const organizationReviewStatus = record.project.executiveReviewStatus;
+  const isUnapprovedChange = isClosure || (resolveProjectRequestKind(record.request) === 'CHANGE' && (record.request?.status === 'PENDING' || record.request?.status === 'REJECTED'));
+  const organizationReviewStatus = isUnapprovedChange ? record.status : record.project.executiveReviewStatus;
   const organizationDecisionState = organizationReviewStatus === 'APPROVED'
     ? 'approved'
     : organizationReviewStatus === 'REVISION_REJECTED' || organizationReviewStatus === 'DUPLICATE_DISCARDED'
       ? 'rejected'
       : null;
-  const latestOrganizationDecision = organizationDecisionState
+  const latestOrganizationDecision = organizationDecisionState && !isUnapprovedChange
     ? [...(record.project.executiveReviewHistory || [])].reverse().find((entry) => entry.status === organizationReviewStatus)
     : undefined;
-  const organizationReviewedByName = latestOrganizationDecision?.reviewedByName || record.project.executiveReviewedByName || '';
-  const organizationReviewedAt = latestOrganizationDecision?.reviewedAt || record.project.executiveReviewedAt || '';
+  const organizationReviewedByName = isUnapprovedChange ? record.request?.reviewedByName || '' : latestOrganizationDecision?.reviewedByName || record.project.executiveReviewedByName || '';
+  const organizationReviewedAt = isUnapprovedChange ? record.request?.reviewedAt || '' : latestOrganizationDecision?.reviewedAt || record.project.executiveReviewedAt || '';
   const managementReview = getManagementPlanningReview(record.project);
   const managementDecisionState = managementReview.status === 'AGREED'
     ? 'approved'
@@ -267,19 +266,20 @@ export function MigrationAuditDocumentDialog({
   const documentStatus = isManagementPlanning
     ? getManagementPlanningReviewLabel(managementReview.status)
     : getMigrationAuditStatusLabel(record.status);
+  const attachmentRepairRequired = record.request?.attachmentReviewStatus === 'REPAIR_REQUIRED';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-[1180px] overflow-y-auto rounded-none border border-slate-500 bg-slate-100 p-5 shadow-2xl sm:max-w-[1180px]">
-        <DialogHeader className="sr-only"><DialogTitle>프로젝트 등록 및 승인서</DialogTitle><DialogDescription>프로젝트 등록 내용을 결재 문서 형식으로 확인합니다.</DialogDescription></DialogHeader>
+        <DialogHeader className="sr-only"><DialogTitle>{isClosure ? '사업 종료 승인서' : '프로젝트 등록 및 승인서'}</DialogTitle><DialogDescription>제출된 프로젝트 요청과 증빙을 확인합니다.</DialogDescription></DialogHeader>
         <article className="mx-auto w-full max-w-[1020px] border border-slate-400 bg-white px-8 py-9 text-slate-900" data-testid="migration-review-document">
           <header className="border-b-2 border-slate-700 pb-5">
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_410px]">
               <div className="flex min-h-[138px] flex-col justify-center">
-                <p className="text-[11px] font-semibold tracking-[0.12em] text-slate-500">MYSCube · PROJECT REGISTRATION</p>
-                <h2 className="mt-3 text-center text-[25px] font-bold tracking-[0.08em]">프로젝트 등록 및 승인서</h2>
+                <p className="text-[11px] font-semibold tracking-[0.12em] text-slate-500">MYSCube · {isClosure ? 'PROJECT CLOSURE' : 'PROJECT REGISTRATION'}</p>
+                <h2 className="mt-3 text-center text-[25px] font-bold tracking-[0.08em]">{isClosure ? '사업 종료 승인서' : '프로젝트 등록 및 승인서'}</h2>
               </div>
-              <div className="border border-slate-400">
+              {isClosure ? <div className="border border-slate-400 p-4 text-sm"><p>조직장 승인·합의</p><p className="mt-2">{organizationDecisionState ? `${organizationReviewedByName} · ${formatDateTime(organizationReviewedAt)}` : `${designatedApproverName || '지정 조직장'} · 검토 대기`}</p><p className="mt-2 text-xs text-slate-500">승인 즉시 주정산·월결산 업무 대상에서 제외됩니다.</p></div> : <div className="border border-slate-400">
                 <div className="grid grid-cols-[48px_repeat(3,minmax(0,1fr))]">
                   <div className="flex items-center justify-center border-r border-b border-slate-400 bg-slate-50 text-[11px] font-semibold">결재</div>
                   <div className="border-r border-b border-slate-400 px-2 py-1.5 text-center text-[11px] font-semibold">기안</div>
@@ -298,9 +298,21 @@ export function MigrationAuditDocumentDialog({
                   <div className="border-r border-t border-slate-400 px-2 py-2 text-center text-[10px] text-slate-700">{organizationReviewedAt ? formatDateTime(organizationReviewedAt) : '검토 대기'}</div>
                   <div className="border-t border-slate-400 px-2 py-2 text-center text-[10px] text-slate-700">{managementReviewedAt ? formatDateTime(managementReviewedAt) : '합의 대기'}</div>
                 </div>
-              </div>
+              </div>}
             </div>
           </header>
+          {isClosure && record.request?.closureSubmission ? <section className="mt-6">
+            <h3 className="border-b-2 border-slate-700 pb-2 text-[14px] font-bold">종료 신청 및 보관</h3>
+            <div className="border border-slate-400">
+              <DocumentCell label="보관 기산일" value={record.request.closureSubmission.retentionStartDate} />
+              <DocumentCell label="보관 기간" value={`${record.request.closureSubmission.retentionPeriodYears}년`} />
+              <DocumentCell label="인계·보관 위치" value={record.request.closureSubmission.handoverNote || '미입력'} />
+              <DocumentCell label="Drive 링크" value={record.request.closureSubmission.driveFolderLink || '미등록'} />
+              <DocumentCell label="Drive 정리일" value={record.request.closureSubmission.driveDeletedAt || '미기록'} />
+              <DocumentCell label="기타 메모" value={record.request.closureSubmission.note || '없음'} />
+            </div>
+            <ProjectClosureDriveContents projectId={record.project.id} link={record.request.closureSubmission.driveFolderLink} />
+          </section> : null}
 
           <section className="mt-5">
             <h3 className="border-b-2 border-slate-700 pb-2 text-[14px] font-bold">의견 및 처리 이력</h3>
@@ -373,14 +385,14 @@ export function MigrationAuditDocumentDialog({
               <DocumentCell label="세금계산서 증빙 확인" value={formatConfirmation(checkout?.taxInvoiceEvidenceConfirmed)} />
               <DocumentCell label="최종 정산리포트 확인" value={formatConfirmation(checkout?.finalSettlementReportConfirmed)} className="md:border-r md:border-slate-400" />
               <DocumentCell label="USB 재경팀 제출" value={formatConfirmation(checkout?.usbEvidenceSubmitted)} />
-              <DocumentCell label="증빙자료 삭제" value={formatConfirmation(checkout?.evidenceDeletedAfterUsb)} className="md:col-span-2" />
+              <DocumentCell label="Google Drive 정산자료 수동 삭제" value={formatConfirmation(checkout?.evidenceDeletedAfterUsb)} className="md:col-span-2" />
             </dl></section>
           ) : null}
           <section className="mt-6"><h3 className="border-b-2 border-slate-700 pb-2 text-[14px] font-bold">등록 내용</h3><dl className="border border-t-0 border-slate-400">
             <DocumentCell label="프로젝트 목적" value={dossier.notes.projectPurpose} /><DocumentCell label="상세 설명" value={dossier.notes.description} /><DocumentCell label="참여 조건" value={dossier.notes.participantCondition} /><DocumentCell label="등록 메모" value={registrationNote || '-'} />
           </dl></section>
           <section className="mt-6">
-            <h3 className="border-b-2 border-slate-700 pb-2 text-[14px] font-bold">등록 제출서류 7종</h3>
+            <h3 className="border-b-2 border-slate-700 pb-2 text-[14px] font-bold">{isClosure ? '종료 제출서류 4종' : '등록 제출서류 7종'}</h3>
             <div className="border border-t-0 border-slate-400" data-testid="migration-review-document-slots">
               <div className="hidden grid-cols-[48px_220px_minmax(0,1fr)_108px] border-b border-slate-400 bg-slate-100 text-[11px] font-semibold text-slate-700 md:grid">
                 <div className="border-r border-slate-400 px-2 py-2 text-center">번호</div>
@@ -484,7 +496,8 @@ export function MigrationAuditDocumentDialog({
             )}
           </section>
 
-          {isActionPending && canFinalize ? <footer className="mt-7 flex justify-end gap-2 border-t border-slate-300 pt-4"><Button type="button" variant="outline" className="rounded-none border-slate-500" onClick={onReject} disabled={acting}>반려</Button><Button type="button" className="rounded-none bg-[#174a7c] hover:bg-[#103a63]" onClick={onApprove} disabled={acting}>{isManagementPlanning ? '합의' : '승인'}</Button></footer> : null}
+          {attachmentRepairRequired ? <p role="alert" className="mt-5 border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">제출 첨부 파일을 복구해야 승인할 수 있습니다. 담당자에게 첨부 파일 확인을 요청해 주세요.</p> : null}
+          {isActionPending && canFinalize ? <footer className="mt-7 flex justify-end gap-2 border-t border-slate-300 pt-4"><Button type="button" variant="outline" className="rounded-none border-slate-500" onClick={onReject} disabled={acting}>반려</Button><Button type="button" className="rounded-none bg-[#174a7c] hover:bg-[#103a63]" onClick={onApprove} disabled={acting || attachmentRepairRequired}>{isManagementPlanning ? '합의' : '승인'}</Button></footer> : null}
           {isActionPending && !canFinalize ? <p className="mt-7 border-t border-slate-300 pt-4 text-right text-[11px] text-slate-500">{isManagementPlanning ? '경영기획실 담당자만 합의 또는 반려할 수 있습니다.' : '지정된 조직장만 승인 또는 반려할 수 있습니다.'}</p> : null}
         </article>
       </DialogContent>
