@@ -1,6 +1,5 @@
 import express from 'express';
 import { randomUUID } from 'node:crypto';
-import { assertProjectDocumentOriginals } from './project-document-validation.mjs';
 import { createFirestoreDb, isFirestoreEmulatorEnabled, resolveProjectId } from './firestore.mjs';
 import {
   createFirebaseAuthAdminService,
@@ -144,7 +143,7 @@ import {
   createCashflowEditDraftService,
   mountCashflowEditDraftRoutes,
 } from './routes/cashflow-edit-drafts.mjs';
-import { createHttpError, resolveErrorResponse, assertProjectClosureFieldsImmutable } from './bff-utils.mjs';
+import { createHttpError, resolveErrorResponse } from './bff-utils.mjs';
 import { getProfessionalProfileCatalog } from './professional-profile.mjs';
 
 function formatSeoulDate(value) {
@@ -646,9 +645,6 @@ export async function resolveApiRequestContext(req, {
     actorEmail,
     actorName,
     authSource: identity.source,
-    googleSubject: identity.source === 'firebase' && Array.isArray(identity.tokenClaims?.firebase?.identities?.['google.com'])
-      ? identity.tokenClaims.firebase.identities['google.com'].find((value) => typeof value === 'string' && value.length > 0)
-      : undefined,
     requestId,
     idempotencyKey: idempotencyKey.trim() || undefined,
   };
@@ -1275,49 +1271,27 @@ export function createBffApp(options = {}) {
       ? 'skipped'
       : (slackAlertService.enabled ? 'pending' : 'disabled');
 
-    const platformApi = parsed.source === 'platform_api';
-    const screenPath = typeof parsed.route === 'string' ? parsed.route.split(/[?#]/)[0] : '';
-    const projectScreen = screenPath.match(/^\/portal\/(register-project|edit-project|project-approvals|project-settings)(?:\/|$)/)?.[1];
-    const diagnosticText = (value, pattern) => typeof value === 'string' && pattern.test(value) ? value : undefined;
-    const diagnosticId = (value) => diagnosticText(value, /^[A-Za-z0-9_-]{1,128}$/);
-    const diagnosticMethod = diagnosticText(parsed.tags?.method, /^(?:GET|POST|PATCH|PUT|DELETE|HEAD|OPTIONS)$/);
-    const diagnostics = platformApi ? {
-      errorCode: typeof parsed.extra?.errorCode === 'string' && parsed.extra.errorCode.length <= 64 ? diagnosticText(parsed.extra.errorCode, /^(?:(?:[a-z]+_){1,7}[a-z]+|forbidden|unauthorized)$/) : undefined,
-      operation: diagnosticText(parsed.extra?.operation, /^project_(?:info|registration)_draft_(?:read|create|save|discard|open|submit|rebase|withdraw|alias|attachment)$/),
-      endpoint: diagnosticText(parsed.extra?.endpoint, /^\/(?:api\/v1\/(?:[a-z][a-z-]{0,47}\/)?|external\/)\*$/),
-      status: Number.isInteger(parsed.extra?.status) && parsed.extra.status >= 100 && parsed.extra.status <= 599 ? parsed.extra.status : undefined,
-      release: diagnosticText(parsed.extra?.release, /^[A-Za-z0-9._-]{1,128}$/),
-      responseRequestId: diagnosticId(parsed.extra?.responseRequestId),
-      projectId: diagnosticId(parsed.extra?.projectId),
-      draftId: diagnosticId(parsed.extra?.draftId),
-      projectRequestId: diagnosticId(parsed.extra?.projectRequestId),
-      ...Object.fromEntries(['expectedDraftRevision', 'actualDraftRevision', 'expectedVersion', 'actualVersion', 'attempt', 'maxRetries'].flatMap((key) => {
-        const value = parsed.extra?.[key];
-        return Number.isSafeInteger(value) && value >= 0 ? [[key, value]] : [];
-      })),
-      conflictReason: ['revision_changed', 'canonical_changed', 'source_changed', 'attachments_changed', 'registration_changed', 'target_changed'].includes(parsed.extra?.conflictReason) ? parsed.extra.conflictReason : undefined,
-    } : {};
     const event = stripUndefinedDeep({
       id: eventId,
       tenantId,
       actorId,
       actorRole,
-      actorEmail: platformApi ? undefined : actorEmail,
+      actorEmail,
       authSource,
       requestId,
       eventType: parsed.eventType || 'exception',
       level: parsed.level || 'error',
       source: parsed.source,
-      name: platformApi ? 'PlatformApiError' : parsed.name,
-      message: platformApi ? '플랫폼 요청을 처리하지 못했습니다.' : parsed.message,
-      stack: platformApi ? undefined : parsed.stack,
-      route: platformApi ? (projectScreen ? `/portal/${projectScreen}` : /^\/portal(?:\/|$)/.test(screenPath) ? '/portal/*' : '/*') : parsed.route,
-      href: platformApi ? undefined : parsed.href,
-      clientRequestId: platformApi ? diagnosticId(parsed.clientRequestId) : parsed.clientRequestId,
-      fingerprint: platformApi ? undefined : parsed.fingerprint,
-      tags: platformApi ? { surface: 'platform_api', method: diagnosticMethod } : parsed.tags,
-      extra: platformApi ? { ...diagnostics, actorRole } : parsed.extra,
-      userAgent: platformApi ? undefined : readOptionalText(req.header('user-agent')),
+      name: parsed.name,
+      message: parsed.message,
+      stack: parsed.stack,
+      route: parsed.route,
+      href: parsed.href,
+      clientRequestId: parsed.clientRequestId,
+      fingerprint: parsed.fingerprint,
+      tags: parsed.tags,
+      extra: parsed.extra,
+      userAgent: readOptionalText(req.header('user-agent')),
       occurredAt: parsed.occurredAt || timestamp,
       slackEligible,
       slackStatus: initialSlackStatus,
@@ -1337,12 +1311,10 @@ export function createBffApp(options = {}) {
       tenantId,
       actorId,
       actorRole,
-      actorEmailMasked: platformApi ? undefined : piiProtector.maskEmail(actorEmail || ''),
+      actorEmailMasked: piiProtector.maskEmail(actorEmail || ''),
       authSource,
       requestId,
-      clientRequestId: platformApi ? diagnosticId(event.clientRequestId) : event.clientRequestId,
-      ...diagnostics,
-      method: platformApi ? diagnosticMethod : undefined,
+      clientRequestId: event.clientRequestId,
       source: event.source,
       route: event.route,
       href: event.href,
@@ -1425,10 +1397,7 @@ export function createBffApp(options = {}) {
     const parsed = parseWithSchema(genericWriteSchema, req.body, 'Invalid write payload');
 
     const entityType = normalizeEntityType(parsed.entityType);
-    if (entityType === 'project') assertProjectClosureFieldsImmutable(parsed.patch);
     const payloadPatch = stripServerManagedFields(parsed.patch || {});
-    const expectedProjectDocuments = entityType === 'project' ? payloadPatch.expectedProjectDocuments : undefined;
-    if (entityType === 'project') delete payloadPatch.expectedProjectDocuments;
     const patchId = typeof payloadPatch.id === 'string' ? payloadPatch.id.trim() : '';
     const bodyEntityId = typeof parsed.entityId === 'string' ? parsed.entityId.trim() : '';
     const entityId = bodyEntityId || patchId;
@@ -1477,9 +1446,6 @@ export function createBffApp(options = {}) {
         }
       }
 
-      const changedProjectDocuments = entityType === 'project'
-        ? assertProjectDocumentOriginals(snap.exists ? current : null, payloadPatch, expectedProjectDocuments)
-        : {};
       const changedFields = detectChangedFields(current, payloadPatch);
       const nextVersion = currentVersion + 1;
       const document = {
@@ -1494,7 +1460,6 @@ export function createBffApp(options = {}) {
         updatedAt: timestamp,
       };
       tx.set(ref, document, { merge: true });
-      if (Object.keys(changedProjectDocuments).length) tx.update(ref, changedProjectDocuments);
 
       const changeEvent = {
         id: eventId,

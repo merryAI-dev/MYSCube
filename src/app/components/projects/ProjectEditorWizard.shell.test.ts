@@ -315,7 +315,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).toContain('function normalizeRestoredProjectEditorDraft');
     expect(source).toContain("mode === 'portal-register' || mode === 'portal-edit'");
     expect(source).toContain('registrationRequirementsVersion: 2');
-    expect(source).toContain('normalizeRestoredProjectEditorDraft(recoverProjectEditorDraft(comparison[source], comparison.server), mode)');
+    expect(source).toContain('normalizeRestoredProjectEditorDraft(restoreCandidate.draft, mode)');
   });
 
   it('uses the project name as the single PPT registration name', () => {
@@ -422,7 +422,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).toContain('`${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 업로드`');
     expect(source).toContain('`${PROJECT_DOCUMENT_BUTTON_LABELS[kind]} 교체`');
     expect(source).toContain('산출내역서(견적서) PDF');
-    expect(source).toContain('PROJECT_DOCUMENTS.map(({ documentKind, label }) => [documentKind, label])');
+    expect(source).toContain('제안서 PDF');
     expect(source).toContain('quoteDocument');
     expect(source).toContain('proposalDocument');
     expect(source).toContain('buildContractDocumentEditPolicy');
@@ -548,7 +548,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).toContain('readOnly?: boolean');
     expect(source).toContain('<fieldset disabled={readOnly} className="contents">');
     expect(source).toContain('disabled={readOnly || autosaveState');
-    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled || Boolean(restoreCandidate)}');
+    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled}');
     expect(source).toContain('shouldResetProjectEditorDraft({');
     expect(source).toContain('autosave?.onSave, draftKey, hasPendingRetryFile, hasRequiredRegistrationDocuments, mode, readOnly, uploadInProgress');
   });
@@ -570,16 +570,15 @@ describe('ProjectEditorWizard dropdown contract', () => {
   });
 
   it('never double-submits or final-submits after the latest private draft save fails', () => {
-    expect(source).toContain('if (submitInFlightRef.current || finishedRef.current || writesPausedRef.current) return');
-    expect(source).toContain("if (restoreCandidate) {\n      toast.info('최종 저장 전에 이전 임시저장을 불러오거나 버려 주세요.');\n      return;");
+    expect(source).toContain('if (submitInFlightRef.current) return');
     expect(source).toContain("throw new Error('최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다.')");
-    expect(source.indexOf('persistAutosaveSnapshot(snapshot, stepIndex, true)')).toBeLessThan(source.indexOf('await onSubmit(snapshot, actionId)'));
+    expect(source.indexOf('persistAutosaveSnapshot(draft, stepIndex)')).toBeLessThan(source.indexOf('await onSubmit(createProjectEditorDraft(draft), actionId)'));
   });
 
   it('never saves or submits a stale snapshot while an attachment mutation is in flight', () => {
     // 자동저장 가드는 렌더 시점 값이 아니라 ref 를 즉석에서 본다 - 대기 파일을 버리고
     // 나가는 경로에서도 임시저장이 돼야 하기 때문이다.
-    expect(source).toContain('if (uploadInProgress || pendingRetryNow || readOnly');
+    expect(source).toContain('if (uploadInProgress || pendingRetryNow) return false;');
     expect(source).toContain("toast.error('첨부파일 처리를 완료한 뒤 임시저장해 주세요.')");
     expect(source).toContain("toast.error('첨부파일 처리를 완료한 뒤 최종 저장해 주세요.')");
     expect(source).toContain("disabled={readOnly || autosaveState === 'saving' || uploadInProgress || hasPendingRetryFile || (mode === 'portal-register' && !hasRequiredRegistrationDocuments)}");
@@ -587,7 +586,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
   });
 
   it('keeps the final save button pressable and explains every reason it cannot submit yet', () => {
-    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled || Boolean(restoreCandidate)}');
+    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled}');
     expect(source).toContain('const submitBlocked = !canSubmit || Boolean(submitBlockedStatusReason);');
     expect(source).toContain('if (submitBlocked) {');
     expect(source).toContain('setSubmitBlockedNotice(true);');

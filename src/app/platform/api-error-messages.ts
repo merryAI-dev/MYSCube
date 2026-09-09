@@ -4,17 +4,6 @@ export interface ApiErrorPresentation {
 }
 
 const presentations = new Map<string, ApiErrorPresentation>([
-  ['draft_version_conflict', { guide: '최근 임시저장과 내용이 달라요. 입력을 유지한 채 비교 화면에서 사용할 내용을 선택해 주세요.', resolution: 'contact' }],
-  ['draft_source_conflict', { guide: '최근 제출·확정 내용이 변경됐어요. 비교 화면에서 최신 내용과 첨부파일을 확인하고 선택해 주세요.', resolution: 'contact' }],
-  ['canonical_version_conflict', { guide: '프로젝트 확정 내용이 변경됐어요. 비교 화면에서 최신 내용과 첨부파일을 확인하고 선택해 주세요.', resolution: 'contact' }],
-  ['project_document_conflict', { guide: '첨부파일이 변경됐어요. 최신 첨부를 확인한 뒤 변경할 파일을 다시 선택해 주세요.', resolution: 'contact' }],
-  ['idempotency_conflict', { guide: '이전 요청과 내용이 달라 처리하지 않았어요. 먼저 서버의 저장 상태를 확인해 주세요. 같은 작업을 새 요청으로 반복하지 마세요.', resolution: 'contact' }],
-  ['idempotency_in_progress', { guide: '이전 요청을 처리 중이에요. 서버의 저장 상태가 확인될 때까지 기다려 주세요.', resolution: 'wait' }],
-  ['edit_lease_expired', { guide: '편집 시간이 만료됐어요. 보관된 입력을 확인하고 편집 권한을 다시 얻은 뒤 최근 저장 내용과 비교해 주세요.', resolution: 'contact' }],
-  ['edit_lease_held', { guide: '다른 편집 세션이 사용 중이에요. 입력을 보관하고 해당 세션의 편집이 끝난 뒤 다시 열어 주세요.', resolution: 'wait' }],
-  ['draft_attachment_invalid', { guide: '파일 형식이나 저장된 첨부를 확인할 수 없어요. 첨부 목록과 허용 파일 형식을 확인해 주세요.', resolution: 'contact' }],
-  ['draft_attachment_size_mismatch', { guide: '첨부파일 크기가 업로드 내용과 달라요. 서버 첨부 목록을 확인한 뒤 원본 파일을 다시 선택해 주세요.', resolution: 'contact' }],
-  ['draft_attachment_incoming_missing', { guide: '업로드한 파일을 확인하지 못했어요. 먼저 서버 첨부 목록을 확인하고 누락된 파일만 다시 선택해 주세요.', resolution: 'contact' }],
   ['cashflow_sheet_apply_in_progress', {
     guide: '시트 값을 반영하는 중이에요. 잠시 뒤 자동으로 풀리면 다시 확인해 주세요.',
     resolution: 'wait',

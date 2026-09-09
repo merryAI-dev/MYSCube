@@ -1422,28 +1422,6 @@ describe('platform-bff-client', () => {
     }));
   });
 
-  it.each([undefined, null, {}, { item: false }, { item: {} }, { item: { id: 'a', payload: [] } },
-    { item: { id: 'r', requestKind: 'CHANGE', status: 'REJECTED', targetProjectId: 'p', reviewedAt: { bad: true }, proposedSnapshot: {} } },
-    ...['reviewedByName', 'reviewedBy', 'reviewComment', 'rejectedReason', 'humanSummary', 'updatedAt', 'createdAt', 'reviewOutcome'].map((key) => ({ item: { id: 'r', [key]: { bad: true } } })),
-  ])('rejects malformed latest request response %j', async (data) => {
-    const client = asMockClient({ get: vi.fn(async () => ({ data })), post: vi.fn(), request: vi.fn() });
-    await expect(fetchLatestProjectRequestViaBff({ tenantId: 'mysc', actor: { uid: 'a', role: 'admin' }, projectId: 'p', client })).rejects.toThrow();
-  });
-  it.each([{}, { items: null }, { items: [null] }, { items: [{ id: '' }] }, { items: [{ id: 'a', proposedSnapshot: [] }] }, { items: [{ id: 'a', requestKind: {} }] }, { items: [{ id: 'a', status: [] }] }, { items: [{ id: 'a', approvedProjectId: 42 }] }])('rejects malformed inbox response %j', async (data) => {
-    const client = asMockClient({ get: vi.fn(async () => ({ data })), post: vi.fn(async () => ({ data })), request: vi.fn() });
-    const params = { tenantId: 'mysc', actor: { uid: 'a', role: 'admin' }, projectIds: ['p'], client };
-    await expect(fetchAssignedProjectRequestsViaBff(params)).rejects.toThrow();
-    await expect(fetchPendingProjectChangeRequestsViaBff(params)).rejects.toThrow();
-    await expect(fetchProjectReviewInboxViaBff(params)).rejects.toThrow();
-  });
-  it('accepts only explicit empty lookup results and fails the whole lookup for one invalid batch', async () => {
-    const client = asMockClient({ get: vi.fn().mockResolvedValueOnce({ data: { item: null } }).mockResolvedValueOnce({ data: { items: [], projects: [] } }), post: vi.fn().mockResolvedValueOnce({ data: { items: [] } }).mockResolvedValueOnce({ data: { items: [{ id: 'ok' }] } }).mockResolvedValueOnce({ data: {} }), request: vi.fn() });
-    const params = { tenantId: 'mysc', actor: { uid: 'a', role: 'admin' }, projectId: 'p', projectIds: ['p'], client };
-    await expect(fetchLatestProjectRequestViaBff(params)).resolves.toBeNull();
-    await expect(fetchAssignedProjectRequestsViaBff(params)).resolves.toEqual({ requests: [], projects: [] });
-    await expect(fetchPendingProjectChangeRequestsViaBff(params)).resolves.toEqual([]);
-    await expect(fetchProjectReviewInboxViaBff({ ...params, projectIds: Array.from({ length: 201 }, (_, i) => String(i)) })).rejects.toThrow();
-  });
   it('chunks 201 project ids and returns deduplicated requests in stable requested order', async () => {
     const projectIds = Array.from({ length: 201 }, (_, index) => `project-${index + 1}`);
     const client = asMockClient({

@@ -311,7 +311,6 @@ export function CashflowExportPage() {
   } : null, [user?.email, user?.idToken, user?.role, user?.uid]);
   const operationsKey = JSON.stringify([
     orgId, operationsActor?.uid || '', operationsActor?.role || '', targetProjectIdsKey,
-    targetProjects.map((project) => [project.id, project.closure?.requestId]),
     previousWeek?.yearMonth || '', previousWeek?.period || '', currentWeek?.yearMonth || '', currentWeek?.period || '',
   ]);
   const scopedOperations = operationsState.key === operationsKey ? operationsState : {
@@ -884,7 +883,7 @@ export function CashflowExportPage() {
                       <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> 주정산과 시트 저장값을 불러오는 중입니다.
                     </td>
                   </tr>
-                ) : targetProjects.filter((project) => scopedOperations.overviewItems[project.id]?.settlementEligibility?.status !== 'CLOSED').map((project) => {
+                ) : targetProjects.map((project) => {
                   const overviewItem = scopedOperations.overviewItems[project.id];
                   const summaryError = Boolean(scopedOperations.summaryErrors[project.id]);
                   return (

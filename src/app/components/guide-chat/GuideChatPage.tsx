@@ -201,7 +201,6 @@ export function GuideChatPage() {
           <div className="border-t p-3 flex gap-2">
             <Input
               value={question}
-              aria-required
               onChange={e => setQuestion(e.target.value)}
               placeholder="사업비 가이드에 대해 질문하세요..."
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAsk(); } }}

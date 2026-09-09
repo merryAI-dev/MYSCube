@@ -103,7 +103,6 @@ export function ProjectFormRow({ label, required, note, hints, errors, issueLabe
      */
     <div
       data-issue-label={issueLabel}
-      data-field-required={Boolean(required)}
       className={cn(
         'grid gap-2 rounded-md border-l-2 border-transparent pl-2 transition-colors lg:grid-cols-[168px_minmax(0,1fr)] lg:gap-x-6',
         'focus-within:border-l-[#0176D3] focus-within:bg-[#0176D3]/[0.04]',
@@ -114,7 +113,6 @@ export function ProjectFormRow({ label, required, note, hints, errors, issueLabe
           <span>
             {label}
           </span>
-          {required ? <span className="text-[11px] font-normal text-red-700">필수</span> : null}
         </Label>
         {note ? <p className={cn('mt-1', FORM_HINT_CLASS)}>{note}</p> : null}
       </div>

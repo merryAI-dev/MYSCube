@@ -99,7 +99,6 @@ jobs:
       LIVE_FIREBASE_PROJECT_ID: inner-platform-live-20260316
       BFF_DEPLOY_ENV: live
       BFF_AUTH_MODE: firebase_required
-      BFF_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.BFF_GOOGLE_OAUTH_CLIENT_ID_LIVE }}
       BFF_EDIT_LEASES_ENABLED: 'true'
       BFF_WORKERS_ENABLED: 'true'
       BFF_SCHEDULER_OWNER: vercel
@@ -483,37 +482,6 @@ jobs:
             --people-uid "${CASHFLOW_ACTOR_UID}" \
             --jvm-base-url "${JVM_WEEKLY_API_BASE_URL}" \
             --jvm-audience "${JVM_WEEKLY_API_ID_TOKEN_AUDIENCE}"
-
-      - name: Authenticate Firestore rules publisher
-        if: steps.release_mode.outputs.release_mode == 'web'
-        uses: google-github-actions/auth@v3
-        id: rules_auth
-        with:
-          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER_LIVE }}
-          service_account: ${{ vars.GCP_JVM_DEPLOYER_SERVICE_ACCOUNT_LIVE }}
-          export_environment_variables: false
-
-      - name: Prepare Firestore rules backup
-        if: steps.release_mode.outputs.release_mode == 'web'
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.rules_auth.outputs.credentials_file_path }}
-          BFF_DEPLOYED_SHA: ${{ steps.release_mode.outputs.bff_deployed_sha }}
-        run: node scripts/publish-firestore-rules.mjs prepare "${RUNNER_TEMP}/firestore-rules-backup.json"
-
-      - name: Preserve Firestore rules rollback artifact
-        if: steps.release_mode.outputs.release_mode == 'web'
-        uses: actions/upload-artifact@v4
-        with:
-          name: firestore-rules-backup-web-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/firestore-rules-backup.json
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Publish and verify Firestore rules
-        if: steps.release_mode.outputs.release_mode == 'web'
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.rules_auth.outputs.credentials_file_path }}
-        run: node scripts/publish-firestore-rules.mjs publish "${RUNNER_TEMP}/firestore-rules-backup.json"
 
       - name: Deploy to Vercel production
         id: vercel_deploy

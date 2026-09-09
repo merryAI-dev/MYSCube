@@ -274,7 +274,6 @@ export function ClaudeSdkHelpPage() {
           <div className="border-t p-3 flex gap-2">
             <Input
               value={question}
-              aria-required
               onChange={(e) => setQuestion(e.target.value)}
               placeholder="예: merry 기준으로 ClaudeSDKClient 초기화 예시를 보여줘"
               onKeyDown={(e) => {

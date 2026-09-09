@@ -9,7 +9,6 @@ import {
   DialogTitle,
 } from '../ui/dialog';
 import { RadioGroup, RadioGroupItem } from '../ui/radio-group';
-import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
 import type {
   ProjectInfoRebaseConflict,
   ProjectInfoRebaseResolution,
@@ -54,7 +53,18 @@ const FIELD_LABELS: Record<string, string> = {
   participantCondition: '참여 조건',
   businessManagementGoogleFolderLink: '사업관리 구글폴더링크',
   groupwareName: '그룹웨어명',
+  contractDocument: '계약서',
+  customerBusinessRegistrationDocument: '고객사 사업자등록증',
+  quoteDocument: '산출내역서(견적서)',
   quoteSubmissionDeferred: '산출내역서 이후 제출',
+  proposalDocument: '제안서',
+  proposalWordOriginalDocument: '제안서(워드)',
+  proposalPptOriginalDocument: '제안서 원본(PPT)',
+  presentationPptOriginalDocument: '발표자료 원본(PPT)',
+  rfpRequestEvidenceDocument: 'RFP',
+  performanceCertificateDocument: '수행확인서',
+  taxInvoiceDocument: '세금계산서',
+  finalSettlementReportDocument: '최종 정산보고서',
   teamMembers: '참여인력 요약',
   settlementSystemOther: '기타 정산 시스템 이름',
   finalPaymentNote: '잔금 관련 메모',
@@ -71,34 +81,9 @@ const FIELD_LABELS: Record<string, string> = {
   registeredByName: '등록자',
   managerId: 'PM 계정',
   executiveApproverId: '최종 결재자 계정',
-  executiveApproverEmail: '최종 결재자 이메일',
-  registeredById: '등록자 계정',
-  registeredByEmail: '등록자 이메일',
-  participationSheetLink: '참여율 시트 링크',
-  contractEndUndecided: '종료 기간 없음',
-  staffing: '참여인력 구성',
-  budgetCurrentYear: '당해연도 예산',
-  taxInvoiceAmount: '세금계산서 발행액',
-  profitRate: '수익률',
-  profitAmount: '수익금',
-  year: '연도',
-  confirmed: '확정 여부',
-  isSettled: '정산 완료',
-  memberName: '성명',
-  memberNickname: '닉네임',
-  role: '역할',
-  participationRate: '참여율',
-  monthlyRates: '월별 참여율',
-  laborAllocationStartMonth: '참여 시작월',
-  laborAllocationEndMonth: '참여 종료월',
-  personId: '구성원',
-  isDocumentOnly: '문서상 인력',
-  identityInput: '구성원 입력',
-  inputMode: '입력 방식',
-  ...Object.fromEntries(PROJECT_DOCUMENTS.map(({ field, label }) => [field, label])),
 };
 
-export function fieldLabel(field: string) {
+function fieldLabel(field: string) {
   return FIELD_LABELS[field] || field;
 }
 
@@ -111,7 +96,7 @@ function text(value: unknown) {
 }
 
 // The dialog shows what the person sees on the form, never the stored shape.
-export function displayValue(value: unknown): string {
+function displayValue(value: unknown): string {
   if (value === null || value === undefined || value === '') return '입력하지 않음';
   if (typeof value === 'boolean') return value ? '예' : '아니오';
   if (typeof value === 'number') return value.toLocaleString('ko-KR');
@@ -119,7 +104,22 @@ export function displayValue(value: unknown): string {
 
   if (Array.isArray(value)) {
     if (value.length === 0) return '없음';
-    return value.map(displayValue).join('\n');
+    const people = value
+      .map((entry) => {
+        if (!isRecord(entry)) return '';
+        const name = text(entry.memberName) || text(entry.name);
+        if (!name) return '';
+        const nickname = text(entry.memberNickname);
+        const role = text(entry.role);
+        return `${name}${nickname ? `(${nickname})` : ''}${role ? ` · ${role}` : ''}`;
+      })
+      .filter(Boolean);
+    if (people.length === value.length) return people.join(', ');
+    const years = value
+      .map((entry) => (isRecord(entry) && entry.year ? String(entry.year) : ''))
+      .filter(Boolean);
+    if (years.length === value.length) return `${years.join(', ')}년`;
+    return `${value.length}개 항목`;
   }
 
   if (isRecord(value)) {
@@ -140,7 +140,8 @@ export function displayValue(value: unknown): string {
         return `${MONEY_LABELS[key]} ${shown}`;
       });
     if (parts.length > 0) return parts.join(' · ');
-    return Object.entries(value).map(([key, entry]) => `${fieldLabel(key)}: ${displayValue(entry)}`).join(' · ') || '입력하지 않음';
+    const filled = Object.values(value).filter((entry) => entry !== null && entry !== undefined && entry !== '').length;
+    return filled === 0 ? '입력하지 않음' : `${filled}개 항목 입력됨`;
   }
   return String(value);
 }
@@ -178,7 +179,7 @@ export function ProjectInfoRebaseDialog({
           <DialogTitle>수정하는 동안 프로젝트가 변경되었습니다</DialogTitle>
           <DialogDescription>
             {conflicts.length > 0
-              ? '아래 항목은 내가 입력한 값과 최근 제출·확정된 값이 서로 다릅니다. 어느 값을 남길지 선택해 주세요.'
+              ? '아래 항목은 내가 입력한 값과 임시저장된 최근 값이 서로 다릅니다. 어느 값을 남길지 선택해 주세요.'
               : '변경된 내용은 모두 자동으로 반영할 수 있습니다. 확인 후 계속 진행해 주세요.'}
           </DialogDescription>
         </DialogHeader>
@@ -223,7 +224,7 @@ export function ProjectInfoRebaseDialog({
                   </label>
                   <label className="flex items-start gap-2 text-[12px] text-slate-700">
                     <RadioGroupItem value="THEIRS" className="mt-0.5" />
-                    <span>최근 제출·확정된 값 · <strong>{displayValue(conflict.theirs)}</strong></span>
+                    <span>임시저장된 최근 값 · <strong>{displayValue(conflict.theirs)}</strong></span>
                   </label>
                 </RadioGroup>
               </div>

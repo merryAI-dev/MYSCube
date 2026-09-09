@@ -68,10 +68,6 @@ export async function assertCashflowMonthWritable({ db, transaction, tenantId, p
     throw createHttpError(400, '대상 월 형식을 확인해 주세요.', 'cashflow_month_invalid');
   }
   const read = (ref) => (transaction ? transaction.get(ref) : ref.get());
-  const projectSnapshot = await read(db.doc(`orgs/${tenantId}/projects/${projectId}`));
-  if (Object.hasOwn(projectSnapshot.data() || {}, 'closure')) {
-    throw createHttpError(409, '조직장이 종료 승인한 사업은 정산을 변경할 수 없습니다.', 'project_closed');
-  }
   const headSnapshot = await read(db.doc(`orgs/${tenantId}/cashflow_cumulative_close_heads/${projectId}`));
   if (headSnapshot.exists) {
     const authority = readCashflowCumulativeCloseAuthority(headSnapshot.data(), { tenantId, projectId });

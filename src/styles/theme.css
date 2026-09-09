@@ -29,11 +29,6 @@
   --border: #d9e2ee;
   --input: #c3cedd;
   --input-background: #ffffff;
-  --field-required-background: #fff1f2;
-  --field-optional-background: #eff6ff;
-  --field-neutral-background: #f1f5f9;
-  --field-active-border: #174a7c;
-  --field-error-border: #be123c;
   --switch-background: #cbd5e1;
   /* Font Weight */
   --font-weight-medium: 500;
@@ -109,11 +104,6 @@
   --border: #243447;
   --input: #334155;
   --input-background: #111d2f;
-  --field-required-background: #35232d;
-  --field-optional-background: #162b43;
-  --field-neutral-background: #172334;
-  --field-active-border: #8ed4ea;
-  --field-error-border: #fb7185;
   --switch-background: #475569;
   --ring: #5bbfdf;
   --font-weight-medium: 500;
@@ -350,42 +340,10 @@
   box-shadow: inset 0 1px 0 rgba(15, 23, 42, 0.03);
 }
 
-[data-field-required='true'],
-[required],
-[aria-required='true'] {
-  --field-background: var(--field-required-background);
-}
-
-[data-field-required='false'],
-[aria-required='false'] {
-  --field-background: var(--field-optional-background);
-}
-
-:is(
-  input:not(:where([type='hidden'], [type='range'], [type='color'], [type='checkbox'], [type='radio'], [type='button'], [type='submit'], [type='reset'], [type='image'])),
-  textarea,
-  select,
-  [data-slot='select-trigger'],
-  [role='combobox']
-):not([hidden]) {
-  background-color: var(--field-background, var(--field-optional-background)) !important;
-
-  &:is(:disabled, [aria-disabled='true'], [readonly], [aria-readonly='true']) {
-    background-color: var(--field-neutral-background) !important;
-    border-color: var(--input) !important;
-  }
-}
-
-:is(input, textarea, select, button, [role='button'], [role='combobox'], [role='checkbox'], [role='radio'], [role='tab']):focus:not(:where(:disabled, [aria-disabled='true'], [readonly], [aria-readonly='true'])),
-:is(input[type='checkbox']:checked, input[type='radio']:checked, [aria-checked='true'], [aria-selected='true'], [aria-pressed='true'], [data-field-selected='true'], [data-slot='select-item'][data-state='checked'], [data-slot='tabs-trigger'][data-state='active'], [role='combobox'][aria-expanded='true'], [data-slot='select-trigger'][data-state='open']):not(:where(:disabled, [aria-disabled='true'], [readonly], [aria-readonly='true'])) {
-  border-color: var(--field-active-border) !important;
-  outline: 3px solid var(--field-active-border) !important;
-  outline-offset: -3px !important;
-}
-
-:is(input, textarea, select, button, [role='combobox'], [role='checkbox'], [role='radio'])[aria-invalid='true']:not(:where(:disabled, [aria-disabled='true'], [readonly], [aria-readonly='true'])) {
-  border-color: var(--field-error-border) !important;
-  outline-color: var(--field-error-border) !important;
+[data-slot='input']:focus-visible,
+[data-slot='textarea']:focus-visible,
+[data-slot='select-trigger']:focus-visible {
+  box-shadow: 0 0 0 3px rgba(42, 169, 206, 0.16);
 }
 
 [data-slot='badge'] {

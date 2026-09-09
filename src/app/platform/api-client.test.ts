@@ -3,28 +3,6 @@ import { PlatformApiClient, PlatformApiError } from './api-client';
 import { clearDevtoolsLogs, getDevtoolsLogs } from './devtools-transaction-log';
 
 describe('PlatformApiClient', () => {
-  it.each([403, 409, 410, 413, 422, 423])('does not retry a terminal %i or replace its idempotency key', async (status) => {
-    const keys: Array<string | null> = [];
-    const fetchImpl = vi.fn(async (_url, init) => {
-      keys.push(new Headers(init?.headers).get('idempotency-key'));
-      return new Response(JSON.stringify({ error: 'draft_request_invalid' }), { status, headers: { 'content-type': 'application/json' } });
-    });
-    const client = new PlatformApiClient({ fetchImpl, maxRetries: 3, retryDelayMs: 0 });
-    await expect(client.post('/api/v1/project-registration-drafts/draft-a/submit', {
-      tenantId: 'mysc', actor: { id: 'u001' }, idempotencyKey: 'keep-this-key',
-    })).rejects.toMatchObject({ status });
-    expect(keys).toEqual(['keep-this-key']);
-  });
-  it.each(['code', 'error'])('normalizes the established forbidden %s envelope', async (field) => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ [field]: 'forbidden' }), {
-      status: 403, headers: { 'content-type': 'application/json' },
-    }));
-    const client = new PlatformApiClient({ fetchImpl, maxRetries: 3, retryDelayMs: 0 });
-    await expect(client.post('/api/v1/project-info-drafts/p001/submit', {
-      tenantId: 'mysc', actor: { id: 'u001', role: 'pm' }, idempotencyKey: 'same-key',
-    })).rejects.toMatchObject({ code: 'forbidden' });
-    expect(fetchImpl).toHaveBeenCalledOnce();
-  });
   it('injects standard headers and parses json body', async () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const headers = new Headers(init?.headers);

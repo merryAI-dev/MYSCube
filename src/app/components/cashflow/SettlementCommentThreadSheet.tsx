@@ -190,7 +190,6 @@ export function SettlementCommentThreadSheet({
           </div>
           <Textarea
             value={draft}
-            aria-required
             placeholder="검토 내용, 수정 근거, 확인 결과를 남겨주세요"
             className="min-h-24 rounded-md text-[12px]"
             onChange={(event) => setDraft(event.target.value)}

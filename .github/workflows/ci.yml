@@ -24,12 +24,6 @@ jobs:
       - name: Unit tests
         run: npm test
 
-      - name: Install project draft browser
-        run: npx playwright install --with-deps chromium
-
-      - name: Project draft recovery browser checks
-        run: npx playwright test --config playwright.project-draft.config.mjs --workers=1
-
       # vite strips types without checking them, so this is what catches an
       # undefined identifier before it reaches production as a runtime crash.
       - name: Typecheck (no new errors)

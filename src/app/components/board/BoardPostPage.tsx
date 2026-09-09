@@ -317,7 +317,7 @@ export function BoardPostPage() {
         <CardContent className="p-4 space-y-3">
           <p className="text-[12px]" style={{ fontWeight: 800 }}>댓글</p>
           <Textarea
-            aria-required="true" value={content}
+            value={content}
             onChange={(e) => setContent(e.target.value)}
             placeholder="댓글을 입력하세요"
             className="min-h-[90px]"
@@ -372,7 +372,7 @@ export function BoardPostPage() {
                       {editingCommentId === c.id ? (
                         <div className="mt-2 space-y-2">
                           <Textarea
-                            aria-required="true" value={editCommentBody}
+                            value={editCommentBody}
                             onChange={(e) => setEditCommentBody(e.target.value)}
                             className="min-h-[80px]"
                           />
@@ -404,7 +404,7 @@ export function BoardPostPage() {
                       {replyTo === c.id && (
                         <div className="mt-3 space-y-2">
                           <Textarea
-                            aria-required="true" value={replyContent}
+                            value={replyContent}
                             onChange={(e) => setReplyContent(e.target.value)}
                             placeholder="답글을 입력하세요"
                             className="min-h-[80px]"
@@ -452,7 +452,7 @@ export function BoardPostPage() {
                             {editingCommentId === r.id ? (
                               <div className="mt-2 space-y-2">
                                 <Textarea
-                                  aria-required="true" value={editCommentBody}
+                                  value={editCommentBody}
                                   onChange={(e) => setEditCommentBody(e.target.value)}
                                   className="min-h-[60px]"
                                 />
@@ -524,14 +524,14 @@ export function BoardPostPage() {
             <div className="space-y-1.5">
               <Label>제목</Label>
               <Input
-                aria-required="true" value={editForm.title}
+                value={editForm.title}
                 onChange={(e) => setEditForm((p) => ({ ...p, title: e.target.value }))}
               />
             </div>
             <div className="space-y-1.5">
               <Label>본문</Label>
               <Textarea
-                aria-required="true" value={editForm.body}
+                value={editForm.body}
                 onChange={(e) => setEditForm((p) => ({ ...p, body: e.target.value }))}
                 className="min-h-[160px]"
               />

@@ -980,7 +980,6 @@ export function PersonnelChangePage() {
               )}
               <div>
                 <Textarea
-                  aria-required={approvalDialog?.action !== 'APPROVED'}
                   value={approvalComment}
                   onChange={e => setApprovalComment(e.target.value)}
                   className="text-[12px] min-h-[80px]"

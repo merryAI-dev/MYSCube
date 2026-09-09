@@ -6,7 +6,6 @@ import dev.merryai.innerplatform.weekly.api.CashflowWeeklyOverviewResponse;
 import dev.merryai.innerplatform.weekly.api.CashflowSettlementStatusesResponse;
 import dev.merryai.innerplatform.weekly.api.TrustedActorContext;
 import dev.merryai.innerplatform.weekly.domain.CashflowLedgerSource;
-import dev.merryai.innerplatform.weekly.domain.ProjectSettlementEligibility;
 import dev.merryai.innerplatform.weekly.domain.CashflowSettlementCyclePolicy;
 import dev.merryai.innerplatform.weekly.storage.WeeklyExpensePersistence;
 import org.junit.jupiter.api.Test;
@@ -24,31 +23,6 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class CashflowWeeklyOverviewServiceTest {
-    @Test
-    void closureEligibilityIsExplicitForBothOverviewModesWithoutDeletingHistory() {
-        WeeklyExpensePersistence persistence = mock(WeeklyExpensePersistence.class);
-        WeeklyExpenseCommandService service = new WeeklyExpenseCommandService(
-            persistence, mock(WeeklyExpenseAuthorizationService.class), new ObjectMapper(), false, "live"
-        );
-        when(persistence.findProjectSettlementEligibility("tenant-a", List.of("closed")))
-            .thenReturn(Map.of("closed", new ProjectSettlementEligibility("CLOSED", false, false, false)));
-        when(persistence.findCashflowSettlementStatusesBatch("tenant-a", List.of("closed"), "2023-01"))
-            .thenReturn(Map.of("closed", List.of(new WeeklyExpensePersistence.CashflowSettlementStatusRecord(
-                "WEEK_1", "COMPLETED", "", "", "", "", 1
-            ))));
-        for (boolean cycle : List.of(false, true)) {
-            var response = service.readCashflowWeeklyOverview(ACTOR,
-                new CashflowWeeklyOverviewRequest(List.of("closed"), "2023-01", cycle));
-            assertThat(response.items().getFirst().settlementEligibility())
-                .isEqualTo(new ProjectSettlementEligibility("CLOSED", false, false, false));
-            if (!cycle) assertThat(response.items().getFirst().settlementStatuses().items()).hasSize(1);
-        }
-        when(persistence.findProjectSettlementEligibility("tenant-a", List.of("closed")))
-            .thenThrow(new IllegalStateException("read failed"));
-        assertThat(service.readCashflowWeeklyOverview(ACTOR,
-            new CashflowWeeklyOverviewRequest(List.of("closed"), "2026-09"))
-            .items().getFirst().settlementEligibility()).isEqualTo(ProjectSettlementEligibility.unavailable());
-    }
     private static final TrustedActorContext ACTOR = new TrustedActorContext(
         "tenant-a", "viewer-a", "viewer@example.com", "viewer", "Viewer A"
     );
@@ -234,7 +208,7 @@ class CashflowWeeklyOverviewServiceTest {
         new ObjectMapper().readTree(new ObjectMapper().writeValueAsString(response))
             .path("items").get(0).fieldNames().forEachRemaining(serializedItemKeys::add);
         assertThat(serializedItemKeys).containsExactly(
-            "projectId", "settlementStatuses", "projectionActualSummary", "settlementEligibility"
+            "projectId", "settlementStatuses", "projectionActualSummary"
         );
         verify(persistence).findCashflowSettlementStatusesBatch("tenant-a", projectIds, "2026-08");
         verify(persistence, never()).findCashflowSettlementCyclesBatch(

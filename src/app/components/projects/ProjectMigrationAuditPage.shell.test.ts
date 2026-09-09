@@ -3,7 +3,6 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import type { MigrationAuditConsoleRecord } from '../../platform/project-migration-console';
 import { buildMigrationReviewDocumentSlots } from './migration-audit/MigrationAuditDocumentDialog';
-import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
 
 const pageSource = readFileSync(resolve(import.meta.dirname, 'ProjectMigrationAuditPage.tsx'), 'utf8');
 const controlBarSource = readFileSync(resolve(import.meta.dirname, 'migration-audit/MigrationAuditControlBar.tsx'), 'utf8');
@@ -14,24 +13,6 @@ const financialYearsTableSource = readFileSync(resolve(import.meta.dirname, 'mig
 const compositeSource = [pageSource, controlBarSource, documentSource, recordListSource, previewSource].join('\n');
 
 describe('ProjectMigrationAuditPage review flow', () => {
-  it('shows only the four closure submissions from the submitted snapshot', () => {
-    const payload = Object.fromEntries(PROJECT_DOCUMENTS.map(({ field, documentKind }) => [field, { name: `${documentKind}.pdf`, path: `requests/${documentKind}.pdf` }]));
-    const record = { project: {}, request: { requestKind: 'CLOSURE', payload } } as unknown as MigrationAuditConsoleRecord;
-    const slots = buildMigrationReviewDocumentSlots(record);
-    expect(slots).toHaveLength(4);
-    expect(slots.flatMap((slot) => slot.entries.map((entry) => entry.kind))).toEqual(['final_report', 'tax_invoice', 'performance_certificate', 'final_settlement_report']);
-    expect(slots[0].entries[0].document.path).toBe('requests/final_report.pdf');
-    expect(documentSource).toContain('종료 제출서류 4종');
-    expect(documentSource).toContain('Google Drive 정산자료 수동 삭제');
-  });
-  it('includes all twelve submitted documents even before project completion', () => {
-    const payload = Object.fromEntries(PROJECT_DOCUMENTS.map(({ field, documentKind }) => [field, { name: `${documentKind}.pdf`, path: `requests/${documentKind}.pdf` }]));
-    const record = { project: { status: 'IN_PROGRESS' }, request: { requestKind: 'CHANGE', proposedSnapshot: payload } } as unknown as MigrationAuditConsoleRecord;
-    const slots = buildMigrationReviewDocumentSlots(record);
-    expect(slots).toHaveLength(12);
-    expect(slots.flatMap((slot) => slot.entries.map((entry) => entry.kind)).sort()).toEqual(PROJECT_DOCUMENTS.map(({ documentKind }) => documentKind).sort());
-    expect(slots.find((slot) => slot.entries.some((entry) => entry.kind === 'final_report'))?.entries[0].document.path).toBe('requests/final_report.pdf');
-  });
   it('keeps a filter-first inbox and opens a formal three-line approval document', () => {
     expect(compositeSource).toContain('data-testid="migration-review-search-bar"');
     expect(compositeSource).toContain('data-testid="migration-review-record-list"');
@@ -112,10 +93,13 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(documentSource).toContain("number: 7");
     expect(documentSource).toContain("number: 4, label: '제안서 Word 원본 (선택)'");
     expect(documentSource).toContain("number: 7, label: 'RFP/요청 메일 증빙 (선택)'");
-    expect(documentSource).toContain('PROJECT_DOCUMENTS.map');
+    expect(documentSource).toContain('customerBusinessRegistrationDocument');
+    expect(documentSource).toContain('proposalWordOriginalDocument');
+    expect(documentSource).toContain('proposalPptOriginalDocument');
+    expect(documentSource).toContain('presentationPptOriginalDocument');
     expect(documentSource).toContain('registrationOptionalDocumentNotes');
     expect(pageSource).toContain('usePrivateDraftDocumentPreviews');
-    expect(pageSource).toContain('PROJECT_DOCUMENTS.forEach');
+    expect(pageSource).toContain('REVIEW_DOCUMENT_FIELDS');
     expect(pageSource).toContain('downloadProjectRequestAttachmentViaBff');
     expect(pageSource).toContain('downloadProjectAttachmentViaBff');
     expect(pageSource).toContain('const reviewPayload = openRecord.request');

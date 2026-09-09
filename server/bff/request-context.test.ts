@@ -15,15 +15,6 @@ function createReq(headers: Record<string, string>, method: string = 'PATCH') {
 }
 
 describe('resolveApiRequestContext', () => {
-  it('takes the linked Google subject only from verified Firebase claims', async () => {
-    const req = createReq({ authorization: 'Bearer firebase-token', 'x-tenant-id': 'mysc', 'x-google-subject': 'attacker' }, 'GET');
-    const context = await resolveApiRequestContext(req as any, {
-      authMode: 'firebase_required',
-      verifyToken: async () => ({ uid: 'owner', email: 'owner@mysc.co.kr', firebase: { identities: { 'google.com': ['verified-google-person'] } } }),
-      resolveMemberIdentity: async () => ({ role: 'pm', status: 'ACTIVE' }),
-    });
-    expect(context.googleSubject).toBe('verified-google-person');
-  });
   it('prefers member role over firebase token role for final RBAC', async () => {
     const req = createReq({
       authorization: 'Bearer token',

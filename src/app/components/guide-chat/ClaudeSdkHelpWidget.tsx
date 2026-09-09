@@ -258,7 +258,6 @@ export function ClaudeSdkHelpWidget() {
               <div className="flex gap-2">
                 <Input
                   value={question}
-                  aria-required
                   onChange={(event) => setQuestion(event.target.value)}
                   placeholder="예: 기본 폴더 생성은 어디서 해? 업로드 후 동기화는 왜 필요해?"
                   onKeyDown={(event) => {

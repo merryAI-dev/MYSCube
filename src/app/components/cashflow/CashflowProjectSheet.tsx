@@ -3441,7 +3441,6 @@ export function CashflowProjectSheet({
                       className="h-7 border-slate-300 bg-white text-[12px]"
                       options={executiveApproverOptions}
                       value={selectedExecutiveApproverId}
-                      required
                       onChange={setSelectedExecutiveApproverId}
                       placeholder="조직장 선택"
                       disabled={executiveApproverBusy || monthCloseActions?.changeExecutiveApprover.enabled !== true}
@@ -4215,7 +4214,6 @@ export function CashflowProjectSheet({
             사유
             <textarea
               value={weeklyReopenReason}
-              aria-required
               className="min-h-[120px] rounded-md border border-slate-200 p-3 text-[12px] font-normal outline-none focus:border-[#17324D]"
               placeholder="되돌려야 하는 이유와 고칠 범위를 입력해 주세요."
               disabled={weeklyWithdrawBusy}
@@ -4259,7 +4257,6 @@ export function CashflowProjectSheet({
             사유
             <textarea
               value={reopenReason}
-              aria-required
               className="min-h-[120px] rounded-md border border-slate-200 p-3 text-[12px] font-normal outline-none focus:border-[#17324D]"
               placeholder="수정이 필요한 이유와 범위를 입력해 주세요."
               disabled={monthCloseBusy}

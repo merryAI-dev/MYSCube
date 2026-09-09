@@ -3,9 +3,6 @@ import { defineConfig } from '@playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   testIgnore: [
-    'project-draft-recovery.spec.ts',
-    'project-closure.spec.ts',
-    'field-appearance.spec.ts',
     'admin-cashflow-export-api.spec.ts',
     'people-professional-profile.spec.ts',
     // 기본 harness 서버는 VITE_PLATFORM_API_ENABLED 가 꺼져 있어 /people 이 disabled 분기로

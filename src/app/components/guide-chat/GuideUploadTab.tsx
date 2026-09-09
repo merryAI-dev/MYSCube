@@ -227,7 +227,6 @@ export function GuideUploadTab() {
             <Label>제목</Label>
             <Input
               value={title}
-              aria-required
               onChange={e => setTitle(e.target.value)}
               placeholder="예: 2026 사업비 가이드"
             />
@@ -255,7 +254,6 @@ export function GuideUploadTab() {
           <div className="space-y-1.5">
             <Label>또는 직접 붙여넣기</Label>
             <textarea
-              aria-required
               className="w-full min-h-[120px] rounded-md border px-3 py-2 text-sm resize-y bg-background"
               value={content}
               onChange={e => setContent(e.target.value)}
@@ -331,7 +329,6 @@ export function GuideUploadTab() {
             <div className="flex gap-2">
               <Input
                 value={calibrationInput}
-                aria-required
                 onChange={e => setCalibrationInput(e.target.value)}
                 placeholder="가이드에 대해 질문하세요..."
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleCalibrate(); } }}
