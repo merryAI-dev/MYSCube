@@ -12,9 +12,12 @@ import dev.merryai.innerplatform.weekly.api.CashflowMonthCloseResponse;
 import dev.merryai.innerplatform.weekly.api.CashflowSettlementCycleHeadMigrationResponse;
 import dev.merryai.innerplatform.weekly.api.CashflowSettlementCycleCommandResponse;
 import dev.merryai.innerplatform.weekly.api.CloseCashflowMonthRequest;
+import dev.merryai.innerplatform.weekly.api.CompleteCashflowWeeklyUpdateRequest;
+import dev.merryai.innerplatform.weekly.api.ReopenCashflowWeeklyUpdateRequest;
 import dev.merryai.innerplatform.weekly.api.MigrateCashflowSettlementCycleHeadV2Request;
 import dev.merryai.innerplatform.weekly.api.SubmitCashflowSettlementCycleRequest;
 import dev.merryai.innerplatform.weekly.api.TransitionCashflowSettlementCycleRequest;
+import dev.merryai.innerplatform.weekly.api.TransitionCashflowSettlementStatusRequest;
 import dev.merryai.innerplatform.weekly.api.TrustedActorContext;
 import dev.merryai.innerplatform.weekly.api.WeeklyExpenseConflictException;
 import dev.merryai.innerplatform.weekly.domain.CashflowSettlementCycleWorkflow;
@@ -106,6 +109,153 @@ class FirestoreSettlementCycleEmulatorIT {
     @AfterAll
     void closeEmulatorClient() throws Exception {
         if (db != null) db.close();
+    }
+
+    @Test
+    void realWeeklyCommandsCanApproveReopenResubmitAndApproveWithoutChangingOtherPeriods() throws Exception {
+        Harness h = harness("it-weekly-resubmit-command", "weekly-resubmit-command");
+        seedCanonicalActorsAndProject(h);
+        Map<String, Map<String, Object>> seeds = new LinkedHashMap<>();
+        YearMonth month = YearMonth.parse("2026-09");
+        int weekNo = 2;
+        Map<String, Object> projection = new LinkedHashMap<>();
+        CUMULATIVE_LINES.forEach(line -> projection.put(line, 0L));
+        for (int index = 0; index < 16; index++) {
+            String id = h.projectId() + "-" + month + "-w" + weekNo;
+            seeds.put("orgs/" + h.tenantId() + "/cashflow_weeks/" + id, Map.of(
+                "id", id, "projectId", h.projectId(), "tenantId", h.tenantId(),
+                "yearMonth", month.toString(), "weekNo", weekNo, "projection", projection));
+            if (++weekNo > 5) { weekNo = 1; month = month.plusMonths(1); }
+        }
+        Map<String, Object> untouched = Map.of("status", "COMPLETED", "approvedAt", "2026-09-01T00:00:00Z");
+        seeds.put(h.settlementPath("2026-09"), Map.of("periods", Map.of("MONTH", untouched, "WEEK_1", untouched)));
+        seedDocuments(seeds);
+        Map<String, Map<String, Object>> ledgerBefore = projectDocuments(h, "cashflow_weeks");
+        for (int round = 0; round < 2; round++) {
+            long revision = 1L + round * 3;
+            transaction(h, () -> h.service().completeCashflowWeeklyUpdate(h.approver(), h.projectId(),
+                new CompleteCashflowWeeklyUpdateRequest("complete-round-" + revision, "2026-09", 2,
+                    "2026-09-09T05:21:00Z", "NO_CHANGES")));
+            assertThat(document(h.weeklyCompletionPath("2026-09", 2)))
+                .containsEntry("status", "SUBMITTED").containsEntry("revision", revision);
+            assertWeeklyAuthorityReads(h, "PENDING_APPROVAL");
+            transaction(h, () -> h.service().transitionCashflowSettlementStatus(h.approver(), h.projectId(),
+                new TransitionCashflowSettlementStatusRequest("2026-09", "WEEK_2", "APPROVE")));
+            assertWeeklyAuthorityReads(h, "COMPLETED");
+            assertThat(document(h.weeklyCompletionPath("2026-09", 2)))
+                .containsEntry("status", "LOCKED").containsEntry("revision", revision + 1);
+            Map<String, Object> version = document(h.weeklyCompletionVersionPath("2026-09", 2, revision + 1));
+            assertThat(version).containsEntry("lockState", "LOCKED");
+            Map<String, Object> periods = nestedMap(document(h.settlementPath("2026-09")).get("periods"));
+            assertThat(nestedMap(periods.get("WEEK_2"))).containsEntry("status", "COMPLETED");
+            assertThat(periods.get("MONTH")).isEqualTo(untouched);
+            assertThat(periods.get("WEEK_1")).isEqualTo(untouched);
+            if (round == 0) {
+                transaction(h, () -> h.service().reopenCashflowWeeklyUpdate(h.approver(), h.projectId(),
+                    new ReopenCashflowWeeklyUpdateRequest("reopen-approved-week", "2026-09", 2, revision + 1, "정정")));
+                assertWeeklyAuthorityReads(h, "WAITING_FOR_UPDATE");
+                assertThat(document(h.weeklyCompletionVersionPath("2026-09", 2, revision + 2)))
+                    .containsEntry("complianceStatus", "REOPENED");
+                assertThat(document(h.weeklyCompletionVersionPath("2026-09", 2, revision + 1))).isEqualTo(version);
+            }
+        }
+        assertThat(projectDocuments(h, "cashflow_weeks")).isEqualTo(ledgerBefore);
+    }
+
+    @Test
+    void weeklyApprovalLocksCanonicalCompletionAndImmutableVersionAcrossBothReads() throws Exception {
+        Harness h = harness("it-weekly-authority", "project-weekly-authority");
+        seedCanonicalActorsAndProject(h);
+        seedWeeklyAuthorityMismatch(h, "SUBMITTED", 3);
+        Map<String, Object> summaryBefore = document(h.settlementPath("2026-09"));
+        assertWeeklyAuthorityReads(h, "PENDING_APPROVAL");
+        transaction(h, () -> h.service().transitionCashflowSettlementStatus(
+            h.approver(), h.projectId(), new TransitionCashflowSettlementStatusRequest("2026-09", "WEEK_2", "APPROVE")
+        ));
+        assertThat(document(h.weeklyCompletionPath("2026-09", 2)))
+            .containsEntry("status", "LOCKED").containsEntry("revision", 4L)
+            .containsEntry("completedAt", "2026-09-09T05:21:00Z")
+            .containsEntry("confirmedAt", NOW.toString());
+        Map<String, Object> immutable = document(h.weeklyCompletionVersionPath("2026-09", 2, 4));
+        assertThat(immutable).containsEntry("lockState", "LOCKED")
+            .containsEntry("confirmedAt", NOW.toString());
+        assertWeeklyAuthorityReads(h, "COMPLETED");
+        assertThat(nestedMap(document(h.settlementPath("2026-09")).get("periods")).get("MONTH"))
+            .isEqualTo(nestedMap(summaryBefore.get("periods")).get("MONTH"));
+        transaction(h, () -> h.service().transitionCashflowSettlementStatus(
+            h.approver(), h.projectId(), new TransitionCashflowSettlementStatusRequest("2026-09", "WEEK_2", "APPROVE")
+        ));
+        assertThat(document(h.weeklyCompletionVersionPath("2026-09", 2, 4))).isEqualTo(immutable);
+        assertThat(documentOrEmpty(h.weeklyCompletionVersionPath("2026-09", 2, 5))).isEmpty();
+    }
+
+    @Test
+    void reopenedAndResubmittedWeeklyHeadOverridesHistoricalCompletedSummaryWithoutWrites() throws Exception {
+        Harness h = harness("it-weekly-reopened", "project-weekly-reopened");
+        seedCanonicalActorsAndProject(h);
+        seedWeeklyAuthorityMismatch(h, "OPEN", 2);
+        Map<String, Map<String, Map<String, Object>>> reopenedBefore = projectState(h);
+        assertWeeklyAuthorityReads(h, "WAITING_FOR_UPDATE");
+        assertThat(projectState(h)).isEqualTo(reopenedBefore);
+        seedWeeklyAuthorityMismatch(h, "SUBMITTED", 3);
+        Map<String, Map<String, Map<String, Object>>> resubmittedBefore = projectState(h);
+        assertWeeklyAuthorityReads(h, "PENDING_APPROVAL");
+        assertThat(projectState(h)).isEqualTo(resubmittedBefore);
+    }
+
+    private void seedWeeklyAuthorityMismatch(Harness h, String status, long revision) throws Exception {
+        Map<String, Object> completion = new LinkedHashMap<>(Map.of(
+            "projectId", h.projectId(), "yearMonth", "2026-09", "weekNo", 2L,
+            "status", status, "revision", revision, "reopenCount", 1L,
+            "completedAt", "2026-09-09T05:21:00Z", "completedByName", "실무자",
+            "complianceStatus", "COMPLETED_ON_TIME", "deadline", "2026-09-10T15:00:00Z"
+        ));
+        seedDocuments(Map.of(
+            h.weeklyCompletionPath("2026-09", 2), completion,
+            h.settlementPath("2026-09"), Map.of("projectId", h.projectId(), "yearMonth", "2026-09", "periods", Map.of(
+                "WEEK_2", Map.of("status", "COMPLETED", "approvedAt", "2026-09-07T00:00:00Z"),
+                "MONTH", Map.of("status", "COMPLETED", "approvedAt", "2026-09-09T07:28:00Z")
+            ))
+        ));
+    }
+
+    @Test
+    void malformedCanonicalWeekIsIsolatedFromHealthyProjectInBatch() throws Exception {
+        Harness healthy = harness("it-weekly-isolation", "healthy-project");
+        Harness malformed = harness("it-weekly-isolation", "malformed-project");
+        seedCanonicalActorsAndProject(healthy);
+        seedCanonicalActorsAndProject(malformed);
+        seedWeeklyAuthorityMismatch(healthy, "SUBMITTED", 3);
+        seedWeeklyAuthorityMismatch(malformed, "UNKNOWN", 3);
+        Map<String, Map<String, Map<String, Object>>> before = projectState(malformed);
+        var results = healthy.persistence().findCashflowSettlementStatusesBatch(
+            healthy.tenantId(), List.of(malformed.projectId(), healthy.projectId()), "2026-09"
+        );
+        assertThat(results).doesNotContainKey(malformed.projectId()).containsKey(healthy.projectId());
+        assertThat(results.get(healthy.projectId()).stream().filter(item -> item.period().equals("WEEK_2"))
+            .findFirst().orElseThrow().status()).isEqualTo("PENDING_APPROVAL");
+        var cycles = healthy.persistence().findCashflowSettlementCyclesBatch(
+            healthy.approver(), List.of(malformed.projectId(), healthy.projectId()), "2026-09", "2026-08"
+        );
+        assertThat(cycles).doesNotContainKey(malformed.projectId()).containsKey(healthy.projectId());
+        assertThat(cycles.get(healthy.projectId()).weeklySettlements().stream()
+            .filter(item -> item.period().equals("WEEK_2")).findFirst().orElseThrow().status())
+            .isEqualTo("PENDING_APPROVAL");
+        assertThat(projectState(malformed)).isEqualTo(before);
+    }
+
+    private void assertWeeklyAuthorityReads(Harness h, String expected) {
+        var single = h.persistence().findCashflowSettlementStatuses(h.tenantId(), h.projectId(), "2026-09");
+        var batch = h.persistence().findCashflowSettlementStatusesBatch(h.tenantId(), List.of(h.projectId()), "2026-09").get(h.projectId());
+        var cycle = h.persistence().findCashflowSettlementCyclesBatch(h.approver(), List.of(h.projectId()), "2026-09", "2026-08")
+            .get(h.projectId()).weeklySettlements();
+        int index = 0;
+        for (var records : List.of(single, batch, cycle)) {
+            var week = records.stream().filter(item -> item.period().equals("WEEK_2")).findFirst().orElseThrow();
+            assertThat(week.status()).as(List.of("single", "batch", "cycle").get(index++)).isEqualTo(expected);
+            if (!expected.equals("COMPLETED")) assertThat(week.approvedAt()).isEmpty();
+            else assertThat(week.approvedAt()).isEqualTo(NOW.toString());
+        }
     }
 
     @Test
