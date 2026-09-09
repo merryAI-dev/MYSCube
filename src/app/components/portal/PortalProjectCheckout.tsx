@@ -24,13 +24,13 @@ type UploadItem = { kind: string; label: string; attached: boolean; note?: strin
 function readChecklist(project: Project): CheckItem[] {
   const checkout = project.checkout;
   return [
-    { field: 'finalPaymentReceived', label: '잔금 입금 완료', done: checkout?.finalPaymentReceived === true },
-    { field: 'bankBalanceZero', label: '사업비 통장 0원', done: checkout?.bankBalanceZero === true },
+    { field: 'finalPaymentReceived', label: '잔금까지 입금되었음을 확인했습니다.', done: checkout?.finalPaymentReceived === true },
+    { field: 'bankBalanceZero', label: '사용한 사업비 전용 통장 잔액을 0원으로 정리했습니다.', done: checkout?.bankBalanceZero === true },
     {
       field: 'performanceCertificateReceived',
-      label: '용역수행실적증명서 원본 제출',
+      label: '용역실적증명서 원본 제출을 완료했습니다.',
       done: checkout?.performanceCertificateReceived === true,
-      note: '원본 수령 시 최소 5부. 전자플랫폼(e나라도움 · KOICA · 온드림 등)은 업로드로 마무리합니다.',
+      note: '원본 수령 시 최소 5부. 온라인 발급 사업은 별도 하드카피 제출 없이 아래에 파일을 업로드합니다.',
     },
   ];
 }
@@ -48,7 +48,7 @@ function readUploads(project: Project): UploadItem[] {
       kind: 'tax_invoice',
       label: '사업 관련 발행 세금계산서 PDF',
       attached: Boolean(project.taxInvoiceDocument?.path),
-      note: checkout?.taxInvoiceEvidenceConfirmed ? '해당 사업으로 표시됨' : '해당 시에만 제출합니다.',
+      note: checkout?.taxInvoiceEvidenceConfirmed ? '본 사업으로 고객사에 발급한 모든 세금계산서를 제출합니다.' : '해당 시 본 사업으로 고객사에 발급한 모든 세금계산서를 제출합니다.',
     },
     {
       kind: 'performance_certificate',
@@ -135,6 +135,7 @@ export function PortalProjectCheckout() {
 
       <section className="space-y-3">
         <h2 className="border-b border-slate-200 pb-2 text-[12px] font-semibold text-slate-700">업로드</h2>
+        <p className="text-[12px] text-slate-500">제출 자료는 향후 인수인계 및 제안서 작성 시 유사 실적 증빙으로 활용됩니다. 파일은 PDF로 제출해 주세요.</p>
         <ul className="space-y-2">
           {uploads.map((item) => (
             <li key={item.kind} className="flex items-start gap-2 text-[13px]">
@@ -144,7 +145,7 @@ export function PortalProjectCheckout() {
                 <span className="ml-2 text-[12px] text-slate-500">{item.attached ? '첨부됨' : '미첨부'}</span>
                 {item.note ? <span className="mt-0.5 block text-[12px] text-slate-500">{item.note}</span> : null}
                 <label className="mt-1 inline-flex cursor-pointer items-center gap-1 text-[12px] text-[#0176D3] underline underline-offset-2">
-                  {item.attached ? 'PDF 교체' : 'PDF 올리기'}
+                  {item.attached ? '자료 교체' : '자료 올리기'}
                   <input
                     type="file"
                     accept="application/pdf,.pdf"
@@ -166,8 +167,8 @@ export function PortalProjectCheckout() {
         <h2 className="border-b border-slate-200 pb-2 text-[12px] font-semibold text-slate-700">정산사업 마감</h2>
         <ul className="space-y-2 text-[13px]">
           {([
-            ['usbEvidenceSubmitted', '정산 자료 USB 저장 후 재경팀 제출', settlementClosed],
-            ['evidenceDeletedAfterUsb', '증빙자료 삭제 (사용내역은 그대로 유지)', evidenceDeleted],
+            ['usbEvidenceSubmitted', '사업비 시트 및 정산자료를 USB에 저장하여 재경팀에 제출했습니다. (5년간 보관 필요)', settlementClosed],
+            ['evidenceDeletedAfterUsb', 'Google Drive에서 정산자료를 삭제했습니다. 사업비 시트는 유지합니다.', evidenceDeleted],
           ] as Array<[CheckField, string, boolean]>).map(([field, label, done]) => (
             <li key={field}>
               <label className="flex cursor-pointer items-start gap-2">
@@ -183,6 +184,7 @@ export function PortalProjectCheckout() {
             </li>
           ))}
         </ul>
+        <p className="text-[12px] text-slate-500">파일 삭제는 담당자가 직접 수행하며, 이 체크로 시스템이 파일을 삭제하지는 않습니다.</p>
       </section>
 
       <p className="text-[13px] text-slate-600">
