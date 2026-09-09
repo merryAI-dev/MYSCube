@@ -971,7 +971,7 @@ export function PeopleDirectoryPage() {
             <div>
               <Label className="text-[13px]">이름</Label>
               <Input
-                className="mt-1.5 h-10 text-[14px]" value={newPerson.name} disabled={saving}
+                className="mt-1.5 h-10 text-[14px]" aria-required="true" value={newPerson.name} disabled={saving}
                 onChange={(event) => setNewPerson({ ...newPerson, name: event.target.value })}
               />
             </div>

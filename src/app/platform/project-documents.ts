@@ -15,6 +15,8 @@ export function projectDocumentFields(source: object) {
 
 export function projectUpdatePayload(existing: Project, updates: Partial<Project>) {
   const payload = { ...existing, ...updates };
+  delete payload.closure;
+  delete payload.closureRequestId;
   const expectedProjectDocuments: Partial<Record<ProjectDocumentField, FileAttachment | null>> = {};
   for (const { field } of PROJECT_DOCUMENTS) {
     if (Object.hasOwn(updates, field)) expectedProjectDocuments[field] = existing[field] ?? null;

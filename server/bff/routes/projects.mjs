@@ -1,4 +1,6 @@
 import express from 'express';
+import { mountProjectClosureRoutes } from './project-closure.mjs';
+import { mountProjectClosureDriveRoutes } from './project-closure-drive.mjs';
 import { randomUUID } from 'node:crypto';
 import { projectDocumentValidationError } from '../project-document-validation.mjs';
 import { createOutboxEvent } from '../outbox.mjs';
@@ -33,6 +35,7 @@ import {
   ensureDocumentExists, upsertVersionedDoc, mergeSystemManagedDoc,
   stripServerManagedFields, stripExpectedVersion, stripUndefinedDeep, readOptionalText, decodeHeaderValue,
   normalizeRole,
+  assertProjectClosureFieldsImmutable,
 } from '../bff-utils.mjs';
 import {
   parseWithSchema,
@@ -708,6 +711,7 @@ async function readAssignedProjectRequests({ db, tenantId, actorId }) {
     legacyRequests,
   });
   const isAssignedRequest = (projectRequest) => {
+    if (projectRequest.requestKind === 'CLOSURE') return assignedProjectIds.has(projectRequest.targetProjectId);
     const payload = resolveProjectRequestPayloadForReview(projectRequest);
     const requestApproverId = readOptionalText(payload?.executiveApproverId);
     if (requestApproverId) return requestApproverId === normalizedActorId;
@@ -3056,6 +3060,8 @@ export function mountProjectRoutes(app, {
   projectSheetSourceStorageService,
   projectRegistrationSlackService,
 }) {
+  mountProjectClosureRoutes(app, { db, now, idempotencyService });
+  mountProjectClosureDriveRoutes(app, { db, googleSheetsService });
   // ── GET /api/v1/projects ─────────────────────────────────────────────────────
   app.get('/api/v1/projects', asyncHandler(async (req, res) => {
     const { tenantId } = req.context;
@@ -3137,9 +3143,22 @@ export function mountProjectRoutes(app, {
     if (!hasProjectRequestAccess({ actorId, member, projectId, project })) {
       throw createHttpError(403, 'Project request access denied', 'forbidden');
     }
-    const items = await queryProjectRequestsByProjectIds({ db, tenantId, projectIds: [projectId] });
+    let item;
+    if (req.query.requestKind === 'CLOSURE') {
+      if (project.closureRequestId) {
+        if (!/^[A-Za-z0-9_-]{1,160}$/.test(project.closureRequestId)) {
+          throw createHttpError(409, '종료 요청 상태를 확인할 수 없습니다.', 'project_closure_unavailable');
+        }
+        item = (await db.doc(`orgs/${tenantId}/project_requests/${project.closureRequestId}`).get()).data();
+        if (!item || item.requestKind !== 'CLOSURE' || item.targetProjectId !== projectId || item.tenantId !== tenantId) {
+          throw createHttpError(409, '종료 요청 상태를 확인할 수 없습니다.', 'project_closure_unavailable');
+        }
+      }
+    } else {
+      [item] = await queryProjectRequestsByProjectIds({ db, tenantId, projectIds: [projectId] });
+    }
     res.setHeader('cache-control', 'private, no-store');
-    res.status(200).json({ item: items[0] ? projectRequestForReview(items[0], tenantId) : null });
+    res.status(200).json({ item: item ? projectRequestForReview(item, tenantId) : null });
   }));
 
   app.get('/api/v1/projects/:projectId/attachments/:documentKind', asyncHandler(async (req, res) => {
@@ -3334,6 +3353,7 @@ export function mountProjectRoutes(app, {
     const { tenantId, actorId, actorRole, actorEmail, requestId } = req.context;
     const timestamp = now();
     const parsed = parseWithSchema(projectUpsertSchema, req.body, 'Invalid project payload');
+    assertProjectClosureFieldsImmutable(req.body);
     const { expectedProjectDocuments } = parsed;
     delete parsed.expectedProjectDocuments;
     const expectedVersion = parsed.expectedVersion;
@@ -3868,6 +3888,9 @@ export function mountProjectRoutes(app, {
       requestId: parsed.requestId,
       projectId,
     });
+    if (request?.requestKind === 'CLOSURE') {
+      throw createHttpError(409, '사업 종료 유형의 승인으로 처리해 주세요.', 'project_closure_review_required');
+    }
     if (projectRequestRequiresDesignatedApprover(request)
       && readOptionalText(resolveProjectRequestPayloadForReview(request)?.executiveApproverId) !== actorId) {
       throw createHttpError(403, 'Only the designated executive approver can review this project', 'executive_approver_mismatch');
@@ -4064,6 +4087,9 @@ export function mountProjectRoutes(app, {
       requestId: parsed.requestId,
       projectId,
     });
+    if (request?.requestKind === 'CLOSURE') {
+      throw createHttpError(409, '사업 종료 유형의 승인으로 처리해 주세요.', 'project_closure_review_required');
+    }
     if (parsed.reviewStatus === 'AGREED') {
       assertProjectRequestAttachmentsPublished(request, tenantId);
       await assertProjectChangeRequestAttachmentsStored(request, tenantId, projectRequestContractStorageService);
@@ -4263,6 +4289,9 @@ export function mountProjectRoutes(app, {
       requestId: parsed.requestId,
       projectId,
     });
+    if (request?.requestKind === 'CLOSURE') {
+      throw createHttpError(409, '사업 종료 유형에서 보완 후 재신청해 주세요.', 'project_closure_review_required');
+    }
 
     await mergeProjectAndRequestDocs({
       db,

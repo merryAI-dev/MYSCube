@@ -434,7 +434,7 @@ export function ExpenseManagementPage() {
               <div>
                 <Label className="text-[12px]">프로젝트</Label>
                 <Select value={newSetForm.projectId} onValueChange={v => setNewSetForm(prev => ({ ...prev, projectId: v }))}>
-                  <SelectTrigger className="h-9 text-[12px] mt-1">
+                  <SelectTrigger aria-required="true" className="h-9 text-[12px] mt-1">
                     <SelectValue placeholder="프로젝트 선택" />
                   </SelectTrigger>
                   <SelectContent>
@@ -447,7 +447,7 @@ export function ExpenseManagementPage() {
               <div>
                 <Label className="text-[12px]">세트 제목</Label>
                 <Input
-                  value={newSetForm.title}
+                  aria-required="true" value={newSetForm.title}
                   onChange={e => setNewSetForm(prev => ({ ...prev, title: e.target.value }))}
                   placeholder="예: 2025년 3월 사업비 정산"
                   className="h-9 text-[12px] mt-1"
@@ -482,7 +482,7 @@ export function ExpenseManagementPage() {
                   <Label className="text-[11px]">지출일</Label>
                   <Input
                     type="date"
-                    value={itemForm.date}
+                    aria-required="true" value={itemForm.date}
                     onChange={e => setItemForm(prev => ({ ...prev, date: e.target.value }))}
                     className="h-8 text-[12px] mt-1"
                   />
@@ -532,7 +532,7 @@ export function ExpenseManagementPage() {
               <div>
                 <Label className="text-[11px]">거래처</Label>
                 <Input
-                  value={itemForm.vendor}
+                  aria-required="true" value={itemForm.vendor}
                   onChange={e => setItemForm(prev => ({ ...prev, vendor: e.target.value }))}
                   className="h-8 text-[12px] mt-1"
                   placeholder="거래처명"
@@ -608,7 +608,7 @@ export function ExpenseManagementPage() {
             <div className="py-2">
               <Label className="text-[12px]">반려 사유 (필수)</Label>
               <Textarea
-                value={rejectReason}
+                aria-required="true" value={rejectReason}
                 onChange={e => setRejectReason(e.target.value)}
                 className="mt-1 text-[12px] min-h-[80px]"
                 placeholder="반려 사유를 입력해 주세요..."

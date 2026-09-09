@@ -312,7 +312,7 @@ export function AdminHrAnnouncementPage() {
             <div>
               <Label className="text-[12px]">대상 직원</Label>
               <Select value={form.employeeId} onValueChange={v => setForm(p => ({ ...p, employeeId: v }))}>
-                <SelectTrigger className="h-9 text-[12px] mt-1"><SelectValue placeholder="직원 선택" /></SelectTrigger>
+                <SelectTrigger aria-required="true" className="h-9 text-[12px] mt-1"><SelectValue placeholder="직원 선택" /></SelectTrigger>
                 <SelectContent className="max-h-[300px]">
                   {employeeOptions.length === 0 ? (
                     <div className="px-3 py-6 text-center text-[12px] text-slate-500">
@@ -343,7 +343,7 @@ export function AdminHrAnnouncementPage() {
             {/* 적용일 */}
             <div>
               <Label className="text-[12px]">적용일 (실제 퇴사일/휴직 시작일 등)</Label>
-              <Input type="date" value={form.effectiveDate} onChange={e => setForm(p => ({ ...p, effectiveDate: e.target.value }))} className="h-9 text-[12px] mt-1" />
+              <Input type="date" aria-required="true" value={form.effectiveDate} onChange={e => setForm(p => ({ ...p, effectiveDate: e.target.value }))} className="h-9 text-[12px] mt-1" />
             </div>
 
             {/* 상세 */}

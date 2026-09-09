@@ -8,6 +8,7 @@ const env = {
   LIVE_FIREBASE_PROJECT_ID: 'live-project',
   BFF_DEPLOY_ENV: 'live',
   BFF_AUTH_MODE: 'firebase_required',
+  BFF_GOOGLE_OAUTH_CLIENT_ID: 'myscube.apps.googleusercontent.com',
   BFF_EDIT_LEASES_ENABLED: 'true',
   BFF_ALLOWED_ORIGINS: 'https://myscube.myscguard.app',
   JVM_WEEKLY_FIRESTORE_PROJECT_ID: 'live-project',
@@ -58,6 +59,7 @@ describe('production deployment decisions', () => {
       'BFF_MAINTENANCE_READ_ONLY=false',
       'BFF_WORKERS_ENABLED=true',
       'BFF_SCHEDULER_OWNER=vercel',
+      'BFF_GOOGLE_OAUTH_CLIENT_ID=myscube.apps.googleusercontent.com',
     ]));
     expect(maintenance.args).toEqual(expect.arrayContaining([
       `VITE_SENTRY_RELEASE=${'b'.repeat(40)}`,

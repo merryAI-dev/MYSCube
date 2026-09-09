@@ -3,6 +3,11 @@ import { PROJECT_DOCUMENTS, projectUpdatePayload } from './project-documents';
 import type { Project } from '../data/types';
 
 describe('project document write boundary', () => {
+  it('does not echo server-owned closure facts through ordinary project saves', () => {
+    const payload = projectUpdatePayload({ id: 'p', closureRequestId: 'c', closure: { requestId: 'c' } } as Project, { name: '수정' });
+    expect(payload).not.toHaveProperty('closure');
+    expect(payload).not.toHaveProperty('closureRequestId');
+  });
   const cached = { id: 'project', name: 'Project', version: 2, ...Object.fromEntries(PROJECT_DOCUMENTS.map(({ field }) => [field, null])) } as Project;
 
   it.each([{ status: 'COMPLETED' }, { checkout: { complete: true } }])('omits every cached attachment for %j', (updates) => {

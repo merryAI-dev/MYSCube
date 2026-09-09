@@ -166,6 +166,12 @@ export function stripServerManagedFields(payload) {
   return sanitized;
 }
 
+export function assertProjectClosureFieldsImmutable(payload) {
+  if (Object.keys(payload || {}).some((key) => ['closure', 'closureRequestId'].some((field) => key === field || key.startsWith(`${field}.`)))) {
+    throw createHttpError(400, '사업 종료 정보는 종료 요청과 조직장 승인으로만 변경할 수 있습니다.', 'project_closure_server_managed');
+  }
+}
+
 export function stripUndefinedDeep(value) {
   if (Array.isArray(value)) {
     return value.map((entry) => stripUndefinedDeep(entry)).filter((entry) => entry !== undefined);

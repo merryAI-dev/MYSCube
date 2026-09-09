@@ -144,7 +144,7 @@ import {
   createCashflowEditDraftService,
   mountCashflowEditDraftRoutes,
 } from './routes/cashflow-edit-drafts.mjs';
-import { createHttpError, resolveErrorResponse } from './bff-utils.mjs';
+import { createHttpError, resolveErrorResponse, assertProjectClosureFieldsImmutable } from './bff-utils.mjs';
 import { getProfessionalProfileCatalog } from './professional-profile.mjs';
 
 function formatSeoulDate(value) {
@@ -646,6 +646,9 @@ export async function resolveApiRequestContext(req, {
     actorEmail,
     actorName,
     authSource: identity.source,
+    googleSubject: identity.source === 'firebase' && Array.isArray(identity.tokenClaims?.firebase?.identities?.['google.com'])
+      ? identity.tokenClaims.firebase.identities['google.com'].find((value) => typeof value === 'string' && value.length > 0)
+      : undefined,
     requestId,
     idempotencyKey: idempotencyKey.trim() || undefined,
   };
@@ -1422,6 +1425,7 @@ export function createBffApp(options = {}) {
     const parsed = parseWithSchema(genericWriteSchema, req.body, 'Invalid write payload');
 
     const entityType = normalizeEntityType(parsed.entityType);
+    if (entityType === 'project') assertProjectClosureFieldsImmutable(parsed.patch);
     const payloadPatch = stripServerManagedFields(parsed.patch || {});
     const expectedProjectDocuments = entityType === 'project' ? payloadPatch.expectedProjectDocuments : undefined;
     if (entityType === 'project') delete payloadPatch.expectedProjectDocuments;

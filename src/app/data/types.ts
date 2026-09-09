@@ -657,6 +657,8 @@ export interface ProjectCheckout {
 }
 
 export interface Project {
+  closure?: { contractVersion: 'project-closure-v1'; requestId: string; approvedAt: string; approvedBy: string };
+  closureRequestId?: string;
   id: string;
   version?: number;
   slug: string;        // URL-safe unique key
@@ -788,7 +790,16 @@ export interface Project {
 export type ProjectRequestStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
 export type ProjectExecutiveReviewStatus = 'PENDING' | 'PLANNING_AGREED' | 'APPROVED' | 'REVISION_REJECTED' | 'DUPLICATE_DISCARDED';
 export type ProjectRequestReviewOutcome = 'APPROVED' | 'REVISION_REJECTED' | 'DUPLICATE_DISCARDED';
-export type ProjectRequestKind = 'REGISTRATION' | 'CHANGE';
+export type ProjectRequestKind = 'REGISTRATION' | 'CHANGE' | 'CLOSURE';
+
+export interface ProjectClosureSubmission {
+  retentionStartDate: string;
+  retentionPeriodYears: number;
+  driveFolderLink: string;
+  handoverNote: string;
+  driveDeletedAt: string;
+  note: string;
+}
 
 export interface ProjectReviewFieldChange {
   key: string;
@@ -1016,6 +1027,7 @@ export interface ProjectRequestPayload {
 }
 
 export interface ProjectRequest {
+  closureSubmission?: ProjectClosureSubmission;
   id: string;
   attachmentReviewStatus?: 'READY' | 'REPAIR_REQUIRED';
   tenantId?: string;

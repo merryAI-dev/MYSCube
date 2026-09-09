@@ -64,6 +64,7 @@ function deriveProjectRequestMap(requests: ProjectRequest[]): Map<string, Projec
 }
 
 export function resolveMigrationReviewApproverId(project: Project, request?: ProjectRequest | null) {
+  if (request?.requestKind === 'CLOSURE') return project.executiveApproverId;
   const payload = resolveProjectRequestPayload(request);
   const modern = request?.requestKind === 'CHANGE'
     || (request?.requestKind === 'REGISTRATION' && Number(payload?.registrationRequirementsVersion) === 2);
@@ -74,6 +75,9 @@ export function deriveMigrationAuditStatus(
   project: Project,
   request?: ProjectRequest | null,
 ): MigrationAuditConsoleStatus {
+  if (request?.requestKind === 'CLOSURE') {
+    return request.status === 'APPROVED' ? 'APPROVED' : request.status === 'REJECTED' ? 'REVISION_REJECTED' : 'PENDING';
+  }
   if (resolveProjectRequestKind(request) === 'CHANGE') {
     if (request?.status === 'PENDING') return 'PENDING';
     if (request?.status === 'REJECTED') return 'REVISION_REJECTED';
@@ -158,15 +162,18 @@ export function buildMigrationAuditConsoleRecords(
   projects: Project[],
   requests: Array<ProjectRequest>,
 ): MigrationAuditConsoleRecord[] {
-  const requestMap = deriveProjectRequestMap(requests);
+  const requestMap = deriveProjectRequestMap(requests.filter((request) => request.requestKind !== 'CLOSURE'));
 
   return projects
     .filter((project) => !project.trashedAt)
-    .map((project) => {
-      const request = requestMap.get(project.id) || null;
+    .flatMap((project) => {
+      const closures = requests.filter((request) => request.requestKind === 'CLOSURE' && request.targetProjectId === project.id);
+      const ordinary = requestMap.get(project.id);
+      const projectRequests = [...(ordinary || !closures.length ? [ordinary || null] : []), ...closures];
+      return projectRequests.map((request) => {
       const source = request ? resolveProjectRequestPayload(request) : project;
       return {
-        id: project.id,
+        id: request?.requestKind === 'CLOSURE' ? request.id : project.id,
         project,
         request,
         status: deriveMigrationAuditStatus(project, request),
@@ -180,6 +187,7 @@ export function buildMigrationAuditConsoleRecords(
           request?.updatedAt || request?.requestedAt || project.registeredAt || project.createdAt,
         ),
       };
+      });
     })
     .sort((left, right) => String(right.requestedAt).localeCompare(String(left.requestedAt)));
 }

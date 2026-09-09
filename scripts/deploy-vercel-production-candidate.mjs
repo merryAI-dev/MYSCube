@@ -40,6 +40,7 @@ export function buildVercelProductionDeployArgs({
   for (const [name, value] of [
     ['BFF_DEPLOY_ENV', required(env, 'BFF_DEPLOY_ENV')],
     ['BFF_AUTH_MODE', required(env, 'BFF_AUTH_MODE')],
+    ['BFF_GOOGLE_OAUTH_CLIENT_ID', required(env, 'BFF_GOOGLE_OAUTH_CLIENT_ID')],
     ['BFF_EDIT_LEASES_ENABLED', required(env, 'BFF_EDIT_LEASES_ENABLED')],
     ['BFF_WORKERS_ENABLED', maintenance ? 'false' : 'true'],
     ['BFF_SCHEDULER_OWNER', maintenance ? 'disabled' : 'vercel'],

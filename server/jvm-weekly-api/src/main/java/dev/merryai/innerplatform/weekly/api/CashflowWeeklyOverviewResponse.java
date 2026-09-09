@@ -1,6 +1,7 @@
 package dev.merryai.innerplatform.weekly.api;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import dev.merryai.innerplatform.weekly.domain.ProjectSettlementEligibility;
 
 import java.util.List;
 import java.util.Map;
@@ -29,7 +30,8 @@ public record CashflowWeeklyOverviewResponse(
         CashflowSettlementStatusesResponse settlementStatuses,
         CashflowProjectionActualSummaryBatchResponse.Item projectionActualSummary,
         @JsonInclude(JsonInclude.Include.NON_NULL)
-        SettlementCycle settlementCycle
+        SettlementCycle settlementCycle,
+        ProjectSettlementEligibility settlementEligibility
     ) {}
 
     public record SettlementCycle(

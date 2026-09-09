@@ -162,6 +162,51 @@ export function createGoogleSheetsService(options = {}) {
 
   let driveMetadataJwtClient = null;
 
+  async function listDriveFolderMetadata({ folderId, pageSize = 50, pageToken = '', accessToken }) {
+    if (typeof folderId !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(folderId)
+      || !Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100
+      || typeof pageToken !== 'string' || pageToken.length > 2048) {
+      throw new GoogleSheetsServiceError('폴더 조회 범위를 확인해 주세요.', { statusCode: 400, code: 'project_closure_drive_invalid' });
+    }
+    if (typeof accessToken !== 'string' || !/^[A-Za-z0-9._~+\/-]{1,8192}$/.test(accessToken)) {
+      throw new GoogleSheetsServiceError('Google 계정을 연결한 뒤 조회해 주세요.', { statusCode: 401, code: 'project_closure_google_reconnect' });
+    }
+    const authHeaders = { authorization: `Bearer ${accessToken}` };
+    async function metadata(path) {
+      let response;
+      try {
+        response = await fetchImpl(`${DRIVE_FILES_API_BASE_URL}${path}`, { headers: { ...authHeaders }, signal: AbortSignal.timeout(15000), redirect: 'error' });
+      } catch {
+        throw new GoogleSheetsServiceError('Drive 자료 목록을 지금 확인할 수 없습니다.', { statusCode: 503, code: 'project_closure_drive_unavailable' });
+      }
+      if (!response.ok) {
+        if (response.status === 401) throw new GoogleSheetsServiceError('Google 연결이 만료되었습니다. 다시 연결해 주세요.', { statusCode: 401, code: 'project_closure_google_reconnect' });
+        const code = response.status === 403 ? 'forbidden' : response.status === 404 ? 'not_found' : 'unavailable';
+        throw new GoogleSheetsServiceError(
+          code === 'forbidden' ? 'Drive 폴더의 공유 권한을 확인해 주세요.' : 'Drive 자료 목록을 지금 확인할 수 없습니다.',
+          { statusCode: [403, 404].includes(response.status) ? response.status : 503, code: `project_closure_drive_${code}` },
+        );
+      }
+      return readJsonResponse(response);
+    }
+    const root = await metadata(`/files/${encodeURIComponent(folderId)}?supportsAllDrives=true&fields=id,mimeType,trashed`);
+    if (root?.mimeType !== 'application/vnd.google-apps.folder' || root.trashed) {
+      throw new GoogleSheetsServiceError('조회 가능한 Drive 폴더가 아닙니다.', { statusCode: 409, code: 'project_closure_drive_not_folder' });
+    }
+    const params = new URLSearchParams({
+      q: `'${folderId}' in parents and trashed = false`,
+      pageSize: String(pageSize), supportsAllDrives: 'true', includeItemsFromAllDrives: 'true',
+      fields: 'nextPageToken,incompleteSearch,files(id,name,mimeType,modifiedTime,size)',
+      orderBy: 'folder,name',
+    });
+    if (pageToken) params.set('pageToken', pageToken);
+    const result = await metadata(`/files?${params}`);
+    if (!Array.isArray(result?.files) || result.incompleteSearch) {
+      throw new GoogleSheetsServiceError('Drive 자료 목록을 모두 확인하지 못했습니다.', { statusCode: 503, code: 'project_closure_drive_unavailable' });
+    }
+    return { items: result.files, nextPageToken: readOptionalText(result.nextPageToken) || null };
+  }
+
   // 시트가 바뀌었는지 "싸게" 묻는다 (Drive files.get, ~수십 ms). 시트 본문 읽기(수 초)와
   // 분리하는 것이 핵심이다 - 검색엔진이 쿼리마다 크롤링하지 않는 것과 같은 원리로,
   // 변경이 없으면 고정본을 그대로 쓴다. 같은 서비스 계정을 쓰므로 시트가 SA 에
@@ -375,6 +420,7 @@ export function createGoogleSheetsService(options = {}) {
     getServiceAccountEmail: () => readOptionalText(config.serviceAccount?.client_email),
     getSpreadsheetMeta,
     getSpreadsheetFreshness,
+    listDriveFolderMetadata,
     getSheetValues,
     batchUpdateValues,
     previewSpreadsheet,

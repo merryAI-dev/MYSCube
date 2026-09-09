@@ -590,7 +590,7 @@ export function PersonHrConsole({
                           {leaveState === 'SEPARATED' ? '퇴사일' : leaveState === 'WORKING' ? '복직일' : '휴직 시작일'}
                         </Label>
                         <Input
-                          id="hr-leave-date" type="date" className="mt-1.5 h-10" value={leaveDate}
+                          id="hr-leave-date" type="date" className="mt-1.5 h-10" aria-required="true" value={leaveDate}
                           disabled={leaveSaving}
                           onChange={(event) => setLeaveDate(event.target.value)}
                         />

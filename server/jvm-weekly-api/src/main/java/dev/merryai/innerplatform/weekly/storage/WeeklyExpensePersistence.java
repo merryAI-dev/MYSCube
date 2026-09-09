@@ -1,6 +1,7 @@
 package dev.merryai.innerplatform.weekly.storage;
 
 import dev.merryai.innerplatform.weekly.domain.CashflowAnnualCellSet;
+import dev.merryai.innerplatform.weekly.domain.ProjectSettlementEligibility;
 import dev.merryai.innerplatform.weekly.service.command.CashflowSheetAnnualApplyCommand;
 import dev.merryai.innerplatform.weekly.domain.CashflowCumulativeCloseHead;
 import dev.merryai.innerplatform.weekly.domain.CashflowLedgerSource;
@@ -47,6 +48,12 @@ import java.util.Optional;
 import java.util.concurrent.Callable;
 
 public interface WeeklyExpensePersistence extends CashflowMonthReopenPort, CashflowReadPort {
+    default Map<String, ProjectSettlementEligibility> findProjectSettlementEligibility(
+        String tenantId, List<String> projectIds
+    ) {
+        return Map.of();
+    }
+
     record AppliedCellChangeAuditSource(
         String eventId,
         String projectId,

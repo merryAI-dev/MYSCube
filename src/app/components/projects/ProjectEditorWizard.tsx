@@ -341,13 +341,6 @@ const STEPS: Array<{
   { id: 'review', label: '검토 및 저장', icon: ClipboardList },
 ];
 
-/*
- * 강조색 #0176D3 은 단 하나의 의미만 갖는다: "여기가 지금 초점" — 필수 마커 · 포커스 링 ·
- * 활성 단계 칩. 그 밖에는 회색조를 쓴다. 상태(오류)는 red 하나로만 말하고,
- * 계산된 값은 색이 아니라 형태(입력칸 없음 + 세로선)로 구분한다.
- * Tailwind 임의값은 리터럴이어야 해서 상수로 빼지 않고 클래스 문자열로 직접 쓴다.
- */
-
 /**
  * 글자는 네 역할만 쓴다. 예전에는 text-sm / text-xs / text-[12px] / text-[11px] / text-[10px] 가
  * 섞여 있었고 그중 text-xs 와 text-[12px] 는 같은 12px 를 두 이름으로 부르던 우연한 중복이었다.
@@ -1825,7 +1818,7 @@ export function ProjectEditorWizard({
     <ProjectFormSection title="기본 정보">
       <ProjectFormRow label="담당조직(CIC)" required issueLabel="담당조직(CIC)" errors={fieldIssues('담당조직(CIC)')}>
       <Select value={canUseSelectedDepartment ? selectedDepartment : undefined} onValueChange={(value) => update('department', value)}>
-        <SelectTrigger className={cn(FIELD_W_SM, FORM_CONTROL_CLASS)}>
+        <SelectTrigger aria-required className={cn(FIELD_W_SM, FORM_CONTROL_CLASS)}>
           <SelectValue placeholder="담당조직 선택" />
         </SelectTrigger>
         <SelectContent>
@@ -1837,7 +1830,7 @@ export function ProjectEditorWizard({
     </ProjectFormRow>
       <ProjectFormRow label="프로젝트 유형" required>
       <Select value={draft.type} onValueChange={(value) => update('type', value as ProjectType)}>
-        <SelectTrigger className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue /></SelectTrigger>
+        <SelectTrigger aria-required className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue /></SelectTrigger>
         <SelectContent>
           {projectTypeOptions.map((type) => (
             <SelectItem key={type} value={type}>{PROJECT_TYPE_LABELS[type]}</SelectItem>
@@ -2440,6 +2433,7 @@ export function ProjectEditorWizard({
                         <Input
                           inputMode="numeric"
                           aria-label={`${row.year}년 ${label}`}
+                          aria-required={field === 'contractAmount' && draft.type !== 'I1'}
                           value={formatProjectAmountInput(row[field], true)}
                           onChange={(event) => updateFinancialYear(index, field, parseProjectAmountInput(event.target.value))}
                           className={cn('min-w-[116px]', FORM_NUMERIC_CONTROL_CLASS)}
@@ -2568,12 +2562,12 @@ export function ProjectEditorWizard({
         기간 / 통화 / 금액으로 나눠 말할 뿐이라 제목을 세 번 끊으면 관계가 보이지 않았다.
       */}
       <ProjectFormSection title="계약 정보">
-        <ProjectFormRow label="계약 시작일" required issueLabel="계약 시작일" errors={fieldIssues('계약 시작일')}>
+        <ProjectFormRow label="계약 시작일" required={usesRegistrationV2 || draft.type !== 'I1'} issueLabel="계약 시작일" errors={fieldIssues('계약 시작일')}>
           <Input type="date" value={draft.contractStart} onChange={(event) => updateContractPeriod('contractStart', event.target.value)} className={cn(FIELD_W_XS, FORM_NUMERIC_CONTROL_CLASS, 'text-left')} />
         </ProjectFormRow>
         <ProjectFormRow
           label="계약 종료일"
-          required
+          required={(usesRegistrationV2 || draft.type !== 'I1') && !draft.contractEndUndecided}
           issueLabel="계약 종료일"
           errors={fieldIssues('계약 종료일', '계약 종료일은 시작일 이후여야 합니다.')}
         >
@@ -2624,7 +2618,7 @@ export function ProjectEditorWizard({
           <>
             <ProjectFormRow
               label="계약금액"
-              required
+              required={draft.type !== 'I1'}
               issueLabel="계약금액"
               errors={fieldIssues('계약금액')}
               hints={[
@@ -2760,7 +2754,7 @@ export function ProjectEditorWizard({
           value={usesRegistrationV2 && draft.settlementType === 'NONE' ? undefined : draft.settlementType}
           onValueChange={(value) => update('settlementType', value as SettlementType)}
         >
-          <SelectTrigger className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue placeholder={usesRegistrationV2 ? '사업유형 선택' : '정산 유형 선택'} /></SelectTrigger>
+          <SelectTrigger aria-required={usesRegistrationV2} className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue placeholder={usesRegistrationV2 ? '사업유형 선택' : '정산 유형 선택'} /></SelectTrigger>
           <SelectContent>
             {(Object.entries(SETTLEMENT_TYPE_LABELS) as [SettlementType, string][]).filter(([key]) => !usesRegistrationV2 || key !== 'NONE').map(([key, value]) => (
               <SelectItem key={key} value={key}>{value}</SelectItem>
@@ -2848,6 +2842,7 @@ export function ProjectEditorWizard({
                   onChange={(event) => update('settlementSystemOther', event.target.value)}
                   placeholder="정산 시스템 이름 직접 입력"
                   aria-label="기타 정산 시스템 이름"
+                  aria-required={usesRegistrationV2}
                   className={cn('mt-2 w-full', FORM_CONTROL_CLASS)}
                 />
               ) : null}
@@ -2900,6 +2895,7 @@ export function ProjectEditorWizard({
           <MemberPicker
             className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}
             options={ownerOptions}
+            required
             value={draft.registeredById}
             placeholder="구성원 원장에서 선택"
             onChange={(value) => {
@@ -2931,6 +2927,7 @@ export function ProjectEditorWizard({
           <MemberPicker
             className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}
             options={executiveApproverOptions}
+            required
             value={draft.executiveApproverId}
             placeholder="구성원 원장에서 선택"
             onChange={(value) => {
@@ -2962,6 +2959,7 @@ export function ProjectEditorWizard({
             시트 안에는 사업 식별자를 적지 않는다 - 사람이 적는 식별자는 어긋난다. */}
         <ProjectFormRow
           label="참여율 시트 링크"
+          required={requiresParticipationSheetLink}
           hints={[
             '월별 참여율은 이 시트의 [참여율 관리] 탭에 적습니다. 표준양식을 복사해 이 사업 전용 시트를 만든 뒤 링크를 넣어 주세요.',
             sheetSystemAccount

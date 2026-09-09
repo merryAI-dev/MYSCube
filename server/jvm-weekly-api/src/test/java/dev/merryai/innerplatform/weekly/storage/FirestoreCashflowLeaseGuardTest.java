@@ -107,6 +107,43 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class FirestoreCashflowLeaseGuardTest {
+    @Test
+    void approvedProjectClosureBlocksCanonicalWritesAndReopenAuthority() {
+        Fixture fixture = fixture(activeMember(), activeLease());
+        Map<String, Object> project = new LinkedHashMap<>(fixture.documents.get("orgs/tenant-a/projects/project-a"));
+        project.put("closure", Map.of(
+            "contractVersion", "project-closure-v1", "requestId", "closure-1",
+            "approvedAt", "2026-09-09T03:00:00Z", "approvedBy", "head-1"
+        ));
+        fixture.documents.put("orgs/tenant-a/projects/project-a", project);
+        assertThatThrownBy(() -> fixture.persistence.runCommandTransaction(() ->
+            fixture.persistence.requireCashflowWritePermission(ACTOR, "project-a")
+        )).isInstanceOf(WeeklyExpenseEditLeaseException.class).hasMessageContaining("종료");
+        assertThatThrownBy(() -> fixture.persistence.runCommandTransaction(() -> {
+            fixture.persistence.bindCashflowMonthReopenDecisionAuthority(
+                new CashflowMonthReopenPolicy.DecisionAuthority("tenant-a", "pm-1", "project-a", "admin")
+            );
+            return null;
+        })).isInstanceOf(WeeklyExpenseEditLeaseException.class).hasMessageContaining("종료");
+        assertThat(fixture.pendingWrites).isEmpty();
+        verify(fixture.transaction, org.mockito.Mockito.atLeastOnce()).get(
+            fixture.refs.get("orgs/tenant-a/projects/project-a")
+        );
+        assertThatThrownBy(() -> fixture.persistence.runCommandTransaction(() ->
+            fixture.persistence.requireCashflowMonthClosePermission(ACTOR, "project-a")
+        )).isInstanceOf(WeeklyExpenseEditLeaseException.class).hasMessageContaining("종료");
+    }
+
+    @Test
+    void malformedProjectClosureCannotRestoreWriteAccess() {
+        Fixture fixture = fixture(activeMember(), activeLease());
+        Map<String, Object> project = new LinkedHashMap<>(fixture.documents.get("orgs/tenant-a/projects/project-a"));
+        project.put("closure", Map.of("approvedBy", "head-1"));
+        fixture.documents.put("orgs/tenant-a/projects/project-a", project);
+        assertThatThrownBy(() -> fixture.persistence.runCommandTransaction(() ->
+            fixture.persistence.requireCashflowWritePermission(ACTOR, "project-a")
+        )).isInstanceOf(WeeklyExpenseEditLeaseException.class).hasMessageContaining("확인");
+    }
     private static final String SOURCE_REVISION = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static final Instant NOW = Instant.parse("2026-07-10T10:00:00Z");
     private static final TrustedActorContext ACTOR = new TrustedActorContext(

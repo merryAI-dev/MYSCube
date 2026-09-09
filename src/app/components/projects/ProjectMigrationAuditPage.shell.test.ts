@@ -14,6 +14,16 @@ const financialYearsTableSource = readFileSync(resolve(import.meta.dirname, 'mig
 const compositeSource = [pageSource, controlBarSource, documentSource, recordListSource, previewSource].join('\n');
 
 describe('ProjectMigrationAuditPage review flow', () => {
+  it('shows only the four closure submissions from the submitted snapshot', () => {
+    const payload = Object.fromEntries(PROJECT_DOCUMENTS.map(({ field, documentKind }) => [field, { name: `${documentKind}.pdf`, path: `requests/${documentKind}.pdf` }]));
+    const record = { project: {}, request: { requestKind: 'CLOSURE', payload } } as unknown as MigrationAuditConsoleRecord;
+    const slots = buildMigrationReviewDocumentSlots(record);
+    expect(slots).toHaveLength(4);
+    expect(slots.flatMap((slot) => slot.entries.map((entry) => entry.kind))).toEqual(['final_report', 'tax_invoice', 'performance_certificate', 'final_settlement_report']);
+    expect(slots[0].entries[0].document.path).toBe('requests/final_report.pdf');
+    expect(documentSource).toContain('종료 제출서류 4종');
+    expect(documentSource).toContain('Google Drive 정산자료 수동 삭제');
+  });
   it('includes all twelve submitted documents even before project completion', () => {
     const payload = Object.fromEntries(PROJECT_DOCUMENTS.map(({ field, documentKind }) => [field, { name: `${documentKind}.pdf`, path: `requests/${documentKind}.pdf` }]));
     const record = { project: { status: 'IN_PROGRESS' }, request: { requestKind: 'CHANGE', proposedSnapshot: payload } } as unknown as MigrationAuditConsoleRecord;

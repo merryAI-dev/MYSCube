@@ -116,6 +116,7 @@ function ExecutiveApproverEditor({
         <select
           id={inputId}
           value={uid}
+          aria-required
           onChange={(event) => setUid(event.target.value)}
           disabled={saving || !item.executiveApprover.changeAction.enabled}
           className="h-9 min-w-0 flex-1 rounded-md border border-input bg-background px-3 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
