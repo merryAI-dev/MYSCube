@@ -2228,10 +2228,6 @@ async function reserveCashflowSheetApply({
   const mirrorRef = db.doc(cashflowSheetMirrorDocPath(tenantId, projectId));
   const publicationRef = db.doc(`orgs/${tenantId}/cashflow_sheet_publications/${projectId}`);
   const result = await db.runTransaction(async (transaction) => {
-    const projectSnapshot = await transaction.get(db.doc(`orgs/${tenantId}/projects/${projectId}`));
-    if (Object.hasOwn(projectSnapshot.data() || {}, 'closure')) {
-      throw createHttpError(409, '조직장이 종료 승인한 사업은 새로운 시트 반영을 시작할 수 없습니다.', 'project_closed');
-    }
     const snap = await transaction.get(runRef);
     if (!snap.exists) {
       throw createHttpError(404, '시트 검토 run을 찾을 수 없습니다.', 'cashflow_sheet_stage_run_not_found');

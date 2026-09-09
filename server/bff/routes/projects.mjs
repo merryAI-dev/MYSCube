@@ -1,6 +1,4 @@
 import express from 'express';
-import { mountProjectClosureRoutes } from './project-closure.mjs';
-import { mountProjectClosureDriveRoutes } from './project-closure-drive.mjs';
 import { randomUUID } from 'node:crypto';
 import { projectDocumentValidationError } from '../project-document-validation.mjs';
 import { createOutboxEvent } from '../outbox.mjs';
@@ -20,13 +18,8 @@ import {
 import { stableStringify } from '../utils.mjs';
 import {
   PROJECT_INFO_DOCUMENT_KINDS,
-  PROJECT_REGISTRATION_DOCUMENT_KINDS,
-  PROJECT_DOCUMENT_FIELD_BY_KIND,
-  PROJECT_DOCUMENT_LABEL_BY_FIELD,
   PROJECT_REGISTRATION_REQUIRED_DOCUMENT_KINDS,
   missingProjectRegistrationRequiredDocumentKind,
-  assertProjectDocumentOriginals,
-  assertNoActiveProjectInfoDraft,
 } from '../project-document-validation.mjs';
 import {
   asyncHandler, createMutatingRoute, assertActorRoleAllowed,
@@ -35,7 +28,6 @@ import {
   ensureDocumentExists, upsertVersionedDoc, mergeSystemManagedDoc,
   stripServerManagedFields, stripExpectedVersion, stripUndefinedDeep, readOptionalText, decodeHeaderValue,
   normalizeRole,
-  assertProjectClosureFieldsImmutable,
 } from '../bff-utils.mjs';
 import {
   parseWithSchema,
@@ -336,7 +328,9 @@ function assertProjectRequestMatchesProject(request, projectId) {
 
 export async function resolveProjectRequestDocuments({ db, tenantId, requestId, projectId }) {
   const refs = [];
-  const requestSnapshots = [];
+  const addRef = (ref) => {
+    if (!refs.some((existing) => existing.path === ref.path)) refs.push(ref);
+  };
 
   let request = null;
   let resolvedRequestId = readOptionalText(requestId);
@@ -345,24 +339,40 @@ export async function resolveProjectRequestDocuments({ db, tenantId, requestId, 
     for (const collectionName of ['project_requests', 'projectRequests']) {
       const ref = db.doc(`orgs/${tenantId}/${collectionName}/${resolvedRequestId}`);
       const snap = await ref.get();
-      refs.push(ref);
-      requestSnapshots.push(snap.exists ? stableStringify(snap.data() || {}) : null);
       if (snap.exists) {
-        request = request || { ...(snap.data() || {}), id: ref.id || resolvedRequestId };
+        addRef(ref);
+        request = request || { id: resolvedRequestId, ...(snap.data() || {}) };
       }
     }
     if (!request) {
       throw createHttpError(404, `Project request not found: ${resolvedRequestId}`, 'not_found');
     }
     assertProjectRequestMatchesProject(request, projectId);
-    return { request, requestId: resolvedRequestId, refs, requestSnapshots };
+    return { request, requestId: resolvedRequestId, refs };
   }
 
-  const requests = await queryProjectRequestsByProjectIds({ db, tenantId, projectIds: [projectId] });
-  if (requests.length) {
-    return resolveProjectRequestDocuments({ db, tenantId, requestId: requests[0].id, projectId });
+  for (const collectionName of ['project_requests', 'projectRequests']) {
+    const baseQuery = db.collection(`orgs/${tenantId}/${collectionName}`)
+      .where('approvedProjectId', '==', projectId);
+    let querySnap = await baseQuery.orderBy('requestedAt', 'desc').limit(1).get();
+    if (querySnap.empty) {
+      querySnap = await baseQuery.limit(1).get();
+    }
+    if (!querySnap.empty) {
+      const snap = querySnap.docs[0];
+      addRef(snap.ref);
+      resolvedRequestId = snap.id;
+      request = { id: snap.id, ...(snap.data() || {}) };
+      assertProjectRequestMatchesProject(request, projectId);
+      break;
+    }
   }
-  return { request: null, requestId: null, refs, requestSnapshots };
+
+  if (resolvedRequestId) {
+    addRef(db.doc(`orgs/${tenantId}/project_requests/${resolvedRequestId}`));
+  }
+
+  return { request, requestId: resolvedRequestId || null, refs };
 }
 
 export async function mergeProjectAndRequestDocs({
@@ -371,7 +381,6 @@ export async function mergeProjectAndRequestDocs({
   buildProjectPatch,
   buildRequestPatch,
   requestRefs,
-  requestSnapshots,
   enforceChangeRequestVersion = false,
   writeProject = true,
   tenantId,
@@ -388,20 +397,13 @@ export async function mergeProjectAndRequestDocs({
     const resolvedRequestRefs = Array.isArray(requestRefs) ? requestRefs : [];
     const requestSnaps = await Promise.all(resolvedRequestRefs.map((ref) => tx.get(ref)));
     const existingRequestIndexes = requestSnaps.flatMap((requestSnap, index) => requestSnap.exists ? [index] : []);
-    if ((enforceChangeRequestVersion || requestSnapshots) && existingRequestIndexes.length > 1) {
+    if (enforceChangeRequestVersion && existingRequestIndexes.length > 1) {
       throw createHttpError(409, 'Duplicate project request collections must be reconciled', 'request_collection_conflict');
-    }
-    if (requestSnapshots && requestSnaps.some((requestSnap, index) => (
-      (requestSnap.exists ? stableStringify(requestSnap.data() || {}) : null) !== requestSnapshots[index]
-    ))) {
-      throw createHttpError(409, 'Project request changed before approval', 'canonical_version_conflict');
     }
     const currentRequestIndex = existingRequestIndexes[0] ?? -1;
     const currentRequestSnap = currentRequestIndex >= 0 ? requestSnaps[currentRequestIndex] : null;
     const currentRequestRef = currentRequestIndex >= 0 ? resolvedRequestRefs[currentRequestIndex] : null;
-    const currentRequest = currentRequestSnap
-      ? { ...(currentRequestSnap.data() || {}), id: currentRequestRef.id || currentRequestRef.path.split('/').at(-1) }
-      : null;
+    const currentRequest = currentRequestSnap ? (currentRequestSnap.data() || {}) : null;
 
     const current = snap.data() || {};
     const currentVersion = Number.isInteger(current.version) && current.version > 0 ? current.version : 1;
@@ -469,7 +471,7 @@ export async function readProjectRequestById(db, tenantId, requestId) {
   for (const collectionName of ['project_requests', 'projectRequests']) {
     const snap = await db.doc(`orgs/${tenantId}/${collectionName}/${normalizedRequestId}`).get();
     if (snap.exists) {
-      return { ...(snap.data() || {}), id: normalizedRequestId };
+      return { id: normalizedRequestId, ...(snap.data() || {}) };
     }
   }
   return null;
@@ -527,13 +529,12 @@ function decodeCheckoutBase64(value, expectedSize) {
   return buffer;
 }
 
-async function readProjectAttachmentMember({ db, tenantId, actorId, tx }) {
+async function readProjectAttachmentMember({ db, tenantId, actorId }) {
   const normalizedActorId = readOptionalText(actorId);
   if (!normalizedActorId || normalizedActorId.includes('/')) {
     throw createHttpError(403, 'Project attachment access denied', 'forbidden');
   }
-  const memberRef = db.doc(`orgs/${tenantId}/members/${normalizedActorId}`);
-  const memberSnap = tx ? await tx.get(memberRef) : await memberRef.get();
+  const memberSnap = await db.doc(`orgs/${tenantId}/members/${normalizedActorId}`).get();
   const member = memberSnap.exists ? (memberSnap.data() || {}) : null;
   if (
     !member
@@ -710,38 +711,21 @@ async function readAssignedProjectRequests({ db, tenantId, actorId }) {
     canonicalRequests,
     legacyRequests,
   });
-  const isAssignedRequest = (projectRequest) => {
-    if (projectRequest.requestKind === 'CLOSURE') return assignedProjectIds.has(projectRequest.targetProjectId);
+  const assigned = projectRequests.map((projectRequest) => {
     const payload = resolveProjectRequestPayloadForReview(projectRequest);
     const requestApproverId = readOptionalText(payload?.executiveApproverId);
-    if (requestApproverId) return requestApproverId === normalizedActorId;
-    if (projectRequestRequiresDesignatedApprover(projectRequest)) return false;
+    if (requestApproverId) return requestApproverId === normalizedActorId ? projectRequest : null;
     const projectId = readOptionalText(projectRequest.targetProjectId || projectRequest.approvedProjectId);
-    return assignedProjectIds.has(projectId);
-  };
-  const assigned = projectRequests.filter(isAssignedRequest);
+    return assignedProjectIds.has(projectId) ? projectRequest : null;
+  });
 
-  const projectRequestsForLatest = await queryProjectRequestsByProjectIds({
-    db,
-    tenantId,
-    projectIds: projectRequests.map((projectRequest) => projectRequest.targetProjectId || projectRequest.approvedProjectId),
-  });
-  const latestRequests = new Map();
-  projectRequestsForLatest.forEach((projectRequest) => {
-    const projectId = readOptionalText(projectRequest.targetProjectId || projectRequest.approvedProjectId);
-    if (projectId && !latestRequests.has(projectId)) latestRequests.set(projectId, projectRequest);
-  });
-  const inaccessibleProjectIds = new Set(Array.from(latestRequests.entries())
-    .filter(([, projectRequest]) => !isAssignedRequest(projectRequest))
-    .map(([projectId]) => projectId));
   const items = sortProjectRequests(assigned
-    .filter((projectRequest) => !inaccessibleProjectIds.has(readOptionalText(projectRequest.targetProjectId || projectRequest.approvedProjectId)))
-    .map((projectRequest) => projectRequestForReview(projectRequest, tenantId)));
+    .filter(Boolean)
+    .filter((projectRequest) => projectRequestAttachmentsArePublished(projectRequest, tenantId)));
   const projects = new Map(assignedProjects.docs.map((doc) => [
     doc.id,
     { id: doc.id, ...(doc.data() || {}) },
   ]));
-  inaccessibleProjectIds.forEach((projectId) => projects.delete(projectId));
   const missingProjectIds = Array.from(new Set(items
     .map((item) => readOptionalText(item.targetProjectId || item.approvedProjectId))
     .filter((projectId) => projectId && !projects.has(projectId))));
@@ -1142,7 +1126,7 @@ function registrationSettlementSheetPolicy(value, fundInputMode) {
   };
 }
 
-export function registrationPrivateDocuments(attachmentRefs) {
+function registrationPrivateDocuments(attachmentRefs) {
   const latest = new Map();
   for (const attachment of Array.isArray(attachmentRefs) ? attachmentRefs : []) {
     const documentKind = readOptionalText(attachment?.documentKind);
@@ -1159,7 +1143,19 @@ export function registrationPrivateDocuments(attachmentRefs) {
       visibility: 'PRIVATE',
     }));
   }
-  return Object.fromEntries(Object.entries(PROJECT_DOCUMENT_FIELD_BY_KIND).map(([kind, field]) => [field, latest.get(kind) || null]));
+  return {
+    contractDocument: latest.get('contract') || null,
+    customerBusinessRegistrationDocument: latest.get('customer_business_registration') || null,
+    quoteDocument: latest.get('quote') || null,
+    proposalDocument: latest.get('proposal') || null,
+    proposalWordOriginalDocument: latest.get('proposal_word_original') || null,
+    proposalPptOriginalDocument: latest.get('proposal_ppt_original') || null,
+    presentationPptOriginalDocument: latest.get('presentation_ppt_original') || null,
+    rfpRequestEvidenceDocument: latest.get('rfp_request_evidence') || null,
+    performanceCertificateDocument: latest.get('performance_certificate') || null,
+    taxInvoiceDocument: latest.get('tax_invoice') || null,
+    finalSettlementReportDocument: latest.get('final_settlement_report') || null,
+  };
 }
 
 function registrationRequirementsVersion(value) {
@@ -1426,9 +1422,25 @@ function assertRegistrationV2Requirements(payload, attachmentRefs, validateAttac
 
 }
 
-const REGISTRATION_REQUIREMENT_DOCUMENT_FIELDS = Object.fromEntries(PROJECT_REGISTRATION_DOCUMENT_KINDS.map((kind) => [kind, PROJECT_DOCUMENT_FIELD_BY_KIND[kind]]));
+const REGISTRATION_REQUIREMENT_DOCUMENT_FIELDS = {
+  contract: 'contractDocument',
+  customer_business_registration: 'customerBusinessRegistrationDocument',
+  quote: 'quoteDocument',
+  proposal: 'proposalDocument',
+  proposal_word_original: 'proposalWordOriginalDocument',
+  proposal_ppt_original: 'proposalPptOriginalDocument',
+  presentation_ppt_original: 'presentationPptOriginalDocument',
+  rfp_request_evidence: 'rfpRequestEvidenceDocument',
+};
 
-const PROJECT_INFO_DOCUMENT_FIELDS = Object.values(PROJECT_DOCUMENT_FIELD_BY_KIND);
+const PROJECT_INFO_DOCUMENT_FIELDS = [
+  ...new Set([
+    ...Object.values(REGISTRATION_REQUIREMENT_DOCUMENT_FIELDS),
+    'performanceCertificateDocument',
+    'taxInvoiceDocument',
+    'finalSettlementReportDocument',
+  ]),
+];
 
 function trustedStoredChangeRequestDocuments(previousRequest) {
   if (
@@ -1880,7 +1892,31 @@ export function buildProjectRequestPayloadFromProject(project, existingPayload =
     teamMembersDetailed,
     participantCondition: pickText('participantCondition'),
     note: pickText('note'),
-    ...Object.fromEntries(PROJECT_INFO_DOCUMENT_FIELDS.map((field) => [field, project?.[field] === undefined ? existingPayload[field] ?? null : project[field]])),
+    contractDocument: project?.contractDocument ?? existingPayload.contractDocument ?? null,
+    customerBusinessRegistrationDocument: project?.customerBusinessRegistrationDocument
+      ?? existingPayload.customerBusinessRegistrationDocument
+      ?? null,
+    quoteDocument: project?.quoteDocument ?? existingPayload.quoteDocument ?? null,
+    proposalDocument: project?.proposalDocument ?? existingPayload.proposalDocument ?? null,
+    proposalWordOriginalDocument: project?.proposalWordOriginalDocument
+      ?? existingPayload.proposalWordOriginalDocument
+      ?? null,
+    proposalPptOriginalDocument: project?.proposalPptOriginalDocument
+      ?? existingPayload.proposalPptOriginalDocument
+      ?? null,
+    presentationPptOriginalDocument: project?.presentationPptOriginalDocument
+      ?? existingPayload.presentationPptOriginalDocument
+      ?? null,
+    rfpRequestEvidenceDocument: project?.rfpRequestEvidenceDocument
+      ?? existingPayload.rfpRequestEvidenceDocument
+      ?? null,
+    performanceCertificateDocument: project?.performanceCertificateDocument
+      ?? existingPayload.performanceCertificateDocument
+      ?? null,
+    taxInvoiceDocument: project?.taxInvoiceDocument ?? existingPayload.taxInvoiceDocument ?? null,
+    finalSettlementReportDocument: project?.finalSettlementReportDocument
+      ?? existingPayload.finalSettlementReportDocument
+      ?? null,
     contractAnalysis: project?.contractAnalysis ?? existingPayload.contractAnalysis ?? null,
   };
 }
@@ -2033,7 +2069,17 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
     ...(updatesTeamMembers ? { teamMembersDetailed } : {}),
     participantCondition: readOptionalText(payload.participantCondition),
     note: readOptionalText(payload.note),
-    ...Object.fromEntries(PROJECT_INFO_DOCUMENT_FIELDS.map((field) => [field, payload[field] === undefined ? currentProject[field] ?? null : payload[field] || null])),
+    contractDocument: payload.contractDocument || null,
+    customerBusinessRegistrationDocument: payload.customerBusinessRegistrationDocument || null,
+    quoteDocument: payload.quoteDocument || null,
+    proposalDocument: payload.proposalDocument || null,
+    proposalWordOriginalDocument: payload.proposalWordOriginalDocument || null,
+    proposalPptOriginalDocument: payload.proposalPptOriginalDocument || null,
+    presentationPptOriginalDocument: payload.presentationPptOriginalDocument || null,
+    rfpRequestEvidenceDocument: payload.rfpRequestEvidenceDocument || null,
+    performanceCertificateDocument: payload.performanceCertificateDocument || null,
+    taxInvoiceDocument: payload.taxInvoiceDocument || null,
+    finalSettlementReportDocument: payload.finalSettlementReportDocument || null,
     contractAnalysis: payload.contractAnalysis || null,
     budgetCurrentYear: Number.isFinite(Number(payload.contractAmount))
       ? Math.max(0, Math.round(Number(payload.contractAmount)))
@@ -2092,11 +2138,21 @@ const PROJECT_INFO_CHANGE_LABELS = {
   projectPurpose: '프로젝트 목적',
   description: '주요 내용',
   note: '비고',
+  contractDocument: '계약서 PDF',
+  quoteDocument: '견적서 PDF',
+  proposalDocument: '제안서 PDF',
+  proposalWordOriginalDocument: '제안서 Word 원본',
+  proposalPptOriginalDocument: '제안서 PPT 원본',
+  presentationPptOriginalDocument: '발표자료 PPT 원본',
+  rfpRequestEvidenceDocument: 'RFP 또는 요청 메일 증빙',
   registrationOptionalDocumentNotes: '원본 파일 미첨부 사유',
+  customerBusinessRegistrationDocument: '고객사 사업자등록증 PDF',
   financialYears: '연도별 재무',
   registrationConfirmations: '등록 확인사항',
   checkout: '종료사업 체크아웃',
-  ...PROJECT_DOCUMENT_LABEL_BY_FIELD,
+  performanceCertificateDocument: '수행확인서 PDF',
+  taxInvoiceDocument: '세금계산서 PDF',
+  finalSettlementReportDocument: '최종 정산보고서 PDF',
 };
 
 const PROJECT_INFO_PAYLOAD_FIELDS = [
@@ -2112,7 +2168,11 @@ const PROJECT_INFO_PAYLOAD_FIELDS = [
   'finalPaymentNote', 'projectPurpose', 'registeredById', 'registeredByName',
   'registeredByEmail', 'executiveApproverId', 'executiveApproverName', 'executiveApproverEmail',
   'managerId', 'managerName', 'teamName', 'teamMembers',
-  'teamMembersDetailed', 'staffing', 'participantCondition', 'note', ...PROJECT_INFO_DOCUMENT_FIELDS,
+  'teamMembersDetailed', 'staffing', 'participantCondition', 'note', 'contractDocument',
+  'customerBusinessRegistrationDocument', 'quoteDocument', 'proposalDocument',
+  'proposalWordOriginalDocument', 'proposalPptOriginalDocument',
+  'presentationPptOriginalDocument', 'rfpRequestEvidenceDocument',
+  'performanceCertificateDocument', 'taxInvoiceDocument', 'finalSettlementReportDocument',
   'contractAnalysis',
 ];
 
@@ -2185,7 +2245,17 @@ function projectInfoPayloadWithDocuments(
     : (contractWasReplaced ? null : project.contractAnalysis);
   return stripUndefinedDeep({
     ...proposed,
-    ...Object.fromEntries(PROJECT_INFO_DOCUMENT_FIELDS.map((field) => [field, effectiveDocument(field)])),
+    contractDocument,
+    customerBusinessRegistrationDocument: effectiveDocument('customerBusinessRegistrationDocument'),
+    quoteDocument: effectiveDocument('quoteDocument'),
+    proposalDocument: effectiveDocument('proposalDocument'),
+    proposalWordOriginalDocument: effectiveDocument('proposalWordOriginalDocument'),
+    proposalPptOriginalDocument: effectiveDocument('proposalPptOriginalDocument'),
+    presentationPptOriginalDocument: effectiveDocument('presentationPptOriginalDocument'),
+    rfpRequestEvidenceDocument: effectiveDocument('rfpRequestEvidenceDocument'),
+    performanceCertificateDocument: effectiveDocument('performanceCertificateDocument'),
+    taxInvoiceDocument: effectiveDocument('taxInvoiceDocument'),
+    finalSettlementReportDocument: effectiveDocument('finalSettlementReportDocument'),
     contractAnalysis: contractAnalysis && typeof contractAnalysis === 'object'
       ? contractAnalysis
       : null,
@@ -2313,16 +2383,6 @@ function isProjectChangeRequest(request) {
   return readOptionalText(request?.requestKind) === 'CHANGE';
 }
 
-function projectRequestRequiresDesignatedApprover(request) {
-  return isProjectChangeRequest(request)
-    || (readOptionalText(request?.requestKind) === 'REGISTRATION'
-      && registrationRequirementsVersion(request?.payload?.registrationRequirementsVersion) === 2);
-}
-
-function projectRequestForReview(request, tenantId) {
-  return { ...request, attachmentReviewStatus: projectRequestAttachmentsArePublished(request, tenantId) ? 'READY' : 'REPAIR_REQUIRED' };
-}
-
 function resolveProjectRequestPayloadForReview(request) {
   if (isProjectChangeRequest(request) && request?.proposedSnapshot && typeof request.proposedSnapshot === 'object') {
     return request.proposedSnapshot;
@@ -2330,27 +2390,15 @@ function resolveProjectRequestPayloadForReview(request) {
   return request?.payload || {};
 }
 
-function isCanonicalProjectRequestDocument(document, tenantId, projectId) {
-  if (!projectId || projectId.includes('/')) return false;
-  const prefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
-  const path = readOptionalText(document?.path);
-  const objectName = path.startsWith(prefix) ? path.slice(prefix.length) : '';
-  return Boolean(objectName && !objectName.includes('/') && !['.', '..'].includes(objectName));
-}
-
 function projectRequestAttachmentsArePublished(request, tenantId) {
   const payload = resolveProjectRequestPayloadForReview(request);
-  if (projectRequestRequiresDesignatedApprover(request)
-    && !PROJECT_INFO_DOCUMENT_FIELDS.every((field) => payload?.[field] == null
-      || isCanonicalProjectRequestDocument(payload[field], tenantId, readOptionalText(request?.targetProjectId || request?.approvedProjectId)))) {
-    return false;
-  }
   const privatePrefix = `orgs/${tenantId}/project-registration-drafts/`;
   const hasUnpublishedAttachment = PROJECT_INFO_DOCUMENT_FIELDS.some((field) => (
     readOptionalText(payload?.[field]?.path).startsWith(privatePrefix)
   ));
   const registrationIsAwaitingPublication = readOptionalText(request?.requestKind) === 'REGISTRATION'
     && registrationRequirementsVersion(payload?.registrationRequirementsVersion) === 2
+    && !readOptionalText(request?.registrationAttachmentsPublishedAt)
     && !hasCanonicalRegistrationV2Documents(request, payload, tenantId);
   return !hasUnpublishedAttachment && !registrationIsAwaitingPublication;
 }
@@ -2366,19 +2414,18 @@ function assertProjectRequestAttachmentsPublished(request, tenantId) {
 }
 
 async function assertProjectChangeRequestAttachmentsStored(request, tenantId, storageService) {
-  if (!projectRequestRequiresDesignatedApprover(request)) return;
+  if (!isProjectChangeRequest(request)) return;
   const projectId = readOptionalText(request?.targetProjectId || request?.approvedProjectId);
   const payload = resolveProjectRequestPayloadForReview(request);
   const documents = PROJECT_INFO_DOCUMENT_FIELDS
     .map((field) => payload?.[field])
-    .filter((document) => document != null);
+    .filter((document) => readOptionalText(document?.path));
   if (documents.length === 0) return;
   try {
     if (!projectId || typeof storageService?.inspectProjectRegistrationAttachment !== 'function') {
       throw new Error('Project attachment storage inspection is not configured');
     }
     await Promise.all(documents.map(async (document) => {
-      if (!isCanonicalProjectRequestDocument(document, tenantId, projectId)) throw new Error('Project attachment path is invalid');
       const stored = await storageService.inspectProjectRegistrationAttachment({
         tenantId,
         projectId,
@@ -2403,9 +2450,14 @@ async function assertProjectChangeRequestAttachmentsStored(request, tenantId, st
 function hasCanonicalRegistrationV2Documents(request, payload, tenantId) {
   const projectId = readOptionalText(request?.approvedProjectId || request?.targetProjectId);
   if (!projectId || projectId.includes('/')) return false;
-  const isCanonicalDocument = (field) => isCanonicalProjectRequestDocument(payload?.[field], tenantId, projectId);
+  const canonicalPrefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
+  const isCanonicalDocument = (field) => {
+    const path = readOptionalText(payload?.[field]?.path);
+    const objectName = path.startsWith(canonicalPrefix) ? path.slice(canonicalPrefix.length) : '';
+    return Boolean(objectName && !objectName.includes('/'));
+  };
   const allExistingDocumentsAreCanonical = PROJECT_INFO_DOCUMENT_FIELDS.every((field) => (
-    payload?.[field] == null || isCanonicalDocument(field)
+    !readOptionalText(payload?.[field]?.path) || isCanonicalDocument(field)
   ));
   if (!allExistingDocumentsAreCanonical) return false;
   const hasRequiredDocument = (kind) => (
@@ -2747,13 +2799,6 @@ export function createProjectRegistrationSubmittedOutboxHandler({
   projectRegistrationAttachmentStorageService,
   now = () => new Date().toISOString(),
 }) {
-  function assertAttachmentPublicationPending(project, request) {
-    if (request.requestKind !== 'REGISTRATION' || request.status !== 'PENDING'
-      || project.executiveReviewStatus !== 'PENDING' || project.managementPlanningReviewStatus !== 'PENDING') {
-      throw new Error('Project registration has progressed beyond attachment publication');
-    }
-  }
-
   function assertCurrentClaim(outbox, event) {
     if (
       event?.claimToken
@@ -2773,7 +2818,7 @@ export function createProjectRegistrationSubmittedOutboxHandler({
       const current = outbox.sideEffects && typeof outbox.sideEffects === 'object'
         ? outbox.sideEffects
         : {};
-      const next = await mutate({ ...current }, tx);
+      const next = mutate({ ...current });
       if (!next) return false;
       tx.set(ref, { sideEffects: next }, { merge: true });
       return true;
@@ -2819,10 +2864,8 @@ export function createProjectRegistrationSubmittedOutboxHandler({
         throw new Error('Project registration attachment relocation is not configured');
       }
       const attachmentIdempotencyKey = `outbox:${event.id}:registrationAttachments`;
-      const shouldRelocate = await mutateSideEffects(event, async (sideEffects, tx) => {
+      const shouldRelocate = await mutateSideEffects(event, (sideEffects) => {
         if (sideEffects.registrationAttachments === 'DONE') return null;
-        assertAttachmentPublicationPending(project, projectRequest);
-        await assertNoActiveProjectInfoDraft({ tx, db, tenantId, projectId });
         return {
           ...sideEffects,
           registrationAttachments: 'PROCESSING',
@@ -2832,11 +2875,6 @@ export function createProjectRegistrationSubmittedOutboxHandler({
         };
       });
       if (shouldRelocate) {
-        const changeRequestRef = db.doc(`orgs/${tenantId}/project_requests/change-${projectId}`);
-        if ((await changeRequestRef.get()).exists) {
-          throw new Error('A project change request supersedes registration attachment publication');
-        }
-        const requestSnapshot = stableStringify(requestSnap.data() || {});
         const relocated = await projectRegistrationAttachmentStorageService.relocateDraftAttachments({
           tenantId,
           draftId,
@@ -2854,14 +2892,13 @@ export function createProjectRegistrationSubmittedOutboxHandler({
             throw new Error('Project registration attachment relocation returned an invalid path');
           }
         }
-        const documents = Object.fromEntries(Object.entries(registrationPrivateDocuments(relocated)).filter(([, document]) => document !== null));
+        const documents = registrationPrivateDocuments(relocated);
         await db.runTransaction(async (tx) => {
           const outboxRef = db.doc(`outbox/${event.id}`);
-          const [currentProjectSnap, currentRequestSnap, outboxSnap, changeRequestSnap] = await Promise.all([
+          const [currentProjectSnap, currentRequestSnap, outboxSnap] = await Promise.all([
             tx.get(projectRef),
             tx.get(requestRef),
             tx.get(outboxRef),
-            tx.get(changeRequestRef),
           ]);
           if (!currentProjectSnap.exists || !currentRequestSnap.exists || !outboxSnap.exists) {
             throw new Error('Project registration delivery records are missing');
@@ -2872,28 +2909,12 @@ export function createProjectRegistrationSubmittedOutboxHandler({
             ? outbox.sideEffects
             : {};
           if (sideEffects.registrationAttachments === 'DONE') return;
-          await assertNoActiveProjectInfoDraft({ tx, db, tenantId, projectId });
-          if (changeRequestSnap.exists) {
-            throw new Error('A project change request supersedes registration attachment publication');
-          }
           if (sideEffects.registrationAttachmentsIdempotencyKey !== attachmentIdempotencyKey) {
             throw new Error('Project registration attachment delivery claim changed');
           }
           const currentRequest = currentRequestSnap.data() || {};
-          const currentProject = currentProjectSnap.data() || {};
-          assertAttachmentPublicationPending(currentProject, currentRequest);
-          if (stableStringify(currentRequest) !== requestSnapshot) {
-            throw new Error('Project registration request changed during attachment publication');
-          }
           if (readOptionalText(currentRequest.approvedProjectId) !== projectId) {
             throw new Error('Project registration request does not match its project');
-          }
-          for (const [field, document] of Object.entries(documents)) {
-            for (const existing of [currentProject[field], currentRequest.payload?.[field]]) {
-              if (existing != null && stableStringify(existing) !== stableStringify(document)) {
-                throw new Error('Project registration attachment was replaced before publication');
-              }
-            }
           }
           tx.set(projectRef, {
             ...documents,
@@ -3060,8 +3081,6 @@ export function mountProjectRoutes(app, {
   projectSheetSourceStorageService,
   projectRegistrationSlackService,
 }) {
-  mountProjectClosureRoutes(app, { db, now, idempotencyService });
-  mountProjectClosureDriveRoutes(app, { db, googleSheetsService });
   // ── GET /api/v1/projects ─────────────────────────────────────────────────────
   app.get('/api/v1/projects', asyncHandler(async (req, res) => {
     const { tenantId } = req.context;
@@ -3125,7 +3144,7 @@ export function mountProjectRoutes(app, {
     await readProjectAttachmentMember({ db, tenantId, actorId });
     const projectIds = parseProjectRequestQueryProjectIds(req.body?.projectIds);
     const items = (await queryProjectRequestsByProjectIds({ db, tenantId, projectIds }))
-      .map((projectRequest) => projectRequestForReview(projectRequest, tenantId));
+      .filter((projectRequest) => projectRequestAttachmentsArePublished(projectRequest, tenantId));
     res.setHeader('cache-control', 'private, no-store');
     res.status(200).json({ items });
   }));
@@ -3143,29 +3162,29 @@ export function mountProjectRoutes(app, {
     if (!hasProjectRequestAccess({ actorId, member, projectId, project })) {
       throw createHttpError(403, 'Project request access denied', 'forbidden');
     }
-    let item;
-    if (req.query.requestKind === 'CLOSURE') {
-      if (project.closureRequestId) {
-        if (!/^[A-Za-z0-9_-]{1,160}$/.test(project.closureRequestId)) {
-          throw createHttpError(409, '종료 요청 상태를 확인할 수 없습니다.', 'project_closure_unavailable');
-        }
-        item = (await db.doc(`orgs/${tenantId}/project_requests/${project.closureRequestId}`).get()).data();
-        if (!item || item.requestKind !== 'CLOSURE' || item.targetProjectId !== projectId || item.tenantId !== tenantId) {
-          throw createHttpError(409, '종료 요청 상태를 확인할 수 없습니다.', 'project_closure_unavailable');
-        }
-      }
-    } else {
-      [item] = await queryProjectRequestsByProjectIds({ db, tenantId, projectIds: [projectId] });
-    }
+    const items = await queryProjectRequestsByProjectIds({ db, tenantId, projectIds: [projectId] });
     res.setHeader('cache-control', 'private, no-store');
-    res.status(200).json({ item: item ? projectRequestForReview(item, tenantId) : null });
+    res.status(200).json({ item: items[0] || null });
   }));
 
   app.get('/api/v1/projects/:projectId/attachments/:documentKind', asyncHandler(async (req, res) => {
     const { tenantId, actorId } = req.context;
     const projectId = readOptionalText(req.params.projectId);
     const documentKind = readOptionalText(req.params.documentKind);
-    const field = Object.hasOwn(PROJECT_DOCUMENT_FIELD_BY_KIND, documentKind) ? PROJECT_DOCUMENT_FIELD_BY_KIND[documentKind] : undefined;
+    const field = {
+      contract: 'contractDocument',
+      customer_business_registration: 'customerBusinessRegistrationDocument',
+      quote: 'quoteDocument',
+      proposal: 'proposalDocument',
+      proposal_word_original: 'proposalWordOriginalDocument',
+      proposal_ppt_original: 'proposalPptOriginalDocument',
+      presentation_ppt_original: 'presentationPptOriginalDocument',
+      rfp_request_evidence: 'rfpRequestEvidenceDocument',
+      performance_certificate: 'performanceCertificateDocument',
+      tax_invoice: 'taxInvoiceDocument',
+      final_settlement_report: 'finalSettlementReportDocument',
+      final_report: 'finalReportDocument',
+    }[documentKind];
     if (!projectId || !field) {
       throw createHttpError(400, 'Project attachment request is invalid', 'project_attachment_invalid');
     }
@@ -3307,7 +3326,19 @@ export function mountProjectRoutes(app, {
     const { tenantId, actorId } = req.context;
     const requestId = readOptionalText(req.params.requestId);
     const documentKind = readOptionalText(req.params.documentKind);
-    const field = Object.hasOwn(PROJECT_DOCUMENT_FIELD_BY_KIND, documentKind) ? PROJECT_DOCUMENT_FIELD_BY_KIND[documentKind] : undefined;
+    const field = {
+      contract: 'contractDocument',
+      customer_business_registration: 'customerBusinessRegistrationDocument',
+      quote: 'quoteDocument',
+      proposal: 'proposalDocument',
+      proposal_word_original: 'proposalWordOriginalDocument',
+      proposal_ppt_original: 'proposalPptOriginalDocument',
+      presentation_ppt_original: 'presentationPptOriginalDocument',
+      rfp_request_evidence: 'rfpRequestEvidenceDocument',
+      performance_certificate: 'performanceCertificateDocument',
+      tax_invoice: 'taxInvoiceDocument',
+      final_settlement_report: 'finalSettlementReportDocument',
+    }[documentKind];
     if (!requestId || requestId.includes('/') || !field) {
       throw createHttpError(400, 'Project request attachment is invalid', 'project_request_attachment_invalid');
     }
@@ -3320,7 +3351,7 @@ export function mountProjectRoutes(app, {
     const requestApproverId = readOptionalText(payload?.executiveApproverId);
     if (!['admin', 'finance'].includes(storedRole)) {
       let isDesignatedApprover = requestApproverId === actorId;
-      if (!requestApproverId && projectId && !projectRequestRequiresDesignatedApprover(projectRequest)) {
+      if (!requestApproverId && projectId) {
         const projectSnap = await db.doc(`orgs/${tenantId}/projects/${projectId}`).get();
         isDesignatedApprover = projectSnap.exists
           && readOptionalText(projectSnap.data()?.executiveApproverId) === actorId;
@@ -3353,9 +3384,6 @@ export function mountProjectRoutes(app, {
     const { tenantId, actorId, actorRole, actorEmail, requestId } = req.context;
     const timestamp = now();
     const parsed = parseWithSchema(projectUpsertSchema, req.body, 'Invalid project payload');
-    assertProjectClosureFieldsImmutable(req.body);
-    const { expectedProjectDocuments } = parsed;
-    delete parsed.expectedProjectDocuments;
     const expectedVersion = parsed.expectedVersion;
     const driveConfig = typeof driveService?.getConfig === 'function' ? driveService.getConfig() : null;
     const projectRef = db.doc(`orgs/${tenantId}/projects/${parsed.id.trim()}`);
@@ -3473,19 +3501,15 @@ export function mountProjectRoutes(app, {
       now: timestamp,
       expectedVersion,
       outboxEvent,
-      stageTransactionWrites: async ({ tx, document, current }) => {
-        const changedDocuments = assertProjectDocumentOriginals(current, projectPayload, expectedProjectDocuments);
-        if (updatesTeamMembers && Array.isArray(projectPayload.teamMembersDetailed)) {
-          await syncProjectParticipationEntries({
+      stageTransactionWrites: updatesTeamMembers && Array.isArray(projectPayload.teamMembersDetailed)
+        ? ({ tx, document }) => syncProjectParticipationEntries({
             db,
             transaction: tx,
             tenantId,
             project: document,
             now: timestamp,
-          });
-        }
-        if (Object.keys(changedDocuments).length) tx.update(projectRef, changedDocuments);
-      },
+          })
+        : undefined,
     });
 
     const existingName = readOptionalText(existingProject?.name);
@@ -3882,21 +3906,13 @@ export function mountProjectRoutes(app, {
     const reviewerName = readOptionalText(actorName) || readOptionalText(actorEmail) || actorId;
     const now = new Date().toISOString();
     await ensureDocumentExists(db, projectPath, `Project not found: ${projectId}`);
-    const { request, requestId: resolvedRequestId, refs, requestSnapshots } = await resolveProjectRequestDocuments({
+    const { request, requestId: resolvedRequestId, refs } = await resolveProjectRequestDocuments({
       db,
       tenantId,
       requestId: parsed.requestId,
       projectId,
     });
-    if (request?.requestKind === 'CLOSURE') {
-      throw createHttpError(409, '사업 종료 유형의 승인으로 처리해 주세요.', 'project_closure_review_required');
-    }
-    if (projectRequestRequiresDesignatedApprover(request)
-      && readOptionalText(resolveProjectRequestPayloadForReview(request)?.executiveApproverId) !== actorId) {
-      throw createHttpError(403, 'Only the designated executive approver can review this project', 'executive_approver_mismatch');
-    }
     if (parsed.reviewStatus === 'APPROVED') {
-      assertProjectRequestAttachmentsPublished(request, tenantId);
       await assertProjectChangeRequestAttachmentsStored(
         request,
         tenantId,
@@ -3908,11 +3924,13 @@ export function mountProjectRoutes(app, {
       db,
       projectPath,
       buildProjectPatch: async (currentProject, currentRequest, _nextVersion, tx) => {
-        const member = await readProjectAttachmentMember({ db, tenantId, actorId, tx });
-        if (!PROJECT_REQUEST_ROUTE_ROLES.includes(normalizeRole(member.role))) {
-          throw createHttpError(403, 'Project review access denied', 'forbidden');
+        const reviewRequest = currentRequest || request;
+        if (
+          isProjectChangeRequest(reviewRequest)
+          && Number(reviewRequest?.requestVersion) !== Number(request?.requestVersion)
+        ) {
+          throw createHttpError(409, 'Project request changed before approval', 'canonical_version_conflict');
         }
-        const reviewRequest = currentRequest;
         const pendingChangeRequest = isProjectChangeRequest(reviewRequest)
           && readOptionalText(reviewRequest?.status) === 'PENDING';
         const previousStatus = pendingChangeRequest
@@ -3922,14 +3940,13 @@ export function mountProjectRoutes(app, {
         const isLegacyPlanningAgreement = previousStatus === 'PLANNING_AGREED';
         const requestPayload = resolveProjectRequestPayloadForReview(reviewRequest);
         const requestApproverId = readOptionalText(requestPayload?.executiveApproverId);
-        const requiresDesignatedApprover = projectRequestRequiresDesignatedApprover(reviewRequest);
-        const designatedApproverId = requiresDesignatedApprover || (!isLegacyPlanningAgreement && requestApproverId)
+        const designatedApproverId = !isLegacyPlanningAgreement && requestApproverId
           ? requestApproverId
           : readOptionalText(currentProject.executiveApproverId);
         if (!pendingChangeRequest && !['PENDING', 'PLANNING_AGREED'].includes(previousStatus)) {
           throw createHttpError(409, 'Project is not awaiting an organization-head decision', 'invalid_executive_review_state');
         }
-        if ((requiresDesignatedApprover || designatedApproverId) && designatedApproverId !== actorId) {
+        if (designatedApproverId && designatedApproverId !== actorId) {
           throw createHttpError(403, 'Only the designated executive approver can review this project', 'executive_approver_mismatch');
         }
         if (parsed.reviewStatus === 'APPROVED') {
@@ -4004,7 +4021,6 @@ export function mountProjectRoutes(app, {
           })
       ),
       requestRefs: resolvedRequestId ? refs : [],
-      requestSnapshots,
       enforceChangeRequestVersion: isProjectChangeRequest(request),
       writeProject: parsed.reviewStatus === 'APPROVED' || !isProjectChangeRequest(request),
       tenantId,
@@ -4021,7 +4037,6 @@ export function mountProjectRoutes(app, {
               project: document,
               now,
             });
-            tx.update(db.doc(projectPath), Object.fromEntries(PROJECT_INFO_DOCUMENT_FIELDS.map((field) => [field, document[field] ?? null])));
           }
         : undefined,
     });
@@ -4063,6 +4078,7 @@ export function mountProjectRoutes(app, {
   app.post('/api/v1/projects/:projectId/management-planning-review', createMutatingRoute(idempotencyService, async (req) => {
     const { tenantId, actorId, actorEmail, actorName } = req.context;
     assertActorRoleAllowed(req, ['admin', 'finance'], 'review project management planning status');
+    await readProjectAttachmentMember({ db, tenantId, actorId });
     const projectId = readOptionalText(req.params.projectId);
     if (!projectId) {
       throw createHttpError(400, 'project id is required', 'missing_project_id');
@@ -4081,35 +4097,21 @@ export function mountProjectRoutes(app, {
       ? db.doc(`orgs/${tenantId}/projectCodeClaims/${projectCode}`)
       : null;
     await ensureDocumentExists(db, projectPath, `Project not found: ${projectId}`);
-    const { request, requestId: resolvedRequestId, refs, requestSnapshots } = await resolveProjectRequestDocuments({
+    const { request, requestId: resolvedRequestId, refs } = await resolveProjectRequestDocuments({
       db,
       tenantId,
       requestId: parsed.requestId,
       projectId,
     });
-    if (request?.requestKind === 'CLOSURE') {
-      throw createHttpError(409, '사업 종료 유형의 승인으로 처리해 주세요.', 'project_closure_review_required');
-    }
-    if (parsed.reviewStatus === 'AGREED') {
-      assertProjectRequestAttachmentsPublished(request, tenantId);
-      await assertProjectChangeRequestAttachmentsStored(request, tenantId, projectRequestContractStorageService);
-    }
     let projectCodeClaimWrite = null;
     const projectResult = await mergeProjectAndRequestDocs({
       db,
       projectPath,
       buildProjectPatch: async (currentProject, currentRequest, _nextVersion, tx) => {
         projectCodeClaimWrite = null;
-        const member = await readProjectAttachmentMember({ db, tenantId, actorId, tx });
-        if (!['admin', 'finance'].includes(normalizeRole(member.role))) {
-          throw createHttpError(403, 'Project management planning review access denied', 'forbidden');
-        }
-        const reviewRequest = currentRequest;
-        const projectApproved = readOptionalText(currentProject.executiveReviewStatus) === 'APPROVED';
-        const requestApproved = readOptionalText(reviewRequest?.status) === 'APPROVED';
-        const hasExecutiveApproval = isProjectChangeRequest(reviewRequest)
-          ? projectApproved && requestApproved
-          : projectRequestRequiresDesignatedApprover(reviewRequest) ? projectApproved : projectApproved || requestApproved;
+        const reviewRequest = currentRequest || request;
+        const hasExecutiveApproval = readOptionalText(currentProject.executiveReviewStatus) === 'APPROVED'
+          || readOptionalText(reviewRequest?.status) === 'APPROVED';
         if (!hasExecutiveApproval) {
           throw createHttpError(409, 'Organization-head approval is required before management planning review', 'executive_review_required');
         }
@@ -4128,7 +4130,6 @@ export function mountProjectRoutes(app, {
           ? currentProject.managementPlanningReviewHistory
           : [];
         const isAgreed = parsed.reviewStatus === 'AGREED';
-        if (isAgreed) assertProjectRequestAttachmentsPublished(reviewRequest, tenantId);
         if (isAgreed && projectCode && projectCodeClaimRef) {
           const existingProjectCode = normalizeProjectCode(currentProject.projectCode);
           if (existingProjectCode && existingProjectCode !== projectCode) {
@@ -4222,7 +4223,6 @@ export function mountProjectRoutes(app, {
         };
       },
       requestRefs: resolvedRequestId ? refs : [],
-      requestSnapshots,
       tenantId,
       actorId,
       now,
@@ -4289,9 +4289,6 @@ export function mountProjectRoutes(app, {
       requestId: parsed.requestId,
       projectId,
     });
-    if (request?.requestKind === 'CLOSURE') {
-      throw createHttpError(409, '사업 종료 유형에서 보완 후 재신청해 주세요.', 'project_closure_review_required');
-    }
 
     await mergeProjectAndRequestDocs({
       db,

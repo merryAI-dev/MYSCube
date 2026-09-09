@@ -449,7 +449,6 @@ function ImportEditorRow({
         return (
           <td
             key={colIdx}
-            data-field-selected={isCellSelected(colIdx)}
             className={`px-0.5 py-0.5 border-b border-r focus-within:bg-teal-50/20 focus-within:shadow-[inset_0_0_0_2px_rgba(20,184,166,0.8)] ${cellToneClass} ${isCellSelected(colIdx)
               ? 'bg-teal-50/40 dark:bg-teal-900/20 shadow-[inset_0_0_0_2px_rgba(20,184,166,0.7)]'
               : ''
@@ -744,7 +743,6 @@ function ImportEditorRow({
                 <div className="flex items-center gap-1 pr-6">
                   <select
                     value={parseContentStatusNote(String(row.cells[colIdx] || '')).status}
-                    aria-required={settlementSheetPolicy.requireNoteForAdjustment && isAdjustmentRow && !parseContentStatusNote(String(row.cells[colIdx] || '')).text.trim()}
                     data-cell-row={rowIdx}
                     data-cell-col={colIdx}
                     className="h-6 rounded border bg-background px-1 text-[10px]"
@@ -764,7 +762,6 @@ function ImportEditorRow({
                   <input
                     type="text"
                     value={parseContentStatusNote(String(row.cells[colIdx] || '')).text}
-                    aria-required={settlementSheetPolicy.requireNoteForAdjustment && isAdjustmentRow && !parseContentStatusNote(String(row.cells[colIdx] || '')).status}
                     className="w-full bg-transparent outline-none text-[11px] px-1 py-0.5"
                     data-cell-row={rowIdx}
                     data-cell-col={colIdx}
@@ -881,7 +878,6 @@ function ImportEditorRow({
                   data-cell-row={rowIdx}
                   data-cell-col={colIdx}
                   list={isAuthor && authorListId ? authorListId : undefined}
-                  aria-required={isCounterparty && settlementSheetPolicy.requireCounterparty}
                   readOnly={isDerivedLocked}
                   onFocus={() => onCellFocus(rowIdx, colIdx)}
                   onPaste={(e) => handlePaste(colIdx, e)}

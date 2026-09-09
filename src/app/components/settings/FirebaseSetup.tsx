@@ -133,7 +133,6 @@ function ConfigForm() {
               <Input
                 className="h-8 text-[12px] font-mono"
                 placeholder={`firebase-${key}-here`}
-                aria-required={Boolean(required)}
                 value={config[key]}
                 onChange={(e) => setConfig(prev => ({ ...prev, [key]: e.target.value }))}
                 type={key === 'apiKey' ? 'password' : 'text'}

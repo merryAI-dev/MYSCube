@@ -1786,7 +1786,6 @@ export function PortalBudget() {
                           <input
                             type="text"
                             value={entry.code}
-                            aria-required
                             placeholder="비목명"
                             className="flex-1 bg-transparent outline-none text-[11px] px-2 py-1 border rounded"
                             onChange={(e) => updateBudgetCode(idx, e.target.value)}
@@ -1836,7 +1835,6 @@ export function PortalBudget() {
                                 <input
                                   type="text"
                                   value={subItem.subCode}
-                                  aria-required
                                   placeholder="세목명"
                                   className="flex-1 bg-transparent outline-none text-[11px] px-2 py-1 border rounded"
                                   onChange={(e) => updateSubCode(idx, sidx, e.target.value)}
@@ -1879,7 +1877,6 @@ export function PortalBudget() {
                                     <input
                                       type="text"
                                       value={leaf.subSubCode || ''}
-                                      aria-required={subItem.leafItems.length > 1 || subItem.leafItems.some((item) => Boolean(item.subSubCode?.trim()))}
                                       placeholder="세세목명"
                                       className="flex-1 bg-transparent outline-none text-[11px] px-2 py-1 border rounded"
                                       onChange={(e) => updateLeafSubSubCode(idx, sidx, leafIdx, e.target.value)}

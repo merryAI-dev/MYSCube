@@ -161,7 +161,6 @@ jobs:
       LIVE_FIREBASE_PROJECT_ID: inner-platform-live-20260316
       BFF_DEPLOY_ENV: live
       BFF_AUTH_MODE: firebase_required
-      BFF_GOOGLE_OAUTH_CLIENT_ID: ${{ vars.BFF_GOOGLE_OAUTH_CLIENT_ID_LIVE }}
       BFF_EDIT_LEASES_ENABLED: 'true'
       BFF_ALLOWED_ORIGINS: https://myscube.myscguard.app
       JVM_WEEKLY_FIRESTORE_PROJECT_ID: inner-platform-live-20260316
@@ -624,28 +623,6 @@ jobs:
             '{ backups: $backups, database: $database }' > "${recovery_file}"
           node scripts/verify-cashflow-settlement-cutover-sequence.mjs \
             verify-firestore-recovery "${recovery_file}"
-
-      - name: Prepare Firestore rules backup
-        if: steps.release_boundary.outputs.release_mode == 'atomic_cutover' || steps.release_boundary.outputs.release_mode == 'final_web_resume'
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
-          BFF_DEPLOYED_SHA: ${{ steps.release_boundary.outputs.bff_deployed_sha }}
-        run: node scripts/publish-firestore-rules.mjs prepare "${RUNNER_TEMP}/firestore-rules-backup.json"
-
-      - name: Preserve Firestore rules rollback artifact
-        if: steps.release_boundary.outputs.release_mode == 'atomic_cutover' || steps.release_boundary.outputs.release_mode == 'final_web_resume'
-        uses: actions/upload-artifact@v4
-        with:
-          name: firestore-rules-backup-jvm-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/firestore-rules-backup.json
-          if-no-files-found: error
-          retention-days: 90
-
-      - name: Publish and verify Firestore rules
-        if: steps.release_boundary.outputs.release_mode == 'atomic_cutover' || steps.release_boundary.outputs.release_mode == 'final_web_resume'
-        env:
-          GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.auth.outputs.credentials_file_path }}
-        run: node scripts/publish-firestore-rules.mjs publish "${RUNNER_TEMP}/firestore-rules-backup.json"
 
       - name: Recheck frozen inventory before maintenance
         if: steps.release_boundary.outputs.release_mode == 'atomic_cutover'

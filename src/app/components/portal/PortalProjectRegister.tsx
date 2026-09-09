@@ -1,6 +1,3 @@
-import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
-import { PlatformApiError } from '../../platform/api-client';
-import { resolveProjectErrorMessage } from '../../platform/api-error-message';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { CheckCircle2, Clock3, LockKeyhole, Pencil, Send } from 'lucide-react';
@@ -68,7 +65,14 @@ function draftForEditor(record: ProjectRegistrationDraft): ProjectEditorDraft {
   }
   return createProjectEditorDraft({
     ...(record.payload as Partial<ProjectEditorDraft>),
-    ...Object.fromEntries(PROJECT_DOCUMENTS.filter(({ registration }) => registration).map(({ documentKind, field }) => [field, documents[documentKind] || null])),
+    contractDocument: documents.contract || null,
+    quoteDocument: documents.quote || null,
+    proposalDocument: documents.proposal || null,
+    proposalWordOriginalDocument: documents.proposal_word_original || null,
+    proposalPptOriginalDocument: documents.proposal_ppt_original || null,
+    presentationPptOriginalDocument: documents.presentation_ppt_original || null,
+    rfpRequestEvidenceDocument: documents.rfp_request_evidence || null,
+    customerBusinessRegistrationDocument: documents.customer_business_registration || null,
     registrationRequirementsVersion: 2,
   });
 }
@@ -95,10 +99,6 @@ function RegistrationEditor({
   const [aliasInput, setAliasInput] = useState(String(initialRecord.alias || ''));
   const revisionRef = useRef(record.draftRevision);
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const writesPausedRef = useRef(false);
-  const finishedRef = useRef(false);
-  const [draftConflictCount, setDraftConflictCount] = useState(0);
-  const latestRecordRef = useRef<ProjectRegistrationDraft | null>(null);
   const leaseClient = useMemo(() => createEditLeaseClient({
     tenantId: orgId,
     actor,
@@ -138,16 +138,11 @@ function RegistrationEditor({
   }, []);
 
   const withOwnership = useCallback(async <T,>(operation: (ownership: { leaseId: string; fence: number }) => Promise<T>) => {
-    if (finishedRef.current || writesPausedRef.current) throw new Error('최근 임시저장과 비교한 뒤 다시 저장해 주세요.');
     const ownership = await lease.checkBeforeSave();
     if (!ownership) throw new Error('수정 세션이 종료되었거나 다른 세션이 사용 중입니다.');
     try {
       return await operation(ownership);
     } catch (error) {
-      if (error instanceof PlatformApiError && error.status === 409 && error.code === 'draft_version_conflict') {
-        writesPausedRef.current = true;
-        setDraftConflictCount((count) => count + 1);
-      }
       await lease.checkStatus();
       throw error;
     }
@@ -230,23 +225,10 @@ function RegistrationEditor({
 
   const editorDraft = useMemo(() => draftForEditor(record), [record]);
   const autosave = useMemo(() => ({
-    key: `portal-register-${orgId}-${actor.uid}-${record.draftId}`,
+    key: `portal-register-${record.draftId}`,
     disabled: !lease.canEdit,
-    conflictCount: draftConflictCount,
     onSave: persistDraft,
-    onLoadLatest: async () => {
-      writesPausedRef.current = true;
-      await mutationQueueRef.current;
-      const latest = await draftClient.get(record.draftId);
-      revisionRef.current = latest.draft.draftRevision;
-      latestRecordRef.current = latest.draft;
-      return draftForEditor(latest.draft);
-    },
-    onResume: () => {
-      if (latestRecordRef.current) setRecord(latestRecordRef.current);
-      writesPausedRef.current = false;
-    },
-  }), [actor.uid, draftClient, draftConflictCount, lease.canEdit, orgId, persistDraft, record.draftId]);
+  }), [lease.canEdit, persistDraft, record.draftId]);
 
   const submit = async () => {
     if (busyActionId) return;
@@ -255,7 +237,6 @@ function RegistrationEditor({
       await enqueueMutation(() => withOwnership((ownership) => draftClient.submit(record.draftId, ownership, {
         expectedDraftRevision: revisionRef.current,
       })));
-      finishedRef.current = true;
       setSubmitted(true);
       toast.success('프로젝트 등록 요청이 최종 제출되었습니다.');
     } finally {
@@ -299,9 +280,8 @@ function RegistrationEditor({
               if (nextAlias === String(record.alias || '')) return;
               void enqueueMutation(() => withOwnership(async (ownership) => {
                 const saved = await draftClient.setAlias(record.draftId, ownership, nextAlias);
-                revisionRef.current = saved.draft.draftRevision;
                 setRecord(saved.draft);
-              })).catch((error) => toast.error(resolveProjectErrorMessage(error, '임시저장 이름을 저장하지 못했습니다.')));
+              })).catch(() => toast.error('임시저장 이름을 저장하지 못했습니다.'));
             }}
             placeholder="예: 관광벤처 멘토링"
             disabled={!lease.canEdit}
@@ -351,12 +331,7 @@ function RegistrationEditor({
         canRemoveProjectDocuments
         onRemoveProjectDocument={removeDocument}
         onLeave={async () => {
-          finishedRef.current = true;
-          await mutationQueueRef.current;
-          if (!await lease.release()) {
-            finishedRef.current = false;
-            throw new Error('edit lease release failed');
-          }
+          if (!await lease.release()) throw new Error('edit lease release failed');
         }}
         onCancel={() => navigate('/portal/project-select')}
         onSubmit={() => submit()}
@@ -474,7 +449,7 @@ export function PortalProjectRegister() {
         const loaded = await client.get(draftId);
         if (!cancelled && session) setBootstrap({ actor, client, draft: loaded.draft, session });
       } catch (cause) {
-        if (!cancelled) setError(resolveProjectErrorMessage(cause, '등록 임시저장을 불러오지 못했습니다.'));
+        if (!cancelled) setError(cause instanceof Error ? cause.message : '등록 임시저장을 불러오지 못했습니다.');
       }
     })();
     return () => {
@@ -576,7 +551,7 @@ export function PortalProjectRegister() {
                         });
                         toast.success('임시저장을 삭제했습니다.');
                       })
-                      .catch((error) => toast.error(resolveProjectErrorMessage(error, '임시저장 삭제 상태를 확인하지 못했습니다.')))
+                      .catch(() => toast.error('임시저장 삭제에 실패했습니다. 잠시 후 다시 시도해 주세요.'))
                       .finally(() => setDeletingDraftId(null));
                   }}
                 >

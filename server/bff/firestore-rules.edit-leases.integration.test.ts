@@ -56,7 +56,6 @@ const protectedCollections = [
 ] as const;
 const canonicalRootCollections = [
   'projects',
-  'project_closure_reviews',
   'cashflow_weeks',
   'cashflow_settlement_statuses',
   'weekly_submission_status',

@@ -47,46 +47,6 @@ function harness() {
 }
 
 describe('project information draft client', () => {
-  const rebaseBody = { rebased: false, sourceFingerprint: 'a'.repeat(64), canonicalVersion: 3, baseCanonicalVersion: 3, autoMerged: [], conflicts: [] };
-  it('carries the preview source fingerprint into apply and requires a committed draft', async () => {
-    const { api, client } = harness();
-    vi.mocked(api.post).mockReset().mockResolvedValueOnce({ data: rebaseBody }).mockResolvedValueOnce({ data: { ...rebaseBody, rebased: true, draft: DRAFT } });
-    const ownership = { leaseId: 'lease-a', fence: 1 };
-    const preview = await client.rebase(ownership, { expectedDraftRevision: 2 });
-    expect(preview.sourceFingerprint).toBe(rebaseBody.sourceFingerprint);
-    const applied = await client.rebase(ownership, { expectedDraftRevision: 2, resolutions: {}, sourceFingerprint: preview.sourceFingerprint });
-    expect(applied).toMatchObject({ rebased: true, draft: DRAFT });
-    expect(api.post).toHaveBeenLastCalledWith(expect.any(String), expect.objectContaining({ body: { expectedDraftRevision: 2, resolutions: {}, sourceFingerprint: preview.sourceFingerprint } }));
-  });
-
-  it.each([
-    { sourceFingerprint: undefined }, { sourceFingerprint: 'bad' }, { rebased: 'false' },
-    { canonicalVersion: 0 }, { canonicalVersion: '3' }, { baseCanonicalVersion: -1 },
-    { conflicts: null }, { conflicts: {} }, { conflicts: [{ field: '' }] },
-    { autoMerged: undefined }, { autoMerged: [{ field: 5 }] },
-    { rebased: true }, { rebased: true, draft: { ...DRAFT, payload: null } },
-  ])('fails closed on malformed rebase response %j', async (override) => {
-    const { api, client } = harness();
-    vi.mocked(api.post).mockReset().mockResolvedValue({ data: { ...rebaseBody, ...override } });
-    await expect(client.rebase({ leaseId: 'lease-a', fence: 1 }, { expectedDraftRevision: 2, ...(override.rebased === true ? { resolutions: {}, sourceFingerprint: rebaseBody.sourceFingerprint } : {}) })).rejects.toThrow();
-  });
-
-  it('never treats a preview response as successful apply', async () => {
-    const { api, client } = harness();
-    vi.mocked(api.post).mockReset().mockResolvedValue({ data: rebaseBody });
-    await expect(client.rebase({ leaseId: 'lease-a', fence: 1 }, { expectedDraftRevision: 2, resolutions: {}, sourceFingerprint: rebaseBody.sourceFingerprint })).rejects.toThrow();
-  });
-
-  it('accepts final report upload metadata and rejects an unknown kind', async () => {
-    const { api, client } = harness();
-    const attachment = { documentKind: 'final_report', path: 'private/report.pdf', name: 'report.pdf', size: 3, contentType: 'application/pdf' };
-    vi.mocked(api.post).mockReset().mockResolvedValue({ data: { draft: DRAFT, attachment } });
-    const input = { expectedDraftRevision: 2, documentKind: 'final_report' as const, file: { name: 'report.pdf', type: 'application/pdf', size: 3, arrayBuffer: async () => new Uint8Array([1, 2, 3]).buffer } };
-    expect((await client.upload({ leaseId: 'lease-a', fence: 3 }, input)).attachment).toEqual(attachment);
-    vi.mocked(api.post).mockResolvedValue({ data: { draft: DRAFT, attachment: { ...attachment, documentKind: 'unknown' } } });
-    await expect(client.upload({ leaseId: 'lease-a', fence: 3 }, input)).rejects.toThrow('Invalid project information attachment response');
-  });
-
   it('gets, opens, saves, uploads, removes and submits only through the project-scoped BFF contract', async () => {
     const { api, client } = harness();
     const ownership = { leaseId: 'lease-a', fence: 3 };

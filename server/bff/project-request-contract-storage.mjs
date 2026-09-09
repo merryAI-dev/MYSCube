@@ -86,37 +86,6 @@ export function createProjectRequestContractStorageService(options = {}) {
   const storage = options.storage || getStorage(adminApp);
   const bucket = storage.bucket(bucketName);
 
-  async function copyAttachmentSnapshot(sourcePath, destinationPath, metadata, purpose, legacyOwnership) {
-    const checksumField = metadata.md5Hash ? 'md5Hash' : 'crc32c';
-    if (!metadata.generation || !metadata[checksumField]) throw new Error('Attachment checksum or source generation is missing');
-    const sourcePathKey = `${purpose}SourcePath`;
-    const sourceGenerationKey = `${purpose}SourceGeneration`;
-    const matches = (candidate) => {
-      if (candidate[checksumField] !== metadata[checksumField]
-        || candidate.size !== metadata.size || candidate.contentType !== metadata.contentType) return false;
-      if (candidate.metadata?.[sourcePathKey] === sourcePath
-        && String(candidate.metadata?.[sourceGenerationKey]) === String(metadata.generation)) return true;
-      // Pre-upgrade relocation copied ownership metadata but recorded no provenance.
-      return purpose === 'relocation' && legacyOwnership
-        && ['relocation', 'restoration', 'repair'].every((prefix) => ['SourcePath', 'SourceGeneration'].every((suffix) => !Object.hasOwn(candidate.metadata || {}, `${prefix}${suffix}`)))
-        && ['tenantId', 'draftId', 'attachmentId'].every((key) => readOptionalText(legacyOwnership[key])
-          && metadata.metadata?.[key] === legacyOwnership[key] && candidate.metadata?.[key] === legacyOwnership[key]);
-    };
-    const destination = bucket.file(destinationPath);
-    let existing;
-    try { [existing] = await destination.getMetadata(); } catch (error) { if (Number(error.code) !== 404) throw error; }
-    if (!existing) {
-      try {
-        await bucket.file(sourcePath, { generation: metadata.generation }).copy(destination, {
-          preconditionOpts: { ifGenerationMatch: 0 },
-          metadata: { ...metadata.metadata, [sourcePathKey]: sourcePath, [sourceGenerationKey]: String(metadata.generation) },
-        });
-      } catch (error) { if (Number(error.code) !== 412) throw error; }
-      [existing] = await destination.getMetadata();
-    }
-    if (!matches(existing)) throw new Error('Attachment copy checksum or source generation mismatch');
-  }
-
   return {
     async uploadContract(input) {
       const tenantId = readOptionalText(input?.tenantId) || 'mysc';
@@ -318,11 +287,7 @@ export function createProjectRequestContractStorageService(options = {}) {
       });
 
       return Promise.all(attachments.map(async ({ attachment, sourcePath, destinationPath }) => {
-        const source = bucket.file(sourcePath);
-        const [sourceMetadata] = await source.getMetadata();
-        await copyAttachmentSnapshot(sourcePath, destinationPath, sourceMetadata, 'relocation', {
-          tenantId: input.tenantId, draftId: input.draftId, attachmentId: attachment.attachmentId,
-        });
+        await bucket.file(sourcePath).copy(bucket.file(destinationPath));
         return {
           ...(readOptionalText(attachment.attachmentId) ? { attachmentId: readOptionalText(attachment.attachmentId) } : {}),
           documentKind: readOptionalText(attachment.documentKind),
@@ -333,24 +298,6 @@ export function createProjectRequestContractStorageService(options = {}) {
           ...(readOptionalText(attachment.uploadedAt) ? { uploadedAt: readOptionalText(attachment.uploadedAt) } : {}),
           visibility: 'PRIVATE',
         };
-      }));
-    },
-
-    async restoreProjectRegistrationAttachments(input) {
-      const sourcePrefix = projectRegistrationAttachmentPrefix(input?.tenantId, input?.projectId);
-      const destinationPrefix = draftAttachmentPrefix(input?.tenantId, input?.draftId);
-      return Promise.all(input.attachmentRefs.map(async (attachment) => {
-        if (readOptionalText(attachment.path).startsWith(destinationPrefix)) {
-          objectNameWithinPrefix(attachment.path, destinationPrefix, 'Invalid private attachment path');
-          return attachment;
-        }
-        const { path, objectName } = objectNameWithinPrefix(attachment.path, sourcePrefix, 'Invalid registration attachment path');
-        const source = bucket.file(path);
-        const destinationPath = `${destinationPrefix}${objectName}`;
-        const [metadata] = await source.getMetadata();
-        if (readOptionalText(metadata.metadata?.draftId) !== input.draftId) throw new Error('Attachment belongs to another draft');
-        await copyAttachmentSnapshot(path, destinationPath, metadata, 'restoration');
-        return { ...attachment, path: destinationPath };
       }));
     },
 

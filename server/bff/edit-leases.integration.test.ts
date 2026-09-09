@@ -1,5 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createServer } from 'node:http';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import request from 'supertest';
 import { createBffApp } from './app.mjs';
 import { EDIT_LEASE_TTL_MS, resolveEditLeaseDocumentId } from './edit-lease.mjs';
@@ -13,7 +12,7 @@ describeIfEmulator('edit leases (Firestore emulator)', () => {
   const actorId = 'actor-a';
   let nowMs = Date.parse('2026-07-10T00:00:00.000Z');
   const db = createFirestoreDb({ projectId });
-  const server = createServer(createBffApp({
+  const api = request(createBffApp({
     projectId,
     db,
     authMode: 'headers',
@@ -25,7 +24,6 @@ describeIfEmulator('edit leases (Firestore emulator)', () => {
       BFF_SCHEDULER_OWNER: 'disabled',
     },
   }));
-  const api = request(server);
 
   const baseHeaders = {
     'x-tenant-id': tenantId,
@@ -81,23 +79,9 @@ describeIfEmulator('edit leases (Firestore emulator)', () => {
       .send({});
   }
 
-  // Match Supertest's IPv4 target instead of the implicit IPv6 wildcard listener.
-  beforeAll(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(0, '127.0.0.1', resolve);
-    });
-    expect(server.address()).toMatchObject({ address: '127.0.0.1', family: 'IPv4', port: expect.any(Number) });
-  });
   // Firestore emulator cold-start cleanup can exceed the shared 30s hook limit.
   beforeEach(resetData, 60_000);
-  afterAll(async () => {
-    try {
-      await clearData();
-    } finally {
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve()));
-    }
-  }, 60_000);
+  afterAll(clearData, 60_000);
 
   it('serializes concurrent same-actor tabs so exactly one acquires the resource', async () => {
     const responses = await Promise.all([

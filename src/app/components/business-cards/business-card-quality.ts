@@ -57,15 +57,6 @@ export function canConfirmBusinessCardContact(payload: Pick<BusinessCardConfirmP
   return hasIdentity && hasContact;
 }
 
-export function requiredBusinessCardFields(payload: Pick<BusinessCardConfirmPayload, 'name' | 'organization' | 'emails' | 'phones'>): Record<string, boolean> {
-  return {
-    name: !payload.organization.trim(),
-    organization: !payload.name.trim(),
-    emailsText: payload.phones.length === 0,
-    phonesText: payload.emails.length === 0,
-  };
-}
-
 export function formStateFromBusinessCardExtraction(extraction: BusinessCardExtraction) {
   return {
     name: extraction.name.value,

@@ -5,31 +5,10 @@ import {
   resolveApiErrorMessage,
   resolveCashflowMonthReopenErrorMessage,
   resolveCashflowWeeklyCompletionErrorMessage,
-  resolveProjectErrorMessage,
 } from './api-error-message';
 import { resolveApiErrorPresentation } from './api-error-messages';
 
 describe('resolveApiErrorMessage', () => {
-  it.each([
-    ['draft_version_conflict', 409, '비교'],
-    ['draft_source_conflict', 409, '비교'],
-    ['canonical_version_conflict', 409, '비교'],
-    ['forbidden', 403, '권한'],
-    ['edit_lease_expired', 410, '편집'],
-    ['edit_lease_held', 423, '사용'],
-    ['request_error', 413, '크기'],
-    ['draft_payload_too_large', 413, '입력 내용'],
-    ['draft_not_active', 409, '이미'],
-    ['unauthorized', 401, '로그인'],
-    ['draft_not_found', 404, '접근'],
-    ['draft_attachment_invalid', 422, '파일'],
-    ['idempotency_conflict', 409, '저장 상태'],
-  ])('gives project %s an actionable guide without blind retry', (code, status, expected) => {
-    const error = new PlatformApiError('upstream failed', status, 'req', { code, message: 'raw internal details' });
-    const guide = resolveProjectErrorMessage(error, 'fallback');
-    expect(guide).toContain(expected);
-    expect(guide).not.toMatch(/raw internal|잠시 후 다시 시도/);
-  });
   it('prefers API body messages when available', () => {
     const error = new PlatformApiError('Bad Request', 400, 'req_1', {
       message: 'validation failed',

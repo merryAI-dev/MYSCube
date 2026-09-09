@@ -66,15 +66,6 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import * as z from 'zod/v4';
 
 const CASHFLOW_LINE_INDEX = new Map(CASHFLOW_ALL_LINES.map((lineId, index) => [lineId, index]));
-
-export function readProjectSettlementEligibility(value) {
-  const active = value?.status === 'ACTIVE';
-  if (value && ['ACTIVE', 'CLOSED', 'UNAVAILABLE'].includes(value.status)
-    && ['weekly', 'monthly', 'writable'].every((key) => value[key] === active)) {
-    return { status: value.status, weekly: active, monthly: active, writable: active };
-  }
-  return { status: 'UNAVAILABLE', weekly: false, monthly: false, writable: false };
-}
 const CASHFLOW_MONTH_CLOSE_ROUTE_TIMEOUT_MS = 26_000;
 const CASHFLOW_MONTH_CLOSE_MUTATION_BUDGET_MS = 12_000;
 const CASHFLOW_MONTH_CLOSE_REQUEST_MAX_BYTES = 900_000;
@@ -4855,7 +4846,6 @@ export function mountJvmWeeklyApiRoutes(app, {
         const mirror = mirrorsByProjectId.get(item?.projectId);
         return {
           ...item,
-          settlementEligibility: readProjectSettlementEligibility(item.settlementEligibility),
           projectionActualSummary: mirror?.projectionActualSummary || null,
           sheetCapturedAt: mirror?.sheetCapturedAt || null,
         };

@@ -34,13 +34,6 @@ export function filterCashflowProjectsByDepartment<T extends { department?: unkn
   return projects.filter((project) => department === 'ALL' || normalizeProjectDepartment(project.department) === department);
 }
 
-export function filterCashflowProjectsByEligibility<T extends { id: string }>(
-  projects: T[], items: CashflowWeeklyOverviewResult['items'], includeClosed = false,
-): T[] {
-  const excluded = new Set(items.filter((item) => item.settlementEligibility?.status === 'CLOSED').map((item) => item.projectId));
-  return includeClosed ? projects : projects.filter((project) => !excluded.has(project.id));
-}
-
 type SettlementStatusFilter = 'ALL' | CashflowSettlementStatus;
 type MonthSettlementStatusFilter = 'ALL' | CashflowSettlementCycle['businessState'];
 
@@ -274,8 +267,6 @@ function SettlementApprovalTimes({ item }: { item?: CashflowSettlementStatusItem
 export function CashflowWeeklyPage() {
   const navigate = useNavigate();
   const { projects, persons, updateProject } = useAppStore();
-  const [includeClosed, setIncludeClosed] = useState(false);
-  const closureRevisionKey = JSON.stringify(projects.map((project) => [project.id, project.closure?.requestId]));
   const { user } = useAuth();
   const { orgId } = useFirebase();
   const { yearMonth, isLoading, goPrevMonth, goNextMonth } = useCashflowWeeks();
@@ -345,9 +336,8 @@ export function CashflowWeeklyPage() {
       .filter((item) => item.settlementCycle.health !== 'OK' || item.settlementCycle.businessState === 'INCONSISTENT')
       .map((item) => [item.projectId, '상태 재확인 필요']));
   }, [overview]);
-  const eligibilityByProject = new Map((overview?.items || []).map((item) => [item.projectId, item.settlementEligibility]));
   const filteredProjects = useMemo(() => filterCashflowProjectsBySettlementStatus(
-    filterCashflowProjectsByEligibility(projects, overview?.items || [], includeClosed),
+    projects,
     deptFilter,
     statuses,
     cycles,
@@ -357,7 +347,7 @@ export function CashflowWeeklyPage() {
     monthWeeks.map((week) => week.weekNo),
     monthStatusFilter,
     weekStatusFilter,
-  ), [cycles, deptFilter, monthStatusErrors, monthStatusFilter, monthWeeks, overviewLoading, projects, statusErrors, statuses, weekStatusFilter, overview, includeClosed]);
+  ), [cycles, deptFilter, monthStatusErrors, monthStatusFilter, monthWeeks, overviewLoading, projects, statusErrors, statuses, weekStatusFilter]);
 
   useEffect(() => {
     const projectIds = JSON.parse(overviewProjectIdsKey) as string[];
@@ -416,7 +406,7 @@ export function CashflowWeeklyPage() {
       });
     }, 120);
     return () => { active = false; window.clearTimeout(requestTimer); };
-  }, [orgId, overviewActor, overviewProjectIdsKey, refreshSequence, yearMonth, closureRevisionKey]);
+  }, [orgId, overviewActor, overviewProjectIdsKey, refreshSequence, yearMonth]);
 
   async function transition(projectId: string, period: Exclude<CashflowSettlementPeriod, 'MONTH'>, action: 'SUBMIT' | 'APPROVE', targetYearMonth = yearMonth) {
     if (!user?.idToken) return;
@@ -521,7 +511,6 @@ export function CashflowWeeklyPage() {
         </div>
         <MonthSettlementStatusFilterSelect value={monthStatusFilter} onValueChange={setMonthStatusFilter} />
         <SettlementStatusFilterSelect label="주정산 상태" value={weekStatusFilter} onValueChange={setWeekStatusFilter} />
-        <label className="flex items-center gap-2 pb-2 text-xs"><input type="checkbox" checked={includeClosed} onChange={(event) => setIncludeClosed(event.target.checked)} />종료 사업 이력 포함</label>
         <span className="pb-2 text-[11px] text-muted-foreground">{filteredProjects.length}개 프로젝트</span>
       </div>
 
@@ -580,8 +569,6 @@ export function CashflowWeeklyPage() {
               <tbody>
                 {filteredProjects.map((project) => {
                   const projectStatuses = statuses[project.id];
-                  const eligibility = eligibilityByProject.get(project.id);
-                  const settlementReadOnly = eligibility?.writable !== true;
                   const canApprove = user?.uid === project.executiveApproverId;
                   const executiveApprover = resolveCashflowOwner(project.executiveApproverId, project.executiveApproverName, ownerOptions);
                   const manager = resolveCashflowOwner(project.managerId, project.managerName, ownerOptions);
@@ -589,14 +576,13 @@ export function CashflowWeeklyPage() {
                     <tr key={project.id} className="border-t border-border/30 transition-colors hover:bg-muted/20">
                       <td className="sticky left-0 z-20 bg-white px-3 py-2">
                         <p className="truncate font-semibold">{project.name}</p>
-                        {eligibility?.status === 'CLOSED' ? <span className="text-slate-500">종료 승인 · 이력 조회</span> : null}
                         {/* 종료가 다가오면 체크아웃이 붙는다 - 일정 판단에 기간이 필요하다(2026-08-20 보람). */}
                         <ProjectPeriodLine start={project.contractStart} end={project.contractEnd} />
                       </td>
                       <td className="sticky left-[180px] z-20 bg-white px-2 py-2 font-medium">{executiveApprover.label || <span className="text-red-700">연결 필요</span>}</td>
                       <td className="sticky left-[284px] z-20 bg-white px-2 py-2 font-medium">{manager.label || <span className="text-red-700">연결 필요</span>}</td>
                       <td className="px-3 py-3 text-center">
-                        {settlementReadOnly ? <span className="text-slate-500">{eligibility?.status === 'CLOSED' ? '종료 사업 · 이력 조회' : '정산 대상 확인 필요'}</span> : statusErrors[project.id] || monthStatusErrors[project.id]
+                        {statusErrors[project.id] || monthStatusErrors[project.id]
                           ? <span className="text-amber-700">{statusErrors[project.id] || monthStatusErrors[project.id]}</span>
                           : (overviewLoading && !cycles[project.id])
                             ? <span className="text-muted-foreground">확인 중…</span>
@@ -614,7 +600,7 @@ export function CashflowWeeklyPage() {
                         const period = `WEEK_${week.weekNo}` as Exclude<CashflowSettlementPeriod, 'MONTH'>;
                         return (
                           <td key={period} className="px-3 py-3 text-center">
-                            {settlementReadOnly ? <span className="text-slate-500">{eligibility?.status === 'CLOSED' ? '이력 조회' : '정산 대상 확인 필요'}</span> : statusErrors[project.id] ? <span className="text-amber-700">{statusErrors[project.id]}</span> : (overviewLoading && !projectStatuses) ? <span className="text-muted-foreground">확인 중…</span> : (
+                            {statusErrors[project.id] ? <span className="text-amber-700">{statusErrors[project.id]}</span> : (overviewLoading && !projectStatuses) ? <span className="text-muted-foreground">확인 중…</span> : (
                               <SettlementStatusButton
                                 item={statusItem(projectStatuses, period)}
                                 loading={actionKey === `${project.id}:${period}`}

@@ -36,11 +36,9 @@ export function buildVercelProductionDeployArgs({
   pair(args, '--build-env', 'VITE_PLATFORM_API_ENABLED', 'true');
   pair(args, '--build-env', 'VITE_FIRESTORE_CORE_ENABLED', 'false');
   pair(args, '--build-env', 'VITE_FIREBASE_PROJECT_ID', liveProject);
-  pair(args, '--build-env', 'VITE_SENTRY_RELEASE', commitSha);
   for (const [name, value] of [
     ['BFF_DEPLOY_ENV', required(env, 'BFF_DEPLOY_ENV')],
     ['BFF_AUTH_MODE', required(env, 'BFF_AUTH_MODE')],
-    ['BFF_GOOGLE_OAUTH_CLIENT_ID', required(env, 'BFF_GOOGLE_OAUTH_CLIENT_ID')],
     ['BFF_EDIT_LEASES_ENABLED', required(env, 'BFF_EDIT_LEASES_ENABLED')],
     ['BFF_WORKERS_ENABLED', maintenance ? 'false' : 'true'],
     ['BFF_SCHEDULER_OWNER', maintenance ? 'disabled' : 'vercel'],

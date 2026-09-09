@@ -1,4 +1,3 @@
-import { PROJECT_DOCUMENTS } from '../../platform/project-documents';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import {
@@ -34,12 +33,12 @@ import {
 } from '../../lib/project-info-draft-client';
 import { ProjectInfoRebaseDialog } from './ProjectInfoRebaseDialog';
 import { PlatformApiError } from '../../platform/api-client';
-import { resolveProjectErrorMessage } from '../../platform/api-error-message';
 
-function isDraftSourceConflict(error: unknown) {
+// The draft froze the project version it started from; the project has moved since.
+function isCanonicalVersionConflict(error: unknown) {
   if (!(error instanceof PlatformApiError) || error.status !== 409) return false;
   const body = error.body as { error?: string } | null | undefined;
-  return body?.error === 'canonical_version_conflict' || body?.error === 'draft_source_conflict';
+  return body?.error === 'canonical_version_conflict';
 }
 import {
   analyzeProjectRequestContractViaBff,
@@ -86,7 +85,23 @@ import { usePrivateDraftDocumentPreviews } from './usePrivateDraftDocumentPrevie
 
 type DraftClient = ReturnType<typeof createProjectInfoDraftClient>;
 
-const PROJECT_INFO_PREVIEW_FIELDS = PROJECT_DOCUMENTS;
+const PROJECT_INFO_PREVIEW_FIELDS: Array<{
+  documentKind: ProjectRequestDocumentKind;
+  field: keyof ProjectEditorDraft;
+}> = [
+  { documentKind: 'contract', field: 'contractDocument' },
+  { documentKind: 'customer_business_registration', field: 'customerBusinessRegistrationDocument' },
+  { documentKind: 'quote', field: 'quoteDocument' },
+  { documentKind: 'proposal', field: 'proposalDocument' },
+  { documentKind: 'proposal_word_original', field: 'proposalWordOriginalDocument' },
+  { documentKind: 'proposal_ppt_original', field: 'proposalPptOriginalDocument' },
+  { documentKind: 'presentation_ppt_original', field: 'presentationPptOriginalDocument' },
+  { documentKind: 'rfp_request_evidence', field: 'rfpRequestEvidenceDocument' },
+  { documentKind: 'performance_certificate', field: 'performanceCertificateDocument' },
+  { documentKind: 'tax_invoice', field: 'taxInvoiceDocument' },
+  { documentKind: 'final_settlement_report', field: 'finalSettlementReportDocument' },
+  { documentKind: 'final_report', field: 'finalReportDocument' },
+];
 
 function resolveExecutiveBanner(
   project: Project,
@@ -156,12 +171,52 @@ function attachmentDocument(attachment: ProjectInfoAttachment): FileAttachment {
   };
 }
 
+function latestPrivateAlternativeDocumentKind(attachmentRefs: ProjectInfoAttachment[]) {
+  let latest: 'proposal' | 'rfp_request_evidence' | null = null;
+  for (const attachment of attachmentRefs) {
+    if (attachment.documentKind === 'proposal' || attachment.documentKind === 'rfp_request_evidence') {
+      latest = attachment.documentKind;
+    }
+  }
+  return latest;
+}
+
 function editorDraftFromPrivate(record: ProjectInfoDraft): ProjectEditorDraft {
   const documents: Partial<Record<ProjectRequestDocumentKind, FileAttachment>> = {};
   for (const attachment of record.attachmentRefs) documents[attachment.documentKind] = attachmentDocument(attachment);
+  const latestAlternativeKind = latestPrivateAlternativeDocumentKind(record.attachmentRefs);
   return createProjectEditorDraft({
     ...(record.payload as Partial<ProjectEditorDraft>),
-    ...Object.fromEntries(PROJECT_DOCUMENTS.filter(({ documentKind }) => documents[documentKind]).map(({ documentKind, field }) => [field, documents[documentKind]])),
+    ...(documents.contract ? { contractDocument: documents.contract } : {}),
+    ...(documents.quote ? { quoteDocument: documents.quote } : {}),
+    ...(latestAlternativeKind === 'proposal'
+      ? { proposalDocument: documents.proposal }
+      : latestAlternativeKind === 'rfp_request_evidence' ? { proposalDocument: null } : {}),
+    ...(documents.proposal_word_original
+      ? { proposalWordOriginalDocument: documents.proposal_word_original }
+      : {}),
+    ...(documents.proposal_ppt_original
+      ? { proposalPptOriginalDocument: documents.proposal_ppt_original }
+      : {}),
+    ...(documents.presentation_ppt_original
+      ? { presentationPptOriginalDocument: documents.presentation_ppt_original }
+      : {}),
+    ...(latestAlternativeKind === 'rfp_request_evidence'
+      ? { rfpRequestEvidenceDocument: documents.rfp_request_evidence }
+      : latestAlternativeKind === 'proposal' ? { rfpRequestEvidenceDocument: null } : {}),
+    ...(documents.customer_business_registration
+      ? { customerBusinessRegistrationDocument: documents.customer_business_registration }
+      : {}),
+    ...(documents.performance_certificate
+      ? { performanceCertificateDocument: documents.performance_certificate }
+      : {}),
+    ...(documents.tax_invoice ? { taxInvoiceDocument: documents.tax_invoice } : {}),
+    ...(documents.final_report
+      ? { finalReportDocument: documents.final_report }
+      : {}),
+    ...(documents.final_settlement_report
+      ? { finalSettlementReportDocument: documents.final_settlement_report }
+      : {}),
     registrationRequirementsVersion: 2,
   });
 }
@@ -181,6 +236,9 @@ function previewAttachmentsFromPrivateDraft(record: ProjectInfoDraft | null) {
       path: attachment.path,
     });
   }
+  const latestAlternativeKind = latestPrivateAlternativeDocumentKind(record.attachmentRefs);
+  if (latestAlternativeKind === 'rfp_request_evidence') attachments.delete('proposal');
+  if (latestAlternativeKind === 'proposal') attachments.delete('rfp_request_evidence');
   return [...attachments.values()];
 }
 
@@ -193,7 +251,6 @@ function ProjectInfoEditor({
   roster,
   project,
   requestDoc,
-  requestAuthorityReady,
   settlementSystemOptions,
   session,
 }: {
@@ -205,7 +262,6 @@ function ProjectInfoEditor({
   roster: ReturnType<typeof usePersonRoster>;
   project: Project;
   requestDoc: ProjectRequest | null;
-  requestAuthorityReady: boolean;
   settlementSystemOptions: string[];
   session: EditSession;
 }) {
@@ -219,7 +275,6 @@ function ProjectInfoEditor({
     conflicts: ProjectInfoRebaseConflict[];
     autoMerged: Array<{ field: string; value: unknown }>;
     pendingActionId: string;
-    sourceFingerprint: string;
   } | null>(null);
   const [rebaseBusy, setRebaseBusy] = useState(false);
   const rebasedVersionRef = useRef(0);
@@ -229,17 +284,6 @@ function ProjectInfoEditor({
   const revisionRef = useRef(0);
   const recordLoadedRef = useRef(false);
   const mutationQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const writesPausedRef = useRef(false);
-  const finishedRef = useRef(false);
-  const requestAuthorityReadyRef = useRef(requestAuthorityReady);
-  requestAuthorityReadyRef.current = requestAuthorityReady;
-  useEffect(() => {
-    requestAuthorityReadyRef.current = requestAuthorityReady;
-    return () => { requestAuthorityReadyRef.current = false; };
-  }, [requestAuthorityReady]);
-  const mutationEpochRef = useRef(0);
-  const latestRecordRef = useRef<ProjectInfoDraft | null>(null);
-  const [draftConflictCount, setDraftConflictCount] = useState(0);
   const leaseClient = useMemo(() => createEditLeaseClient({
     tenantId: orgId,
     actor,
@@ -274,7 +318,6 @@ function ProjectInfoEditor({
   // Show the action whenever the project is awaiting a decision; the server rejects it
   // with request_not_withdrawable if there is nothing pending to pull back.
   const canWithdrawRequest = changeRequestStatus === 'PENDING'
-    && requestAuthorityReady
     && lease.canEdit
     && !submitted;
   const reviewFeedback = useMemo(() => buildPortalProjectReviewFeedback(project, requestDoc), [project, requestDoc]);
@@ -283,7 +326,7 @@ function ProjectInfoEditor({
     [canonicalDraft, record],
   );
   const autosaveKey = `portal-edit-${orgId}-${project.id}-${actor.uid}`;
-  const editorCanEdit = requestAuthorityReady && lease.canEdit && record !== null && !submitted;
+  const editorCanEdit = lease.canEdit && record !== null && !submitted;
   const previewAttachments = useMemo(() => previewAttachmentsFromPrivateDraft(record), [record]);
   const loadDraftDocumentPreview = useCallback(({ documentKind, signal }: {
     documentKind: ProjectRequestDocumentKind;
@@ -308,15 +351,14 @@ function ProjectInfoEditor({
     recordLoadedRef.current = false;
     setRecord(null);
     await lease.release();
-    toast.error(resolveProjectErrorMessage(error, fallback));
+    toast.error(error instanceof Error ? error.message : fallback);
   }, [lease.release]);
 
   useEffect(() => {
-    if (!requestAuthorityReady) return;
     let cancelled = false;
     void (async () => {
       const status = await lease.checkStatus();
-      if (cancelled || !requestAuthorityReadyRef.current || !status.canEdit || !status.ownership || recordLoadedRef.current) return;
+      if (!status.canEdit || !status.ownership || recordLoadedRef.current) return;
       try {
         const opened = await draftClient.open(status.ownership);
         if (cancelled) return;
@@ -329,16 +371,10 @@ function ProjectInfoEditor({
       }
     })();
     return () => { cancelled = true; };
-  }, [draftClient, lease.checkStatus, releaseLeaseAfterDraftOpenFailure, requestAuthorityReady]);
+  }, [draftClient, lease.checkStatus, releaseLeaseAfterDraftOpenFailure]);
 
   const enqueueMutation = useCallback(<T,>(operation: () => Promise<T>): Promise<T> => {
-    const epoch = mutationEpochRef.current;
-    const checkedOperation = () => {
-      if (!requestAuthorityReadyRef.current) throw new Error('프로젝트 접수 이력을 확인한 뒤 다시 시도해 주세요.');
-      if (epoch !== mutationEpochRef.current) throw new Error('수정 요청 회수 전 입력은 다시 확인한 뒤 저장해 주세요.');
-      return operation();
-    };
-    const run = mutationQueueRef.current.then(checkedOperation, checkedOperation);
+    const run = mutationQueueRef.current.then(operation, operation);
     mutationQueueRef.current = run.then(() => undefined, () => undefined);
     return run;
   }, []);
@@ -346,26 +382,19 @@ function ProjectInfoEditor({
   const withOwnership = useCallback(async <T,>(
     operation: (ownership: { leaseId: string; fence: number }) => Promise<T>,
   ) => {
-    if (finishedRef.current || writesPausedRef.current) throw new Error('최근 임시저장과 비교한 뒤 다시 저장해 주세요.');
     const ownership = await lease.checkBeforeSave();
-    if (!requestAuthorityReadyRef.current) throw new Error('프로젝트 접수 이력을 확인한 뒤 다시 시도해 주세요.');
     if (!ownership) throw new Error('수정 세션이 종료되었거나 다른 세션이 사용 중입니다.');
     try {
       return await operation(ownership);
     } catch (error) {
-      if (error instanceof PlatformApiError && error.status === 409 && error.code === 'draft_version_conflict') {
-        writesPausedRef.current = true;
-        setDraftConflictCount((count) => count + 1);
-      }
       await lease.checkStatus();
       throw error;
     }
   }, [lease.checkBeforeSave, lease.checkStatus]);
 
   const startEditing = useCallback(async () => {
-    if (!requestAuthorityReadyRef.current) return;
     const ownership = await lease.acquire();
-    if (!ownership || !requestAuthorityReadyRef.current) return;
+    if (!ownership) return;
     try {
       const opened = await draftClient.open(ownership);
       revisionRef.current = opened.draft.draftRevision;
@@ -388,15 +417,6 @@ function ProjectInfoEditor({
       setRecord(saved.draft);
     })
   )), [draftClient, enqueueMutation, record, withOwnership]);
-
-  const loadLatestDraft = useCallback(async () => {
-    writesPausedRef.current = true;
-    await mutationQueueRef.current;
-    const latest = await draftClient.get();
-    revisionRef.current = latest.draft.draftRevision;
-    latestRecordRef.current = latest.draft;
-    return editorDraftFromPrivate(latest.draft);
-  }, [draftClient]);
 
   const uploadDocument = useCallback((kind: ProjectRequestDocumentKind, file: File) => enqueueMutation(() => (
     withOwnership(async (ownership) => {
@@ -451,7 +471,6 @@ function ProjectInfoEditor({
       resubmit: shouldResubmit,
       ...(shouldResubmit && resubmitComment.trim() ? { reviewComment: resubmitComment.trim() } : {}),
     })));
-    finishedRef.current = true;
     await lease.checkStatus();
     if (shouldResubmit) setResubmitComment('');
     rebasedVersionRef.current = 0;
@@ -460,18 +479,6 @@ function ProjectInfoEditor({
     setRecord(null);
     setSaveSuccessDialogOpen(true);
     void lease.release();
-  };
-
-  const refreshRebase = async (actionId: string) => {
-    const preview = await enqueueMutation(() => withOwnership((ownership) => draftClient.rebase(ownership, {
-      expectedDraftRevision: revisionRef.current,
-    })));
-    setRebaseState({
-      conflicts: preview.conflicts,
-      autoMerged: preview.autoMerged,
-      sourceFingerprint: preview.sourceFingerprint,
-      pendingActionId: actionId,
-    });
   };
 
   const handleSubmit = async (_draft: ProjectEditorDraft, actionId: string) => {
@@ -484,17 +491,26 @@ function ProjectInfoEditor({
     try {
       await submitDraft(actionId);
     } catch (error) {
-      if (isDraftSourceConflict(error)) {
+      if (isCanonicalVersionConflict(error)) {
         try {
-          await refreshRebase(actionId);
+          const preview = await enqueueMutation(() => withOwnership((ownership) => draftClient.rebase(ownership, {
+            expectedDraftRevision: revisionRef.current,
+          })));
+          setRebaseState({
+            conflicts: preview.conflicts,
+            autoMerged: preview.autoMerged,
+            pendingActionId: actionId,
+          });
         } catch (rebaseError) {
-          toast.error(resolveProjectErrorMessage(rebaseError, '프로젝트 변경 내역을 불러오지 못했습니다.'));
+          toast.error(rebaseError instanceof Error
+            ? rebaseError.message
+            : '프로젝트 변경 내역을 불러오지 못했습니다.');
         }
         // The submit did not go through. Rethrow so the caller keeps treating this as a
         // failure and leaves the local autosave and the unsaved-changes guard in place.
         throw error;
       }
-      toast.error(resolveProjectErrorMessage(error, '저장 상태를 확인하지 못했습니다.'));
+      toast.error(error instanceof Error ? error.message : '저장에 실패했습니다. 다시 시도해주세요.');
       throw error;
     } finally {
       setBusyActionId(null);
@@ -502,12 +518,10 @@ function ProjectInfoEditor({
   };
 
   const withdrawRequest = async () => {
-    mutationEpochRef.current += 1;
     setWithdrawBusy(true);
     try {
       const result = await enqueueMutation(() => withOwnership((ownership) => draftClient.withdraw(ownership)));
       if (result.kind === 'REGISTRATION') {
-        finishedRef.current = true;
         // 신규 등록 건은 등록 임시저장으로 복원된다. 이 수정 화면이 아니라 등록 위저드에서 이어간다.
         setWithdrawOpen(false);
         toast.success('등록 요청을 회수했습니다. 등록 임시저장에서 이어서 작성할 수 있습니다.');
@@ -523,7 +537,7 @@ function ProjectInfoEditor({
       setWithdrawOpen(false);
       toast.success('수정 요청을 회수했습니다. 이어서 수정할 수 있습니다.');
     } catch (error) {
-      toast.error(resolveProjectErrorMessage(error, '수정 요청을 회수하지 못했습니다.'));
+      toast.error(error instanceof Error ? error.message : '수정 요청을 회수하지 못했습니다.');
     } finally {
       setWithdrawBusy(false);
     }
@@ -537,11 +551,11 @@ function ProjectInfoEditor({
       const result = await enqueueMutation(() => withOwnership((ownership) => draftClient.rebase(ownership, {
         expectedDraftRevision: revisionRef.current,
         resolutions,
-        sourceFingerprint: rebaseState.sourceFingerprint,
       })));
-      if (!result.rebased || !result.draft) throw new Error('변경 내용 반영을 확인하지 못했습니다. 입력 내용은 보관됩니다.');
-      revisionRef.current = result.draft.draftRevision;
-      setRecord(result.draft);
+      if (result.draft) {
+        revisionRef.current = result.draft.draftRevision;
+        setRecord(result.draft);
+      }
       rebasedVersionRef.current = result.canonicalVersion;
       setRebaseState(null);
       setBusyActionId(actionId);
@@ -551,15 +565,7 @@ function ProjectInfoEditor({
         setBusyActionId(null);
       }
     } catch (error) {
-      if (isDraftSourceConflict(error)) {
-        try {
-          await refreshRebase(actionId);
-        } catch (refreshError) {
-          toast.error(resolveProjectErrorMessage(refreshError, '최근 변경 내용을 불러오지 못했습니다. 입력 내용은 보관됩니다.'));
-        }
-      } else {
-        toast.error(resolveProjectErrorMessage(error, '변경 내용을 반영하지 못했습니다. 입력을 유지하고 최근 저장 내용을 확인해 주세요.'));
-      }
+      toast.error(error instanceof Error ? error.message : '변경 내용을 반영하지 못했습니다. 다시 시도해주세요.');
     } finally {
       setRebaseBusy(false);
     }
@@ -585,7 +591,7 @@ function ProjectInfoEditor({
             </Button>
           </>
         ) : (
-          <Button type="button" size="sm" onClick={() => void startEditing()} disabled={lease.busy || !requestAuthorityReady}>
+          <Button type="button" size="sm" onClick={() => void startEditing()} disabled={lease.busy}>
             수정 시작
           </Button>
         )}
@@ -684,24 +690,12 @@ function ProjectInfoEditor({
         settlementSystemOptions={settlementSystemOptions}
         topSlot={topSlot}
         showCheckoutEntry
-        readOnly={!editorCanEdit || withdrawBusy || rebaseBusy || rebaseState !== null}
+        readOnly={!editorCanEdit}
         trustedParticipationSheetDraft={canonicalDraft}
         canRemoveContractDocument={Boolean(record?.attachmentRefs.some((attachment) => attachment.documentKind === 'contract'))}
         canRemoveProjectDocuments
         onRemoveProjectDocument={removeDocument}
-        completed={submitted}
-        autosave={{
-          key: autosaveKey,
-          ready: record !== null,
-          disabled: submitted || !editorCanEdit || withdrawBusy || rebaseBusy || rebaseState !== null,
-          conflictCount: draftConflictCount,
-          onSave: persistDraft,
-          onLoadLatest: loadLatestDraft,
-          onResume: () => {
-            if (latestRecordRef.current) setRecord(latestRecordRef.current);
-            writesPausedRef.current = false;
-          },
-        }}
+        autosave={record && !submitted ? { key: autosaveKey, disabled: !editorCanEdit, onSave: persistDraft } : undefined}
         actions={submitted ? [] : (
           canResubmit
             ? [{ id: 'resubmit', label: '수정 후 다시 제출', icon: SendHorizontal, variant: 'secondary' as const }]
@@ -717,12 +711,7 @@ function ProjectInfoEditor({
         }}
         onProjectDocumentFileUpload={({ kind, file }) => uploadDocument(kind, file)}
         onLeave={async () => {
-          finishedRef.current = true;
-          await mutationQueueRef.current;
-          if (!await lease.release()) {
-            finishedRef.current = false;
-            throw new Error('edit lease release failed');
-          }
+          if (!await lease.release()) throw new Error('edit lease release failed');
         }}
         onCancel={() => navigate('/portal/project-select')}
         onSubmit={handleSubmit}
@@ -808,23 +797,14 @@ export function PortalProjectEdit() {
   const fallbackProject = projects.find((project) => project.id === activeProjectId) || sessionProject;
   const project = routeProjectId ? routeProject : fallbackProject;
   const currentPath = `${location.pathname}${location.search}${location.hash}`;
-  const [requestRetry, setRequestRetry] = useState(0);
-  const [requestLookup, setRequestLookup] = useState<{
-    scope: string; key: string; status: 'loading' | 'error' | 'none' | 'ready'; loaded: boolean; request: ProjectRequest | null;
-  } | null>(null);
+  const [requestDoc, setRequestDoc] = useState<ProjectRequest | null>(null);
   const [bootstrap, setBootstrap] = useState<{
-    scope: string;
     actor: ActorLike;
     draftClient: DraftClient;
     session: EditSession;
   } | null>(null);
   const [error, setError] = useState('');
   const identityKey = [user?.uid, user?.email, user?.name, user?.role].join('|');
-  const requestScope = [orgId, project?.id, identityKey].join('|');
-  const requestLookupKey = [requestScope, user?.idToken, requestRetry].join('|');
-  const scopedLookup = requestLookup?.scope === requestScope ? requestLookup : null;
-  const requestDoc = scopedLookup?.request ?? null;
-  const requestAuthorityReady = scopedLookup?.key === requestLookupKey && (scopedLookup.status === 'ready' || scopedLookup.status === 'none');
 
   useEffect(() => {
     if (routeProjectId || !project?.id) return;
@@ -833,11 +813,10 @@ export function PortalProjectEdit() {
 
   useEffect(() => {
     if (!project?.id || !user?.uid || !isPlatformApiEnabled()) {
-      setRequestLookup({ scope: requestScope, key: requestLookupKey, status: 'error', loaded: false, request: null });
+      setRequestDoc(null);
       return undefined;
     }
     let disposed = false;
-    setRequestLookup((current) => ({ scope: requestScope, key: requestLookupKey, status: 'loading', loaded: current?.scope === requestScope && current.loaded, request: current?.scope === requestScope ? current.request : null }));
     void (async () => {
       try {
         const idToken = user.idToken || await getAuthInstance()?.currentUser?.getIdToken() || undefined;
@@ -846,14 +825,14 @@ export function PortalProjectEdit() {
           actor: { uid: user.uid, email: user.email, role: user.role, idToken },
           projectId: project.id,
         });
-        if (!disposed) setRequestLookup({ scope: requestScope, key: requestLookupKey, status: request ? 'ready' : 'none', loaded: true, request });
+        if (!disposed) setRequestDoc(request);
       } catch (cause) {
         console.error('[PortalProjectEdit] latest project request fetch failed:', cause);
-        if (!disposed) setRequestLookup((current) => ({ scope: requestScope, key: requestLookupKey, status: 'error', loaded: current?.scope === requestScope && current.loaded, request: current?.scope === requestScope ? current.request : null }));
+        if (!disposed) setRequestDoc(null);
       }
     })();
     return () => { disposed = true; };
-  }, [orgId, project?.id, user?.email, user?.idToken, user?.role, user?.uid, requestScope, requestLookupKey]);
+  }, [orgId, project?.id, user?.email, user?.idToken, user?.role, user?.uid]);
 
   useEffect(() => {
     if (!user?.uid || !project?.id) {
@@ -871,7 +850,7 @@ export function PortalProjectEdit() {
         const draftClient = createProjectInfoDraftClient({
           tenantId: orgId, actor, sessionId: session.sessionId, projectId: project.id,
         });
-        if (!cancelled) setBootstrap({ scope: requestScope, actor, draftClient, session });
+        if (!cancelled) setBootstrap({ actor, draftClient, session });
       } catch (cause) {
         if (!cancelled) setError(cause instanceof Error ? cause.message : '수정 세션을 준비하지 못했습니다.');
       }
@@ -887,7 +866,7 @@ export function PortalProjectEdit() {
     const idToken = user?.idToken;
     if (!user?.uid || !idToken || !project?.id) return;
     setBootstrap((current) => {
-      if (!current || current.scope !== requestScope || current.actor.uid !== user.uid || current.actor.idToken === idToken) return current;
+      if (!current || current.actor.uid !== user.uid || current.actor.idToken === idToken) return current;
       const actor = { ...current.actor, idToken };
       return {
         ...current,
@@ -904,10 +883,10 @@ export function PortalProjectEdit() {
 
   const canonicalDraft = useMemo(() => {
     if (!project) return createProjectEditorDraft();
-    const unapprovedChange = (requestDoc?.status === 'PENDING' || requestDoc?.status === 'REJECTED') && resolveProjectRequestKind(requestDoc) === 'CHANGE';
-    return unapprovedChange
-      ? createProjectEditorDraft(resolveProjectRequestPayload(requestDoc))
-      : buildProjectEditorDraftFromProject(project);
+    const pendingChange = requestDoc?.status === 'PENDING' && resolveProjectRequestKind(requestDoc) === 'CHANGE';
+    return createProjectEditorDraft({
+      ...buildProjectEditorDraftFromProject(project, pendingChange ? resolveProjectRequestPayload(requestDoc) : undefined),
+    });
   }, [project, requestDoc]);
 
   if (!project && portalLoading) {
@@ -928,14 +907,10 @@ export function PortalProjectEdit() {
     );
   }
   if (error) return <div className="rounded-lg border border-red-200 bg-white p-5 text-sm text-red-700">{error}</div>;
-  const lookupNotice = !requestAuthorityReady ? <div role="status" className="rounded-lg border border-amber-200 bg-white p-5 text-sm text-amber-800"><p>{scopedLookup?.status === 'error' ? '프로젝트 접수 이력을 확인하지 못했습니다. 다시 시도해 주세요.' : '프로젝트 접수 이력을 확인하는 중...'}</p>{scopedLookup?.status === 'error' ? <Button className="mt-3" variant="outline" onClick={() => setRequestRetry((value) => value + 1)}>접수 이력 다시 확인</Button> : null}</div> : null;
-  if (!scopedLookup?.loaded) return lookupNotice;
-  if (!bootstrap || bootstrap.scope !== requestScope) return <div className="p-6 text-sm text-muted-foreground">읽기 모드를 준비하는 중...</div>;
+  if (!bootstrap) return <div className="p-6 text-sm text-muted-foreground">읽기 모드를 준비하는 중...</div>;
   return (
-    <>
-    {lookupNotice}
     <ProjectInfoEditor
-      key={requestScope}
+      key={project.id}
       actor={bootstrap.actor}
       canonicalDraft={canonicalDraft}
       departmentOptions={departmentOptions}
@@ -944,10 +919,8 @@ export function PortalProjectEdit() {
       roster={roster}
       project={project}
       requestDoc={requestDoc}
-      requestAuthorityReady={requestAuthorityReady}
       settlementSystemOptions={projects.flatMap((item) => item.settlementSystem === 'OTHER' && item.settlementSystemOther && !item.trashedAt ? [item.settlementSystemOther] : [])}
       session={bootstrap.session}
     />
-    </>
   );
 }

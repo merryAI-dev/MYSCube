@@ -1,27 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { Input } from '../ui/input';
 import {
   buildBusinessCardConfirmPayload,
   canConfirmBusinessCardContact,
-  requiredBusinessCardFields,
   isLowConfidenceField,
   scoreBusinessCardConfidence,
 } from './business-card-quality';
 
 describe('business-card-quality', () => {
-  it('renders only the missing alternative as required without adding native validation', () => {
-    const fields = requiredBusinessCardFields({ name: '홍길동', organization: '', emails: ['a@example.com'], phones: [] });
-    expect(fields).toEqual({ name: true, organization: false, emailsText: true, phonesText: false });
-    const alternate = requiredBusinessCardFields({ name: '', organization: 'MYSC', emails: [], phones: ['01012345678'] });
-    expect(alternate).toEqual({ name: false, organization: true, emailsText: false, phonesText: true });
-    expect(requiredBusinessCardFields({ name: ' ', organization: ' ', emails: [], phones: [] }))
-      .toEqual({ name: true, organization: true, emailsText: true, phonesText: true });
-    const html = renderToStaticMarkup(createElement(Input, { 'aria-required': fields.name }));
-    expect(html).toContain('aria-required="true"');
-    expect(html).not.toMatch(/\srequired(?:=|\s|>)/);
-  });
   it('maps confidence labels to numeric scores', () => {
     expect(scoreBusinessCardConfidence('high')).toBe(0.9);
     expect(scoreBusinessCardConfidence('medium')).toBe(0.65);

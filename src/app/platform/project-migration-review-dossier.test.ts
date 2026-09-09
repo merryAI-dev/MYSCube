@@ -124,30 +124,17 @@ const request: ProjectRequest = {
 };
 
 describe('buildMigrationReviewDossier', () => {
-  it.each(['REGISTRATION', 'CHANGE'] as const)('keeps %s submitted empty values authoritative', (requestKind) => {
-    const payload = { ...request.payload, name: '', clientOrg: '', department: '', managerName: '', teamMembersDetailed: [], contractDocument: null, contractAnalysis: null, contractAmount: 0, contractEndUndecided: false, contractEnd: '' };
-    const selected = { ...request, requestKind, payload, proposedSnapshot: requestKind === 'CHANGE' ? payload : undefined };
-    const dossier = buildMigrationReviewDossier({ ...project, contractEndUndecided: true, cic: 'OLD' }, selected);
-    expect(dossier.headerTitle).toBe('-');
-    expect(dossier.identity.clientOrg).toBe('-');
-    expect(dossier.identity.cic).toBe('-');
-    expect(dossier.people.members).toEqual([]);
-    expect(dossier.budget.contractAmountLabel).toContain('0');
-    expect(dossier.contract.periodLabel).toBe('2026-01-01 ~ -');
-    expect(dossier.analysis.summary).toBe('-');
-    expect(resolveMigrationReviewContractDocument(project, selected)).toBeNull();
-  });
   it('builds an executive review dossier from the PM portal project and request payload', () => {
     const dossier = buildMigrationReviewDossier(project, request);
 
     expect(dossier.headerTitle).toBe('2026 다자간협력');
     expect(dossier.identity.clientOrg).toBe('KOICA');
-    expect(dossier.identity.groupwareName).toBe('-');
+    expect(dossier.identity.groupwareName).toBe('2026 다자간협력 운영');
     expect(dossier.identity.cic).toBe('CIC1');
     expect(dossier.identity.pmName).toBe('변민욱');
 
     expect(dossier.contract.projectTypeLabel).toBeTruthy();
-    expect(dossier.contract.contractType).toBe('-');
+    expect(dossier.contract.contractType).toBe('계약서(날인)');
     expect(dossier.contract.periodLabel).toContain('2026-01-01');
     expect(dossier.contract.basisLabel).toBe('공급가액 기준');
     expect(dossier.contract.accountTypeLabel).toBe('일반사업(MYSC법인통장)');
@@ -155,8 +142,8 @@ describe('buildMigrationReviewDossier', () => {
 
     expect(dossier.budget.contractAmountLabel).toContain('120,000,000');
     expect(dossier.budget.salesVatAmountLabel).toContain('10,000,000');
-    expect(dossier.budget.paymentPlanSplitLabel).toBe('-');
-    expect(dossier.budget.finalPaymentNote).toBe('-');
+    expect(dossier.budget.paymentPlanSplitLabel).toBe('선금/계약금 48,000,000원 (40%) · 중도금 36,000,000원 (30%) · 잔금 36,000,000원 (30%)');
+    expect(dossier.budget.finalPaymentNote).toBe('잔금은 최종 검수 후 입금');
     expect(dossier.people.teamName).toBe('임팩트 CIC');
     expect(dossier.people.members[0]).toContain('변민욱');
     expect(dossier.people.members[0]).toContain('PM');
@@ -166,9 +153,9 @@ describe('buildMigrationReviewDossier', () => {
     expect(dossier.audit.requestedByName).toBe('변민욱');
     expect(dossier.audit.requestUpdatedAt).toBe('2026. 04. 20. 17:30');
     expect(dossier.audit.reviewedByName).toBe('임원A');
-    expect(dossier.analysis.summary).toBe('-');
-    expect(dossier.contractDocument.name).toBe('-');
-    expect(dossier.contractDocument.downloadURL).toBe('-');
+    expect(dossier.analysis.summary).toContain('계약 기간과 계약금액');
+    expect(dossier.contractDocument.name).toBe('네팔_계약서.pdf');
+    expect(dossier.contractDocument.downloadURL).toContain('contract.pdf');
     expect(dossier.submittedFields.find((field) => field.label === '인건비 정산 기준')?.value).toBe('미입력');
     expect(dossier.submittedFields.find((field) => field.label === '정산 가이드')?.value).toBe('정산 가이드');
     expect(dossier.submittedFields.find((field) => field.label === '등록 메모')?.value).toBe('임원 검토 메모 없음');
@@ -376,7 +363,7 @@ describe('buildMigrationReviewDossier', () => {
     })?.name).toBe('제안_계약서.pdf');
   });
 
-  it('shows submitted team members even when the confirmed project differs', () => {
+  it('prefers current project team members over stale request payload values', () => {
     const dossier = buildMigrationReviewDossier(
       {
         ...project,
@@ -398,11 +385,12 @@ describe('buildMigrationReviewDossier', () => {
     );
 
     expect(dossier.people.members).toEqual([
-      '김다은 (데이나) / 운영 / 100%',
+      '변민욱 (보람) / PM / 80%',
+      '이지영 (이지) / 정산 / 20%',
     ]);
   });
 
-  it('does not replace submitted team members with an empty project list', () => {
+  it('treats an explicit empty project team list as current in CIC review', () => {
     const dossier = buildMigrationReviewDossier(
       {
         ...project,
@@ -420,7 +408,7 @@ describe('buildMigrationReviewDossier', () => {
       },
     );
 
-    expect(dossier.people.members).toEqual(['김다은 (데이나) / 운영 / 100%']);
+    expect(dossier.people.members).toEqual([]);
   });
 
   it('keeps zero-won payment split entries visible for CIC review', () => {
@@ -434,8 +422,7 @@ describe('buildMigrationReviewDossier', () => {
         ...request,
         payload: {
           ...request.payload,
-          contractAmount: 100_000,
-          paymentPlan: { contract: 0, interim: 20_000, final: 0 },
+          paymentPlan: { contract: 50_000, interim: 30_000, final: 20_000 },
         },
       },
     );
@@ -443,7 +430,7 @@ describe('buildMigrationReviewDossier', () => {
     expect(dossier.budget.paymentPlanSplitLabel).toBe('선금/계약금 0원 (0%) · 중도금 20,000원 (20%) · 잔금 0원 (0%)');
   });
 
-  it('shows submitted settlement fields when the confirmed project differs', () => {
+  it('prefers current project settlement fields over stale request payload values', () => {
     const dossier = buildMigrationReviewDossier(
       {
         ...project,
@@ -464,9 +451,9 @@ describe('buildMigrationReviewDossier', () => {
       },
     );
 
-    expect(dossier.contract.settlementTypeLabel).toBe('정산 없음');
-    expect(dossier.contract.basisLabel).toBe('정산 없음');
-    expect(dossier.contract.accountTypeLabel).toBe('일반사업(MYSC법인통장)');
-    expect(dossier.contract.fundInputModeLabel).toBe('통장내역 업로드');
+    expect(dossier.contract.settlementTypeLabel).toBe('Type1. 세금계산서발행+공급가액');
+    expect(dossier.contract.basisLabel).toBe('공급가액 기준');
+    expect(dossier.contract.accountTypeLabel).toBe('전용계좌 사업(이나라도움)');
+    expect(dossier.contract.fundInputModeLabel).toBe('직접 입력');
   });
 });

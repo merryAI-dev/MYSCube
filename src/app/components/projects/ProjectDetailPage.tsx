@@ -707,7 +707,7 @@ export function ProjectDetailPage() {
                   }));
                 }}
               >
-                <SelectTrigger aria-required><SelectValue placeholder="템플릿 선택" /></SelectTrigger>
+                <SelectTrigger><SelectValue placeholder="템플릿 선택" /></SelectTrigger>
                 <SelectContent>
                   {templates.map(t => (
                     <SelectItem key={t.id} value={t.id}>{t.name} (v{t.version})</SelectItem>

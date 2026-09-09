@@ -106,7 +106,7 @@ function CreateCourseDialog({
         <div className="space-y-3 py-2">
           <div>
             <Label className="text-[12px] mb-1 block">강의명 *</Label>
-            <Input aria-required="true" value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="예: 사업관리 기초 교육" className="h-9 text-[13px]" />
+            <Input value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="예: 사업관리 기초 교육" className="h-9 text-[13px]" />
           </div>
           <div>
             <Label className="text-[12px] mb-1 block">강의 설명</Label>
@@ -134,7 +134,7 @@ function CreateCourseDialog({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-[12px] mb-1 block">강사명 *</Label>
-              <Input aria-required="true" value={form.instructor} onChange={(e) => update('instructor', e.target.value)} placeholder="예: 관리자" className="h-9 text-[13px]" />
+              <Input value={form.instructor} onChange={(e) => update('instructor', e.target.value)} placeholder="예: 관리자" className="h-9 text-[13px]" />
             </div>
             <div>
               <Label className="text-[12px] mb-1 block">수강 시간 (h)</Label>
@@ -144,11 +144,11 @@ function CreateCourseDialog({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-[12px] mb-1 block">시작일 *</Label>
-              <Input type="date" aria-required="true" value={form.startDate} onChange={(e) => update('startDate', e.target.value)} className="h-9 text-[13px]" />
+              <Input type="date" value={form.startDate} onChange={(e) => update('startDate', e.target.value)} className="h-9 text-[13px]" />
             </div>
             <div>
               <Label className="text-[12px] mb-1 block">종료일 *</Label>
-              <Input type="date" aria-required="true" value={form.endDate} onChange={(e) => update('endDate', e.target.value)} className="h-9 text-[13px]" />
+              <Input type="date" value={form.endDate} onChange={(e) => update('endDate', e.target.value)} className="h-9 text-[13px]" />
             </div>
           </div>
           <div className="grid grid-cols-2 gap-3">

@@ -24,7 +24,6 @@ export function MemberPicker({
   placeholder = '구성원을 선택하세요',
   emptyLabel = '구성원 원장을 불러오는 중입니다',
   disabled = false,
-  required,
   className,
 }: {
   options: OrgMemberPickerOption[];
@@ -33,7 +32,6 @@ export function MemberPicker({
   placeholder?: string;
   emptyLabel?: string;
   disabled?: boolean;
-  required?: boolean;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -49,8 +47,6 @@ export function MemberPicker({
           type="button"
           variant="outline"
           role="combobox"
-          aria-label={placeholder}
-          aria-required={required}
           aria-expanded={open}
           disabled={disabled || options.length === 0}
           className={cn('w-full justify-between font-normal', className)}

@@ -16,9 +16,6 @@ import dev.merryai.innerplatform.weekly.api.MigrateCashflowSettlementCycleHeadV2
 import dev.merryai.innerplatform.weekly.api.SubmitCashflowSettlementCycleRequest;
 import dev.merryai.innerplatform.weekly.api.TransitionCashflowSettlementCycleRequest;
 import dev.merryai.innerplatform.weekly.api.TrustedActorContext;
-import dev.merryai.innerplatform.weekly.api.UpsertProjectionRequest;
-import dev.merryai.innerplatform.weekly.api.WeeklyExpenseEditLeaseException;
-import dev.merryai.innerplatform.weekly.domain.CashflowMonthReopenPolicy;
 import dev.merryai.innerplatform.weekly.api.WeeklyExpenseConflictException;
 import dev.merryai.innerplatform.weekly.domain.CashflowSettlementCycleWorkflow;
 import dev.merryai.innerplatform.weekly.service.WeeklyExpenseAuthorizationService;
@@ -87,87 +84,6 @@ class FirestoreSettlementCycleEmulatorIT {
     );
 
     private Firestore db;
-
-    @org.springframework.boot.test.context.TestConfiguration
-    @org.springframework.web.servlet.config.annotation.EnableWebMvc
-    static class ClosureHttpConfiguration {}
-
-    @Test
-    void bffApprovalAndJvmEligibilityShareOneFirestoreOverRealHttp() throws Exception {
-        Harness harness = harness("it-closure-http", "project-closure-http");
-        seedCanonicalActorsAndProject(harness);
-        db.document(harness.projectPath()).update(Map.of(
-            "managerId", "admin-2", "registeredById", "admin-2", "name", "HTTP 통합 검증 사업",
-            "status", "IN_PROGRESS", "executiveReviewStatus", "APPROVED", "contractEnd", "2030-12-31"
-        )).get();
-        db.document("orgs/" + harness.tenantId() + "/cashflow_sheet_mirrors/" + harness.projectId())
-            .set(Map.of("projectId", harness.projectId(), "weeklyYear", 2026)).get();
-        var proxy = new org.springframework.aop.aspectj.annotation.AspectJProxyFactory(harness.service());
-        proxy.addAspect(new WeeklyExpenseCommandTransactionAspect(harness.persistence()));
-        var readService = new dev.merryai.innerplatform.weekly.service.CashflowReadService(harness.persistence());
-        var controller = new dev.merryai.innerplatform.weekly.api.WeeklyExpenseController(
-            proxy.getProxy(), readService,
-            new dev.merryai.innerplatform.weekly.service.query.CashflowMonthDashboardQueryService(readService,
-                new dev.merryai.innerplatform.weekly.service.query.CashflowDashboardSectionQueryService()), false
-        );
-        var web = new org.springframework.web.context.support.AnnotationConfigWebApplicationContext();
-        web.register(ClosureHttpConfiguration.class);
-        web.addBeanFactoryPostProcessor(factory -> factory.registerSingleton("weeklyExpenseController", controller));
-        var tomcat = new org.apache.catalina.startup.Tomcat();
-        tomcat.setPort(0);
-        tomcat.setBaseDir(java.nio.file.Files.createTempDirectory("closure-http-tomcat-").toString());
-        tomcat.getConnector().setProperty("address", "127.0.0.1");
-        var context = tomcat.addContext("", java.nio.file.Files.createTempDirectory("closure-http-web-").toString());
-        var servlet = org.apache.catalina.startup.Tomcat.addServlet(context, "dispatcher",
-            new org.springframework.web.servlet.DispatcherServlet(web));
-        servlet.setLoadOnStartup(1);
-        context.addServletMappingDecoded("/", "dispatcher");
-        try {
-            tomcat.start();
-            Process process = new ProcessBuilder("node", "scripts/test-project-closure-http.mjs",
-                "http://127.0.0.1:" + tomcat.getConnector().getLocalPort(),
-                DATA_PROJECT_ID, harness.tenantId(), harness.projectId()).inheritIO().start();
-            boolean completed = process.waitFor(60, TimeUnit.SECONDS);
-            if (!completed) process.destroyForcibly();
-            assertThat(completed).as("Shared HTTP check completed").isTrue();
-            assertThat(process.exitValue()).isZero();
-        } finally {
-            tomcat.stop();
-            tomcat.destroy();
-            web.close();
-        }
-    }
-
-    @Test
-    void approvedProjectClosureStopsRealCanonicalWritesAndPreservesStoredHistory() throws Exception {
-        Harness harness = harness("it-project-closure", "project-closure");
-        seedCanonicalActorsAndProject(harness);
-        db.document("orgs/" + harness.tenantId() + "/cashflow_sheet_mirrors/" + harness.projectId())
-            .set(Map.of("projectId", harness.projectId(), "weeklyYear", 2026)).get();
-        var request = new UpsertProjectionRequest("before-closure", List.of(
-            new UpsertProjectionRequest.ProjectionLinePatch("2026-09", 1, "SALES_IN", new java.math.BigDecimal("1234"))
-        ));
-        transaction(harness, () -> harness.service().upsertProjection(harness.admin(), harness.projectId(), null, request));
-        Map<String, Map<String, Map<String, Object>>> before = projectState(harness);
-        db.document(harness.projectPath()).update("closure", Map.of(
-            "contractVersion", "project-closure-v1", "requestId", "closure-1",
-            "approvedAt", NOW.toString(), "approvedBy", harness.approver().id()
-        )).get();
-        assertThat(harness.persistence().findProjectSettlementEligibility(harness.tenantId(), List.of(harness.projectId()))
-            .get(harness.projectId()).status()).isEqualTo("CLOSED");
-        assertThatThrownBy(() -> transaction(harness, () -> harness.service().upsertProjection(
-            harness.admin(), harness.projectId(), null, new UpsertProjectionRequest("after-closure", request.lines())
-        ))).isInstanceOf(WeeklyExpenseEditLeaseException.class).hasMessageContaining("종료");
-        assertThatThrownBy(() -> transaction(harness, () -> {
-            harness.persistence().bindCashflowMonthReopenDecisionAuthority(new CashflowMonthReopenPolicy.DecisionAuthority(
-                harness.tenantId(), harness.admin().id(), harness.projectId(), "admin"
-            ));
-            return null;
-        })).isInstanceOf(WeeklyExpenseEditLeaseException.class).hasMessageContaining("종료");
-        assertThat(projectState(harness)).isEqualTo(before);
-        assertThat(harness.persistence().findCashflowLedgerSource(harness.tenantId(), harness.projectId(), 2026).projection())
-            .isNotEmpty();
-    }
 
     @BeforeAll
     void connectToCredentialFreeDemoEmulator() {

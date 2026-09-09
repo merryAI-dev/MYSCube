@@ -247,7 +247,7 @@ export function BoardFeedPage() {
             <div className="space-y-1.5">
               <Label>제목</Label>
               <Input
-                aria-required="true" value={form.title}
+                value={form.title}
                 onChange={(e) => setForm((p) => ({ ...p, title: e.target.value }))}
                 placeholder="예: 사업비 증빙 기준 질문"
               />
@@ -256,7 +256,7 @@ export function BoardFeedPage() {
             <div className="space-y-1.5">
               <Label>본문</Label>
               <Textarea
-                aria-required="true" value={form.body}
+                value={form.body}
                 onChange={(e) => setForm((p) => ({ ...p, body: e.target.value }))}
                 placeholder="상황/질문/제안 내용을 구체적으로 적어주세요."
                 className="min-h-[160px]"

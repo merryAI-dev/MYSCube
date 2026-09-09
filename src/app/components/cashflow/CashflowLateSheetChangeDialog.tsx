@@ -134,7 +134,6 @@ export function CashflowLateSheetChangeDialog({
                 <label className="block text-[12px] font-semibold text-slate-800" htmlFor="late-sheet-change-reason">변경 사유</label>
                 <textarea
                   id="late-sheet-change-reason"
-                  aria-required={!resumeRequired}
                   value={reason}
                   onChange={(event) => setReason(event.target.value.slice(0, 1000))}
                   placeholder="예: 결산 후 확인된 실제 입금액을 시트 기준으로 정정"

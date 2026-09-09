@@ -32,11 +32,9 @@ import {
 import {
   buildProjectInfoChangeSubmission,
   buildProjectInfoDraftSeed,
-  registrationPrivateDocuments,
 } from './projects.mjs';
 import {
   PROJECT_INFO_DOCUMENT_KINDS,
-  PROJECT_DOCUMENT_FIELD_BY_KIND,
   projectDocumentValidationError,
 } from '../project-document-validation.mjs';
 
@@ -44,7 +42,20 @@ const RESOURCE_TYPE = 'project-info';
 // Every member works across all projects; see CROSS_PROJECT_ROLES in src/app/platform/rbac.ts.
 const CROSS_PROJECT_ROLES = new Set(['admin', 'finance', 'pm', 'viewer']);
 const DOCUMENT_KINDS = PROJECT_INFO_DOCUMENT_KINDS;
-const DOCUMENT_FIELD_BY_KIND = PROJECT_DOCUMENT_FIELD_BY_KIND;
+const DOCUMENT_FIELD_BY_KIND = {
+  contract: 'contractDocument',
+  customer_business_registration: 'customerBusinessRegistrationDocument',
+  quote: 'quoteDocument',
+  proposal: 'proposalDocument',
+  proposal_word_original: 'proposalWordOriginalDocument',
+  proposal_ppt_original: 'proposalPptOriginalDocument',
+  presentation_ppt_original: 'presentationPptOriginalDocument',
+  rfp_request_evidence: 'rfpRequestEvidenceDocument',
+  performance_certificate: 'performanceCertificateDocument',
+  tax_invoice: 'taxInvoiceDocument',
+  final_settlement_report: 'finalSettlementReportDocument',
+  final_report: 'finalReportDocument',
+};
 const MAX_DRAFT_BYTES = 900 * 1024;
 const MAX_ATTACHMENT_REFS = 100;
 const MAX_PAYLOAD_DEPTH = 20;
@@ -295,16 +306,6 @@ function sameFieldValue(left, right) {
   return JSON.stringify(stableValue(left)) === JSON.stringify(stableValue(right));
 }
 
-function sourceConflict() {
-  return createHttpError(409, '최근 제출 또는 확정 내용이 변경되었습니다. 다시 비교해 주세요.', 'draft_source_conflict', { conflictReason: 'source_changed' });
-}
-
-function assertDraftSource(draft, project, request) {
-  if (draft.baseSnapshot == null || !sameFieldValue(draft.baseSnapshot, buildProjectInfoDraftSeed(project, request))) {
-    throw sourceConflict();
-  }
-}
-
 // Three-way merge between the canonical values the draft started from (base),
 // the owner's edits (mine), and the canonical values now (theirs). Only fields
 // that both sides moved in different directions are reported as conflicts;
@@ -352,7 +353,6 @@ function assertRevision(draft, expected) {
       409,
       `Draft revision mismatch: expected ${expected}, actual ${actual}`,
       'draft_version_conflict',
-      { expectedDraftRevision: expected, actualDraftRevision: actual, conflictReason: 'revision_changed' },
     );
   }
   return actual;
@@ -788,37 +788,6 @@ export function createProjectInfoDraftService({
           leaseId: current.leaseId, fence: current.fence,
         },
       });
-      const withdrawal = registrationRequestRef ? await db.runTransaction(async (tx) => {
-        const nowDate = clockDate(now);
-        await ownedDraft(tx, current);
-        const lock = await checkIdempotency(tx, current, fingerprint, nowDate);
-        if (lock.mode === 'replay') return { outcome: { status: lock.status, body: lock.body, replayed: true } };
-        const lockError = idempotencyError(lock);
-        if (lockError) throw lockError;
-        await assertLease(tx, current, nowDate);
-        const change = await tx.get(refs(current).request);
-        if (change.exists && change.data()?.requestKind === 'CHANGE') return null;
-        const snap = await tx.get(registrationRequestRef);
-        const registration = snap.exists ? snap.data() : null;
-        if (!registration || registration.requestKind !== 'REGISTRATION' || registration.status !== 'PENDING') return null;
-        if (registration.requestedBy !== current.actorId) throw createHttpError(403, 'Only the requester can withdraw this change request', 'request_owner_mismatch');
-        const sourceDraftId = readOptionalText(registration.sourceDraftId);
-        if (!sourceDraftId) return null;
-        const draftSnap = await tx.get(db.doc(`orgs/${current.tenantId}/projectRequestDrafts/${sourceDraftId}`));
-        const sourceDraft = draftSnap.exists ? draftSnap.data() : null;
-        if (!sourceDraft) return null;
-        const submittedOutboxId = readOptionalText(sourceDraft.submittedOutboxId);
-        const outbox = submittedOutboxId ? await tx.get(db.doc(`outbox/${submittedOutboxId}`)) : null;
-        const attachmentRefs = Array.isArray(outbox?.data()?.payload?.attachmentRefs) ? outbox.data().payload.attachmentRefs : [];
-        return { sourceDraftId, submittedOutboxId, attachmentRefs, requestSnapshot: JSON.stringify(registration), draftRevision: sourceDraft.draftRevision };
-      }) : null;
-      if (withdrawal?.outcome) return withdrawal.outcome;
-      let restoredSnapshot = withdrawal?.attachmentRefs;
-      if (withdrawal?.attachmentRefs.some((attachment) => readOptionalText(attachment.path).startsWith(`orgs/${current.tenantId}/project-registration-documents/${current.projectId}/`))) {
-        restoredSnapshot = await draftStorageService.restoreProjectRegistrationAttachments({
-          tenantId: current.tenantId, projectId: current.projectId, draftId: withdrawal.sourceDraftId, attachmentRefs: withdrawal.attachmentRefs,
-        });
-      }
       return db.runTransaction(async (tx) => {
         const nowDate = clockDate(now);
         const timestamp = nowDate.toISOString();
@@ -858,18 +827,12 @@ export function createProjectInfoDraftService({
           if (!registrationDraft) {
             throw createHttpError(409, '등록 임시저장을 찾지 못해 회수할 수 없습니다.', 'request_not_withdrawable');
           }
-          // 제출 당시 첨부 스냅샷을 복원하되, 영구 파일은 과거 요청을 위해 그대로 둔다.
+          // 제출 이벤트가 원본(사설 경로) 첨부 목록을 들고 있다 - 이관은 복사라 원본이 남아 있다.
           const submittedOutboxId = readOptionalText(registrationDraft.submittedOutboxId);
           const outboxSnap = submittedOutboxId ? await tx.get(db.doc(`outbox/${submittedOutboxId}`)) : null;
-          const sourceAttachmentRefs = Array.isArray(outboxSnap?.data?.()?.payload?.attachmentRefs)
+          const restoredAttachmentRefs = Array.isArray(outboxSnap?.data?.()?.payload?.attachmentRefs)
             ? outboxSnap.data().payload.attachmentRefs
             : [];
-          if (!withdrawal || withdrawal.sourceDraftId !== sourceDraftId || withdrawal.submittedOutboxId !== submittedOutboxId
-            || withdrawal.requestSnapshot !== JSON.stringify(registration) || withdrawal.draftRevision !== registrationDraft.draftRevision
-            || JSON.stringify(withdrawal.attachmentRefs) !== JSON.stringify(sourceAttachmentRefs)) {
-            throw createHttpError(409, 'Registration changed during withdrawal', 'draft_version_conflict', { conflictReason: 'registration_changed' });
-          }
-          const restoredAttachmentRefs = restoredSnapshot;
 
           const withdrawnRegistration = stripUndefinedDeep({
             ...registration,
@@ -901,7 +864,6 @@ export function createProjectInfoDraftService({
           const restoredRegistrationDraft = stripUndefinedDeep({
             ...registrationDraft,
             status: 'ACTIVE',
-            targetProjectId: null,
             payload: registration.payload && typeof registration.payload === 'object'
               ? registration.payload
               : (registrationDraft.payload || {}),
@@ -1011,7 +973,6 @@ export function createProjectInfoDraftService({
         body: {
           actorId: current.actorId, sessionId: current.sessionId, leaseId: current.leaseId,
           fence: current.fence, expectedDraftRevision, resolutions,
-          sourceFingerprint: input?.sourceFingerprint ?? null,
         },
       });
       return db.runTransaction(async (tx) => {
@@ -1029,29 +990,15 @@ export function createProjectInfoDraftService({
         await assertLease(tx, current, nowDate);
         const actualVersion = Number.isInteger(project.version) && project.version > 0 ? project.version : 1;
         const theirs = buildProjectInfoDraftSeed(project, previousRequest);
-        const sourceFingerprint = sha256(JSON.stringify(stableValue({
-          canonicalVersion: actualVersion,
-          requestId: requestSnap.id,
-          requestExists: requestSnap.exists,
-          requestStatus: previousRequest.status,
-          requestVersion: previousRequest.requestVersion,
-          theirs,
-        })));
-        if (resolutions && (!/^[a-f0-9]{64}$/.test(input?.sourceFingerprint || '') || input.sourceFingerprint !== sourceFingerprint)) {
-          throw sourceConflict();
-        }
-        const privateDocuments = Object.fromEntries(Object.entries(registrationPrivateDocuments(draftAttachments(draft)))
-          .filter(([, document]) => document !== null));
         const { merged, autoMerged, conflicts } = mergeProjectInfoDraftFields({
           base: draft.baseSnapshot ?? null,
-          mine: { ...draft.payload, ...privateDocuments },
+          mine: draft.payload,
           theirs,
         });
         // Without resolutions this is a preview: report the merge outcome and write nothing.
         if (!resolutions) {
           const body = {
             rebased: false,
-            sourceFingerprint,
             baseCanonicalVersion: Number.isInteger(draft.baseCanonicalVersion) ? draft.baseCanonicalVersion : 1,
             canonicalVersion: actualVersion,
             autoMerged,
@@ -1073,21 +1020,11 @@ export function createProjectInfoDraftService({
         conflicts.forEach((conflict) => {
           merged[conflict.field] = resolutions[conflict.field] === 'THEIRS' ? conflict.theirs : conflict.mine;
         });
-        const inherited = resumableDraftAttachments(current.tenantId, current.projectId, current.draftDocumentId, previousRequest);
-        const attachmentRefs = Object.entries(DOCUMENT_FIELD_BY_KIND).flatMap(([kind, field]) => {
-          const path = readOptionalText(merged[field]?.path);
-          if (!path || path === readOptionalText(project[field]?.path)) return [];
-          const selected = [...draftAttachments(draft), ...inherited].findLast(attachment => (
-            attachment.documentKind === kind && readOptionalText(attachment.path) === path
-          ));
-          return selected ? [selected] : [];
-        });
         // `merged` and `theirs` are computed rather than literal, so an absent optional
         // field can arrive here as undefined, which Firestore rejects on write.
         const nextDraft = stripUndefinedDeep({
           ...draft,
           payload: merged,
-          attachmentRefs,
           baseSnapshot: theirs,
           baseCanonicalVersion: actualVersion,
           draftRevision: expectedDraftRevision + 1,
@@ -1108,7 +1045,6 @@ export function createProjectInfoDraftService({
         tx.set(draftRef, nextDraft);
         const body = {
           rebased: true,
-          sourceFingerprint,
           draft: draftContract(nextDraft),
           canonicalVersion: actualVersion,
           autoMerged,
@@ -1243,12 +1179,25 @@ export function createProjectInfoDraftService({
       let buffer = Buffer.isBuffer(input?.buffer)
         ? input.buffer
         : (input?.buffer instanceof Uint8Array ? Buffer.from(input.buffer) : null);
+      // 큰 파일은 서명 URL 로 스토리지에 직접 올라온다(Vercel 본문 4.5MB 우회). 여기서는
+      // 그 경로를 읽어 같은 검증·저장 경로를 태운다 - 전송 수단만 다르고 계약은 같다.
       const incomingPath = !buffer && input?.storagePath ? String(input.storagePath) : null;
-      if (!Number.isInteger(expectedDraftRevision) || expectedDraftRevision < 0 || (!incomingPath && !buffer?.length)) {
+      if (incomingPath) {
+        if (!draftStorageService?.readIncomingUpload) {
+          throw createHttpError(503, '대용량 첨부 업로드가 아직 켜져 있지 않습니다.', 'draft_attachment_direct_unavailable');
+        }
+        try {
+          ({ buffer } = await draftStorageService.readIncomingUpload({
+            tenantId: current.tenantId, draftId: current.draftDocumentId, path: incomingPath,
+          }));
+        } catch {
+          throw createHttpError(422, '업로드된 파일을 찾지 못했습니다. 다시 업로드해 주세요.', 'draft_attachment_incoming_missing');
+        }
+      }
+      if (!Number.isInteger(expectedDraftRevision) || expectedDraftRevision < 0 || !buffer?.length) {
         throw createHttpError(400, 'Attachment request is invalid', 'draft_attachment_invalid');
       }
-      const fileSize = Number(input?.fileSize);
-      if (!Number.isSafeInteger(fileSize) || fileSize < 1 || (!incomingPath && fileSize !== buffer.byteLength)) {
+      if (Number(input?.fileSize) !== buffer.byteLength) {
         throw createHttpError(422, 'Attachment size does not match its content', 'draft_attachment_size_mismatch');
       }
       const documentKind = requiredText(input?.documentKind, 'documentKind');
@@ -1258,7 +1207,7 @@ export function createProjectInfoDraftService({
       const replacedDocumentKinds = replacementDocumentKinds(documentKind);
       const fileName = requiredText(input?.fileName, 'fileName');
       const mimeType = requiredText(input?.mimeType, 'mimeType');
-      if (!incomingPath) assertProjectAttachment(buffer, mimeType, fileName, documentKind);
+      assertProjectAttachment(buffer, mimeType, fileName, documentKind);
       const attachmentId = documentId(createAttachmentId(), 'attachmentId');
       const method = 'POST';
       const path = `/api/v1/project-info-drafts/${current.projectId}/attachments`;
@@ -1267,7 +1216,7 @@ export function createProjectInfoDraftService({
         body: {
           actorId: current.actorId, sessionId: current.sessionId, leaseId: current.leaseId,
           fence: current.fence, expectedDraftRevision, documentKind, fileName, mimeType,
-          fileSize, ...(incomingPath ? { storagePath: incomingPath } : { contentHash: sha256(buffer) }),
+          fileSize: buffer.byteLength, contentHash: sha256(buffer),
         },
       });
       const preflight = await db.runTransaction(async (tx) => {
@@ -1288,22 +1237,6 @@ export function createProjectInfoDraftService({
         return null;
       });
       if (preflight) return preflight;
-      if (incomingPath) {
-        if (!draftStorageService?.readIncomingUpload) {
-          throw createHttpError(503, '대용량 첨부 업로드가 아직 켜져 있지 않습니다.', 'draft_attachment_direct_unavailable');
-        }
-        try {
-          ({ buffer } = await draftStorageService.readIncomingUpload({
-            tenantId: current.tenantId, draftId: current.draftDocumentId, path: incomingPath,
-          }));
-        } catch {
-          throw createHttpError(422, '업로드된 파일을 찾지 못했습니다. 다시 업로드해 주세요.', 'draft_attachment_incoming_missing');
-        }
-        if (fileSize !== buffer?.byteLength) {
-          throw createHttpError(422, 'Attachment size does not match its content', 'draft_attachment_size_mismatch');
-        }
-        assertProjectAttachment(buffer, mimeType, fileName, documentKind);
-      }
 
       let uploaded;
       const cleanup = async () => {
@@ -1390,9 +1323,8 @@ export function createProjectInfoDraftService({
           }
           return { status: 200, body, replayed: false };
         });
-        if (outcome.replayed) {
-          if (outcome.body?.attachment?.path !== uploaded.path) await cleanup();
-        } else {
+        if (outcome.replayed) await cleanup();
+        else {
           await Promise.all(replacedAttachments.map(async (replaced) => {
             if (
               replaced?.inheritedFromProjectRequest === true
@@ -1420,24 +1352,7 @@ export function createProjectInfoDraftService({
         }
         return outcome;
       } catch (error) {
-        if (uploaded?.path) {
-          try {
-            const stored = await db.runTransaction(async (tx) => {
-              const nowDate = clockDate(now);
-              const { draft } = await ownedDraft(tx, current);
-              const lock = await checkIdempotency(tx, current, fingerprint, nowDate);
-              return { draft, lock };
-            });
-            if (stored.lock.mode === 'replay') {
-              if (stored.lock.body?.attachment?.path !== uploaded.path) await cleanup();
-              return { status: stored.lock.status, body: stored.lock.body, replayed: true };
-            }
-            if (error.statusCode >= 400 && error.statusCode < 500
-              && !draftAttachments(stored.draft).some((attachment) => attachment.path === uploaded.path)) await cleanup();
-          } catch {
-            // A failed result read cannot prove the upload commit failed; retain the file.
-          }
-        }
+        await cleanup();
         throw error;
       }
     },
@@ -1580,26 +1495,6 @@ export function createProjectInfoDraftService({
           resubmit: input?.resubmit === true, reviewComment: readOptionalText(input?.reviewComment) || null,
         },
       });
-      const preflight = await db.runTransaction(async (tx) => {
-        const nowDate = clockDate(now);
-        const { project, draft } = await ownedDraft(tx, current);
-        const requestSnap = await tx.get(refs(current).request);
-        const lock = await checkIdempotency(tx, current, fingerprint, nowDate);
-        if (lock.mode === 'replay') return { outcome: { status: lock.status, body: lock.body, replayed: true } };
-        const lockError = idempotencyError(lock);
-        if (lockError) throw lockError;
-        assertActive(draft);
-        assertRevision(draft, expectedDraftRevision);
-        await assertLease(tx, current, nowDate);
-        const actualVersion = Number.isInteger(project.version) && project.version > 0 ? project.version : 1;
-        if (draft.baseCanonicalVersion !== actualVersion || expectedVersion !== actualVersion) {
-          throw createHttpError(409, `Canonical version mismatch: expected ${expectedVersion}, actual ${actualVersion}`, 'canonical_version_conflict', { expectedVersion, actualVersion, conflictReason: 'canonical_changed' });
-        }
-        assertDraftSource(draft, project, requestSnap.exists ? requestSnap.data() : null);
-        return { draft };
-      });
-      if (preflight.outcome) return preflight.outcome;
-      await assertSubmittedAttachmentsStored(current, preflight.draft);
       const eventTemplate = createOutboxEvent({
         tenantId: current.tenantId,
         requestId: current.requestId,
@@ -1630,13 +1525,9 @@ export function createProjectInfoDraftService({
             409,
             `Canonical version mismatch: expected ${expectedVersion}, actual ${actualVersion}`,
             'canonical_version_conflict',
-            { expectedVersion, actualVersion, conflictReason: 'canonical_changed' },
           );
         }
-        assertDraftSource(draft, project, previousRequest);
-        if (JSON.stringify(draftAttachments(draft)) !== JSON.stringify(draftAttachments(preflight.draft))) {
-          throw createHttpError(409, 'Draft attachments changed during submission', 'draft_version_conflict', { conflictReason: 'attachments_changed' });
-        }
+        await assertSubmittedAttachmentsStored(current, draft);
         const nextVersion = actualVersion + 1;
         const { projectRequest } = buildProjectInfoChangeSubmission({
           tenantId: current.tenantId,

@@ -97,4 +97,4 @@ printf "[bff-integration] Running Firestore integration tests (project=%s, port=
 run_emulator_suite firestore "npx vitest run --config vitest.bff-integration.config.ts"
 
 printf "[bff-integration] Running Auth/Firestore/Storage rules integration test (project=%s, ports=%s/%s/%s)\n" "$PROJECT_ID" "$AUTH_PORT" "$FIRESTORE_PORT" "$STORAGE_PORT"
-run_emulator_suite auth,firestore,storage "npx vitest run --config vitest.bff-integration.config.ts server/bff/storage-rules.integration.test.ts server/bff/project-registration-drafts.integration.test.ts server/bff/project-registration-attachment-repair.integration.test.ts server/bff/project-review-ssot.integration.test.ts"
+run_emulator_suite auth,firestore,storage "npx vitest run --config vitest.bff-integration.config.ts server/bff/storage-rules.integration.test.ts"
