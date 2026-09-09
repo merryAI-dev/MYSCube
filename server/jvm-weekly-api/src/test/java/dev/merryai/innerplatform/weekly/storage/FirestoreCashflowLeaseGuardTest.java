@@ -223,6 +223,65 @@ class FirestoreCashflowLeaseGuardTest {
     }
 
     @Test
+    void latestWeeklyCompletionOverridesAnEarlierApprovalInSingleAndBatchReads() {
+        Fixture fixture = fixture(activeMember(), Map.of());
+        fixture.documents.put("orgs/tenant-a/cashflow_settlement_statuses/project-a-2026-09", Map.of(
+            "periods", Map.of("WEEK_2", Map.of("status", "COMPLETED", "approvedAt", "2026-09-07T05:07:03Z"))
+        ));
+        Map<String, Object> completion = submittedWeeklyCompletion("2026-09", 2, 3);
+        completion.put("completedAt", "2026-09-09T05:21:18Z");
+        fixture.documents.put("orgs/tenant-a/cashflow_weekly_update_completions/project-a-2026-09-w2", completion);
+        var single = fixture.persistence.findCashflowSettlementStatuses("tenant-a", "project-a", "2026-09").get(2);
+        var batch = fixture.persistence.findCashflowSettlementStatusesBatch("tenant-a", List.of("project-a"), "2026-09").get("project-a").get(2);
+        assertThat(single.status()).isEqualTo("PENDING_APPROVAL");
+        assertThat(single.submittedAt()).isEqualTo("2026-09-09T05:21:18Z");
+        assertThat(single.approvedAt()).isEmpty();
+        assertThat(single.revision()).isEqualTo(3L);
+        assertThat(batch).isEqualTo(single);
+        completion.put("status", "OPEN");
+        assertThat(fixture.persistence.findCashflowSettlementStatuses("tenant-a", "project-a", "2026-09").get(2).status())
+            .isEqualTo("WAITING_FOR_UPDATE");
+    }
+
+    @Test
+    void legacyWeeklySummaryRemainsReadableWhenCanonicalCompletionDoesNotExist() {
+        Fixture fixture = fixture(activeMember(), Map.of());
+        fixture.documents.put("orgs/tenant-a/cashflow_settlement_statuses/project-a-2026-09", Map.of(
+            "periods", Map.of("WEEK_2", Map.of("status", "COMPLETED", "revision", 7L,
+                "approvedAt", "2026-09-07T05:07:03Z", "approvedBy", "이전 조직장"))
+        ));
+        var single = fixture.persistence.findCashflowSettlementStatuses("tenant-a", "project-a", "2026-09").get(2);
+        var batch = fixture.persistence.findCashflowSettlementStatusesBatch(
+            "tenant-a", List.of("project-a"), "2026-09").get("project-a").get(2);
+        assertThat(single.status()).isEqualTo("COMPLETED");
+        assertThat(single.revision()).isEqualTo(7L);
+        assertThat(single.approvedAt()).isEqualTo("2026-09-07T05:07:03Z");
+        assertThat(single.approvedBy()).isEqualTo("이전 조직장");
+        assertThat(batch).isEqualTo(single);
+        verify(fixture.transaction, never()).set(any(DocumentReference.class), any(), any());
+    }
+
+    @Test
+    void statuslessLegacyCompletionIsOpenRatherThanApprovedFromHistoricalSummary() {
+        Fixture fixture = fixture(activeMember(), Map.of());
+        fixture.documents.put("orgs/tenant-a/cashflow_settlement_statuses/project-a-2026-09", Map.of(
+            "periods", Map.of("WEEK_2", Map.of("status", "COMPLETED", "approvedAt", "2026-09-07T05:07:03Z"))
+        ));
+        Map<String, Object> completion = submittedWeeklyCompletion("2026-09", 2, 3);
+        completion.remove("status");
+        fixture.documents.put("orgs/tenant-a/cashflow_weekly_update_completions/project-a-2026-09-w2", completion);
+        var single = fixture.persistence.findCashflowSettlementStatuses("tenant-a", "project-a", "2026-09").get(2);
+        var batch = fixture.persistence.findCashflowSettlementStatusesBatch(
+            "tenant-a", List.of("project-a"), "2026-09").get("project-a").get(2);
+        assertThat(single.status()).isEqualTo("WAITING_FOR_UPDATE");
+        assertThat(single.submittedAt()).isEmpty();
+        assertThat(single.approvedAt()).isEmpty();
+        assertThat(batch).isEqualTo(single);
+        assertThat(completion).doesNotContainKey("status");
+        verify(fixture.transaction, never()).set(any(DocumentReference.class), any(), any());
+    }
+
+    @Test
     void readsWeeklySettlementStatusBeforeTheFirstTransactionalWrite() {
         Fixture fixture = fixture(activeMember(), Map.of());
         putCompleteProjectionWindow(fixture, "2026-08", 2);
@@ -307,6 +366,8 @@ class FirestoreCashflowLeaseGuardTest {
     @Test
     void allowsManagerApprovalAfterWeeklyCompletion() {
         Fixture fixture = fixture(activeMember(), Map.of());
+        fixture.documents.put("orgs/tenant-a/members/manager-1", member(Map.of(
+            "uid", "manager-1", "role", "pm", "projectIds", List.of("project-a"))));
         putCompleteProjectionWindow(fixture, "2026-08", 2);
         fixture.documents.put("orgs/tenant-a/projects/project-a", Map.of(
             "id", "project-a",
@@ -326,16 +387,73 @@ class FirestoreCashflowLeaseGuardTest {
                 )
             ));
         WeeklyExpensePersistence.CashflowSettlementStatusRecord approved = fixture.persistence
-            .runCommandTransaction(() -> fixture.persistence.transitionCashflowSettlementStatus(
-                manager, "project-a", "2026-08", "WEEK_2", "APPROVE"
-            ));
+            .runCommandTransaction(() -> {
+                fixture.persistence.requireCashflowMonthClosePermission(manager, "project-a");
+                return fixture.persistence.transitionCashflowSettlementStatus(
+                    manager, "project-a", "2026-08", "WEEK_2", "APPROVE");
+            });
 
         assertThat(approved.status()).isEqualTo("COMPLETED");
         assertThat(approved.approvedBy()).isEqualTo("Manager");
+        assertThat(fixture.documents.get("orgs/tenant-a/cashflow_weekly_update_completions/project-a-2026-08-w2"))
+            .containsEntry("status", "LOCKED");
+        assertThat(fixture.documents.get("orgs/tenant-a/cashflow_weekly_update_completion_versions/project-a-2026-08-w2-r2"))
+            .containsEntry("lockState", "LOCKED");
         Map<?, ?> week = (Map<?, ?>) ((Map<?, ?>) fixture.documents.get(
             "orgs/tenant-a/cashflow_settlement_statuses/project-a-2026-08"
         ).get("periods")).get("WEEK_2");
         assertThat(week.get("status")).isEqualTo("COMPLETED");
+    }
+
+    @Test
+    void genericWeeklyApprovalCanReopenResubmitAndApproveAgainWithoutStaleMirrorConflict() {
+        Fixture fixture = fixture(activeMember(), Map.of());
+        putCompleteProjectionWindow(fixture, "2026-08", 2);
+        fixture.documents.put("orgs/tenant-a/projects/project-a", Map.of(
+            "id", "project-a", "tenantId", "tenant-a", "executiveApproverId", "manager-1"));
+        fixture.documents.put("orgs/tenant-a/members/manager-1", member(Map.of(
+            "uid", "manager-1", "role", "pm", "projectIds", List.of("project-a"))));
+        fixture.documents.put("orgs/tenant-a/persons/person-manager-1", Map.of("uid", "manager-1"));
+        TrustedActorContext manager = new TrustedActorContext(
+            "tenant-a", "manager-1", "manager@example.com", "pm", "Manager");
+        String summaryPath = "orgs/tenant-a/cashflow_settlement_statuses/project-a-2026-08";
+        String headPath = "orgs/tenant-a/cashflow_weekly_update_completions/project-a-2026-08-w2";
+        String versionPrefix = "orgs/tenant-a/cashflow_weekly_update_completion_versions/project-a-2026-08-w2-r";
+        Map<String, Object> unrelated = Map.of("status", "COMPLETED", "approvedAt", "2026-08-01T00:00:00Z");
+        fixture.documents.put(summaryPath, Map.of("periods", Map.of("MONTH", unrelated, "WEEK_1", unrelated)));
+        var service = commandService(fixture.persistence);
+        for (int round = 0; round < 2; round++) {
+            long submittedRevision = 1L + round * 3;
+            fixture.persistence.runCommandTransaction(() -> service.completeCashflowWeeklyUpdate(
+                ACTOR, "project-a", new CompleteCashflowWeeklyUpdateRequest(
+                    "resubmit-round-" + submittedRevision, "2026-08", 2, "2026-08-04T01:21:00Z", "NO_CHANGES")));
+            assertThat(fixture.documents.get(headPath)).containsEntry("status", "SUBMITTED")
+                .containsEntry("revision", submittedRevision);
+            assertThat(fixture.persistence.findCashflowSettlementStatuses("tenant-a", "project-a", "2026-08").get(2).status())
+                .isEqualTo("PENDING_APPROVAL");
+            fixture.persistence.runCommandTransaction(() -> service.transitionCashflowSettlementStatus(
+                manager, "project-a", new dev.merryai.innerplatform.weekly.api.TransitionCashflowSettlementStatusRequest(
+                    "2026-08", "WEEK_2", "APPROVE")));
+            assertThat(fixture.documents.get(headPath)).containsEntry("status", "LOCKED")
+                .containsEntry("revision", submittedRevision + 1);
+            assertThat(fixture.documents.get(versionPrefix + (submittedRevision + 1)))
+                .containsEntry("lockState", "LOCKED");
+            Map<String, Object> approvedVersion = new LinkedHashMap<>(fixture.documents.get(versionPrefix + (submittedRevision + 1)));
+            Map<?, ?> periods = (Map<?, ?>) fixture.documents.get(summaryPath).get("periods");
+            assertThat(((Map<?, ?>) periods.get("WEEK_2")).get("status")).isEqualTo("COMPLETED");
+            assertThat(periods.get("MONTH")).isEqualTo(unrelated);
+            assertThat(periods.get("WEEK_1")).isEqualTo(unrelated);
+            if (round == 0) {
+                fixture.persistence.runCommandTransaction(() -> service.reopenCashflowWeeklyUpdate(
+                    manager, "project-a", new ReopenCashflowWeeklyUpdateRequest(
+                        "reopen-after-generic-approval", "2026-08", 2, submittedRevision + 1, "입력 정정")));
+                assertThat(fixture.documents.get(headPath)).containsEntry("status", "OPEN")
+                    .containsEntry("revision", submittedRevision + 2);
+                assertThat(fixture.documents.get(versionPrefix + (submittedRevision + 2)))
+                    .containsEntry("complianceStatus", "REOPENED");
+                assertThat(fixture.documents.get(versionPrefix + (submittedRevision + 1))).isEqualTo(approvedVersion);
+            }
+        }
     }
 
     @Test
