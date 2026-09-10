@@ -13,24 +13,9 @@ afterEach(() => {
 });
 
 describe('shell LAB visibility', () => {
-  it('hides direct bank statement surfaces for direct-entry portal projects', () => {
-    expect(shouldShowShellRoute('/portal/bank-statements', 'portal', 'nav', {
-      fundInputMode: 'DIRECT_ENTRY',
-      labEnabled: false,
-    })).toBe(false);
-    expect(shouldShowShellRoute('/portal/bank-statements', 'portal', 'command', {
-      fundInputMode: 'DIRECT_ENTRY',
-      labEnabled: false,
-    })).toBe(false);
+  it('keeps weekly expenses visible for direct-entry portal projects', () => {
     expect(shouldShowShellRoute('/portal/weekly-expenses', 'portal', 'nav', {
       fundInputMode: 'DIRECT_ENTRY',
-      labEnabled: false,
-    })).toBe(true);
-  });
-
-  it('keeps direct bank statements visible for non-direct portal projects', () => {
-    expect(shouldShowShellRoute('/portal/bank-statements', 'portal', 'nav', {
-      fundInputMode: 'BANK_STATEMENT',
       labEnabled: false,
     })).toBe(true);
   });

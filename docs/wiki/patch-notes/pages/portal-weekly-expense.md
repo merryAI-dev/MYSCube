@@ -3,7 +3,11 @@
 - route: `/portal/weekly-expenses`
 - primary users: PM, 실무 입력 담당자
 - status: active
-- last updated: 2026-06-02
+- last updated: 2026-09-10
+
+## 2026-09-10
+
+폐기된 통장내역 페이지로 안내하는 준비 카드와 연결 버튼을 제거했다. 기존 거래 원장 조회와 증빙 폴더 연결 기능은 유지한다.
 
 ## Purpose
 

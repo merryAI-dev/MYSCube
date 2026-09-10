@@ -352,18 +352,6 @@ const PM_COMMAND_DEFINITIONS: AdminCommandItem[] = [
     keywords: ['캐시플로', '캐시플로우', 'projection', '프로젝션', '주간', '입금', '지출', '잔액', '계약금', '중도금', '잔금', '수익', '지원금'],
   },
   {
-    id: 'pm:bank-statements',
-    label: 'PM 통장내역',
-    description: '통장 엑셀 업로드와 거래내역 확인 화면입니다.',
-    category: 'PM',
-    scope: 'pm',
-    to: '/portal/bank-statements',
-    icon: 'bank',
-    kind: 'page',
-    priority: 100,
-    keywords: ['통장', '통장내역', '은행', '엑셀', '업로드', '입출금', '거래내역', 'bank', 'statement', '계좌'],
-  },
-  {
     id: 'pm:project-edit',
     label: 'PM 프로젝트 수정',
     description: '등록된 프로젝트 정보를 수정 제출합니다.',

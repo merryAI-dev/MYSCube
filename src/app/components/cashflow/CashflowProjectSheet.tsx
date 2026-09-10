@@ -3810,12 +3810,12 @@ export function CashflowProjectSheet({
     return (
       <Card className="h-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <CardContent className="p-4">
-          <div className="flex items-start justify-between gap-2 pb-3">
-            <div>
+          <div className="min-w-0 space-y-2 pb-3">
+            <div className="min-w-0 break-words">
               <div className="text-[15px] font-bold tracking-[-0.01em] text-slate-950">실제 반영 기록</div>
               <div className="mt-0.5 text-[12px] leading-4 text-slate-600">{latestCashflowEventSummary(latestEvent)}</div>
             </div>
-            <div className="flex shrink-0 flex-wrap justify-end gap-1">
+            <div className="flex min-w-0 flex-wrap gap-1">
               {countBadges.map((badge) => (
                 <span
                   key={badge.key}
@@ -3826,7 +3826,7 @@ export function CashflowProjectSheet({
               ))}
             </div>
           </div>
-          <div className={`mb-2 grid gap-2 ${compact ? '' : 'sm:grid-cols-3'}`}>
+          <div className="mb-2 grid min-w-0 grid-cols-1 gap-2">
             <Input aria-label="실제 반영 기록 검색" value={cashflowEventQuery} onChange={(event) => setCashflowEventQuery(event.target.value)} placeholder="항목·담당자 검색" />
             <select aria-label="실제 반영 구분 필터" className="h-9 rounded-md border border-slate-300 bg-white px-2 text-[12px]" value={cashflowEventMode} onChange={(event) => setCashflowEventMode(event.target.value)}><option value="ALL">전체 구분</option><option value="projection">Projection</option><option value="actual">Actual</option></select>
             <select aria-label="실제 반영 월 필터" className="h-9 rounded-md border border-slate-300 bg-white px-2 text-[12px]" value={cashflowEventMonth} onChange={(event) => setCashflowEventMonth(event.target.value)}><option value="ALL">전체 월</option>{[...new Set(cashflowEvents.map((event) => event.yearMonth).filter(Boolean))].sort((left, right) => left.localeCompare(right)).map((month) => <option key={month} value={month}>{month}</option>)}</select>

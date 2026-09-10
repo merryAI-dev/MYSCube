@@ -90,7 +90,6 @@ const CashflowSheetLabPage = lazyRoute(() => import('./features/cashflow-sheet-c
 const CareerProfilePage = lazyRoute(() => import('./components/portal/CareerProfilePage'), 'CareerProfilePage');
 const PortalTrainingPage = lazyRoute(() => import('./components/portal/PortalTrainingPage'), 'PortalTrainingPage');
 const PortalWeeklyExpensePage = lazyRoute(() => import('./components/portal/PortalWeeklyExpensePage'), 'PortalWeeklyExpensePage');
-const PortalBankStatementPage = lazyRoute(() => import('./components/portal/PortalBankStatementPage'), 'PortalBankStatementPage');
 const GuideChatPage = lazyRoute(() => import('./components/guide-chat/GuideChatPage'), 'GuideChatPage');
 const BusinessCardLabPage = lazyRoute(() => import('./components/business-cards/BusinessCardLabPage'), 'BusinessCardLabPage');
 
@@ -205,7 +204,6 @@ export const router = createBrowserRouter([
       { path: 'cashflow/:projectId/sheets-lab', element: <S C={CashflowSheetLabPage} /> },
       { path: 'budget', element: <S C={PortalBudget} /> },
       { path: 'weekly-expenses', element: <S C={PortalWeeklyExpensePage} /> },
-      { path: 'bank-statements', element: <S C={PortalBankStatementPage} /> },
       { path: 'personnel', element: <S C={PortalPersonnel} /> },
       { path: 'change-requests', element: <S C={PortalChangeRequests} /> },
       { path: 'project-approvals', element: <S C={ProjectAssigneeApprovalPage} /> },
