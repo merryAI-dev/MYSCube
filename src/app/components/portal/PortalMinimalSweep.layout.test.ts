@@ -7,7 +7,6 @@ function readPortalSource(fileName: string) {
 }
 
 const submissionsSource = readPortalSource('PortalSubmissionsPage.tsx');
-const bankStatementSource = readPortalSource('PortalBankStatementPage.tsx');
 const weeklyExpenseSource = readPortalSource('PortalWeeklyExpensePage.tsx');
 const cashflowSource = readPortalSource('PortalCashflowPage.tsx');
 const projectEditSource = readPortalSource('PortalProjectEdit.tsx');
@@ -21,30 +20,6 @@ describe('portal minimal sweep', () => {
     expect(submissionsSource).not.toContain('필요시만 수동 보정');
     expect(submissionsSource).not.toContain('아직 추적 중인 제출 대상이 없습니다');
     expect(submissionsSource).not.toContain('해당 상태의 인력변경 신청이 없습니다');
-  });
-
-  it('removes walkthrough and role-notice clutter from bank statements', () => {
-    expect(bankStatementSource).not.toContain('const helperSteps = [');
-    expect(bankStatementSource).not.toContain('Mission 1');
-    expect(bankStatementSource).not.toContain('roleNotice');
-    expect(bankStatementSource).not.toContain('사업비 입력(주간) 먼저 보기');
-  });
-
-  it('restores the bank statement completion wizard without queue-first controls', () => {
-    expect(bankStatementSource).toContain('비어있는 사업비 항목 작성');
-    expect(bankStatementSource).toContain('작성 내용 반영');
-    expect(bankStatementSource).not.toContain('신규 거래 처리 Queue');
-    expect(bankStatementSource).not.toContain('분류/검토 열기');
-    expect(bankStatementSource).not.toContain('증빙 이어서 하기');
-    expect(bankStatementSource).not.toContain('주간 사업비에서 보기');
-    expect(bankStatementSource).not.toContain('Java API');
-  });
-
-  it('removes operator-facing special template actions from bank statements', () => {
-    expect(bankStatementSource).not.toContain('환수 행');
-    expect(bankStatementSource).not.toContain('선사용금');
-    expect(bankStatementSource).not.toContain('특이건');
-    expect(bankStatementSource).not.toContain('addSpecialTemplateRow(');
   });
 
   it('removes redundant policy and bottom summary bars from weekly expenses', () => {

@@ -627,9 +627,6 @@ export function PortalPayrollPage() {
             )}
 
             <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" className="h-8 text-[11px] gap-1.5" onClick={() => navigate('/portal/bank-statements')}>
-                통장내역 열기 <ArrowRight className="h-3.5 w-3.5" />
-              </Button>
               <Button size="sm" variant="outline" className="h-8 text-[11px] gap-1.5" onClick={() => navigate('/portal/weekly-expenses')}>
                 사업비 입력(주간) 열기 <ArrowRight className="h-3.5 w-3.5" />
               </Button>
@@ -640,7 +637,6 @@ export function PortalPayrollPage() {
 
       <PortalPayrollLiquidityDetail
         item={activeQueueItem}
-        onOpenBankStatements={() => navigate('/portal/bank-statements')}
         onOpenWeeklyExpenses={() => navigate('/portal/weekly-expenses')}
       />
 
@@ -751,11 +747,9 @@ function payrollStatusLabel(status: PayrollLiquidityQueueItem['status']) {
 
 function PortalPayrollLiquidityDetail({
   item,
-  onOpenBankStatements,
   onOpenWeeklyExpenses,
 }: {
   item: PayrollLiquidityQueueItem | null;
-  onOpenBankStatements: () => void;
   onOpenWeeklyExpenses: () => void;
 }) {
   if (!item) {
@@ -865,9 +859,6 @@ function PortalPayrollLiquidityDetail({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" className="h-8 text-[11px] gap-1.5" onClick={onOpenBankStatements}>
-            통장내역 열기 <ArrowRight className="h-3.5 w-3.5" />
-          </Button>
           <Button size="sm" variant="outline" className="h-8 text-[11px] gap-1.5" onClick={onOpenWeeklyExpenses}>
             사업비 입력(주간) 열기 <ArrowRight className="h-3.5 w-3.5" />
           </Button>

@@ -14,8 +14,8 @@ import type { EvidenceUploadSelection } from '../cashflow/SettlementLedgerPage';
 import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
 import {
-  normalizeSettlementSheetPolicy,
   normalizeProjectFundInputMode,
+  normalizeSettlementSheetPolicy,
   type CashflowWeekSheet,
   type Transaction,
   type TransactionState,
@@ -83,7 +83,6 @@ export function PortalWeeklyExpensePage() {
     activeExpenseSheetId,
     setActiveExpenseSheet,
     expenseSheetRows,
-    bankStatementRows,
     saveExpenseSheetRows,
     comments,
     addComment,
@@ -127,7 +126,6 @@ export function PortalWeeklyExpensePage() {
     const name = sheet?.name?.trim();
     return sheet?.id !== 'default' && name ? name : '사업비 입력';
   }, [visibleExpenseSheets, activeExpenseSheetId]);
-  const bankStatementCount = bankStatementRows?.rows?.length || 0;
 
   const defaultLedgerId = useMemo(() => {
     const ledger = ledgers.find((l) => l.projectId === projectId);
@@ -140,7 +138,6 @@ export function PortalWeeklyExpensePage() {
     ledgers,
   }), [authUser, portalUser, myProject, ledgers]);
   const fundInputMode = normalizeProjectFundInputMode(myProject?.fundInputMode);
-  const isDirectEntryMode = fundInputMode === 'DIRECT_ENTRY';
   const weeklySetupPanel = useMemo(() => {
     if (!happyPath.canOpenWeeklyExpenses) {
       return {
@@ -149,15 +146,6 @@ export function PortalWeeklyExpensePage() {
         toneClass: 'border-amber-200/70 bg-amber-50/70',
         actionLabel: '사업 설정 열기',
         actionKind: 'settings' as const,
-      };
-    }
-    if (!isDirectEntryMode && bankStatementCount === 0) {
-      return {
-        title: '이번 주 원본이 아직 없습니다',
-        description: '통장내역을 먼저 올리면 이 탭이 자동 분류와 사람 확인 기준으로 바로 이어집니다.',
-        toneClass: 'border-cyan-200/70 bg-cyan-50/70',
-        actionLabel: '통장내역 열기',
-        actionKind: 'bank' as const,
       };
     }
     if (!happyPath.canUseEvidenceWorkflow) {
@@ -171,10 +159,8 @@ export function PortalWeeklyExpensePage() {
     }
     return null;
   }, [
-    bankStatementCount,
     happyPath.canOpenWeeklyExpenses,
     happyPath.canUseEvidenceWorkflow,
-    isDirectEntryMode,
   ]);
   const settlementSheetPolicy = useMemo(
     () => normalizeSettlementSheetPolicy(myProject?.settlementSheetPolicy, myProject?.fundInputMode),
@@ -799,14 +785,9 @@ export function PortalWeeklyExpensePage() {
                       {projectDriveProvisioning ? <Loader2 className="h-4 w-4 animate-spin" /> : <FolderPlus className="h-4 w-4" />}
                       {weeklySetupPanel.actionLabel}
                     </Button>
-                  ) : weeklySetupPanel.actionKind === 'settings' ? (
+                  ) : (
                     <Button size="sm" onClick={() => requestRouteNavigation('/portal/project-select', '사업 선택')}>
                       {weeklySetupPanel.actionLabel}
-                    </Button>
-                  ) : (
-                    <Button size="sm" onClick={() => requestRouteNavigation('/portal/bank-statements', '통장내역')}>
-                      {weeklySetupPanel.actionLabel}
-                      <ArrowRight className="h-4 w-4" />
                     </Button>
                   )}
                 </div>

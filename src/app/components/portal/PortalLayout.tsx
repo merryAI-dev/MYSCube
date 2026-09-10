@@ -110,7 +110,6 @@ const NAV_SECTIONS: PortalNavSection[] = [
   {
     title: '사업비관리',
     items: [
-      { to: '/portal/bank-statements', icon: FileSpreadsheet, label: '통장내역' },
       { to: '/portal/budget', icon: BarChart3, label: '예산총괄' },
       { to: '/portal/cashflow', icon: BarChart3, label: '캐시플로(주간)' },
       { to: '/portal/cashflow/sheets-lab', icon: FileSpreadsheet, label: '시트 연동 검토', hidden: true },

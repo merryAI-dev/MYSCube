@@ -2,8 +2,12 @@
 
 - route: `/portal/bank-statements`
 - primary users: PM, 운영 입력 담당자
-- status: active
-- last updated: 2026-06-19
+- status: retired (page and route removed; stored data retained)
+- last updated: 2026-09-10
+
+## Retirement
+
+레거시 페이지 코드, 라우트, 메뉴, 빠른 검색과 연결 버튼을 제거했다. 아래 내용은 과거 기능 기록이며 현재 제공되는 화면이 아니다. 저장된 통장·거래 데이터와 다른 기능에서 사용하는 공유 저장·조회 경로는 보존한다.
 
 ## Purpose
 

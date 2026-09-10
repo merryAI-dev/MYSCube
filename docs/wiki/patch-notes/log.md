@@ -1,5 +1,9 @@
 # Patch Notes Log
 
+## [2026-09-10] patch-note | cashflow-legacy-regressions | 기존 승인 보존 및 레거시 통장내역 화면 제거
+- pages: [portal-bank-statement](./pages/portal-bank-statement.md), [portal-weekly-expense](./pages/portal-weekly-expense.md)
+- summary: 동일 제출에 대한 과거 주정산 승인 증거를 보존하고, 새 재제출은 승인 대기로 유지한다. 실제 반영 기록 패널의 제목·배지·필터를 분리해 좁은 폭의 줄바꿈 문제를 수정한다. 레거시 통장내역 페이지·라우트·메뉴·검색·연결 버튼을 제거하며 기존 거래 데이터와 공유 저장 경로는 보존한다.
+
 ## [2026-08-12] patch-note | strip-mock-employee-names | 참여율 목데이터와 가짜 인사 공지 제거
 - pages: [shared-portal-architecture](./pages/shared-portal-architecture.md), [admin-participation](./pages/admin-participation.md)
 - summary: 프론트 번들에 직원 실명 75명이 실려 나가고 있었다. `PART_PROJECTS`/`PROJECT_ASSIGNMENTS`/`PARTICIPATION_ENTRIES` 목데이터는 목 프로젝트 id(`eco26` 등)를 쓰고 실제 프로젝트는 `p177…` 형태라 프로덕션에서 아무 역할도 하지 않으면서 이름만 싣고 있었다. 인력변경 알림은 이제 목 프로젝트가 아니라 실제 프로젝트를 받는다. 기본값으로 들어 있던 실존 인물의 가짜 퇴사·전배 공지도 제거했다. 번들 실명 75명 → 33명, 남은 33명은 KOICA·인력변경 화면이 실제로 쓰는 기능 데이터라 별도 슬라이스로 남긴다.
