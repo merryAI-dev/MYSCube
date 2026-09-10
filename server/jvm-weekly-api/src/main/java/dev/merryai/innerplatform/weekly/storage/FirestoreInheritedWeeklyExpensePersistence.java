@@ -2370,7 +2370,7 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             if (!completionSnapshot.exists()) {
                 throw new WeeklyExpenseConflictException("Cashflow settlement status changed. Submit the week before approving.");
             }
-            Map<String, Object> completion = data(completionSnapshot);
+            Map<String, Object> completion = effectiveWeeklyCompletion(data(completionSnapshot), document, weekNo);
             CashflowSettlementStatusRecord canonical = weeklySettlementStatusRecord(
                 actor.tenantId(), projectId, yearMonth, weekNo, completion);
             if ("COMPLETED".equals(canonical.status())) return canonical;
@@ -2434,10 +2434,28 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         for (int index = 0; index < completions.size(); index++) {
             if (completions.get(index).exists()) {
                 records.set(index + 1, weeklySettlementStatusRecord(
-                    tenantId, projectId, yearMonth, index + 1, data(completions.get(index))));
+                    tenantId, projectId, yearMonth, index + 1,
+                    effectiveWeeklyCompletion(data(completions.get(index)), stored, index + 1)));
             }
         }
         return List.copyOf(records);
+    }
+
+    private Map<String, Object> effectiveWeeklyCompletion(
+        Map<String, Object> completion, Map<String, Object> settlement, int weekNo
+    ) {
+        if (!"SUBMITTED".equals(text(completion.get("status"), ""))) return completion;
+        Map<String, Object> approval = nestedMap(nestedMap(settlement.get("periods")).get("WEEK_" + weekNo));
+        Instant submittedAt = instant(completion.get("completedAt"));
+        Instant approvedAt = instant(approval.get("approvedAt"));
+        // Legacy approvals were stored only in the summary. Preserve only evidence bound to this submission.
+        if (!"COMPLETED".equals(text(approval.get("status"), ""))
+            || text(approval.get("approvedBy"), "").isBlank()
+            || submittedAt == null || approvedAt == null
+            || !submittedAt.equals(instant(approval.get("submittedAt")))
+            || approvedAt.isBefore(submittedAt)) return completion;
+        return merge(completion, Map.of("status", "LOCKED",
+            "confirmedAt", approvedAt.toString(), "confirmedByName", text(approval.get("approvedBy"), "")));
     }
 
     private CashflowSettlementStatusRecord weeklySettlementStatusRecord(
@@ -3498,7 +3516,8 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             throw new WeeklyExpenseConflictException("Stored weekly cashflow completion scope is invalid.");
         }
         requireWeeklyCompletionIntegrity(document);
-        return toWeeklyCompletionRecord(projectId, yearMonth, weekNo, document, false);
+        return toWeeklyCompletionRecord(projectId, yearMonth, weekNo,
+            effectiveWeeklyCompletion(document, settlementStatusDocument(tenantId, projectId, yearMonth), weekNo), false);
     }
 
     @Override
@@ -3718,7 +3737,7 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             "orgs/" + actor.tenantId() + "/cashflow_weekly_compliance_heads/" + projectId
         );
         DocumentSnapshot complianceHeadSnapshot = get(complianceHeadRef);
-        settlementStatusDocument(actor.tenantId(), projectId, request.yearMonth());
+        Map<String, Object> settlement = settlementStatusDocument(actor.tenantId(), projectId, request.yearMonth());
         Map<String, Object> lockedCompletion = null;
         if (snapshot.exists()) {
             Map<String, Object> existing = data(snapshot);
@@ -3729,7 +3748,7 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             }
             if (isSettledWeeklyStatus(text(existing.get("status"), ""))) {
                 requireWeeklyCompletionIntegrity(existing);
-                lockedCompletion = existing;
+                lockedCompletion = effectiveWeeklyCompletion(existing, settlement, request.weekNo());
             }
         }
 
@@ -4100,6 +4119,8 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             || request.weekNo() != intValue(current.get("weekNo"), 0)) {
             throw new WeeklyExpenseConflictException("Stored weekly cashflow completion scope is invalid.");
         }
+        current = effectiveWeeklyCompletion(current,
+            settlementStatusDocument(actor.tenantId(), projectId, request.yearMonth()), request.weekNo());
         String currentStatus = text(current.get("status"), "");
         if (!isSettledWeeklyStatus(currentStatus)) {
             throw new WeeklyExpenseConflictException("Only a submitted or locked cashflow week can be reopened.");
@@ -4192,6 +4213,8 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             || request.weekNo() != intValue(current.get("weekNo"), 0)) {
             throw new WeeklyExpenseConflictException("Stored weekly cashflow completion scope is invalid.");
         }
+        current = effectiveWeeklyCompletion(current,
+            settlementStatusDocument(actor.tenantId(), projectId, request.yearMonth()), request.weekNo());
         if (!"SUBMITTED".equals(text(current.get("status"), ""))) {
             throw new WeeklyExpenseConflictException("Only a submitted cashflow week can be confirmed.");
         }

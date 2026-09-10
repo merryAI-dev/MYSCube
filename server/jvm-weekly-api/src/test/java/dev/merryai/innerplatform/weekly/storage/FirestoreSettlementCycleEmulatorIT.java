@@ -190,6 +190,36 @@ class FirestoreSettlementCycleEmulatorIT {
     }
 
     @Test
+    void priorApprovalOfTheSameSubmissionSurvivesEveryReadWithoutChangingStoredDocuments() throws Exception {
+        Harness h = harness("it-weekly-legacy-approval", "project-legacy-approval");
+        seedCanonicalActorsAndProject(h);
+        Map<String, Object> snapshot = Map.of("projectId", h.projectId());
+        Map<String, Object> completion = new LinkedHashMap<>(Map.of(
+            "projectId", h.projectId(), "yearMonth", "2026-09", "weekNo", 1L,
+            "status", "SUBMITTED", "revision", 1L, "reopenCount", 0L,
+            "completedAt", "2026-09-01T00:41:56.385Z", "completedByName", "실무자",
+            "snapshot", snapshot, "snapshotHash", h.persistence().hashCanonicalJson(snapshot)));
+        seedDocuments(Map.of(h.weeklyCompletionPath("2026-09", 1), completion,
+            h.settlementPath("2026-09"), Map.of("periods", Map.of("WEEK_1", Map.of(
+                "status", "COMPLETED", "submittedAt", "2026-09-01T00:41:56.385Z",
+                "approvedAt", "2026-09-01T00:42:57Z", "approvedBy", "조직장")))));
+        Map<String, Map<String, Map<String, Object>>> before = projectState(h);
+        var single = h.persistence().findCashflowSettlementStatuses(h.tenantId(), h.projectId(), "2026-09");
+        var batch = h.persistence().findCashflowSettlementStatusesBatch(h.tenantId(), List.of(h.projectId()), "2026-09").get(h.projectId());
+        var cycle = h.persistence().findCashflowSettlementCyclesBatch(h.approver(), List.of(h.projectId()), "2026-09", "2026-08")
+            .get(h.projectId()).weeklySettlements();
+        for (var records : List.of(single, batch, cycle)) {
+            var week = records.stream().filter(record -> record.period().equals("WEEK_1")).findFirst().orElseThrow();
+            assertThat(week.status()).isEqualTo("COMPLETED");
+            assertThat(week.approvedAt()).isEqualTo("2026-09-01T00:42:57Z");
+            assertThat(week.approvedBy()).isEqualTo("조직장");
+        }
+        assertThat(h.persistence().findCashflowWeeklyUpdateCompletion(h.tenantId(), h.projectId(), "2026-09", 1).status())
+            .isEqualTo("LOCKED");
+        assertThat(projectState(h)).isEqualTo(before);
+    }
+
+    @Test
     void reopenedAndResubmittedWeeklyHeadOverridesHistoricalCompletedSummaryWithoutWrites() throws Exception {
         Harness h = harness("it-weekly-reopened", "project-weekly-reopened");
         seedCanonicalActorsAndProject(h);
