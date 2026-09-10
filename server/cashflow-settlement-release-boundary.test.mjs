@@ -174,7 +174,11 @@ describe('cashflow settlement release boundary', () => {
       'src/app/lib/platform-bff-client.ts',
     ]);
     expect(result.jvm).toEqual([]);
-    expect(result.bffFrontendCutover).toHaveLength(4);
+    expect(result.bffFrontendCutover).toEqual([
+      'server/bff/routes/jvm-weekly-api.mjs',
+      'server/bff/cashflow/settlement-cycle/application-service.mjs',
+      'src/app/lib/platform-bff-client.ts',
+    ]);
   });
 
   it('routes a mixed settlement release through the atomic cutover', () => {
@@ -188,6 +192,12 @@ describe('cashflow settlement release boundary', () => {
     expect(classifyCashflowSettlementReleasePaths([
       'src/app/components/people/PeopleDirectoryPage.tsx',
       'server/bff/routes/persons.mjs',
+    ])).toEqual({ jvm: [], bffFrontendCutover: [] });
+  });
+
+  it('does not gate a presentation-only project sheet change as a settlement cutover', () => {
+    expect(classifyCashflowSettlementReleasePaths([
+      'src/app/components/cashflow/CashflowProjectSheet.tsx',
     ])).toEqual({ jvm: [], bffFrontendCutover: [] });
   });
 

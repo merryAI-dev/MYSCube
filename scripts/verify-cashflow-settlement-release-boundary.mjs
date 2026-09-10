@@ -18,6 +18,9 @@ const BFF_CUTOVER_PATHS = [
   'src/app/platform/api-error-messages.ts',
   'src/app/platform/cashflow-settlement-cycle.ts',
 ];
+const PRESENTATION_ONLY_PATHS = new Set([
+  'src/app/components/cashflow/CashflowProjectSheet.tsx',
+]);
 const JVM_ROLLOUT_SUPPORT_PATHS = new Set([
   'server/bff/cashflow/settlement-cycle/contract.mjs',
   'server/bff/cashflow/settlement-cycle/jvm-anti-corruption-adapter.mjs',
@@ -64,6 +67,7 @@ export function classifyCashflowSettlementReleasePaths(paths, { rolloutSupportIs
       || path === 'scripts/verify-cashflow-settlement-candidate.mjs'),
     bffFrontendCutover: normalized.filter((path) => (
       (!JVM_ROLLOUT_SUPPORT_PATHS.has(path) || rolloutSupportIsLive)
+      && !PRESENTATION_ONLY_PATHS.has(path)
       &&
       BFF_CUTOVER_PATHS.some((candidate) => isPathOrChild(path, candidate))
     )),
