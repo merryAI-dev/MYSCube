@@ -168,6 +168,7 @@ jobs:
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
           VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           VERCEL_GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          GH_TOKEN: ${{ github.token }}
           BFF_SPLIT_RELEASE_BASE_SHA: ${{ vars.BFF_SPLIT_RELEASE_BASE_SHA_LIVE }}
         run: |
           set -euo pipefail
@@ -184,15 +185,41 @@ jobs:
           git merge-base --is-ancestor "${bff_deployed_sha}" "${DEPLOY_SHA}"
           BFF_DEPLOY_BASE_SHA="${bff_deployed_sha}"
 
-          release_classification="$(node --input-type=module - "${BFF_DEPLOY_BASE_SHA}" "${DEPLOY_SHA}" <<'NODE'
+          jvm_deployed_sha=""
+          jvm_runs="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/workflows/jvm-production-deploy.yml/runs" \
+            -f status=success -f branch=main -f per_page=100)"
+          while IFS=$'\t' read -r run_id run_sha; do
+            [ -n "${run_id}" ] || continue
+            jobs="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs" -f per_page=100)"
+            if jq -e '.jobs[]
+                | select(.name == "Deploy JVM candidate and promote" and .conclusion == "success")
+                | .steps[]
+                | select((.name == "Reconcile promotion traffic or roll back"
+                    or .name == "Verify canonical service after promotion")
+                  and .conclusion == "success")' <<< "${jobs}" >/dev/null; then
+              jvm_deployed_sha="${run_sha}"
+              break
+            fi
+          done < <(jq -r '.workflow_runs[] | [.id, .head_sha] | @tsv' <<< "${jvm_runs}")
+          if [ -n "${jvm_deployed_sha}" ]; then
+            git cat-file -e "${jvm_deployed_sha}^{commit}"
+          fi
+
+          release_classification="$(node --input-type=module - "${BFF_DEPLOY_BASE_SHA}" "${DEPLOY_SHA}" "${jvm_deployed_sha}" <<'NODE'
           import {
             changedPathsBetween,
             classifyCashflowSettlementProductionRelease,
             isJvmRolloutSupportLiveAt,
           } from './scripts/verify-cashflow-settlement-release-boundary.mjs';
 
-          const [aliasBase, head] = process.argv.slice(2);
-          const changedPaths = changedPathsBetween(aliasBase, head);
+          const [aliasBase, head, jvmDeployedSha] = process.argv.slice(2);
+          const aliasPaths = changedPathsBetween(aliasBase, head);
+          const changedPaths = jvmDeployedSha
+            ? [
+                ...aliasPaths.filter((path) => !path.startsWith('server/jvm-weekly-api/')),
+                ...changedPathsBetween(jvmDeployedSha, head),
+              ]
+            : aliasPaths;
           const { releaseMode, bffFrontendCutover } = classifyCashflowSettlementProductionRelease(
             changedPaths,
             {
