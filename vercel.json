@@ -28,14 +28,6 @@
     {
       "path": "/api/internal/workers/payroll/run",
       "schedule": "45 2 * * *"
-    },
-    {
-      "path": "/api/internal/workers/cashflow-weekly-digest/run",
-      "schedule": "30 9 * * *"
-    },
-    {
-      "path": "/api/internal/workers/cashflow-weekly-digest/run",
-      "schedule": "59 14 * * *"
     }
   ],
   "redirects": [
