@@ -6,7 +6,33 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+  pull-requests: read
+
 jobs:
+  cashflow-sheet-lab-one-way-freeze:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+
+      - name: Require owner approval for sheet one-way changes
+        env:
+          CASHFLOW_SHEET_LAB_FREEZE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          CASHFLOW_SHEET_LAB_FREEZE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          CASHFLOW_SHEET_LAB_FREEZE_PULL_NUMBER: ${{ github.event.pull_request.number }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/check_cashflow_sheet_lab_freeze.mjs
+
   test-and-build:
     runs-on: ubuntu-latest
     timeout-minutes: 10
