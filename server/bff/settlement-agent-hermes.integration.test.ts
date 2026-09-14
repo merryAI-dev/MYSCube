@@ -18,7 +18,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Hermes worker route persi
     await memberRef.set(member);
     await projectRef.set(project);
     await threadRef.set({ ...identity, queue: [id], turns: [] });
-    await jobRef.set({ ...identity, conversationId: id, question: '내 사업을 찾아줘',
+    await jobRef.set({ ...identity, conversationId: id, question: '[Hermes] 내 사업을 찾아줘',
       createdAt: new Date().toISOString(), status: 'queued', attempts: 0 });
     const deliveries: any[] = [];
     const readOverview = vi.fn();
@@ -70,7 +70,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Hermes worker route persi
     const trace = (await jobRef.collection('trace').orderBy('sequence').get()).docs.map((doc) => doc.data());
     expect(verifyAgentTrace(trace, saved.traceAnchor)).toBe(true);
     expect(trace.some((row) => row.event.type === 'run_start' && row.event.harness === 'hermes-readonly-v1')).toBe(true);
-    expect((await threadRef.get()).data()).toMatchObject({ queue: [], turns: [{ jobId: id, question: '내 사업을 찾아줘', answer: saved.answer }] });
+    expect((await threadRef.get()).data()).toMatchObject({ queue: [], turns: [{ jobId: id, question: '[Hermes] 내 사업을 찾아줘', answer: saved.answer }] });
     expect(await saveSlackFeedback({ db, teamId: identity.teamId, channelId: identity.channelId, payload: {
       team: { id: identity.teamId }, channel: { id: identity.channelId }, user: { id: identity.slackUserId },
       container: { message_ts: '200.1' }, actions: [{ action_id: 'settlement_scope_no', value: id, action_ts: '201.1' }],
