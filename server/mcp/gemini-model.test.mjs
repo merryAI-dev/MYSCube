@@ -3,7 +3,7 @@ import { createGeminiCompletion } from './gemini-model.mjs';
 
 it('preserves signed tool parts and ends follow-up input with user role', async () => {
   const requests = [];
-  const signed = { role: 'model', parts: [{ functionCall: { name: 'lookup', args: {} }, thoughtSignature: 'test-signature' }] };
+  const signed = { role: 'model', parts: [{ functionCall: { id: 'native-1', name: 'lookup', args: {} }, thoughtSignature: 'test-signature' }] };
   const complete = createGeminiCompletion({ client: { models: { generateContent: async (request) => {
     requests.push(request);
     return { candidates: [{ content: requests.length === 1 ? signed : { role: 'model', parts: [{ text: '확인 완료' }] } }] };
@@ -16,5 +16,6 @@ it('preserves signed tool parts and ends follow-up input with user role', async 
   await complete({ messages, tools: [], signal });
   expect(requests[1].contents[1]).toEqual(signed);
   expect(requests[1].contents.at(-1).role).toBe('user');
+  expect(requests[1].contents.at(-1).parts[0].functionResponse.id).toBe('native-1');
   expect(requests[1].config).not.toHaveProperty('temperature');
 });

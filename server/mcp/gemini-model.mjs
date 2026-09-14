@@ -16,11 +16,12 @@ export function createGeminiCompletion({ apiKey, model = 'gemini-3.6-flash', cli
         const saved = signedReplies.get(message.tool_calls[0].id);
         if (!saved) throw new Error('모델 도구 호출 이력이 일치하지 않습니다.');
         contents.push(saved);
-        for (const call of message.tool_calls) names.set(call.id, call.function.name);
+        const nativeCalls = saved.parts.filter((part) => part.functionCall);
+        for (const [index, call] of message.tool_calls.entries()) names.set(call.id, nativeCalls[index].functionCall);
       } else if (message.role === 'tool') {
         const call = names.get(message.tool_call_id);
         if (!call) throw new Error('도구 응답의 호출 정보가 없습니다.');
-        const part = { functionResponse: { name: call, response: { result: JSON.parse(message.content) } } };
+        const part = { functionResponse: { name: call.name, ...(call.id ? { id: call.id } : {}), response: { result: JSON.parse(message.content) } } };
         if (contents.at(-1)?.role === 'user' && contents.at(-1).parts?.[0]?.functionResponse) contents.at(-1).parts.push(part);
         else contents.push({ role: 'user', parts: [part] });
       } else contents.push({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] });
