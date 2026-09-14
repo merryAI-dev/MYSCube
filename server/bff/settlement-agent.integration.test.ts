@@ -4,6 +4,8 @@ import { createSlackWorker, claimSlackJob, updateClaimedJob, saveSlackFeedback }
 import { createHash } from 'node:crypto';
 import { createHmac } from 'node:crypto';
 import { createSlackIngress } from '../mcp/slack-ingress.mjs';
+import { verifyAgentTrace } from '../mcp/agent-trace.mjs';
+import { buildJavaWeeklyTrustedHeaders } from './java-weekly-auth.mjs';
 
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker persistence', () => {
   it('runs search and canonical status lookup, publicly replies, keeps errors private and reloads feedback', async () => {
@@ -55,7 +57,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
         return Response.json({ ok: true, message_ts: '2.1', ts: '2.1' });
       },
       readOverview: async ({ context, body }: any) => {
-        expect(context.actorId).toBe(memberId);
+        expect(context).toMatchObject({ actorId: 'myscube-settlement-agent', actorRole: 'auditor',
+          actorEmail: '', requestedByActorId: memberId, authSource: 'settlement_agent_read' });
+        const headers = await buildJavaWeeklyTrustedHeaders({ context, serviceToken: 'fixture', authMode: 'internal_saas_workspace' });
+        expect(headers['x-actor-role']).toBe('auditor');
+        expect(headers['x-actor-id']).toBe('myscube-settlement-agent');
         expect(body.projectIds).toEqual([projectId]);
         lookups++;
         return overview;
@@ -82,11 +88,16 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     const saved = (await firstRef.get()).data()!;
     expect(saved.status).toBe('succeeded');
     expect(saved.audit.length).toBeGreaterThan(0);
+    const trace = (await firstRef.collection('trace').orderBy('sequence').get()).docs.map((doc) => doc.data());
+    expect(verifyAgentTrace(trace, saved.traceAnchor)).toBe(true);
+    expect(trace.some((row) => row.event.type === 'tool_result')).toBe(true);
     await worker();
     expect(deliveries).toHaveLength(2);
     expect(lookups).toBe(2);
     expect(deliveries[1].text).toContain('월결산: 확정');
     expect((await secondRef.get()).data()!.status).toBe('succeeded');
+    const followupTrace = (await secondRef.collection('trace').get()).docs.map((doc) => doc.data());
+    expect(followupTrace.find((row) => row.event.type === 'conversation_feedback')?.event).toMatchObject({ previousAnswerId: firstRef.id, trainingEligible: false });
     const conversation = (await db.doc(`settlement_agent_threads/${saved.conversationId}`).get()).data()!;
     expect(conversation.queue).toEqual([]);
     expect(conversation.turns).toHaveLength(2);

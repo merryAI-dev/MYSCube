@@ -4,6 +4,15 @@ import * as z from 'zod/v4';
 import { createGeminiCompletion } from './gemini-model.mjs';
 import { runSettlementAgent, settlementTools } from './settlement-agent.mjs';
 import { assertActorRoleAllowed, ROUTE_ROLES } from '../bff/bff-utils.mjs';
+import { readSettlementAgentReport } from '../bff/settlement-agent-query.mjs';
+import { createAgentTrace } from './agent-trace.mjs';
+import { observeConversationFeedback, validateSemanticFeedback } from './conversation-feedback.mjs';
+
+function answerBlocks(text) {
+  return Array.from({ length: Math.ceil(text.length / 2800) }, (_, index) => ({
+    type: 'section', text: { type: 'plain_text', text: text.slice(index * 2800, (index + 1) * 2800) },
+  }));
+}
 
 export function verifySettlementWorkerToken({ authorization = '', secret = '', disabled = false }) {
   if (disabled || !secret || !authorization.startsWith('Bearer ')) return false;
@@ -47,24 +56,91 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
     assertActorRoleAllowed({ context }, ROUTE_ROLES.readCore, 'read settlement agent projects');
     return context;
   }
+  async function readContextFor(job) {
+    const requester = await contextFor(job);
+    // This principal is private to the fixed readOverview capability, never a general API credential.
+    return { tenantId, actorId: 'myscube-settlement-agent', actorRole: 'auditor', actorEmail: '',
+      actorName: '정산 에이전트', authSource: 'settlement_agent_read', requestId: job.id,
+      requestedByActorId: requester.actorId };
+  }
   async function process(job) {
     const scopes = [];
     const audit = [];
     const projectNames = new Map();
+    const trace = createAgentTrace({ db, jobId: job.id, leaseId: job.leaseId });
+    const record = async (event) => {
+      const receipt = await trace(event);
+      audit.push({ type: event.type || 'tool_event', ...(event.tool ? { tool: event.tool } : {}),
+        ...(event.outcome ? { outcome: event.outcome } : {}), ...receipt });
+    };
     let answer;
+    let answerStatus;
     try {
-      await contextFor(job);
+      const actor = await contextFor(job);
+      await record({ type: 'run_start', actorId: actor.actorId, actorRole: actor.actorRole,
+        readPrincipal: 'myscube-settlement-agent', permissionPolicy: 'mysc-designated-channel-company-settlement-read-v1',
+        question: job.question, model: 'gemini-3.6-flash', harness: 'settlement-read-v2' });
+      const previousAnswerId = job.turns?.at(-1)?.jobId || null;
+      await record({ type: 'conversation_feedback', ...observeConversationFeedback({ text: job.question, previousAnswerId }) });
       if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
       await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
       const tools = settlementTools({ projectNames, readStatus: async (input) => {
-        const context = await contextFor(job);
+        const context = await readContextFor(job);
         const names = await db.getAll(...input.projectIds.map((id) => db.doc(`orgs/${tenantId}/projects/${id}`)), { fieldMask: ['name'] });
         for (const doc of names) if (doc.exists && doc.data().name) projectNames.set(doc.id, doc.data().name);
         return readOverview({ context, body: input });
       } });
-      tools[0].schema = z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), projectIds: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(20) }).strict();
+      tools.push({ name: 'observe_feedback', observationOnly: true,
+        description: '이전 답변에 대한 사용자의 정정·범위 불만·활용 의사·모호함을 관찰 기록합니다. 현재 사용자 발화에서 근거를 그대로 인용하세요. 공손함/짜증/침묵을 정답·오답으로 해석하지 않습니다. 기록은 학습이나 정산값에 반영되지 않습니다. 기록 후 실제 질문 처리를 계속하세요.',
+        schema: z.object({ kind: z.enum(['correction', 'scope_concern', 'use_intent', 'ambiguous']), quote: z.string().min(1).max(500) }).strict(),
+        execute: async (input) => validateSemanticFeedback({ ...input, text: job.question, previousAnswerId }),
+      });
+      tools.push({ name: 'clarify_request', description: '대화 문맥으로도 대상 사업·기간·마감 기준을 정할 수 없을 때 한 번에 필요한 것만 확인합니다. 미완료/미승인/기한 내 미승인은 서로 다릅니다. 금요일이 어느 날짜인지 불명확하면 조회 전에 확인하세요.',
+        schema: z.object({ missing: z.array(z.enum(['projects', 'period', 'deadline', 'status_definition'])).min(1).max(4) }).strict(),
+        execute: async (input) => input, requiresReply: true,
+        render: (result) => {
+          const questions = { projects: '어느 사업을 확인할까요? 전체 등록 사업인지 특정 사업인지 알려주세요.',
+            period: '어느 달 또는 몇 주차를 확인할까요?', deadline: '어느 날짜·시각의 마감을 말씀하시나요?',
+            status_definition: '현재 승인이 안 된 건을 찾을까요, 기한 후 승인된 건도 함께 찾을까요?' };
+          return ['정확히 확인하려고 조금만 여쭤볼게요.', ...[...new Set(result.missing)].map((key) => questions[key]), '편하게 답해주시면 이어서 확인할게요.'].join('\n');
+        },
+      });
+      tools[0].schema = z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), projectIds: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(100) }).strict();
+      tools[0].modelResult = (result) => ({ yearMonth: result.yearMonth, monthCloseTargetYearMonth: result.monthCloseTargetYearMonth,
+        items: result.items.map((item) => ({ projectId: item.projectId, month: item.settlementCycle.businessState,
+          health: item.settlementCycle.health, weeks: item.settlementStatuses.items.map(({ period, status }) => ({ period, status })) })), errors: result.errors });
+      tools.push({ name: 'settlement_report',
+        description: '월결산 미완료 사업과 조직장, 또는 지정 주차의 승인 기한을 놓친 사업을 서버 코드로 조회합니다. 전체 목록은 projectIds를 생략합니다. yearMonth는 운영 주기월이며 월결산 대상은 직전 월입니다. 주간 조회는 weekNo와 cutoff(시간대 포함)를 지정하세요. cutoff는 마감시각 상한이며 과거 상태 복원이 아닙니다. 현재 미승인과 기한후 승인을 함께 표시합니다. 정산 의무 대상 명단과 등록 사업 명단은 다릅니다.',
+        schema: z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),
+          kind: z.enum(['month_incomplete', 'week_overdue']), weekNo: z.number().int().min(1).max(5).optional(),
+          cutoff: z.iso.datetime({ offset: true }).optional(),
+          includeLateApproved: z.boolean().optional().describe('false이면 현재 미승인만, true 또는 생략이면 기한후 승인도 함께 조회합니다.'),
+          projectIds: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(100).optional(),
+        }).strict().refine((v) => v.kind !== 'week_overdue' || (v.weekNo && v.cutoff), '주차와 기준 시각을 지정해주세요.'),
+        execute: async (input, { signal }) => readSettlementAgentReport({ db, context: await readContextFor(job), input, readOverview, signal, record }),
+        modelResult: (result) => ({ yearMonth: result.yearMonth, checked: result.checked, matches: result.rows.length,
+          complete: result.complete, warning: result.warning, evidence: '검증된 사업·조직장 목록은 서버가 답변에 직접 포함합니다.' }),
+        render: (result) => {
+          const labels = { NOT_REQUESTED: '요청 전', SUBMITTED: '승인 대기', REOPEN_REQUESTED: '재개 요청', REOPENED: '재개됨',
+            REJECTED: '반려', WITHDRAWN: '철회', UNKNOWN: '확인 필요', WAITING_FOR_UPDATE: '업데이트 대기', PENDING_APPROVAL: '승인 대기', LATE_APPROVED: '기한 후 승인 완료' };
+          return [`[${result.kind === 'month_incomplete' ? '월결산 미완료·확인 필요 사업' : '주간 승인 기한 확인'}]`,
+            result.weekNo ? `주정산: ${result.yearMonth} · ${result.weekNo}주차` : `월결산 대상: ${result.monthCloseTargetYearMonth}`,
+            ...(result.cutoff ? [`마감 기준: ${new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date(result.cutoff))} (한국시간)까지 · 상태는 현재 조회 기준입니다.`] : []),
+            ...(result.weekNo ? [result.includeLateApproved ? '현재 미승인 및 기한 후 승인 포함' : '현재 미승인만 조회'] : []),
+            `조회 ${result.checked}개 사업 · 해당 ${result.rows.length}개 사업`, result.warning,
+            ...(!result.complete ? ['요청한 사업 중 조회할 수 없는 항목이 있어 전체 결과가 아닙니다.'] : []),
+            ...result.rows.map((row) => `- ${row.name} / ${row.leader}: ${labels[row.state] || '확인 필요'}`),
+            ...(!result.rows.length ? ['조회 범위에서 해당하는 사업이 없습니다.'] : []),
+          ].join('\n');
+        },
+      });
+      tools.push({ name: 'agent_capabilities', description: '현재 에이전트가 접근하는 Slack 채널과 지원하는 조회 기능·제한을 설명합니다. 사업명 검색으로 권한을 추정하지 않습니다.',
+        schema: z.object({}).strict(), execute: async () => { await contextFor(job); return {
+          channel: '0_전사_공지_08_myscube', capabilities: ['전사 등록 사업 이름 검색', '전사 주정산·월결산 상태 조회', '등록 사업 기준 미완료·기한 경과 목록과 조직장 조회'],
+          limits: ['다른 Slack 채널의 대화는 조회하지 않습니다.', '승인·금액·파일 변경은 할 수 없습니다.', '정산 의무 대상·종료 제외 정책은 아직 연결되지 않았습니다.'],
+        }; }, render: (result) => [`현재 ${result.channel} 채널에서 요청을 받고 있어요.`, ...result.capabilities.map((value) => `- ${value}`), ...result.limits].join('\n') });
       tools.push({ name: 'project_search', description: '사업명을 검색해 정산 조회에 사용할 프로젝트 ID를 확인합니다. 결과가 잘렸으면 전체 목록이 아닙니다.',
-        schema: z.object({ query: z.string().min(1).max(100) }).strict(),
+        schema: z.object({ query: z.string().trim().min(1).max(100) }).strict(),
         execute: async ({ query }) => {
           await contextFor(job);
           const result = await db.collection(`orgs/${tenantId}/projects`).select('name').limit(1000).get();
@@ -84,9 +160,11 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
           if (!scopes.some((item) => item.key === key)) scopes.push({ key, scope });
           const prior = (await db.doc(`settlement_agent_feedback/${key}`).get()).data();
           return (prior?.votes || []).map(({ id, value }) => ({ id, value }));
-        }, record: async (record) => audit.push(record),
+        }, record,
       });
       await contextFor(job);
+      await record({ type: 'run_result', status: result.status, answer: result.answer });
+      answerStatus = result.status;
       answer = `안녕하세요! 요청하신 조회 결과를 공유드립니다.\n\n${result.answer}\n\n조회 범위가 다르거나 추가로 확인할 내용이 있으면 이 스레드에 남겨주세요. 감사합니다!`;
     } catch (error) {
       audit.push({ type: 'failure', code: /^[a-z_]+$/.test(error.message || '') ? error.message : 'lookup_failed' });
@@ -99,10 +177,10 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
           : '조회 도중 처리를 마치지 못했어요. 정산이 미완료라는 뜻은 아닙니다. 사업과 기간을 좁혀 다시 요청해주세요. 같은 문제가 반복되면 이 스레드를 관리자에게 공유해주세요.';
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 2700)}${answer.length > 2700 ? '\n일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n조회 기준: ${queriedAt} (한국시간)`;
-    const blocks = [{ type: 'section', text: { type: 'plain_text', text } }];
+    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n조회 기준: ${queriedAt} (한국시간)`;
+    const blocks = answerBlocks(text);
     const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
-    if (publicAnswer && scopes.length) blocks.push({ type: 'section', text: { type: 'plain_text', text: '질문자님, 조회한 사업·기간이 질문 의도와 맞나요? (정산값 자체의 정오 평가가 아닙니다)' } }, { type: 'actions', elements: [
+    if (publicAnswer && answerStatus === 'answered' && scopes.length) blocks.push({ type: 'context', elements: [{ type: 'plain_text', text: '정정할 내용은 댓글로 편하게 알려주세요. 아래 조회 범위 평가는 선택사항입니다.' }] }, { type: 'actions', elements: [
       { type: 'button', action_id: 'settlement_scope_yes', text: { type: 'plain_text', text: '예 · 범위가 맞아요' }, value: job.id },
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
@@ -195,7 +273,7 @@ export function createFeedbackIngress({ db, secret, teamId, channelId, fetchImpl
         headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(timeout),
         body: JSON.stringify({ replace_original: true,
           text: `${job.data().answer}\n\n${feedbackText}`,
-          blocks: [{ type: 'section', text: { type: 'plain_text', text: job.data().answer } },
+          blocks: [...answerBlocks(job.data().answer),
             { type: 'context', elements: [{ type: 'plain_text', text: feedbackText }] }],
         }),
       });
@@ -239,5 +317,5 @@ async function finishConversation(tx, db, job, status) {
   const thread = (await tx.get(ref)).data();
   if (!thread || thread.queue[0] !== job.id) throw new Error('conversation_order_lost');
   tx.update(ref, { queue: thread.queue.slice(1),
-    turns: status === 'succeeded' ? [...thread.turns, { question: job.question, answer: job.answer }].slice(-6) : thread.turns });
+    turns: status === 'succeeded' ? [...thread.turns, { jobId: job.id, question: job.question, answer: job.answer }].slice(-6) : thread.turns });
 }
