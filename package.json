@@ -79,7 +79,7 @@
     "@emotion/styled": "11.14.1",
     "@google-cloud/kms": "^5.2.0",
     "@google/genai": "^2.6.0",
-    "@modelcontextprotocol/sdk": "1.26.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@mui/icons-material": "7.3.5",
     "@mui/material": "7.3.5",
     "@popperjs/core": "2.11.8",
