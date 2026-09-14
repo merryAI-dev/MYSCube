@@ -1,5 +1,7 @@
 # 정산 에이전트 클라우드 운영 계약
 
+2026-09-14 기록: 이 문서의 고정 renderer 경로는 기존 기준선이다. PR #782는 병합됐지만 해당 자동 운영 배포는 전환 전에 취소됐고, PR #783은 자동 병합 해제 상태다. [연구 초안의 구현·배포 원장](../architecture/2026-09-14-evidence-grounded-agent-paper.md)을 먼저 확인한다. 제안된 동적 데이터 탐색 구조는 아직 운영 계약이 아니다.
+
 Slack → Vercel BFF 서명 검증 → Firestore job·공개 접수 안내 → Google Cloud Scheduler(매분) → Vercel BFF worker → Gemini 도구 선택 → 코드 입력 검증 → 기존 BFF `readWeeklyOverview` → JVM → 코드 renderer → 원래 질문의 공개 스레드 응답.
 
 기존 Vercel·Firestore를 재사용한다. 별도 Cloud Run·노트북 프로세스·로컬 OAuth는 필요 없다. worker는 HTTP 응답 전에 실행을 마친다. 기존 주정산 공지는 변경하지 않는다.

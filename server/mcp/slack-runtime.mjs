@@ -9,6 +9,7 @@ import { createAgentTrace } from './agent-trace.mjs';
 import { observeConversationFeedback, validateSemanticFeedback } from './conversation-feedback.mjs';
 import { createSettlementReportTools } from './settlement-reporting.mjs';
 import { loadPreviousReportSnapshots, reviewGroundedAnswer } from './grounded-answer.mjs';
+import { runHermesAgent } from './hermes-harness.mjs';
 
 const slackText = (text) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 function answerBlocks(text) {
@@ -32,7 +33,7 @@ export async function reserveAgentBudget(db, month) {
   });
 }
 
-export function createSlackWorker({ db, readOverview, env = process.env, fetchImpl = fetch, completeFactory = createGeminiCompletion }) {
+export function createSlackWorker({ db, readOverview, env = process.env, fetchImpl = fetch, completeFactory = createGeminiCompletion, hermesRunner = runHermesAgent }) {
   const teamId = 'T099F304GAY';
   const channelId = 'C0BQ6980HR6';
   const tenantId = 'mysc';
@@ -83,7 +84,7 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       const actor = await contextFor(job);
       await record({ type: 'run_start', actorId: actor.actorId, actorRole: actor.actorRole,
         readPrincipal: 'myscube-settlement-agent', permissionPolicy: 'mysc-designated-channel-company-settlement-read-v1',
-        question: job.question, model: 'gemini-3.6-flash', harness: 'settlement-read-v2' });
+        question: job.question, model: 'gemini-3.6-flash', harness: env.SETTLEMENT_HERMES_URL ? 'hermes-readonly-v1' : 'settlement-read-v2' });
       const previousAnswerId = job.turns?.at(-1)?.jobId || null;
       await record({ type: 'conversation_feedback', ...observeConversationFeedback({ text: job.question, previousAnswerId }) });
       if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
@@ -124,10 +125,17 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
           if (reportSnapshots.length > 5 || JSON.stringify(reportSnapshots).length > 200000) throw new Error('report_snapshot_too_large');
         },
       }));
-      tools.push({ name: 'agent_capabilities', description: '현재 에이전트가 접근하는 Slack 채널과 지원하는 조회 기능·제한을 설명합니다. 사업명 검색으로 권한을 추정하지 않습니다.',
+      tools.push({ name: 'agent_capabilities', description: '데이터 조감도/catalog: 조회 가능한 데이터·필드·도구·제한을 확인합니다. 어떤 데이터가 있는지 묻거나 필요한 도구를 모를 때 사용하세요. 이미 아는 조회에 매번 호출할 필요는 없습니다. 사업명 검색으로 권한을 추정하지 않습니다.',
         schema: z.object({}).strict(), execute: async () => { await contextFor(job); return {
           channel: '0_전사_공지_08_myscube', capabilities: ['전사 등록 사업 이름 검색', '전사 주정산·월결산 상태 조회', '등록 사업 기준 미완료·기한 경과 목록과 조직장 조회'],
-          limits: ['다른 Slack 채널의 대화는 조회하지 않습니다.', '승인·금액·파일 변경은 할 수 없습니다.', '정산 의무 대상·종료 제외 정책은 아직 연결되지 않았습니다.'],
+          dataSources: [
+            { name: '프로젝트 원장', authority: 'MYSCube BFF', fields: ['사업명', 'CIC', '조직장'], tools: ['project_search', 'settlement_report'], note: '등록 사업 기준입니다. 검색 결과가 잘리면 전체 목록이 아닙니다.' },
+            { name: '주정산', authority: 'JVM', fields: ['주차별 상태', '실무자 제출 시각', '조직장 승인 시각', '마감 시각'], tools: ['cashflow_status', 'settlement_report'], note: '운영 주기월 기준. 기록이 없으면 시각을 추정하지 않습니다.' },
+            { name: '월결산', authority: 'JVM', fields: ['상태', '정합성', '미완료 사업', 'CIC·조직장별 집계'], tools: ['cashflow_status', 'settlement_report'], note: '대상월은 운영 주기월의 직전 월입니다.' },
+            { name: '이전 조회 결과', authority: '권한 재검증된 대화 스냅샷', fields: ['원래 조회 시각', '조회 범위', 'CIC·조직장별 재구성'], tools: ['reformat_report'], note: '형식 변경 시 재사용합니다. 최신 데이터라고 표시하지 않습니다.' },
+          ],
+          tools: tools.filter((tool) => !tool.observationOnly).map(({ name, description }) => ({ name, description })),
+          limits: ['다른 Slack 채널의 대화는 조회하지 않습니다.', '승인·금액·파일 변경과 삭제는 할 수 없습니다.', '정산 의무 대상·종료 제외 정책은 아직 연결되지 않았습니다.', '연결 시트의 셀·수식 직접 조회는 아직 연결되지 않았습니다.'],
         }; }, render: (result) => [`현재 ${result.channel} 채널에서 요청을 받고 있어요.`, ...result.capabilities.map((value) => `- ${value}`), ...result.limits].join('\n') });
       tools.push({ name: 'project_search', description: '사업명을 검색해 정산 조회에 사용할 프로젝트 ID를 확인합니다. 결과가 잘렸으면 전체 목록이 아닙니다.',
         schema: z.object({ query: z.string().trim().min(1).max(100) }).strict(),
@@ -145,7 +153,8 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       const reviewComplete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
         onUsage: async (usage) => audit.push({ type: 'usage', phase: 'review', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
       });
-      const result = await runSettlementAgent({ question: job.question, history: (job.turns || []).flatMap((turn) => [
+      const runAgent = env.SETTLEMENT_HERMES_URL ? hermesRunner : runSettlementAgent;
+      const result = await runAgent({ env, question: job.question, history: (job.turns || []).flatMap((turn) => [
         { role: 'user', content: turn.question }, { role: 'assistant', content: turn.answer },
       ]), tools, complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
         reviewAnswer: (input) => reviewGroundedAnswer({ ...input, complete: reviewComplete }),

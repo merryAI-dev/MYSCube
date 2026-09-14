@@ -67,6 +67,7 @@ export function buildVercelProductionDeployArgs({
     pair(args, '--env', 'SLACK_SIGNING_SECRET', required(env, 'SLACK_SIGNING_SECRET'));
     pair(args, '--env', 'SETTLEMENT_AGENT_GEMINI_API_KEY', required(env, 'SETTLEMENT_AGENT_GEMINI_API_KEY'));
     pair(args, '--env', 'SETTLEMENT_AGENT_WORKER_SECRET', required(env, 'SETTLEMENT_AGENT_WORKER_SECRET'));
+    pair(args, '--env', 'SETTLEMENT_HERMES_URL', env.SETTLEMENT_HERMES_URL || '');
   }
   pair(args, '--meta', 'maintenanceReadOnly', String(maintenance));
   pair(args, '--meta', 'githubCommitSha', commitSha);

@@ -1,5 +1,7 @@
 # 정산 에이전트: 검증 가능한 이진 피드백 정책
 
+문서 상태: 초기 수학·구현 기록. 아래의 미연결/고정 renderer 서술은 당시 상태이며 현재 운영 상태의 단일 기준이 아니다. 후속 구현 이력과 PLC-DPO 외부 궤적 선택기 제안은 [연구 초안 §3·8](2026-09-14-evidence-grounded-agent-paper.md)을 참조한다. 이 문서의 스칼라 피드백 학습을 Gemini 또는 PLC-DPO 학습으로 해석하지 않는다.
+
 ## 구현과 운영 경계
 
 `server/mcp/settlement-feedback.mjs`는 단일 조회 해석에 대한 검토된
