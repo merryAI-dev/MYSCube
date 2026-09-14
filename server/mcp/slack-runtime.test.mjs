@@ -2,6 +2,15 @@ import { it, expect } from 'vitest';
 import { createHmac } from 'node:crypto';
 import * as runtime from './slack-runtime.mjs';
 
+it('accepts only the dedicated scheduler bearer and fails closed when disabled', () => {
+  const check = runtime.verifySettlementWorkerToken;
+  expect(typeof check).toBe('function');
+  expect(check({ authorization: 'Bearer dedicated', secret: 'dedicated' })).toBe(true);
+  for (const authorization of ['', 'Bearer generic-cron', 'dedicated']) expect(check({ authorization, secret: 'dedicated' })).toBe(false);
+  expect(check({ authorization: 'Bearer dedicated', secret: '' })).toBe(false);
+  expect(check({ authorization: 'Bearer dedicated', secret: 'dedicated', disabled: true })).toBe(false);
+});
+
 it('reserves budget atomically per attempt and prevents terminal job overwrite', async () => {
   const data = new Map([['settlement_agent_jobs/j', { status: 'succeeded', leaseId: 'lease', leaseUntil: Date.now() + 10000 }]]);
   const db = { doc: (path) => ({ path }), runTransaction: async (fn) => fn({

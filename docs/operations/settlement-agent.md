@@ -1,6 +1,6 @@
 # 정산 에이전트 클라우드 운영 계약
 
-Slack → Vercel BFF 서명 검증 → Firestore job → Vercel cron(매분) → Gemini 도구 선택 → 코드 입력 검증 → 기존 BFF `readWeeklyOverview` → JVM → 코드 renderer → 질문자 개인 응답.
+Slack → Vercel BFF 서명 검증 → Firestore job → Google Cloud Scheduler(매분) → Vercel BFF worker → Gemini 도구 선택 → 코드 입력 검증 → 기존 BFF `readWeeklyOverview` → JVM → 코드 renderer → 질문자 개인 응답.
 
 기존 Vercel·Firestore를 재사용한다. 별도 Cloud Run·노트북 프로세스·로컬 OAuth는 필요 없다. worker는 HTTP 응답 전에 실행을 마친다. 기존 주정산 공지는 변경하지 않는다.
 
@@ -8,10 +8,10 @@ Slack → Vercel BFF 서명 검증 → Firestore job → Vercel cron(매분) →
 
 - Events: `https://myscube.myscguard.app/api/slack/events`, `app_mention` 구독
 - Interactivity: `https://myscube.myscguard.app/api/slack/interactions`
-- Cron: `/api/internal/workers/settlement-agent/run`, 기존 `CRON_SECRET` 인증
+- Scheduler: `/api/internal/workers/settlement-agent/run`, 전용 `SETTLEMENT_AGENT_WORKER_SECRET` bearer 인증. 일반 `CRON_SECRET`은 이 경로에서 사용하지 않는다.
 - Workspace `T099F304GAY`, channel `C0BQ6980HR6`
 - Google Gemini Developer API, `gemini-3.6-flash`
-- GitHub Production secrets: `GEMINI_API_KEY`, `SLACK_SIGNING_SECRET`, 기존 `SLACK_ALERT_BOT_TOKEN`. 서버에만 주입한다.
+- GitHub Production secrets: `SETTLEMENT_AGENT_GEMINI_API_KEY`, `SETTLEMENT_AGENT_WORKER_SECRET`, `SLACK_SIGNING_SECRET`, 기존 `SLACK_ALERT_BOT_TOKEN`. 서버에만 주입한다. 명함 인식의 기존 `GEMINI_API_KEY`는 변경하지 않는다.
 - Slack 권한 `app_mentions:read`, `users:read.email`, `chat:write` 등이 필요하다. 변경 후 앱 재설치와 URL 등록은 별도 Slack 관리자 작업이다.
 
 ## 데이터·권한
@@ -31,7 +31,7 @@ Firestore 컬렉션:
 
 ## 실행·비용 한계
 
-`queued → running → sending → succeeded`. transaction lease와 fencing token으로 중복 실행·만료 worker의 덮어쓰기를 막는다. 발송 결과 불명확은 `delivery_unknown`으로 멈추고 무조건 재발송하지 않는다. succeeded는 전달 상태이며 실제 조회 실패는 답변·audit에 남는다. 실행 재시도 최대 3번, worker당 최대 2작업. 대화 기억·취소·자동 결과 재개·전체 조직 집계는 없다.
+`queued → running → sending → succeeded`. transaction lease와 fencing token으로 중복 실행·만료 worker의 덮어쓰기를 막는다. 발송 결과 불명확은 `delivery_unknown`으로 멈추고 무조건 재발송하지 않는다. succeeded는 전달 상태이며 실제 조회 실패는 답변·audit에 남는다. 실행 재시도 최대 3번, worker당 최대 1작업. 대화 기억·취소·자동 결과 재개·전체 조직 집계는 없다.
 
 2026년 9~12월 한 시도당 500원, 월 30,000원까지 예약하고 반환하지 않는다(최대 60시도). 나머지 20,000원은 인프라 여유분이며 전체 클라우드 청구액의 강제 상한은 아니다. 호출당 입력 16,000·출력 2,048토큰, 시도당 최대 3회 호출, SDK 자동 재시도 없음. 가격·환율 변경 시 재검토하며 정책 기간 이후 유료 호출을 차단한다. 토큰 계산은 system·tools를 포함한다.
 
@@ -40,6 +40,8 @@ Firestore 컬렉션:
 ## 배포·검증
 
 main CI 성공 후 Production Deploy 자동 배포. alias 전에 `check-settlement-runtime.mjs`가 signed JSON·form과 변조 거부·worker 인증을 확인한다. 이 검사는 데이터를 쓰지 않으므로 실제 피드백 저장 증거를 대신하지 않는다. `Settlement Agent Slack Check`에서 모델·live runtime 검사를 실행한다.
+
+GCP `inner-platform-live-20260316/us-central1/myscube-settlement-agent`는 `scripts/configure-settlement-scheduler.mjs`로 한 번 생성하고 일시정지한다. 운영 검증 후 `gcloud scheduler jobs resume myscube-settlement-agent --location=us-central1 --project=inner-platform-live-20260316`로 시작한다. 중단·롤백 전 같은 명령의 `resume`을 `pause`로 바꾼다. 생성 스크립트는 기존 작업을 덮어쓰지 않는다. 호출 제한은 300초, Scheduler 재시도는 0회이며 작업 재시도는 Firestore가 관리한다. Scheduler 설정 조회 권한은 bearer 비밀값 접근 권한으로 취급한다. 전체 job JSON을 로그에 출력하지 않는다. [HTTP 작업 계약](https://docs.cloud.google.com/scheduler/docs/reference/rest/v1/projects.locations.jobs)을 따른다.
 
 실제 SDK 회귀 테스트와 Firestore 에뮬레이터의 전체 worker 저장 테스트를 유지한다. 통합 테스트의 모델·Slack은 대역이므로 사용자 Slack QA가 별도 필수다. 운영 검증은 멘션 → cron 로그 → 개인 응답 → 버튼 클릭 → 저장된 투표 재조회 순이다. 노트북 종료 상태에서도 확인한다.
 

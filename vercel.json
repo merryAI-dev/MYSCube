@@ -18,10 +18,6 @@
   },
   "crons": [
     {
-      "path": "/api/internal/workers/settlement-agent/run",
-      "schedule": "* * * * *"
-    },
-    {
       "path": "/api/internal/workers/work-queue/run",
       "schedule": "15 2 * * *"
     },

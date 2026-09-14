@@ -1,6 +1,6 @@
 import express from 'express';
 import { createSlackIngress } from '../mcp/slack-ingress.mjs';
-import { createFeedbackIngress, createSlackWorker } from '../mcp/slack-runtime.mjs';
+import { createFeedbackIngress, createSlackWorker, verifySettlementWorkerToken } from '../mcp/slack-runtime.mjs';
 import { randomUUID } from 'node:crypto';
 import { createFirestoreDb, isFirestoreEmulatorEnabled, resolveProjectId } from './firestore.mjs';
 import {
@@ -1744,7 +1744,10 @@ export function createBffApp(options = {}) {
   if (settlementAgentEnabled) {
     const runSettlementWorker = createSlackWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview });
     app.get('/api/internal/workers/settlement-agent/run', asyncHandler(async (req, res) => {
-      assertInternalWorkerAuthorized(req);
+      if (!verifySettlementWorkerToken({ authorization: req.header('authorization'), secret: env.SETTLEMENT_AGENT_WORKER_SECRET,
+        disabled: workerAuthPolicy.schedulerOwner === 'disabled' || maintenanceReadOnly || readOptionalText(env.BFF_WORKERS_ENABLED).toLowerCase() === 'false' })) {
+        throw createHttpError(401, 'Worker authorization failed', 'unauthorized_worker');
+      }
       res.json({ ok: true, ...await runSettlementWorker() });
     }));
   }

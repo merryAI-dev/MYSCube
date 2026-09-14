@@ -27,7 +27,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
         monthCloseSettlement: status('MONTH'), provenance: null, supersededAttempt: null,
         commandCapabilities: Object.fromEntries(['SUBMIT_MONTH_CLOSE','WITHDRAW_MONTH_CLOSE','APPROVE_MONTH_CLOSE','REJECT_MONTH_CLOSE','REQUEST_MONTH_REOPEN','APPROVE_MONTH_REOPEN','REJECT_MONTH_REOPEN','CANCEL_ACTIVE_CYCLE'].map((key) => [key, { allowed: false, reasonCode: 'NOT_ALLOWED' }])) },
     }] };
-    const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', GEMINI_API_KEY: 'fixture' },
+    const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture' },
       fetchImpl: async (url: string, options: any) => {
         if (url.endsWith('users.info')) return Response.json({ ok: true, user: { team_id: 'T099F304GAY', profile: { email } } });
         expect(url).toBe('https://slack.com/api/chat.postEphemeral');

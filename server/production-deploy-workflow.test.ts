@@ -25,6 +25,13 @@ const env = {
 };
 
 describe('production deployment decisions', () => {
+  it('isolates agent credentials from the shared Gemini key', () => {
+    const deployment = buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance: false,
+      env: { ...env, SETTLEMENT_AGENT_ENABLED: 'true', SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key' } });
+    expect(deployment.args).toContain('SETTLEMENT_AGENT_GEMINI_API_KEY=agent-key');
+    expect(deployment.args).toContain('SETTLEMENT_AGENT_WORKER_SECRET=worker-key');
+    expect(deployment.args.some((arg: string) => arg.startsWith('GEMINI_API_KEY='))).toBe(false);
+  });
   it('keeps the reviewed active September request in the read-only cutover inventory', () => {
     const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
     const inventoryStep = workflow.split('- name: Verify settlement-cycle cutover inventory')[1].split('- name: Deploy to Vercel production')[0];
