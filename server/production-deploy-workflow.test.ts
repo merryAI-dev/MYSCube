@@ -25,6 +25,13 @@ const env = {
 };
 
 describe('production deployment decisions', () => {
+  it('keeps the reviewed active September request in the read-only cutover inventory', () => {
+    const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
+    const inventoryStep = workflow.split('- name: Verify settlement-cycle cutover inventory')[1].split('- name: Deploy to Vercel production')[0];
+    expect(inventoryStep).toContain('p1779869011617');
+    expect(inventoryStep).toContain('--verify-cutover');
+    expect(inventoryStep).not.toMatch(/--apply\b/);
+  });
   it('runs the settlement behavior canary only against the verified direct deployment', () => {
     const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
     expect(workflow.match(/node scripts\/verify-cashflow-settlement-candidate\.mjs/g)).toHaveLength(1);
