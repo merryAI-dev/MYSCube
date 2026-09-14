@@ -36,7 +36,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     let lookups = 0;
     let turn = 0;
     const status = (period: string) => ({ period, status: period === 'MONTH' ? 'LOCKED' : 'COMPLETED', revision: 1,
-      submittedAt: '', submittedBy: '', approvedAt: '', approvedBy: '', deadlineAt: '2026-09-01T00:00:00Z', approverDeadlineAt: '2026-09-02T00:00:00Z' });
+      submittedAt: '2026-09-01T01:23:00Z', submittedBy: '', approvedAt: '2026-09-02T02:34:00Z', approvedBy: '', deadlineAt: '2026-09-01T00:00:00Z', approverDeadlineAt: '2026-09-02T00:00:00Z' });
     const overview = { version: '5', yearMonth: '2026-09', monthCloseTargetYearMonth: '2026-08', monthCloseTargetLabel: '8월', errors: [], items: [{ projectId,
       settlementStatuses: { projectId, yearMonth: '2026-09', items: ['MONTH','WEEK_1','WEEK_2','WEEK_3','WEEK_4','WEEK_5'].map(status) },
       projectionActualSummary: null, sheetCapturedAt: null,
@@ -73,6 +73,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
           return { content: JSON.stringify({ supported, addressesRequest: supported, issues: supported ? [] : ['근거 없는 수치'] }) };
         }
         turn++;
+        if (turn === 3) {
+          const evidence = JSON.parse(messages.at(-1).content);
+          expect(evidence.items[0].weeks.find((week: any) => week.period === 'WEEK_2')).toMatchObject({
+            submittedAt: '2026-09-01T01:23:00Z', approvedAt: '2026-09-02T02:34:00Z', approverDeadlineAt: '2026-09-02T00:00:00Z',
+          });
+        }
         if (turn === 5) {
           expect(messages.filter((m: any) => m.role === 'user').map((m: any) => m.content)).toEqual([`2026-09 사업-${id} 조회`, '그 사업 다시 확인해줘']);
           return { tool_calls: [{ id: 'c', function: { name: 'cashflow_status', arguments: JSON.stringify({ yearMonth: '2026-09', projectIds: [projectId] }) } }] };

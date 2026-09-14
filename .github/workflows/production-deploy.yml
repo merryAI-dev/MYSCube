@@ -524,6 +524,7 @@ jobs:
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
           SETTLEMENT_AGENT_GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
           SETTLEMENT_AGENT_WORKER_SECRET: ${{ secrets.SETTLEMENT_AGENT_WORKER_SECRET }}
+          SETTLEMENT_HERMES_URL: ${{ vars.SETTLEMENT_HERMES_URL }}
           SETTLEMENT_AGENT_ENABLED: 'true'
         run: |
           set -euo pipefail

@@ -1,0 +1,111 @@
+name: Hermes Production Deploy
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  id-token: write
+
+concurrency:
+  group: hermes-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: Production
+    env:
+      PROJECT: inner-platform-live-20260316
+      REGION: us-central1
+      SERVICE: myscube-hermes-readonly
+      IMAGE: asia-northeast3-docker.pkg.dev/inner-platform-live-20260316/hermes-images/harness
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      - name: Verify CI and current main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse origin/main)" = "$TARGET_SHA"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${TARGET_SHA}&event=push" \
+            --jq '.workflow_runs | any(.conclusion == "success" and .head_branch == "main")' | grep -qx true
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER_LIVE }}
+          service_account: ${{ vars.GCP_JVM_DEPLOYER_SERVICE_ACCOUNT_LIVE }}
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Resolve source change and rollback revision
+        id: source
+        run: |
+          set -euo pipefail
+          old="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format='value(metadata.labels.source-sha)' 2>/dev/null || true)"
+          if [ -n "$old" ] && git cat-file -e "$old^{commit}" 2>/dev/null && git diff --quiet "$old" HEAD -- server/hermes .github/workflows/hermes-production-deploy.yml; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          fi
+          gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format='json(status.traffic,status.latestReadyRevisionName,metadata.labels)' > "$RUNNER_TEMP/hermes-rollback.json" 2>/dev/null || true
+      - name: Build pinned source and run isolated tests
+        if: steps.source.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          docker build -f server/hermes/Dockerfile -t "$IMAGE:$TARGET_SHA" .
+          docker run --rm --network none "$IMAGE:$TARGET_SHA" python -m unittest discover -s /app -p 'test_*.py' -v
+      - name: Publish image
+        if: steps.source.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet
+          docker push "$IMAGE:$TARGET_SHA"
+      - name: Store existing Gemini key without logging it
+        if: steps.source.outputs.changed == 'true'
+        id: secret
+        env:
+          GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
+        run: |
+          set -euo pipefail
+          version="$(python -c 'import os,sys; key=os.environ["GEMINI_API_KEY"]; assert key; sys.stdout.write(key)' | gcloud secrets versions add settlement-hermes-gemini --project "$PROJECT" --data-file=- --format='value(name)')"
+          echo "version=${version##*/}" >> "$GITHUB_OUTPUT"
+      - name: Deploy isolated service
+        if: steps.source.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --image "$IMAGE:$TARGET_SHA" \
+            --service-account "myscube-hermes-runtime@${PROJECT}.iam.gserviceaccount.com" \
+            --set-secrets "GEMINI_API_KEY=settlement-hermes-gemini:${{ steps.secret.outputs.version }}" \
+            --labels "source-sha=$TARGET_SHA" \
+            --cpu 1 --memory 1Gi --min-instances 0 --max-instances 1 --concurrency 2 \
+            --timeout 120 --port 8080 --quiet
+      - name: Record deployment metadata
+        run: |
+          gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" \
+            --format='json(status.url,status.traffic,status.latestReadyRevisionName,spec.template.spec.serviceAccountName)' > "$RUNNER_TEMP/hermes-deployed.json"
+      - name: Verify no public invocation
+        run: |
+          set -euo pipefail
+          gcloud run services get-iam-policy "$SERVICE" --project "$PROJECT" --region "$REGION" --format=json > "$RUNNER_TEMP/hermes-iam.json"
+          jq -e '[.bindings[]?.members[]? | select(. == "allUsers" or . == "allAuthenticatedUsers")] | length == 0' "$RUNNER_TEMP/hermes-iam.json"
+          url="$(jq -r '.status.url' "$RUNNER_TEMP/hermes-deployed.json")"
+          test "$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$url/healthz")" = 403
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hermes-deployment-evidence
+          path: |
+            ${{ runner.temp }}/hermes-rollback.json
+            ${{ runner.temp }}/hermes-deployed.json
+            ${{ runner.temp }}/hermes-iam.json
