@@ -8,6 +8,17 @@ try {
     '--project=inner-platform-live-20260316',
   ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim();
   console.log(JSON.stringify({ keyPresent: Boolean(apiKey), googleKeyShape: /^AIza[0-9A-Za-z_-]{35}$/.test(apiKey) }));
+  // SDK 2.6 wraps HTTP 4xx in an error without status. Read the free token endpoint directly for diagnosis.
+  const probe = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:countTokens', {
+    method: 'POST', headers: { 'x-goog-api-key': apiKey, 'content-type': 'application/json' },
+    body: JSON.stringify({ contents: [{ role: 'user', parts: [{ text: 'OK' }] }] }), signal: AbortSignal.timeout(10000),
+  });
+  if (!probe.ok) {
+    const body = await probe.json().catch(() => ({}));
+    const reason = body.error?.details?.find((item) => item['@type'] === 'type.googleapis.com/google.rpc.ErrorInfo')?.reason;
+    throw Object.assign(new Error('Provider rejected credential probe'), { providerStatus: probe.status,
+      providerReason: /^[A-Z_]{1,80}$/.test(reason || '') ? reason : 'PROVIDER_REQUEST_FAILED' });
+  }
   const complete = createGeminiCompletion({ apiKey, maxInputTokens: 16000 });
   const response = await complete({ messages: [{ role: 'user', content: '연결 확인입니다. OK라고만 답하세요.' }], tools: [], signal: AbortSignal.timeout(15000) });
   console.log(JSON.stringify({ connected: Boolean(response.content), model: 'gemini-3.6-flash' }));
