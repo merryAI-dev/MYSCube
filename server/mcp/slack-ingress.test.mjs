@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createSlackIngress, verifySlackRequest } from './slack-ingress.mjs';
 
 const now = 1789340000000;
@@ -21,6 +21,29 @@ function store() {
   }) };
 }
 describe('Slack ingress', () => {
+  it('posts a public thread receipt only after new durable acceptance, never duplicates', async () => {
+    const db = store();
+    const fetchImpl = vi.fn(async (url, options) => {
+      expect([...db.documents.values()].some((v) => v.status === 'queued')).toBe(true);
+      expect(url).toBe('https://slack.com/api/chat.postMessage');
+      expect(JSON.parse(options.body)).toMatchObject({ channel: 'C0BQ6980HR6', thread_ts: '1.1' });
+      expect(JSON.parse(options.body).text).toContain('<@U1>');
+      return Response.json({ ok: true });
+    });
+    const handler = createSlackIngress({ db, secret, teamId: 'T1', botToken: 'fixture', fetchImpl, now: () => now });
+    const req = request({ team_id: 'T1', event_id: 'E1', type: 'event_callback', event: { type: 'app_mention', user: 'U1', text: '조회', channel: 'C0BQ6980HR6', ts: '1.1' } });
+    await handler(req, response());
+    await handler(req, response());
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+  it('keeps a queued lookup when the receipt fails', async () => {
+    const db = store();
+    const handler = createSlackIngress({ db, secret, teamId: 'T1', botToken: 'fixture', fetchImpl: async () => { throw new Error('timeout'); }, now: () => now });
+    const res = response();
+    await handler(request({ team_id: 'T1', event_id: 'E1', type: 'event_callback', event: { type: 'app_mention', user: 'U1', text: '조회', channel: 'C0BQ6980HR6', ts: '1.1' } }), res);
+    expect(res.code).toBe(200);
+    expect([...db.documents.values()].filter((v) => v.status === 'queued')).toHaveLength(1);
+  });
   it('rejects replay and modified content', () => {
     const req = request({ text: 'hello' });
     expect(verifySlackRequest({ ...req, secret, now })).toBe(true);

@@ -1,6 +1,6 @@
 # 정산 에이전트 클라우드 운영 계약
 
-Slack → Vercel BFF 서명 검증 → Firestore job → Google Cloud Scheduler(매분) → Vercel BFF worker → Gemini 도구 선택 → 코드 입력 검증 → 기존 BFF `readWeeklyOverview` → JVM → 코드 renderer → 질문자 개인 응답.
+Slack → Vercel BFF 서명 검증 → Firestore job·공개 접수 안내 → Google Cloud Scheduler(매분) → Vercel BFF worker → Gemini 도구 선택 → 코드 입력 검증 → 기존 BFF `readWeeklyOverview` → JVM → 코드 renderer → 원래 질문의 공개 스레드 응답.
 
 기존 Vercel·Firestore를 재사용한다. 별도 Cloud Run·노트북 프로세스·로컬 OAuth는 필요 없다. worker는 HTTP 응답 전에 실행을 마친다. 기존 주정산 공지는 변경하지 않는다.
 
@@ -22,7 +22,11 @@ Slack → Vercel BFF 서명 검증 → Firestore job → Google Cloud Scheduler(
 
 `project_search`는 이름 필드만 최대 1,000문서에서 검색해 최대 20개 결과와 잘림 여부를 반환한다. 전체 사업 집계가 아니다. `cashflow_status`는 최대 20사업, 운영 주기월과 월결산 대상월을 분리한다. 모델의 최종 자연어 수치 대신 검증한 BFF/JVM 값을 코드로 출력한다.
 
-Slack에서 확인한 MYSC 이메일이 유일한 ACTIVE 구성원과 일치해야 한다. 기존 BFF readCore 역할 검사를 매 조회·최종 정상 응답 직전에 수행한다. 모델에 역할·tenant·토큰·DB 경로를 입력시키지 않는다. `chat.postEphemeral`로 질문자만 답변을 본다. 승인·시트·금액·Drive 변경 도구는 없다.
+Slack에서 확인한 MYSC 이메일이 유일한 ACTIVE 구성원과 일치해야 한다. 기존 BFF readCore 역할 검사를 매 조회·최종 정상 응답 직전에 수행한다. 모델에 역할·tenant·토큰·DB 경로를 입력시키지 않는다. 채널 관리자 승인에 따라 지정 채널의 정상 조회 결과는 `chat.postMessage`로 공개하며 채널 구성원 모두가 볼 수 있다. 계정·권한 등 실패 안내는 `chat.postEphemeral`로 질문자에게만 보낸다. 기존 비공개 답변을 소급 공개하지 않는다. 승인·시트·금액·Drive 변경 도구는 없다.
+
+신규 질문을 저장한 뒤 일반 접수 안내를 공개 스레드에 한 번 시도한다. Slack 호출은 최대 800ms이고 ingress 처리 2.4초까지 남은 시간 내에서만 시도한다. 중복 이벤트는 재발송하지 않으며 안내 실패도 저장된 조회를 취소하지 않는다. 실제 조회는 여전히 매분 Scheduler가 실행하므로 안내 추가가 조회 대기시간 자체를 줄이지는 않는다.
+
+예/아니오는 원래 질문자만 저장할 수 있다. 저장 후 Slack `response_url`로 원래 답변을 유지하면서 버튼을 저장 확인으로 교체한다. 아니요는 원래 질문의 스레드에서 사업·기간 설명을 추가하도록 안내하며, 댓글은 기존 대화 경로로 저장·재조회된다. 화면 교체 실패 시 버튼을 유지하고 실패를 반환하므로 다시 클릭할 수 있다. Slack 반환 URL은 저장·로그하지 않으며 hooks.slack.com HTTPS 경로만 허용한다.
 
 Firestore 컬렉션:
 

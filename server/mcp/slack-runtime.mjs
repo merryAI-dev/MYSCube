@@ -87,14 +87,17 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
     }
     const text = `${answer.slice(0, 2700)}${answer.length > 2700 ? '\n일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n조회 시각: ${new Date().toISOString()} · 요청 ${job.id.slice(0, 8)}`;
     const blocks = [{ type: 'section', text: { type: 'plain_text', text } }];
-    if (scopes.length) blocks.push({ type: 'section', text: { type: 'plain_text', text: '제가 조회한 사업·기간이 질문 의도와 맞나요? (정산값 자체의 정오 평가가 아닙니다)' } }, { type: 'actions', elements: [
+    const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
+    if (publicAnswer && scopes.length) blocks.push({ type: 'section', text: { type: 'plain_text', text: '질문자님, 조회한 사업·기간이 질문 의도와 맞나요? (정산값 자체의 정오 평가가 아닙니다)' } }, { type: 'actions', elements: [
       { type: 'button', action_id: 'settlement_scope_yes', text: { type: 'plain_text', text: '예 · 범위가 맞아요' }, value: job.id },
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
     await updateClaimedJob({ db, job, patch: { status: 'sending', answer: text, scopes, audit, answeredAt: new Date().toISOString() } });
     try {
-      const result = await slack('chat.postEphemeral', { channel: channelId, user: job.slackUserId, thread_ts: job.threadTs, text, blocks });
-      await updateClaimedJob({ db, job, patch: { status: 'succeeded', answerTs: result.message_ts } });
+      const result = await slack(publicAnswer ? 'chat.postMessage' : 'chat.postEphemeral', {
+        channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs, text, blocks,
+      });
+      await updateClaimedJob({ db, job, patch: { status: 'succeeded', answerTs: publicAnswer ? result.ts : result.message_ts } });
     } catch {
       await updateClaimedJob({ db, job, patch: { status: 'delivery_unknown' } });
     }
@@ -153,16 +156,38 @@ export async function saveSlackFeedback({ db, payload, teamId, channelId }) {
   });
 }
 
-export function createFeedbackIngress({ db, secret, teamId, channelId }) {
+export function createFeedbackIngress({ db, secret, teamId, channelId, fetchImpl = fetch }) {
   return async (req, res) => {
+    const started = performance.now();
     if (!verifySlackRequest({ body: req.body, timestamp: req.get('x-slack-request-timestamp'), signature: req.get('x-slack-signature'), secret })) return res.status(401).json({ error: 'invalid_signature' });
     let payload;
     try { payload = JSON.parse(new URLSearchParams(req.body.toString('utf8')).get('payload')); }
     catch { return res.status(400).json({ error: 'invalid_payload' }); }
+    let saved = false;
     try {
       if (!await saveSlackFeedback({ db, payload, teamId, channelId })) return res.status(403).json({ error: 'feedback_not_allowed' });
+      saved = true;
+      const url = new URL(payload.response_url);
+      if (url.origin !== 'https://hooks.slack.com' || url.username || url.password
+        || !/^\/(actions|services)\/[A-Za-z0-9_\/-]+$/.test(url.pathname) || url.search || url.hash) throw new Error('invalid_response_url');
+      const jobRef = db.doc(`settlement_agent_jobs/${payload.actions[0].value}`);
+      const [job, vote] = await Promise.all([jobRef.get(), db.doc(`${jobRef.path}/feedback/${payload.user.id}`).get()]);
+      const feedbackText = vote.data()?.value === 1
+        ? '✓ 피드백을 저장했어요. 조회 범위가 맞았군요. 감사합니다!'
+        : '✓ 피드백을 저장했어요. 어떤 사업·기간이 달랐나요? 원래 질문의 스레드에 알려주시면 다시 조회할게요.';
+      const timeout = Math.min(800, Math.floor(2400 - (performance.now() - started)));
+      if (timeout <= 0) throw new Error('feedback_display_timeout');
+      const result = await fetchImpl(url.href, { method: 'POST', redirect: 'error',
+        headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(timeout),
+        body: JSON.stringify({ replace_original: true,
+          text: `${job.data().answer}\n\n${feedbackText}`,
+          blocks: [{ type: 'section', text: { type: 'plain_text', text: job.data().answer } },
+            { type: 'context', elements: [{ type: 'plain_text', text: feedbackText }] }],
+        }),
+      });
+      if (!result.ok || (await result.text()).trim() !== 'ok') throw new Error('feedback_display_failed');
       return res.json({ ok: true });
-    } catch { return res.status(503).json({ error: 'feedback_storage_unavailable' }); }
+    } catch { return res.status(503).json({ error: saved ? 'feedback_saved_display_unavailable' : 'feedback_storage_unavailable' }); }
   };
 }
 

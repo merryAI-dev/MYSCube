@@ -911,7 +911,7 @@ export function createBffApp(options = {}) {
   const settlementAgentEnabled = env.SETTLEMENT_AGENT_ENABLED === 'true';
   if (settlementAgentEnabled) {
     const slackConfig = { db, secret: env.SLACK_SIGNING_SECRET, teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6' };
-    app.post('/api/slack/events', express.raw({ type: 'application/json', limit: '32kb' }), createSlackIngress(slackConfig));
+    app.post('/api/slack/events', express.raw({ type: 'application/json', limit: '32kb' }), createSlackIngress({ ...slackConfig, botToken: env.SLACK_ALERT_BOT_TOKEN }));
     app.post('/api/slack/interactions', express.raw({ type: 'application/x-www-form-urlencoded', limit: '32kb' }), createFeedbackIngress(slackConfig));
   }
   app.use(express.json({ limit: process.env.BFF_JSON_LIMIT || '25mb' }));
