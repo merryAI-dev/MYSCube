@@ -14,6 +14,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     const slackUserId = 'UAGENTTEST';
     const email = `${id}@mysc.co.kr`;
     await db.doc(`orgs/mysc/members/${memberId}`).set({ email, role: 'pm', status: 'ACTIVE' });
+    await db.doc(`orgs/mysc/members/${memberId}-historical`).set({ email, role: 'admin', status: 'INACTIVE' });
     await db.doc(`orgs/mysc/projects/${projectId}`).set({ name: `사업-${id}` });
     const timestamp = String(Math.floor(Date.now() / 1000));
     const threadTs = `${timestamp}.1`;
@@ -43,7 +44,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     }] };
     const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture' },
       fetchImpl: async (url: string, options: any) => {
-        if (url.endsWith('users.info')) return Response.json({ ok: true, user: { team_id: 'T099F304GAY', profile: { email } } });
+        if (new URL(url).pathname === '/api/users.info') {
+          expect(options.method).toBe('GET');
+          expect(new URL(url).searchParams.get('user')).toBe(slackUserId);
+          expect(options.body).toBeUndefined();
+          return Response.json({ ok: true, user: { team_id: 'T099F304GAY', profile: { email } } });
+        }
         expect(url).toBe('https://slack.com/api/chat.postEphemeral');
         deliveries.push(JSON.parse(options.body));
         return Response.json({ ok: true, message_ts: '2.1' });
@@ -87,6 +93,11 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     const payload = { team: { id: saved.teamId }, channel: { id: saved.channelId }, user: { id: slackUserId }, container: { message_ts: '2.1' }, actions: [{ action_id: 'settlement_scope_no', value: firstRef.id, action_ts: '3.1' }] };
     expect(await saveSlackFeedback({ db, payload, teamId: saved.teamId, channelId: saved.channelId })).toBe(true);
     expect((await db.doc(`settlement_agent_feedback/${saved.scopes[0].key}`).get()).data()!.votes[0].value).toBe(0);
+    await db.doc(`orgs/mysc/members/${memberId}-duplicate`).set({ email, role: 'admin', status: 'ACTIVE' });
+    const deniedRef = await enqueue('message', `${timestamp}.3`, '다시 조회');
+    await worker();
+    expect(lookups).toBe(2);
+    expect((await deniedRef.get()).data()!.audit).toContainEqual({ type: 'failure', code: 'member_unverified' });
   });
 
   it('permits only one concurrent claimant and rejects a replaced lease', async () => {

@@ -25,12 +25,13 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
   const channelId = 'C0BQ6980HR6';
   const tenantId = 'mysc';
   async function slack(method, body) {
-    const response = await fetchImpl(`https://slack.com/api/${method}`, {
-      method: 'POST', headers: { authorization: `Bearer ${env.SLACK_ALERT_BOT_TOKEN}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body), signal: AbortSignal.timeout(10000),
+    const readUser = method === 'users.info';
+    const response = await fetchImpl(`https://slack.com/api/${method}${readUser ? `?${new URLSearchParams(body)}` : ''}`, {
+      method: readUser ? 'GET' : 'POST', headers: { authorization: `Bearer ${env.SLACK_ALERT_BOT_TOKEN}`, ...(!readUser ? { 'content-type': 'application/json' } : {}) },
+      ...(!readUser ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000),
     });
     const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error(`slack_${['missing_scope', 'invalid_auth', 'not_in_channel', 'ratelimited'].includes(result.error) ? result.error : 'unavailable'}`);
+    if (!response.ok || !result.ok) throw new Error(`slack_${['missing_scope', 'invalid_auth', 'not_in_channel', 'ratelimited', 'user_not_found'].includes(result.error) ? result.error : 'unavailable'}`);
     return result;
   }
   async function contextFor(job) {
@@ -38,7 +39,7 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
     const { user } = await slack('users.info', { user: job.slackUserId });
     const email = user?.profile?.email?.trim().toLowerCase();
     if (user?.deleted || user?.is_bot || user?.is_restricted || user?.is_ultra_restricted || user?.team_id !== teamId || !email?.endsWith('@mysc.co.kr')) throw new Error('member_unverified');
-    const members = await db.collection(`orgs/${tenantId}/members`).where('email', '==', email).limit(2).get();
+    const members = await db.collection(`orgs/${tenantId}/members`).where('email', '==', email).where('status', '==', 'ACTIVE').limit(2).get();
     if (members.docs.length !== 1) throw new Error('member_unverified');
     const member = members.docs[0].data();
     if (member.status !== 'ACTIVE') throw new Error('member_inactive');
