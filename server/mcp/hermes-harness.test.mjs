@@ -135,6 +135,25 @@ it('never returns a draft rejected by the grounded reviewer', async () => {
   await expect(run.promise).rejects.toThrow('hermes_answer_unverified');
 });
 
+it('revises a rejected draft once with the same evidence and no additional tools', async () => {
+  for (const accepted of [true, false]) {
+    const complete = vi.fn(async () => ({ content: '📌 확인된 자료만 안내합니다.' }));
+    const reviewAnswer = vi.fn().mockResolvedValueOnce({ supported: false, addressesRequest: false, issues: ['내부 식별자 제거'] })
+      .mockResolvedValue({ supported: accepted, addressesRequest: accepted, issues: [] });
+    const run = scenario((message, socket) => {
+      if (message.type === 'start') emit(socket, call());
+      if (message.type === 'tool_result') emit(socket, final());
+    }, { complete, reviewAnswer });
+    if (accepted) expect((await run.promise).answer).toBe('📌 확인된 자료만 안내합니다.');
+    else await expect(run.promise).rejects.toThrow('hermes_answer_unverified');
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0][0].tools).toEqual([]);
+    expect(run.execute).toHaveBeenCalledTimes(1);
+    expect(reviewAnswer).toHaveBeenCalledTimes(2);
+    expect(reviewAnswer.mock.calls[1][0].evidence).toEqual(reviewAnswer.mock.calls[0][0].evidence);
+  }
+});
+
 it('finishes grounded review when the service closes normally after its final frame', async () => {
   const run = scenario((message, socket) => {
     if (message.type === 'start') emit(socket, call());
