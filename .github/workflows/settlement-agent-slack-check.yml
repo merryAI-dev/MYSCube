@@ -1,0 +1,38 @@
+name: Settlement Agent Slack Check
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_test:
+        description: 'Send one connection test to C0BQ6980HR6 (no model call or settlement data)'
+        type: boolean
+        required: true
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: settlement-agent-slack-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify existing Slack identity and optionally send test
+        env:
+          SLACK_ALERT_BOT_TOKEN: ${{ secrets.SLACK_ALERT_BOT_TOKEN }}
+          SEND_TEST: ${{ inputs.send_test }}
+        run: |
+          if [ "$SEND_TEST" = "true" ]; then
+            node scripts/check-settlement-slack.mjs --send-test
+          else
+            node scripts/check-settlement-slack.mjs
+          fi
