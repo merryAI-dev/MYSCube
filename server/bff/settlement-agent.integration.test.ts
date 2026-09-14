@@ -30,7 +30,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     const secondRef = await enqueue('message', `${timestamp}.2`, '그 사업 다시 확인해줘');
     expect(await claimSlackJob({ db, jobId: secondRef.id })).toBeNull();
     const deliveries: any[] = [];
-    let lookedUp = false;
+    let lookups = 0;
     let turn = 0;
     const status = (period: string) => ({ period, status: period === 'MONTH' ? 'LOCKED' : 'COMPLETED', revision: 1,
       submittedAt: '', submittedBy: '', approvedAt: '', approvedBy: '', deadlineAt: '2026-09-01T00:00:00Z', approverDeadlineAt: '2026-09-02T00:00:00Z' });
@@ -51,7 +51,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
       readOverview: async ({ context, body }: any) => {
         expect(context.actorId).toBe(memberId);
         expect(body.projectIds).toEqual([projectId]);
-        lookedUp = true;
+        lookups++;
         return overview;
       },
       completeFactory: () => async ({ messages }: any) => {
@@ -66,7 +66,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
       },
     });
     await worker();
-    expect(lookedUp).toBe(true);
+    expect(lookups).toBe(1);
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0].user).toBe(slackUserId);
     expect(deliveries[0].text).toContain('월결산: 확정');
@@ -76,6 +76,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     expect(saved.audit.length).toBeGreaterThan(0);
     await worker();
     expect(deliveries).toHaveLength(2);
+    expect(lookups).toBe(2);
+    expect(deliveries[1].text).toContain('월결산: 확정');
     expect((await secondRef.get()).data()!.status).toBe('succeeded');
     const conversation = (await db.doc(`settlement_agent_threads/${saved.conversationId}`).get()).data()!;
     expect(conversation.queue).toEqual([]);
