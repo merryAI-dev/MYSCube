@@ -2,6 +2,21 @@ import { describe, it, expect } from 'vitest';
 import * as z from 'zod/v4';
 import { runSettlementAgent, settlementTools } from './settlement-agent.mjs';
 
+it('formats a notice using verified names and groups weeks without inventing approvals or deadlines', () => {
+  const tool = settlementTools({ projectNames: new Map([['p1', 'AXR프로젝트경비경']]) })[0];
+  const result = { yearMonth: '2026-09', monthCloseTargetYearMonth: '2026-08', errors: [], items: [{ projectId: 'p1',
+    settlementCycle: { health: 'OK', businessState: 'LOCKED' }, settlementStatuses: { items: [
+      { period: 'WEEK_1', status: 'COMPLETED' }, { period: 'WEEK_2', status: 'COMPLETED' },
+      { period: 'WEEK_3', status: 'WAITING_FOR_UPDATE' }, { period: 'WEEK_4', status: 'WAITING_FOR_UPDATE' }, { period: 'WEEK_5', status: 'WAITING_FOR_UPDATE' },
+    ] } }] };
+  const notice = tool.render(result);
+  expect(notice).toContain('AXR프로젝트경비경');
+  expect(notice).toContain('월결산: 확정');
+  expect(notice).toContain('1·2주차: 승인 완료');
+  expect(notice).toContain('3·4·5주차: 업데이트 대기');
+  expect(notice).not.toMatch(/지연|미준수|13시|모두 완료/);
+});
+
 describe('settlement agent', () => {
   it('uses bounded multi-turn context while answering multiple queries only from fresh tools', async () => {
     let step = 0;

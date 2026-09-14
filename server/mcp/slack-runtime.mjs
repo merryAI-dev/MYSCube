@@ -50,12 +50,13 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
   async function process(job) {
     const scopes = [];
     const audit = [];
+    const projectNames = new Map();
     let answer;
     try {
       await contextFor(job);
       if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
       await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
-      const tools = settlementTools({ readStatus: async (input) => readOverview({ context: await contextFor(job), body: input }) });
+      const tools = settlementTools({ projectNames, readStatus: async (input) => readOverview({ context: await contextFor(job), body: input }) });
       tools[0].schema = z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), projectIds: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(20) }).strict();
       tools.push({ name: 'project_search', description: '사업명을 검색해 정산 조회에 사용할 프로젝트 ID를 확인합니다. 결과가 잘렸으면 전체 목록이 아닙니다.',
         schema: z.object({ query: z.string().min(1).max(100) }).strict(),
@@ -63,8 +64,9 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
           await contextFor(job);
           const result = await db.collection(`orgs/${tenantId}/projects`).select('name').limit(1000).get();
           const matches = result.docs.map((doc) => ({ projectId: doc.id, name: doc.data().name || '' })).filter((item) => item.name.toLowerCase().includes(query.toLowerCase()));
+          for (const item of matches.slice(0, 20)) projectNames.set(item.projectId, item.name);
           return { items: matches.slice(0, 20), truncated: result.docs.length === 1000 || matches.length > 20 };
-        }, render: (result) => `사업 검색 결과${result.truncated ? ' (일부 결과)' : ''}\n${result.items.map((item) => `${item.name}: ${item.projectId}`).join('\n') || '일치하는 사업이 없습니다.'}`,
+        }, render: (result) => `조회할 사업을 확인했어요${result.truncated ? ' (일부 검색 결과)' : ''}.\n${result.items.map((item) => `- ${item.name}`).join('\n') || '일치하는 사업이 없습니다. 사업명을 다시 알려주세요.'}`,
       });
       const complete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
         onUsage: async (usage) => audit.push({ type: 'usage', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
@@ -80,12 +82,13 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
         }, record: async (record) => audit.push(record),
       });
       await contextFor(job);
-      answer = result.answer;
+      answer = `안녕하세요! 요청하신 조회 결과를 공유드립니다.\n\n${result.answer}\n\n조회 범위가 다르거나 추가로 확인할 내용이 있으면 이 스레드에 남겨주세요. 감사합니다!`;
     } catch (error) {
       audit.push({ type: 'failure', code: /^[a-z_]+$/.test(error.message || '') ? error.message : 'lookup_failed' });
       answer = '정산 정보를 확인하지 못했습니다. MYSCube 활성 계정 연결, Slack 앱 권한 또는 모델·예산 설정을 확인해야 합니다. 정산 상태를 완료나 미완료로 판단하지 않았습니다.';
     }
-    const text = `${answer.slice(0, 2700)}${answer.length > 2700 ? '\n일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n조회 시각: ${new Date().toISOString()} · 요청 ${job.id.slice(0, 8)}`;
+    const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
+    const text = `${answer.slice(0, 2700)}${answer.length > 2700 ? '\n일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n조회 기준: ${queriedAt} (한국시간) · 요청 ${job.id.slice(0, 8)}`;
     const blocks = [{ type: 'section', text: { type: 'plain_text', text } }];
     const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     if (publicAnswer && scopes.length) blocks.push({ type: 'section', text: { type: 'plain_text', text: '질문자님, 조회한 사업·기간이 질문 의도와 맞나요? (정산값 자체의 정오 평가가 아닙니다)' } }, { type: 'actions', elements: [
