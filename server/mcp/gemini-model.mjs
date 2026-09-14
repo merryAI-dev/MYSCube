@@ -1,9 +1,9 @@
 import { GoogleGenAI } from '@google/genai';
 
 // One adapter per run: signed model parts must not cross users or conversations.
-export function createGeminiCompletion({ apiKey, model = 'gemini-3.6-flash', client, onUsage = async () => {} }) {
+export function createGeminiCompletion({ apiKey, model = 'gemini-3.6-flash', client, onUsage = async () => {}, maxInputTokens }) {
   if (!client && !apiKey) throw new Error('Gemini API 키가 설정되지 않았습니다.');
-  const ai = client || new GoogleGenAI({ apiKey });
+  const ai = client || new GoogleGenAI({ apiKey, httpOptions: { retryOptions: { attempts: 1 } } });
   const signedReplies = new Map();
   let sequence = 0;
   return async ({ messages, tools, signal }) => {
@@ -29,12 +29,31 @@ export function createGeminiCompletion({ apiKey, model = 'gemini-3.6-flash', cli
     if (contents.at(-1)?.role !== 'user') throw new Error('마지막 입력은 사용자 또는 도구 응답이어야 합니다.');
     let response;
     try {
-      response = await ai.models.generateContent({ model, contents, config: {
-        abortSignal: signal, maxOutputTokens: 2048,
+      const sharedConfig = {
+        abortSignal: signal,
         systemInstruction: messages.filter((m) => m.role === 'system').map((m) => m.content).join('\n'),
         ...(tools.length ? { tools: [{ functionDeclarations: tools.map(({ function: f }) => ({ name: f.name, description: f.description, parametersJsonSchema: f.parameters })) }] } : {}),
+      };
+      if (maxInputTokens) {
+        // The Developer API supports the full request, but the SDK's count config does not.
+        const counted = await ai.models.countTokens({ model, config: { abortSignal: signal, httpOptions: { extraBody: {
+          generateContentRequest: { model: `models/${model}`, contents,
+            systemInstruction: { role: 'user', parts: [{ text: sharedConfig.systemInstruction }] },
+            ...(sharedConfig.tools ? { tools: sharedConfig.tools } : {}),
+          },
+        } } } });
+        if (!Number.isSafeInteger(counted.totalTokens) || counted.totalTokens > maxInputTokens) throw new Error('input_budget_exceeded');
+      }
+      response = await ai.models.generateContent({ model, contents, config: {
+        ...sharedConfig, maxOutputTokens: 2048,
       } });
-    } catch { signal.throwIfAborted(); throw new Error('Gemini 연결에 실패했습니다. 키·모델 접근 권한·사용 한도를 확인해 주세요.'); }
+    } catch (error) {
+      signal.throwIfAborted();
+      throw Object.assign(new Error('Gemini 연결에 실패했습니다. 키·모델 접근 권한·사용 한도를 확인해 주세요.'), {
+        providerStatus: Number.isInteger(error?.status) ? error.status : null,
+        providerReason: String(error?.message).includes('API_KEY_INVALID') ? 'API_KEY_INVALID' : 'PROVIDER_REQUEST_FAILED',
+      });
+    }
     await onUsage(response.usageMetadata || {});
     const content = response.candidates?.[0]?.content;
     if (!content?.parts?.length) throw new Error('Gemini 응답에 사용할 내용이 없습니다.');

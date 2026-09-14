@@ -7,6 +7,7 @@ const vercelConfig = JSON.parse(readFileSync(resolve(repoRoot, 'vercel.json'), '
 
 // 한 워커가 하루 여러 번 돌 수 있어 경로별 단일 스케줄이 아니라 (경로, 스케줄) 쌍으로 고정한다.
 const VERCEL_OWNED_CRONS = [
+  ['/api/internal/workers/settlement-agent/run', '* * * * *'],
   ['/api/internal/workers/work-queue/run', '15 2 * * *'],
   ['/api/internal/workers/outbox/run', '30 2 * * *'],
   ['/api/internal/workers/payroll/run', '45 2 * * *'],

@@ -1,4 +1,6 @@
 import express from 'express';
+import { createSlackIngress } from '../mcp/slack-ingress.mjs';
+import { createFeedbackIngress, createSlackWorker } from '../mcp/slack-runtime.mjs';
 import { randomUUID } from 'node:crypto';
 import { createFirestoreDb, isFirestoreEmulatorEnabled, resolveProjectId } from './firestore.mjs';
 import {
@@ -906,6 +908,12 @@ export function createBffApp(options = {}) {
   }
 
   app.disable('x-powered-by');
+  const settlementAgentEnabled = env.SETTLEMENT_AGENT_ENABLED === 'true';
+  if (settlementAgentEnabled) {
+    const slackConfig = { db, secret: env.SLACK_SIGNING_SECRET, teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6' };
+    app.post('/api/slack/events', express.raw({ type: 'application/json', limit: '32kb' }), createSlackIngress(slackConfig));
+    app.post('/api/slack/interactions', express.raw({ type: 'application/x-www-form-urlencoded', limit: '32kb' }), createFeedbackIngress(slackConfig));
+  }
   app.use(express.json({ limit: process.env.BFF_JSON_LIMIT || '25mb' }));
   app.use(express.urlencoded({ extended: false }));
 
@@ -1720,7 +1728,7 @@ export function createBffApp(options = {}) {
   mountParticipationRosterRoutes(app, {
     db, now, idempotencyService, processRosterEventInline,
   });
-  mountJvmWeeklyApiRoutes(app, {
+  const jvmReadPort = mountJvmWeeklyApiRoutes(app, {
     db,
     idempotencyService,
     env,
@@ -1733,6 +1741,13 @@ export function createBffApp(options = {}) {
     cashflowSlackService,
     mcpOAuthService,
   });
+  if (settlementAgentEnabled) {
+    const runSettlementWorker = createSlackWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview });
+    app.get('/api/internal/workers/settlement-agent/run', asyncHandler(async (req, res) => {
+      assertInternalWorkerAuthorized(req);
+      res.json({ ok: true, ...await runSettlementWorker() });
+    }));
+  }
   mountLedgerRoutes(app, { db, now, idempotencyService, auditChainService, piiProtector });
   mountTransactionRoutes(app, { db, now, idempotencyService, auditChainService, piiProtector, rbacPolicy, driveService });
   mountAuditRoutes(app, { db, auditChainService });
