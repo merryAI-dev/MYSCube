@@ -1,9 +1,14 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { verifySlackRequest } from './slack-ingress.mjs';
 import * as z from 'zod/v4';
 import { createGeminiCompletion } from './gemini-model.mjs';
 import { runSettlementAgent, settlementTools } from './settlement-agent.mjs';
 import { assertActorRoleAllowed, ROUTE_ROLES } from '../bff/bff-utils.mjs';
+
+export function verifySettlementWorkerToken({ authorization = '', secret = '', disabled = false }) {
+  if (disabled || !secret || !authorization.startsWith('Bearer ')) return false;
+  return timingSafeEqual(createHash('sha256').update(authorization.slice(7)).digest(), createHash('sha256').update(secret).digest());
+}
 
 export async function reserveAgentBudget(db, month) {
   if (!/^2026-(09|10|11|12)$/.test(month)) throw new Error('budget_policy_expired');
@@ -47,7 +52,7 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
     let answer;
     try {
       await contextFor(job);
-      if (!env.GEMINI_API_KEY) throw new Error('model_not_configured');
+      if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
       await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
       const tools = settlementTools({ readStatus: async (input) => readOverview({ context: await contextFor(job), body: input }) });
       tools[0].schema = z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), projectIds: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(20) }).strict();
@@ -60,7 +65,7 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
           return { items: matches.slice(0, 20), truncated: result.docs.length === 1000 || matches.length > 20 };
         }, render: (result) => `사업 검색 결과${result.truncated ? ' (일부 결과)' : ''}\n${result.items.map((item) => `${item.name}: ${item.projectId}`).join('\n') || '일치하는 사업이 없습니다.'}`,
       });
-      const complete = completeFactory({ apiKey: env.GEMINI_API_KEY, maxInputTokens: 16000,
+      const complete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
         onUsage: async (usage) => audit.push({ type: 'usage', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
       });
       const result = await runSettlementAgent({ question: job.question, tools, complete, maxSteps: 3, signal: AbortSignal.timeout(100000),
@@ -105,7 +110,7 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       }
       const job = await claimSlackJob({ db, jobId: doc.id });
       if (job) { await process(job); processed++; }
-      if (processed >= 2) break;
+      if (processed >= 1) break;
     }
     return { processed };
   };

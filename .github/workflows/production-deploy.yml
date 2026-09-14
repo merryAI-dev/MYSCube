@@ -522,7 +522,8 @@ jobs:
           JVM_WEEKLY_API_SERVICE_ACCOUNT_JSON: ${{ secrets.JVM_WEEKLY_API_SERVICE_ACCOUNT_JSON_LIVE }}
           SLACK_ALERT_BOT_TOKEN: ${{ secrets.SLACK_ALERT_BOT_TOKEN }}
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          SETTLEMENT_AGENT_GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
+          SETTLEMENT_AGENT_WORKER_SECRET: ${{ secrets.SETTLEMENT_AGENT_WORKER_SECRET }}
           SETTLEMENT_AGENT_ENABLED: 'true'
         run: |
           set -euo pipefail

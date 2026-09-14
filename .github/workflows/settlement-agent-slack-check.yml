@@ -55,7 +55,7 @@ jobs:
       - name: Verify configured Gemini connection
         if: inputs.check_model
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
         run: node scripts/check-settlement-gemini.mjs
       - name: Read deployed agent cron logs
         if: inputs.check_runtime

@@ -32,6 +32,27 @@ function createTestApp(options: Parameters<typeof createBffApp>[0] = {}) {
 }
 
 describe('internal worker endpoints (cron)', () => {
+  it('isolates the cloud agent token and blocks maintenance before database access', async () => {
+    const get = vi.fn(async () => ({ docs: [] }));
+    const db = { collection: vi.fn(() => ({ where: () => ({ limit: () => ({ get }) }) })),
+      doc: () => { throw new Error('Unexpected document access'); }, runTransaction: () => { throw new Error('Unexpected write'); } };
+    const env = { BFF_DEPLOY_ENV: 'local', BFF_SCHEDULER_OWNER: 'vercel', CRON_SECRET: LONG_CRON_SECRET,
+      SETTLEMENT_AGENT_ENABLED: 'true', SETTLEMENT_AGENT_WORKER_SECRET: 'agent-only', SLACK_ALERT_BOT_TOKEN: 'fixture', SLACK_SIGNING_SECRET: 'fixture' };
+    const path = '/api/internal/workers/settlement-agent/run';
+    const app = createTestApp({ db, env });
+    await request(app).get(path).expect(401);
+    await request(app).get(path).set('Authorization', `Bearer ${LONG_CRON_SECRET}`).expect(401);
+    await request(app).get(path).set('x-worker-secret', 'agent-only').expect(401);
+    await request(app).get('/api/internal/workers/outbox/run').set('Authorization', 'Bearer agent-only').expect(401);
+    expect(get).not.toHaveBeenCalled();
+    const response = await request(app).get(path).set('Authorization', 'Bearer agent-only').expect(200);
+    expect(response.body).toEqual({ ok: true, processed: 0 });
+    expect(get).toHaveBeenCalledTimes(1);
+    for (const blocked of [{ BFF_MAINTENANCE_READ_ONLY: ' TRUE ' }, { BFF_WORKERS_ENABLED: ' false ' }, { BFF_SCHEDULER_OWNER: 'disabled' }]) {
+      await request(createTestApp({ db, env: { ...env, ...blocked } })).get(path).set('Authorization', 'Bearer agent-only').expect(401);
+    }
+    expect(get).toHaveBeenCalledTimes(1);
+  });
   it('keeps the Live maintenance probe open while workers stay disabled', async () => {
     const app = createTestApp({
       projectId: LIVE_PROJECT_ID,
