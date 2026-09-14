@@ -57,3 +57,9 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: node scripts/check-settlement-gemini.mjs
+      - name: Read deployed agent cron logs
+        if: inputs.check_runtime
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_DEPLOY_TOKEN_PRODUCTION }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: npx --yes vercel@50.14.0 logs --project "$VERCEL_PROJECT_ID" --scope merryai-devs-projects --environment production --no-branch --no-follow --since 10m --limit 5 --query /api/internal/workers/settlement-agent/run --json

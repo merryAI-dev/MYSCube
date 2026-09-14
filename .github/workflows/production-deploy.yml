@@ -493,7 +493,8 @@ jobs:
           JVM_WEEKLY_API_ID_TOKEN: ${{ steps.jvm_cutover_verifier_auth.outputs.id_token }}
           JVM_WEEKLY_INTERNAL_API_TOKEN: ${{ secrets.JVM_WEEKLY_INTERNAL_API_TOKEN_LIVE }}
           GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.jvm_release_verifier_auth.outputs.credentials_file_path }}
-          SETTLEMENT_NORMALIZATION_PROJECTS: p1773817948751,p1775209262483,p1780662870530
+          # Read-only inventory: p1779869011617 has a matching canonical request/coordinator (2026-09, rev 1).
+          SETTLEMENT_NORMALIZATION_PROJECTS: p1773817948751,p1775209262483,p1780662870530,p1779869011617
         run: |
           set -euo pipefail
           test -n "${CASHFLOW_ACTOR_UID}"
