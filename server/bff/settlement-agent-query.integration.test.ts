@@ -11,7 +11,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('settlement report real pe
     await db.doc(`orgs/${tenantId}/persons/person`).set({ uid: 'leader', name: '홍길동', nickname: '나무' });
     const batch = db.batch();
     for (let i = 0; i < 103; i++) batch.set(db.doc(`orgs/${tenantId}/projects/p${String(i).padStart(3, '0')}`), {
-      name: `사업${i}`, executiveApproverId: 'leader', status: 'COMPLETED', ...(i === 102 ? { trashedAt: '2026-01-01' } : {}),
+      name: `사업${i}`, cic: 'CIC2', executiveApproverId: 'leader', status: 'COMPLETED', ...(i === 102 ? { trashedAt: '2026-01-01' } : {}),
     });
     await batch.commit();
     let calls = 0;
@@ -35,7 +35,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('settlement report real pe
     expect(calls).toBe(2);
     expect(report).toMatchObject({ scanned: 103, checked: 102, complete: true });
     expect(report.rows).toHaveLength(102);
-    expect(report.rows.at(-1)).toMatchObject({ name: '사업101', leader: '홍길동(나무)' });
+    expect(report.rows.at(-1)).toMatchObject({ name: '사업101', cic: 'CIC2', leaderId: 'leader', leader: '홍길동(나무)' });
+    expect(Number.isFinite(Date.parse(report.queriedAt))).toBe(true);
     expect(events.map((event) => event.checked)).toEqual([100, 2]);
     for (const event of events) for (const evidence of event.decisions) {
       expect(selectSettlementIssue({ settlementCycle: evidence.cycle, settlementStatuses: { items: evidence.weeks } }, event.input)).toEqual(evidence.decision);

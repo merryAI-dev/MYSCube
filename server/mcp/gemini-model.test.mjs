@@ -1,6 +1,16 @@
 import { it, expect, vi } from 'vitest';
 import { createGeminiCompletion } from './gemini-model.mjs';
 
+it('does not publish or execute truncated output, but records its actual usage', async () => {
+  const onUsage = vi.fn();
+  const complete = createGeminiCompletion({ onUsage, client: { models: { generateContent: async () => ({
+    usageMetadata: { promptTokenCount: 20, candidatesTokenCount: 2048 },
+    candidates: [{ finishReason: 'MAX_TOKENS', content: { parts: [{ text: '✅ 모두 완' }] } }],
+  }) } } });
+  await expect(complete({ messages: [{ role: 'user', content: '조회' }], tools: [], signal: AbortSignal.timeout(1000) })).rejects.toThrow('완성되지');
+  expect(onUsage).toHaveBeenCalledWith({ promptTokenCount: 20, candidatesTokenCount: 2048 });
+});
+
 it('preserves signed tool parts and ends follow-up input with user role', async () => {
   const requests = [];
   const signed = { role: 'model', parts: [{ functionCall: { id: 'native-1', name: 'lookup', args: {} }, thoughtSignature: 'test-signature' }] };

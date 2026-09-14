@@ -21,7 +21,7 @@ export function selectSettlementIssue(item, { kind, weekNo, cutoff, includeLateA
 export async function readSettlementAgentReport({ db, context, input, readOverview, signal, record = async () => {} }) {
   const member = (await db.doc(`orgs/${context.tenantId}/members/${context.actorId}`).get()).data();
   const query = db.collection(`orgs/${context.tenantId}/projects`).orderBy(FieldPath.documentId())
-    .select('name', 'executiveApproverId', 'trashedAt', 'status');
+    .select('name', 'cic', 'executiveApproverId', 'trashedAt', 'status');
   const rows = [];
   let cursor;
   let scanned = 0;
@@ -50,6 +50,7 @@ export async function readSettlementAgentReport({ db, context, input, readOvervi
           const people = leaderId ? await db.collection(`orgs/${context.tenantId}/persons`).where('uid', '==', leaderId).limit(2).get() : null;
           const leader = people?.docs.length === 1 ? people.docs[0].data() : null;
           rows.push({ projectId: doc.id, name: project.name || '사업명 확인 필요', projectStatus: project.status || '',
+            cic: typeof project.cic === 'string' ? project.cic.trim() : '', leaderId,
             leader: leader?.name ? `${leader.name}${leader.nickname ? `(${leader.nickname})` : ''}` : '조직장 확인 필요', ...issue });
         }
       }
@@ -60,6 +61,7 @@ export async function readSettlementAgentReport({ db, context, input, readOvervi
   } while (cursor);
   signal.throwIfAborted();
   return { yearMonth: input.yearMonth, monthCloseTargetYearMonth: previousYearMonth(input.yearMonth), kind: input.kind, weekNo: input.weekNo || null, cutoff: input.cutoff || null, includeLateApproved: input.includeLateApproved !== false,
+    queriedAt: new Date().toISOString(),
     coverage: 'accessible_registered_projects', complete: !input.projectIds || checked === new Set(input.projectIds).size, scanned, checked, rows,
     warning: '권한 내 등록 사업 기준입니다. 정산 의무 대상·종료 제외 정책이 적용된 미준수 명단은 아닙니다.' };
 }

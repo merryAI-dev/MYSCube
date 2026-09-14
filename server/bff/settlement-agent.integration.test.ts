@@ -17,7 +17,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     const email = `${id}@mysc.co.kr`;
     await db.doc(`orgs/mysc/members/${memberId}`).set({ email, role: 'pm', status: 'ACTIVE' });
     await db.doc(`orgs/mysc/members/${memberId}-historical`).set({ email, role: 'admin', status: 'INACTIVE' });
-    await db.doc(`orgs/mysc/projects/${projectId}`).set({ name: `사업-${id}` });
+    await db.doc(`orgs/mysc/projects/${projectId}`).set({ name: `사업-${id}`, cic: 'CIC1' });
     const timestamp = String(Math.floor(Date.now() / 1000));
     const threadTs = `${timestamp}.1`;
     const ingress = createSlackIngress({ db, secret: 'fixture', teamId: 'T099F304GAY' });
@@ -52,7 +52,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
           expect(options.body).toBeUndefined();
           return Response.json({ ok: true, user: { team_id: 'T099F304GAY', profile: { email } } });
         }
-        expect(url).toBe(`https://slack.com/api/${deliveries.length < 2 ? 'chat.postMessage' : 'chat.postEphemeral'}`);
+        expect(url).toBe(`https://slack.com/api/${deliveries.length < 4 ? 'chat.postMessage' : 'chat.postEphemeral'}`);
         deliveries.push(JSON.parse(options.body));
         return Response.json({ ok: true, message_ts: '2.1', ts: '2.1' });
       },
@@ -67,14 +67,22 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
         return overview;
       },
       completeFactory: () => async ({ messages }: any) => {
+        if (messages[0].content.startsWith('정산 답변의 독립 검토자')) {
+          const { answer } = JSON.parse(messages.at(-1).content);
+          const supported = !answer.includes('999');
+          return { content: JSON.stringify({ supported, addressesRequest: supported, issues: supported ? [] : ['근거 없는 수치'] }) };
+        }
         turn++;
-        if (turn === 4) {
+        if (turn === 5) {
           expect(messages.filter((m: any) => m.role === 'user').map((m: any) => m.content)).toEqual([`2026-09 사업-${id} 조회`, '그 사업 다시 확인해줘']);
           return { tool_calls: [{ id: 'c', function: { name: 'cashflow_status', arguments: JSON.stringify({ yearMonth: '2026-09', projectIds: [projectId] }) } }] };
         }
         if (turn === 1) return { tool_calls: [{ id: 'a', function: { name: 'project_search', arguments: JSON.stringify({ query: id }) } }] };
         if (turn === 2) return { tool_calls: [{ id: 'b', function: { name: 'cashflow_status', arguments: JSON.stringify({ yearMonth: '2026-09', projectIds: [projectId] }) } }] };
-        return { content: '허위 모델 답변: 999개 반려' };
+        if (turn === 7) return { tool_calls: [{ id: 'd', function: { name: 'settlement_report', arguments: JSON.stringify({ yearMonth: '2026-09', kind: 'month_incomplete', projectIds: [projectId] }) } }] };
+        if (turn === 9) return { tool_calls: [{ id: 'e', function: { name: 'reformat_report', arguments: JSON.stringify({ kind: 'month_incomplete', presentation: { groupBy: ['cic'] } }) } }] };
+        if (turn >= 8) return { content: `📌 CIC1 월결산 보고\n사업-${id} · ⏳ 승인 대기\n등록 사업 기준입니다. 정산 의무 대상 미준수 명단은 아닙니다.` };
+        return { content: turn === 3 ? '허위 모델 답변: 999개 반려' : '✅ 월결산: 확정\n요청하신 사업의 월결산이 확정됐어요.' };
       },
     });
     await worker();
@@ -106,12 +114,33 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     const payload = { team: { id: saved.teamId }, channel: { id: saved.channelId }, user: { id: slackUserId }, container: { message_ts: '2.1' }, actions: [{ action_id: 'settlement_scope_no', value: firstRef.id, action_ts: '3.1' }] };
     expect(await saveSlackFeedback({ db, payload, teamId: saved.teamId, channelId: saved.channelId })).toBe(true);
     expect((await db.doc(`settlement_agent_feedback/${saved.scopes[0].key}`).get()).data()!.votes[0].value).toBe(0);
-    await db.doc(`orgs/mysc/members/${memberId}-duplicate`).set({ email, role: 'admin', status: 'ACTIVE' });
-    const deniedRef = await enqueue('message', `${timestamp}.3`, '다시 조회');
+
+    overview.items[0].settlementCycle.businessState = 'SUBMITTED';
+    const reportRef = await enqueue('message', `${timestamp}.3`, '8월 월결산 미완료 목록을 알려줘');
     await worker();
-    expect(lookups).toBe(2);
+    const fresh = (await reportRef.get()).data()!;
+    expect(fresh.reportSnapshots).toHaveLength(1);
+    expect(fresh.reportSnapshots[0].report.rows[0].cic).toBe('CIC1');
+    expect(fresh.reportSnapshots[0].sourceJobId).toBe(reportRef.id);
+    const formatRef = await enqueue('message', `${timestamp}.4`, '피드백: 월결산만 CIC별로 정리해서 리포팅하듯이 이야기해줘. 답변 형식 오류');
+    await worker();
+    const reformatted = (await formatRef.get()).data()!;
+    expect(reformatted.status).toBe('succeeded');
+    expect(reformatted.reportSnapshots[0].report.queriedAt).toBe(fresh.reportSnapshots[0].report.queriedAt);
+    expect(reformatted.reportSnapshots[0].sourceJobId).toBe(reportRef.id);
+    expect(reformatted.reportSnapshots[0].presentation.groupBy).toEqual(['cic']);
+    expect(deliveries[3].user).toBeUndefined();
+    expect(deliveries[3].text).toContain('📌 CIC1 월결산 보고');
+    expect(deliveries[3].text).not.toContain('주간 승인');
+    expect(lookups).toBe(3);
+    expect((await db.doc(`orgs/mysc/projects/${projectId}`).get()).data()).toEqual({ name: `사업-${id}`, cic: 'CIC1' });
+
+    await db.doc(`orgs/mysc/members/${memberId}-duplicate`).set({ email, role: 'admin', status: 'ACTIVE' });
+    const deniedRef = await enqueue('message', `${timestamp}.5`, '다시 조회');
+    await worker();
+    expect(lookups).toBe(3);
     expect((await deniedRef.get()).data()!.audit).toContainEqual({ type: 'failure', code: 'member_unverified' });
-    expect(deliveries[2].user).toBe(slackUserId);
+    expect(deliveries[4].user).toBe(slackUserId);
   });
 
   it('permits only one concurrent claimant and rejects a replaced lease', async () => {

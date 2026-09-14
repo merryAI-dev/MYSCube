@@ -12,6 +12,10 @@ on:
         description: 'Check configured Gemini model with a benign prompt (no business data)'
         type: boolean
         default: false
+      check_replies:
+        description: 'Run live Gemini multi-turn reply QA with synthetic evidence only'
+        type: boolean
+        default: false
       check_runtime:
         description: 'Verify live Slack signatures and worker authentication without data writes'
         type: boolean
@@ -85,7 +89,7 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
       - name: Install model SDK
-        if: inputs.check_model
+        if: inputs.check_model || inputs.check_replies
         run: npm ci --ignore-scripts
       - name: Verify live runtime
         if: inputs.check_runtime || inputs.apply_slack_exception
@@ -97,6 +101,11 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
         run: node scripts/check-settlement-gemini.mjs
+      - name: Verify grounded flexible replies
+        if: inputs.check_replies
+        env:
+          GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
+        run: node scripts/qa-settlement-replies.mjs --live
       - name: Diagnose blocked Slack probes without changing firewall settings
         if: failure() && (inputs.check_runtime || inputs.apply_slack_exception)
         env:
