@@ -110,9 +110,10 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
         },
       });
       tools[0].schema = z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), projectIds: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(100) }).strict();
-      tools[0].modelResult = (result) => ({ yearMonth: result.yearMonth, monthCloseTargetYearMonth: result.monthCloseTargetYearMonth,
+      tools[0].modelResult = (result) => ({ yearMonth: result.yearMonth, monthCloseTargetYearMonth: result.monthCloseTargetYearMonth, queriedAt: new Date().toISOString(),
         items: result.items.map((item) => ({ projectId: item.projectId, name: projectNames.get(item.projectId) || '사업명 확인 필요', month: item.settlementCycle.businessState,
-          health: item.settlementCycle.health, weeks: item.settlementStatuses.items.map(({ period, status }) => ({ period, status })) })), errors: result.errors });
+          health: item.settlementCycle.health, weeks: item.settlementStatuses.items.map(({ period, status, submittedAt, approvedAt, deadlineAt, approverDeadlineAt }) =>
+            ({ period, status, submittedAt, approvedAt, deadlineAt, approverDeadlineAt })) })), errors: result.errors });
       tools.push(...createSettlementReportTools({
         readReport: async (input, { signal }) => readSettlementAgentReport({ db, context: await readContextFor(job), input, readOverview, signal, record }),
         loadPreviousReports: () => loadPreviousReportSnapshots({ db, job, authorize: () => contextFor(job) }),

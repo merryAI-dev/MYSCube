@@ -11,7 +11,7 @@ const statusInput = z.object({
 export function settlementTools({ resolveAuthorization, baseUrl, fetchImpl, audit, readStatus, projectNames = new Map() }) {
   return [{
     name: 'cashflow_status',
-    description: '권한 내 프로젝트의 주정산·월결산을 조회합니다. yearMonth는 운영 주기월(주정산 월)이며 월결산 대상은 그 직전 월입니다. 예: 8월 월결산은 yearMonth=2026-09로 조회합니다.',
+    description: '권한 내 프로젝트의 주정산·월결산 상태와 제출/승인 시각을 조회합니다. 실무자가 몇 시에 제출했는지는 submittedAt, 조직장이 몇 시에 승인했는지는 approvedAt입니다. 비어 있으면 기록 없음이며 시간을 추정하지 마세요. 시각 질문에는 이 결과에서 해당 주차만 답하고 기한 경과 보고서를 추가하지 마세요. yearMonth는 운영 주기월(주정산 월)이며 월결산 대상은 그 직전 월입니다. 예: 8월 월결산은 yearMonth=2026-09로 조회합니다.',
     schema: statusInput,
     render(result) {
       const lines = [`[주간정산·월결산 진행 현황]`, `주정산 조회월: ${result.yearMonth} · 월결산 대상월: ${result.monthCloseTargetYearMonth}`];
