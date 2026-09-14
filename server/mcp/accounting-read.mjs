@@ -100,8 +100,9 @@ export function accountingEvidence(snapshot, rawInput, retrievedAt = new Date().
     projectCurrency: /^[A-Z]{3}$/.test(metadata.projectCurrency || '') ? metadata.projectCurrency : null, amountCurrency: null,
     fieldStateAvailability: 'NOT_EXPOSED',
     source: { authority: 'JVM', targetRevision: snapshot.targetRevision, retrievedAt,
-      capturedAt: null, freshness: 'UNKNOWN',
-      sheetMirror: { authority: 'BFF_PINNED_MIRROR', status: text(mirror.status, 32),
+      capturedAt: null, freshness: 'UNKNOWN', liveSheetVerified: false,
+      freshnessExplanation: '저장된 캡처와 원장 버전이 같아도 현재 Google Sheets가 최신 반영됐는지는 확인 불가입니다.',
+      sheetMirror: { authority: 'BFF_PINNED_MIRROR',
         capturedAt: text(mirror.capturedAt, 40), sourceRevision: text(mirror.sourceRevision, 128),
         appliedSourceRevision: text(mirror.appliedSourceRevision, 128), appliedTargetRevision: text(mirror.appliedTargetRevision, 128),
         matchesJvmRevision: Boolean(mirror.appliedTargetRevision && mirror.appliedTargetRevision === snapshot.targetRevision) } },
@@ -113,7 +114,7 @@ export function accountingEvidence(snapshot, rawInput, retrievedAt = new Date().
 export function createAccountingTools({ readSnapshot }) {
   return [{
     name: 'accounting_read',
-    description: '한 사업의 월/주차 Projection·Actual 입출금과 누적잔액을 JVM에서 조회합니다. 기본 summary는 주별 합계, 항목별 금액이 필요할 때만 detail=lines. 사업은 먼저 식별하세요. currentWeek는 한국시간 현재 재무 주차입니다. 승인 여부/원본시트 실시간 조회는 아닙니다.',
+    description: '한 사업의 월/주차 Projection·Actual 입출금과 누적잔액을 JVM에서 조회합니다. 기본 summary는 주별 합계, 항목별 금액이 필요할 때만 detail=lines. 사업은 먼저 식별하세요. currentWeek는 한국시간 현재 재무 주차입니다. 캡처 버전 일치는 현재 시트의 최신 반영 증거가 아닙니다. 금액 단위 미확인을 명시하고 원본시트 최신 여부는 확인 불가로 답하세요. 원장 해시는 감사 근거용이며 사용자가 직접 요청하지 않으면 답변에 노출하지 마세요.',
     schema: accountingInput,
     async execute(input, { signal } = {}) {
       const parsed = accountingInput.parse(input);
