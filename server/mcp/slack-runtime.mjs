@@ -11,7 +11,21 @@ import { createSettlementReportTools } from './settlement-reporting.mjs';
 import { loadPreviousReportSnapshots, reviewGroundedAnswer } from './grounded-answer.mjs';
 import { runHermesAgent } from './hermes-harness.mjs';
 
-const slackText = (text) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+export function slackText(text) {
+  const formatted = text.split(/(```[\s\S]*?(?:```|$)|`[^`\n]*(?:`|$))/g).map((part, index) => index % 2 ? part : part
+    .replace(/^ {0,3}(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, '')
+    .replace(/\*\*([^\n]+?)\*\*/g, '*$1*')
+    .replace(/^ {0,3}#{1,6}[ \t]+/gm, '')
+    .replace(/^([ \t]*)[-*][ \t]+/gm, '$1• ')
+    .replace(/\n{3,}/g, '\n\n')).join('');
+  return formatted.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
+export function selectSlackHarness(question, turns = []) {
+  const tag = (text) => String(text).match(/\[(hermes|baseline)\]/i)?.[1].toLowerCase();
+  const variant = tag(question) || [...turns].reverse().map((turn) => ['hermes', 'baseline'].includes(turn.experimentVariant) ? turn.experimentVariant : tag(turn.question)).find(Boolean) || 'baseline';
+  return { variant, question: question.replace(/\[(?:hermes|baseline)\]/gi, '').trim() };
+}
 function answerBlocks(text) {
   return (slackText(text).match(/[\s\S]{1,2800}/gu) || []).map((part) => ({
     type: 'section', text: { type: 'mrkdwn', text: part, verbatim: true },
@@ -68,6 +82,8 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       requestedByActorId: requester.actorId };
   }
   async function process(job) {
+    const experiment = selectSlackHarness(job.question, job.turns);
+    const useHermes = experiment.variant === 'hermes';
     const scopes = [];
     const audit = [];
     const projectNames = new Map();
@@ -84,7 +100,9 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       const actor = await contextFor(job);
       await record({ type: 'run_start', actorId: actor.actorId, actorRole: actor.actorRole,
         readPrincipal: 'myscube-settlement-agent', permissionPolicy: 'mysc-designated-channel-company-settlement-read-v1',
-        question: job.question, model: 'gemini-3.6-flash', harness: env.SETTLEMENT_HERMES_URL ? 'hermes-readonly-v1' : 'settlement-read-v2' });
+        question: job.question, model: 'gemini-3.6-flash', experiment: experiment.variant,
+        harness: useHermes ? 'hermes-readonly-v1' : 'settlement-read-v2' });
+      if (useHermes && !env.SETTLEMENT_HERMES_URL) throw new Error('hermes_not_configured');
       const previousAnswerId = job.turns?.at(-1)?.jobId || null;
       await record({ type: 'conversation_feedback', ...observeConversationFeedback({ text: job.question, previousAnswerId }) });
       if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
@@ -153,12 +171,13 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       const reviewComplete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
         onUsage: async (usage) => audit.push({ type: 'usage', phase: 'review', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
       });
-      const runAgent = env.SETTLEMENT_HERMES_URL ? hermesRunner : runSettlementAgent;
-      const result = await runAgent({ env, question: job.question, history: (job.turns || []).flatMap((turn) => [
-        { role: 'user', content: turn.question }, { role: 'assistant', content: turn.answer },
+      const runAgent = useHermes ? hermesRunner : runSettlementAgent;
+      const result = await runAgent({ env, question: experiment.question, history: (job.turns || []).flatMap((turn) => [
+        { role: 'user', content: selectSlackHarness(turn.question).question }, { role: 'assistant', content: turn.answer },
       ]), tools, complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
         reviewAnswer: (input) => reviewGroundedAnswer({ ...input, complete: reviewComplete }),
         loadFeedback: async (scope) => {
+          scope = { ...scope, experimentVariant: experiment.variant };
           const key = feedbackScopeKey(job, scope);
           if (!scopes.some((item) => item.key === key)) scopes.push({ key, scope });
           const prior = (await db.doc(`settlement_agent_feedback/${key}`).get()).data();
@@ -171,7 +190,9 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       answer = result.answer;
     } catch (error) {
       audit.push({ type: 'failure', code: /^[a-z_]+$/.test(error.message || '') ? error.message : 'lookup_failed' });
-      answer = ['member_unverified', 'member_inactive'].includes(error.message)
+      answer = error.message === 'hermes_not_configured'
+        ? 'Hermes 실험 경로가 아직 연결되지 않았어요. 기존 실행기로 대신 처리하지 않았습니다.'
+        : ['member_unverified', 'member_inactive'].includes(error.message)
         ? 'MYSCube 계정 연결을 확인하지 못했어요. 관리자에게 활성 계정과 Slack 이메일 연결을 확인해 달라고 요청해주세요.'
         : error.message === 'input_budget_exceeded'
           ? '조회할 내용이 많아 한 번에 정리하지 못했어요. 사업이나 기간을 나누어 다시 요청해주세요. 정산이 미완료라는 뜻은 아닙니다.'
@@ -180,14 +201,14 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
           : '조회 도중 처리를 마치지 못했어요. 정산이 미완료라는 뜻은 아닙니다. 사업과 기간을 좁혀 다시 요청해주세요. 같은 문제가 반복되면 이 스레드를 관리자에게 공유해주세요.';
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)`;
+    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
     const blocks = answerBlocks(text);
     const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     if (publicAnswer && answerStatus === 'answered' && scopes.length) blocks.push({ type: 'context', elements: [{ type: 'plain_text', text: '정정할 내용은 댓글로 편하게 알려주세요. 아래 조회 범위 평가는 선택사항입니다.' }] }, { type: 'actions', elements: [
       { type: 'button', action_id: 'settlement_scope_yes', text: { type: 'plain_text', text: '예 · 범위가 맞아요' }, value: job.id },
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
-    await updateClaimedJob({ db, job, patch: { status: 'sending', answer: text, scopes, audit,
+    await updateClaimedJob({ db, job, patch: { status: 'sending', answer: text, scopes, audit, experimentVariant: experiment.variant,
       reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
       answeredAt: new Date().toISOString() } });
     try {
@@ -323,5 +344,6 @@ async function finishConversation(tx, db, job, status) {
   const thread = (await tx.get(ref)).data();
   if (!thread || thread.queue[0] !== job.id) throw new Error('conversation_order_lost');
   tx.update(ref, { queue: thread.queue.slice(1),
-    turns: status === 'succeeded' ? [...thread.turns, { jobId: job.id, question: job.question, answer: job.answer }].slice(-6) : thread.turns });
+    turns: status === 'succeeded' ? [...thread.turns, { jobId: job.id, question: job.question, answer: job.answer,
+      ...(job.experimentVariant ? { experimentVariant: job.experimentVariant } : {}) }].slice(-6) : thread.turns });
 }
