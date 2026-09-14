@@ -41,6 +41,23 @@ it('executes only the fixed validated read capability and reviews exact source e
   expect(run.socket.close).toHaveBeenCalledTimes(1);
 });
 
+it('trims oldest whole history pairs instead of rejecting a valid long reporting thread', async () => {
+  const latest = [{ role: 'user', content: '월결산만 CIC별로 정리해줘' },
+    { role: 'assistant', content: '8월 월결산 CIC별 조회 자료입니다.' }];
+  const history = [{ role: 'user', content: '지난 주정산 전사 명단' },
+    { role: 'assistant', content: '이전 주정산 결과 '.repeat(3500) }, ...latest];
+  const original = structuredClone(history);
+  let sentHistory;
+  const run = scenario((message, socket) => {
+    if (message.type === 'start') { sentHistory = message.history; emit(socket, call()); }
+    if (message.type === 'tool_result') emit(socket, final());
+  }, { question: '아까 그 월결산을 조직장별로 바꿔줘', history });
+  expect((await run.promise).status).toBe('answered');
+  expect(sentHistory).toEqual(latest);
+  expect(run.reviewAnswer.mock.calls[0][0].history).toEqual(latest);
+  expect(history).toEqual(original);
+});
+
 it('never advertises or executes write tools even if a caller supplies them', async () => {
   const write = vi.fn();
   const run = scenario((message, socket) => {
