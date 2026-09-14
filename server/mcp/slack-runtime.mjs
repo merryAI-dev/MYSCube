@@ -56,7 +56,12 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       await contextFor(job);
       if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
       await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
-      const tools = settlementTools({ projectNames, readStatus: async (input) => readOverview({ context: await contextFor(job), body: input }) });
+      const tools = settlementTools({ projectNames, readStatus: async (input) => {
+        const context = await contextFor(job);
+        const names = await db.getAll(...input.projectIds.map((id) => db.doc(`orgs/${tenantId}/projects/${id}`)), { fieldMask: ['name'] });
+        for (const doc of names) if (doc.exists && doc.data().name) projectNames.set(doc.id, doc.data().name);
+        return readOverview({ context, body: input });
+      } });
       tools[0].schema = z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), projectIds: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(20) }).strict();
       tools.push({ name: 'project_search', description: '사업명을 검색해 정산 조회에 사용할 프로젝트 ID를 확인합니다. 결과가 잘렸으면 전체 목록이 아닙니다.',
         schema: z.object({ query: z.string().min(1).max(100) }).strict(),
@@ -85,10 +90,16 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       answer = `안녕하세요! 요청하신 조회 결과를 공유드립니다.\n\n${result.answer}\n\n조회 범위가 다르거나 추가로 확인할 내용이 있으면 이 스레드에 남겨주세요. 감사합니다!`;
     } catch (error) {
       audit.push({ type: 'failure', code: /^[a-z_]+$/.test(error.message || '') ? error.message : 'lookup_failed' });
-      answer = '정산 정보를 확인하지 못했습니다. MYSCube 활성 계정 연결, Slack 앱 권한 또는 모델·예산 설정을 확인해야 합니다. 정산 상태를 완료나 미완료로 판단하지 않았습니다.';
+      answer = ['member_unverified', 'member_inactive'].includes(error.message)
+        ? 'MYSCube 계정 연결을 확인하지 못했어요. 관리자에게 활성 계정과 Slack 이메일 연결을 확인해 달라고 요청해주세요.'
+        : error.message === 'input_budget_exceeded'
+          ? '조회할 내용이 많아 한 번에 정리하지 못했어요. 사업이나 기간을 나누어 다시 요청해주세요. 정산이 미완료라는 뜻은 아닙니다.'
+        : error.message === 'budget_exhausted'
+          ? '이번 달 에이전트 사용 한도에 도달했어요. MYSCube에서 직접 확인하시거나 관리자에게 문의해주세요.'
+          : '조회 도중 처리를 마치지 못했어요. 정산이 미완료라는 뜻은 아닙니다. 사업과 기간을 좁혀 다시 요청해주세요. 같은 문제가 반복되면 이 스레드를 관리자에게 공유해주세요.';
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 2700)}${answer.length > 2700 ? '\n일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n조회 기준: ${queriedAt} (한국시간) · 요청 ${job.id.slice(0, 8)}`;
+    const text = `${answer.slice(0, 2700)}${answer.length > 2700 ? '\n일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n조회 기준: ${queriedAt} (한국시간)`;
     const blocks = [{ type: 'section', text: { type: 'plain_text', text } }];
     const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     if (publicAnswer && scopes.length) blocks.push({ type: 'section', text: { type: 'plain_text', text: '질문자님, 조회한 사업·기간이 질문 의도와 맞나요? (정산값 자체의 정오 평가가 아닙니다)' } }, { type: 'actions', elements: [

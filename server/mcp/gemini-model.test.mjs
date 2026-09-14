@@ -40,7 +40,7 @@ it('counts the complete Developer API request through the real SDK and stops ove
     expect(requests[0].body.generateContentRequest.tools).toEqual(requests[1].body.tools);
     expect(requests[0].body.generateContentRequest.systemInstruction).toEqual(requests[1].body.systemInstruction);
     totalTokens = 16001;
-    await expect(complete(input)).rejects.toThrow('Gemini');
+    await expect(complete(input)).rejects.toThrow('input_budget_exceeded');
     expect(requests).toHaveLength(3);
   } finally { vi.unstubAllGlobals(); }
 });

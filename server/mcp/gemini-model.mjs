@@ -49,6 +49,7 @@ export function createGeminiCompletion({ apiKey, model = 'gemini-3.6-flash', cli
       } });
     } catch (error) {
       signal.throwIfAborted();
+      if (error?.message === 'input_budget_exceeded') throw error;
       throw Object.assign(new Error('Gemini 연결에 실패했습니다. 키·모델 접근 권한·사용 한도를 확인해 주세요.'), {
         providerStatus: Number.isInteger(error?.status) ? error.status : null,
         providerReason: String(error?.message).includes('API_KEY_INVALID') ? 'API_KEY_INVALID' : 'PROVIDER_REQUEST_FAILED',

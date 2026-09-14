@@ -18,7 +18,7 @@ export function settlementTools({ resolveAuthorization, baseUrl, fetchImpl, audi
       const labels = { WAITING_FOR_UPDATE: '업데이트 대기', PENDING_APPROVAL: '조직장 승인 대기', COMPLETED: '승인 완료', SUBMITTED: '승인 대기', LOCKED: '확정' };
       const cycleLabels = { NOT_REQUESTED: '요청 전', SUBMITTED: '승인 대기', LOCKED: '확정', REOPEN_REQUESTED: '재개 요청', REOPENED: '재개됨', REJECTED: '반려', WITHDRAWN: '철회', INCONSISTENT: '확인 필요' };
       for (const item of result.items) {
-        lines.push('', projectNames.get(item.projectId) || `사업 ID: ${item.projectId}`);
+        lines.push('', projectNames.get(item.projectId) || '사업명 확인 필요');
         const cycle = item.settlementCycle;
         lines.push(`월결산: ${cycle.health === 'OK' ? cycleLabels[cycle.businessState] : '확인 필요'}`);
         for (const value of ['COMPLETED', 'PENDING_APPROVAL', 'WAITING_FOR_UPDATE']) {
