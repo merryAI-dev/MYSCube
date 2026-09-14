@@ -39,7 +39,7 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
     const { user } = await slack('users.info', { user: job.slackUserId });
     const email = user?.profile?.email?.trim().toLowerCase();
     if (user?.deleted || user?.is_bot || user?.is_restricted || user?.is_ultra_restricted || user?.team_id !== teamId || !email?.endsWith('@mysc.co.kr')) throw new Error('member_unverified');
-    const members = await db.collection(`orgs/${tenantId}/members`).where('email', '==', email).limit(2).get();
+    const members = await db.collection(`orgs/${tenantId}/members`).where('email', '==', email).where('status', '==', 'ACTIVE').limit(2).get();
     if (members.docs.length !== 1) throw new Error('member_unverified');
     const member = members.docs[0].data();
     if (member.status !== 'ACTIVE') throw new Error('member_inactive');
