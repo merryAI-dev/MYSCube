@@ -25,7 +25,9 @@ export async function runHermesAgent({ question, history = [], tools, signal = A
   const base = new URL(env.SETTLEMENT_HERMES_URL);
   if (base.protocol !== 'https:' || !base.hostname.endsWith('.run.app') || base.username || base.password || base.pathname !== '/' || base.search || base.hash || base.port) throw new Error('hermes_endpoint_invalid');
   if (typeof question !== 'string' || !question.trim() || question.length > 8000) throw new Error('hermes_question_invalid');
-  if (!Array.isArray(history) || history.length > 12 || history.length % 2 || history.some((m, i) => m?.role !== (i % 2 ? 'assistant' : 'user') || typeof m.content !== 'string') || JSON.stringify(history).length > 24000) throw new Error('hermes_history_invalid');
+  if (!Array.isArray(history) || history.length > 12 || history.length % 2 || history.some((m, i) => m?.role !== (i % 2 ? 'assistant' : 'user') || typeof m.content !== 'string')) throw new Error('hermes_history_invalid');
+  history = structuredClone(history);
+  while (history.reduce((size, message) => size + message.content.length, 0) > 12000) history.splice(0, 2);
   const registry = new Map();
   for (const tool of tools) {
     if (!HERMES_READ_TOOLS.includes(tool.name)) continue;
