@@ -29,6 +29,12 @@ describe('accounting read evidence', () => {
     expect(result.source.capturedAt).toBeNull();
     expect(result.source.sheetMirror.matchesJvmRevision).toBe(false);
     expect(result.source.sheetMirror.secret).toBeUndefined();
+    expect(result.source.sheetMirror.status).toBeUndefined();
+    expect(result.source).toMatchObject({ freshness: 'UNKNOWN', liveSheetVerified: false });
+    const matched = source();
+    matched.accountingSource.mirror.appliedTargetRevision = matched.targetRevision;
+    expect(accountingEvidence(matched, input).source).toMatchObject({ freshness: 'UNKNOWN', liveSheetVerified: false,
+      sheetMirror: { matchesJvmRevision: true } });
     expect(result.currentWeek).toMatchObject({ yearMonth: '2026-09', weekNo: 3 });
     expect(result.projection[0]).toMatchObject({ start: '2026-09-07', end: '2026-09-13' });
   });
