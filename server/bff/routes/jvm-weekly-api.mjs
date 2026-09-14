@@ -6501,8 +6501,45 @@ export function mountJvmWeeklyApiRoutes(app, {
     res.status(200).json({ request: cashflowMonthCloseRequestView(decided) });
   }));
 
-  app.get('/api/v1/cashflow/:projectId', asyncHandler(async (req, res) => {
+  async function readCashflowSnapshot(req) {
+    req.signal?.throwIfAborted();
     assertWeeklyWorkspaceOrRoleAllowed(req, ROUTE_ROLES.readCore, 'read Java weekly cashflow snapshot', authMode, workspaceEmailDomain);
+    const rawProjectId = readOptionalText(req.params.projectId);
+    if (!rawProjectId || rawProjectId.includes('/')) {
+      throw createHttpError(400, '사업을 확인해 주세요.', 'cashflow_project_invalid');
+    }
+    await assertCashflowProjectInScope({ db, req, projectId: rawProjectId, authMode, workspaceEmailDomain });
+    let accountingSource;
+    if (req.query.yearMonth !== undefined) {
+      const yearMonth = readOptionalText(req.query.yearMonth);
+      if (!/^20\d{2}-(0[1-9]|1[0-2])$/.test(yearMonth)) {
+        throw createHttpError(400, '조회월은 YYYY-MM 형식이어야 합니다.', 'cashflow_accounting_month_invalid');
+      }
+      const tenantId = readOptionalText(req.context?.tenantId);
+      const [project, mirror] = await Promise.all([
+        readDocument(db, `orgs/${tenantId}/projects/${rawProjectId}`),
+        readDocument(db, `orgs/${tenantId}/cashflow_sheet_mirrors/${rawProjectId}`),
+      ]);
+      if (!project || project.trashedAt) throw createHttpError(404, '사업을 찾을 수 없습니다.', 'cashflow_project_not_found');
+      const weeklyYear = readWeeklyYear(mirror?.weeklyYear);
+      if (weeklyYear === null || mirror?.projectId !== rawProjectId) {
+        throw createHttpError(503, '시트의 주별 관리 연도를 확인하지 못했습니다.', 'cashflow_accounting_source_unavailable');
+      }
+      if (weekOrdinal(weeklyYear, yearMonth, 1) === -1) {
+        throw createHttpError(400, '해당 연도는 주별 관리 영역이 아닙니다. 연간 금액을 월별로 나누어 조회할 수 없습니다.', 'cashflow_accounting_annual_scope');
+      }
+      accountingSource = {
+        weeklyYear, projectName: readOptionalText(project.name),
+        projectCurrency: readOptionalText(project.currency) || null,
+        mirror: {
+          status: readOptionalText(mirror.status) || 'UNKNOWN',
+          capturedAt: readOptionalText(mirror.capturedAt) || null,
+          sourceRevision: readOptionalText(mirror.sourceRevision) || null,
+          appliedSourceRevision: readOptionalText(mirror.appliedSourceRevision) || null,
+          appliedTargetRevision: readOptionalText(mirror.appliedTargetRevision) || null,
+        },
+      };
+    }
     let comparisonBoundary;
     try {
       comparisonBoundary = resolveCashflowComparisonAsOf(readOptionalText(req.query.asOf), now());
@@ -6524,6 +6561,7 @@ export function mountJvmWeeklyApiRoutes(app, {
       method: 'GET',
       path: `/api/v1/cashflow/${projectId}`,
     });
+    req.signal?.throwIfAborted();
     if (readOptionalText(result?.projectId) !== readOptionalText(req.params.projectId)) {
       throw createHttpError(502, '다른 프로젝트의 자료가 도착했습니다. 화면을 새로고침해 주세요.', 'jvm_weekly_project_mismatch');
     }
@@ -6536,8 +6574,9 @@ export function mountJvmWeeklyApiRoutes(app, {
       rawEnd: req.query.rangeEnd,
       comparisonBoundary,
     });
-    res.status(200).json({
+    return {
       ...result,
+      ...(accountingSource ? { accountingSource } : {}),
       readModel: {
         ...(result?.readModel || {}),
         range: {
@@ -6566,7 +6605,10 @@ export function mountJvmWeeklyApiRoutes(app, {
         }),
       },
       comparison,
-    });
+    };
+  }
+  app.get('/api/v1/cashflow/:projectId', asyncHandler(async (req, res) => {
+    res.status(200).json(await readCashflowSnapshot(req));
   }));
-  return { readWeeklyOverview };
+  return { readWeeklyOverview, readCashflowSnapshot };
 }

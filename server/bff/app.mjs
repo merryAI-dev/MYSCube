@@ -1742,7 +1742,7 @@ export function createBffApp(options = {}) {
     mcpOAuthService,
   });
   if (settlementAgentEnabled) {
-    const runSettlementWorker = createSlackWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview });
+    const runSettlementWorker = createSlackWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview, readSnapshot: jvmReadPort.readCashflowSnapshot });
     app.get('/api/internal/workers/settlement-agent/run', asyncHandler(async (req, res) => {
       if (!verifySettlementWorkerToken({ authorization: req.header('authorization'), secret: env.SETTLEMENT_AGENT_WORKER_SECRET,
         disabled: workerAuthPolicy.schedulerOwner === 'disabled' || maintenanceReadOnly || readOptionalText(env.BFF_WORKERS_ENABLED).toLowerCase() === 'false' })) {
