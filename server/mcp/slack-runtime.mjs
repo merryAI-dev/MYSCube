@@ -7,10 +7,13 @@ import { assertActorRoleAllowed, ROUTE_ROLES } from '../bff/bff-utils.mjs';
 import { readSettlementAgentReport } from '../bff/settlement-agent-query.mjs';
 import { createAgentTrace } from './agent-trace.mjs';
 import { observeConversationFeedback, validateSemanticFeedback } from './conversation-feedback.mjs';
+import { createSettlementReportTools } from './settlement-reporting.mjs';
+import { loadPreviousReportSnapshots, reviewGroundedAnswer } from './grounded-answer.mjs';
 
+const slackText = (text) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 function answerBlocks(text) {
-  return Array.from({ length: Math.ceil(text.length / 2800) }, (_, index) => ({
-    type: 'section', text: { type: 'plain_text', text: text.slice(index * 2800, (index + 1) * 2800) },
+  return (slackText(text).match(/[\s\S]{1,2800}/gu) || []).map((part) => ({
+    type: 'section', text: { type: 'mrkdwn', text: part, verbatim: true },
   }));
 }
 
@@ -67,6 +70,7 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
     const scopes = [];
     const audit = [];
     const projectNames = new Map();
+    const reportSnapshots = [];
     const trace = createAgentTrace({ db, jobId: job.id, leaseId: job.leaseId });
     const record = async (event) => {
       const receipt = await trace(event);
@@ -107,33 +111,18 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       });
       tools[0].schema = z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), projectIds: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(100) }).strict();
       tools[0].modelResult = (result) => ({ yearMonth: result.yearMonth, monthCloseTargetYearMonth: result.monthCloseTargetYearMonth,
-        items: result.items.map((item) => ({ projectId: item.projectId, month: item.settlementCycle.businessState,
+        items: result.items.map((item) => ({ projectId: item.projectId, name: projectNames.get(item.projectId) || '사업명 확인 필요', month: item.settlementCycle.businessState,
           health: item.settlementCycle.health, weeks: item.settlementStatuses.items.map(({ period, status }) => ({ period, status })) })), errors: result.errors });
-      tools.push({ name: 'settlement_report',
-        description: '월결산 미완료 사업과 조직장, 또는 지정 주차의 승인 기한을 놓친 사업을 서버 코드로 조회합니다. 전체 목록은 projectIds를 생략합니다. yearMonth는 운영 주기월이며 월결산 대상은 직전 월입니다. 주간 조회는 weekNo와 cutoff(시간대 포함)를 지정하세요. cutoff는 마감시각 상한이며 과거 상태 복원이 아닙니다. 현재 미승인과 기한후 승인을 함께 표시합니다. 정산 의무 대상 명단과 등록 사업 명단은 다릅니다.',
-        schema: z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/),
-          kind: z.enum(['month_incomplete', 'week_overdue']), weekNo: z.number().int().min(1).max(5).optional(),
-          cutoff: z.iso.datetime({ offset: true }).optional(),
-          includeLateApproved: z.boolean().optional().describe('false이면 현재 미승인만, true 또는 생략이면 기한후 승인도 함께 조회합니다.'),
-          projectIds: z.array(z.string().min(1).max(120).regex(/^[^/]+$/)).min(1).max(100).optional(),
-        }).strict().refine((v) => v.kind !== 'week_overdue' || (v.weekNo && v.cutoff), '주차와 기준 시각을 지정해주세요.'),
-        execute: async (input, { signal }) => readSettlementAgentReport({ db, context: await readContextFor(job), input, readOverview, signal, record }),
-        modelResult: (result) => ({ yearMonth: result.yearMonth, checked: result.checked, matches: result.rows.length,
-          complete: result.complete, warning: result.warning, evidence: '검증된 사업·조직장 목록은 서버가 답변에 직접 포함합니다.' }),
-        render: (result) => {
-          const labels = { NOT_REQUESTED: '요청 전', SUBMITTED: '승인 대기', REOPEN_REQUESTED: '재개 요청', REOPENED: '재개됨',
-            REJECTED: '반려', WITHDRAWN: '철회', UNKNOWN: '확인 필요', WAITING_FOR_UPDATE: '업데이트 대기', PENDING_APPROVAL: '승인 대기', LATE_APPROVED: '기한 후 승인 완료' };
-          return [`[${result.kind === 'month_incomplete' ? '월결산 미완료·확인 필요 사업' : '주간 승인 기한 확인'}]`,
-            result.weekNo ? `주정산: ${result.yearMonth} · ${result.weekNo}주차` : `월결산 대상: ${result.monthCloseTargetYearMonth}`,
-            ...(result.cutoff ? [`마감 기준: ${new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date(result.cutoff))} (한국시간)까지 · 상태는 현재 조회 기준입니다.`] : []),
-            ...(result.weekNo ? [result.includeLateApproved ? '현재 미승인 및 기한 후 승인 포함' : '현재 미승인만 조회'] : []),
-            `조회 ${result.checked}개 사업 · 해당 ${result.rows.length}개 사업`, result.warning,
-            ...(!result.complete ? ['요청한 사업 중 조회할 수 없는 항목이 있어 전체 결과가 아닙니다.'] : []),
-            ...result.rows.map((row) => `- ${row.name} / ${row.leader}: ${labels[row.state] || '확인 필요'}`),
-            ...(!result.rows.length ? ['조회 범위에서 해당하는 사업이 없습니다.'] : []),
-          ].join('\n');
+      tools.push(...createSettlementReportTools({
+        readReport: async (input, { signal }) => readSettlementAgentReport({ db, context: await readContextFor(job), input, readOverview, signal, record }),
+        loadPreviousReports: () => loadPreviousReportSnapshots({ db, job, authorize: () => contextFor(job) }),
+        saveReport: async (snapshot) => {
+          snapshot = { ...snapshot, sourceJobId: snapshot.sourceJobId || job.id };
+          const index = reportSnapshots.findIndex((previous) => JSON.stringify(previous.query) === JSON.stringify(snapshot.query));
+          if (index < 0) reportSnapshots.push(snapshot); else reportSnapshots[index] = snapshot;
+          if (reportSnapshots.length > 5 || JSON.stringify(reportSnapshots).length > 200000) throw new Error('report_snapshot_too_large');
         },
-      });
+      }));
       tools.push({ name: 'agent_capabilities', description: '현재 에이전트가 접근하는 Slack 채널과 지원하는 조회 기능·제한을 설명합니다. 사업명 검색으로 권한을 추정하지 않습니다.',
         schema: z.object({}).strict(), execute: async () => { await contextFor(job); return {
           channel: '0_전사_공지_08_myscube', capabilities: ['전사 등록 사업 이름 검색', '전사 주정산·월결산 상태 조회', '등록 사업 기준 미완료·기한 경과 목록과 조직장 조회'],
@@ -150,11 +139,15 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
         }, render: (result) => `조회할 사업을 확인했어요${result.truncated ? ' (일부 검색 결과)' : ''}.\n${result.items.map((item) => `- ${item.name}`).join('\n') || '일치하는 사업이 없습니다. 사업명을 다시 알려주세요.'}`,
       });
       const complete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
-        onUsage: async (usage) => audit.push({ type: 'usage', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
+        onUsage: async (usage) => audit.push({ type: 'usage', phase: 'answer', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
+      });
+      const reviewComplete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
+        onUsage: async (usage) => audit.push({ type: 'usage', phase: 'review', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
       });
       const result = await runSettlementAgent({ question: job.question, history: (job.turns || []).flatMap((turn) => [
         { role: 'user', content: turn.question }, { role: 'assistant', content: turn.answer },
-      ]), tools, complete, maxSteps: 3, signal: AbortSignal.timeout(100000),
+      ]), tools, complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
+        reviewAnswer: (input) => reviewGroundedAnswer({ ...input, complete: reviewComplete }),
         loadFeedback: async (scope) => {
           const key = feedbackScopeKey(job, scope);
           if (!scopes.some((item) => item.key === key)) scopes.push({ key, scope });
@@ -165,7 +158,7 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       await contextFor(job);
       await record({ type: 'run_result', status: result.status, answer: result.answer });
       answerStatus = result.status;
-      answer = `안녕하세요! 요청하신 조회 결과를 공유드립니다.\n\n${result.answer}\n\n조회 범위가 다르거나 추가로 확인할 내용이 있으면 이 스레드에 남겨주세요. 감사합니다!`;
+      answer = result.answer;
     } catch (error) {
       audit.push({ type: 'failure', code: /^[a-z_]+$/.test(error.message || '') ? error.message : 'lookup_failed' });
       answer = ['member_unverified', 'member_inactive'].includes(error.message)
@@ -177,17 +170,20 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
           : '조회 도중 처리를 마치지 못했어요. 정산이 미완료라는 뜻은 아닙니다. 사업과 기간을 좁혀 다시 요청해주세요. 같은 문제가 반복되면 이 스레드를 관리자에게 공유해주세요.';
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n조회 기준: ${queriedAt} (한국시간)`;
+    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)`;
     const blocks = answerBlocks(text);
     const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     if (publicAnswer && answerStatus === 'answered' && scopes.length) blocks.push({ type: 'context', elements: [{ type: 'plain_text', text: '정정할 내용은 댓글로 편하게 알려주세요. 아래 조회 범위 평가는 선택사항입니다.' }] }, { type: 'actions', elements: [
       { type: 'button', action_id: 'settlement_scope_yes', text: { type: 'plain_text', text: '예 · 범위가 맞아요' }, value: job.id },
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
-    await updateClaimedJob({ db, job, patch: { status: 'sending', answer: text, scopes, audit, answeredAt: new Date().toISOString() } });
+    await updateClaimedJob({ db, job, patch: { status: 'sending', answer: text, scopes, audit,
+      reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
+      answeredAt: new Date().toISOString() } });
     try {
       const result = await slack(publicAnswer ? 'chat.postMessage' : 'chat.postEphemeral', {
-        channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs, text, blocks,
+        channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
+        text: slackText(text), blocks, parse: 'none', unfurl_links: false, unfurl_media: false,
       });
       await updateClaimedJob({ db, job, patch: { status: 'succeeded', answerTs: publicAnswer ? result.ts : result.message_ts } });
     } catch {
@@ -272,7 +268,7 @@ export function createFeedbackIngress({ db, secret, teamId, channelId, fetchImpl
       const result = await fetchImpl(url.href, { method: 'POST', redirect: 'error',
         headers: { 'content-type': 'application/json' }, signal: AbortSignal.timeout(timeout),
         body: JSON.stringify({ replace_original: true,
-          text: `${job.data().answer}\n\n${feedbackText}`,
+          text: slackText(`${job.data().answer}\n\n${feedbackText}`),
           blocks: [...answerBlocks(job.data().answer),
             { type: 'context', elements: [{ type: 'plain_text', text: feedbackText }] }],
         }),

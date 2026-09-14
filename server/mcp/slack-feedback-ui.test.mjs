@@ -5,7 +5,7 @@ import { createFeedbackIngress } from './slack-runtime.mjs';
 it.each(['yes', 'no'])('replaces buttons with persisted %s feedback without hiding the public answer', async (choice) => {
   const documents = new Map([['settlement_agent_jobs/job1', {
     status: 'succeeded', slackUserId: 'U1', teamId: 'T1', channelId: 'C1', answerTs: '1.2',
-    answer: '월결산: 확정', scopes: [{ key: 'scope1' }],
+    answer: '📌 *월결산: 확정* <!channel> <@UOTHER>', scopes: [{ key: 'scope1' }],
   }]]);
   const db = { doc: (path) => ({ path, get: async () => ({ data: () => documents.get(path) }) }),
     runTransaction: async (fn) => fn({ get: async (ref) => ({ data: () => documents.get(ref.path) }),
@@ -19,6 +19,8 @@ it.each(['yes', 'no'])('replaces buttons with persisted %s feedback without hidi
     expect(body.response_type).toBeUndefined();
     expect(body.blocks.some((block) => block.type === 'actions')).toBe(false);
     expect(body.text).toContain('월결산: 확정');
+    expect(body.text).not.toContain('<!channel>');
+    expect(body.blocks[0].text).toEqual({ type: 'mrkdwn', text: '📌 *월결산: 확정* &lt;!channel&gt; &lt;@UOTHER&gt;', verbatim: true });
     expect(body.text).toContain(choice === 'yes' ? '감사합니다' : '스레드');
     expect(options.redirect).toBe('error');
     return new Response('ok');

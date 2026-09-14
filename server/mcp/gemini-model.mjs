@@ -56,6 +56,9 @@ export function createGeminiCompletion({ apiKey, model = 'gemini-3.6-flash', cli
       });
     }
     await onUsage(response.usageMetadata || {});
+    if (response.candidates?.[0]?.finishReason && response.candidates[0].finishReason !== 'STOP') {
+      throw new Error('모델 응답이 완성되지 않았습니다.');
+    }
     const content = response.candidates?.[0]?.content;
     if (!content?.parts?.length) throw new Error('Gemini 응답에 사용할 내용이 없습니다.');
     const calls = content.parts.filter((part) => part.functionCall).map((part) => ({
