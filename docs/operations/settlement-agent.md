@@ -6,13 +6,17 @@ Slack → Vercel BFF 서명 검증 → Firestore job → Google Cloud Scheduler(
 
 ## 연결
 
-- Events: `https://myscube.myscguard.app/api/slack/events`, `app_mention` 구독
+- Events: `https://myscube.myscguard.app/api/slack/events`, `app_mention`, `message.channels` 구독 (`channels:history` 필요)
 - Interactivity: `https://myscube.myscguard.app/api/slack/interactions`
 - Scheduler: `/api/internal/workers/settlement-agent/run`, 전용 `SETTLEMENT_AGENT_WORKER_SECRET` bearer 인증. 일반 `CRON_SECRET`은 이 경로에서 사용하지 않는다.
 - Workspace `T099F304GAY`, channel `C0BQ6980HR6`
 - Google Gemini Developer API, `gemini-3.6-flash`
 - GitHub Production secrets: `SETTLEMENT_AGENT_GEMINI_API_KEY`, `SETTLEMENT_AGENT_WORKER_SECRET`, `SLACK_SIGNING_SECRET`, 기존 `SLACK_ALERT_BOT_TOKEN`. 서버에만 주입한다. 명함 인식의 기존 `GEMINI_API_KEY`는 변경하지 않는다.
 - Slack 권한 `app_mentions:read`, `users:read.email`, `chat:write` 등이 필요하다. 변경 후 앱 재설치와 URL 등록은 별도 Slack 관리자 작업이다.
+
+멘션으로 대화를 시작한 뒤 같은 사용자는 원래 스레드에 댓글로 질문을 이어간다. 최근 6회 대화를 문맥으로 전달하되 정산값은 매번 새로 조회한다. 여러 사업·기간도 조회 가능하며 조회 한도에 도달하면 확인된 일부 결과와 미완료 안내를 함께 보낸다. 다른 사용자는 직접 멘션해 별도 문맥으로 시작한다. 일반 채널 메시지, 봇 메시지, 수정 이벤트는 처리하지 않는다. 최초 멘션이 아직 서버에 도착하지 않은 스레드의 댓글은 무시되므로 최초 응답 전 누락된 질문은 멘션으로 다시 보낸다.
+
+스레드당 최대 10건을 접수 순서로 처리하며 질문과 답변은 사용자별로 분리한다. `settlement_agent_jobs`의 `status, createdAt` 복합 인덱스를 배포 전에 준비한다. 신규 정렬 조회는 `createdAt` 없는 기존 작업을 포함하지 않으므로 운영 작업 재고를 먼저 확인한다.
 
 ## 데이터·권한
 

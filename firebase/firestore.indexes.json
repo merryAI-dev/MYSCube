@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "settlement_agent_jobs",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "expense_sets",
       "queryScope": "COLLECTION",
       "fields": [

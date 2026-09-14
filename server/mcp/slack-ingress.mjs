@@ -19,20 +19,35 @@ export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR
     if (payload.type === 'url_verification') return res.json({ challenge: payload.challenge });
     if (payload.team_id !== teamId) return res.status(403).json({ error: 'workspace_not_allowed' });
     const event = payload.event;
-    if (payload.type !== 'event_callback' || event?.type !== 'app_mention' || event.bot_id || event.subtype
+    if (payload.type !== 'event_callback' || !['app_mention', 'message'].includes(event?.type) || event.bot_id || event.subtype
       || event.channel !== channelId) return res.json({ ok: true, ignored: true });
     if (!/^[UW][A-Z0-9]+$/.test(event.user || '') || typeof payload.event_id !== 'string'
-      || typeof event.text !== 'string' || event.text.length > 8000) return res.status(400).json({ error: 'invalid_event' });
-    const key = createHash('sha256').update(`${teamId}:${payload.event_id}`).digest('hex');
+      || typeof event.text !== 'string' || !event.text.trim() || event.text.length > 8000
+      || !/^\d{1,12}\.\d{1,6}$/.test(event.ts || '')
+      || (event.thread_ts && !/^\d{1,12}\.\d{1,6}$/.test(event.thread_ts))) return res.status(400).json({ error: 'invalid_event' });
+    if (event.type === 'message' && !event.thread_ts) return res.json({ ok: true, ignored: true });
+    const threadTs = event.thread_ts || event.ts;
+    const key = createHash('sha256').update(`${teamId}:${channelId}:${event.ts}`).digest('hex');
+    const conversationId = createHash('sha256').update(`${teamId}:${channelId}:${threadTs}:${event.user}`).digest('hex');
     try {
-      await db.doc(`settlement_agent_jobs/${key}`).create({
-        teamId, channelId, slackUserId: event.user, eventId: payload.event_id,
-        threadTs: event.thread_ts || event.ts, question: event.text,
-        status: 'queued', createdAt: new Date(now()).toISOString(), attempts: 0,
+      const accepted = await db.runTransaction(async (tx) => {
+        const jobRef = db.doc(`settlement_agent_jobs/${key}`);
+        const conversationRef = db.doc(`settlement_agent_threads/${conversationId}`);
+        const [job, stored] = await Promise.all([tx.get(jobRef), tx.get(conversationRef)]);
+        if (job.exists) return true;
+        if (!stored.exists && event.type !== 'app_mention') return false;
+        const conversation = stored.data() || { teamId, channelId, slackUserId: event.user, threadTs, turns: [], queue: [] };
+        if (conversation.queue.length >= 10) throw new Error('thread_queue_full');
+        const queuedAt = Math.max(now(), (conversation.lastQueuedAt || 0) + 1);
+        tx.set(conversationRef, { ...conversation, lastQueuedAt: queuedAt, queue: [...conversation.queue, key] });
+        tx.create(jobRef, { teamId, channelId, slackUserId: event.user, eventId: payload.event_id,
+          conversationId, threadTs, question: event.text,
+          status: 'queued', createdAt: new Date(queuedAt).toISOString(), attempts: 0 });
+        return true;
       });
+      return res.json({ ok: true, ...(!accepted ? { ignored: true } : {}) });
     } catch (error) {
-      if (error?.code !== 6 && error?.code !== 'already-exists') return res.status(503).json({ error: 'queue_unavailable' });
+      return res.status(503).json({ error: 'queue_unavailable' });
     }
-    return res.json({ ok: true });
   };
 }

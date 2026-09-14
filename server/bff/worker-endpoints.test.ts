@@ -34,7 +34,7 @@ function createTestApp(options: Parameters<typeof createBffApp>[0] = {}) {
 describe('internal worker endpoints (cron)', () => {
   it('isolates the cloud agent token and blocks maintenance before database access', async () => {
     const get = vi.fn(async () => ({ docs: [] }));
-    const db = { collection: vi.fn(() => ({ where: () => ({ limit: () => ({ get }) }) })),
+    const db = { collection: vi.fn(() => ({ where: () => ({ orderBy: () => ({ limit: () => ({ get }) }) }) })),
       doc: () => { throw new Error('Unexpected document access'); }, runTransaction: () => { throw new Error('Unexpected write'); } };
     const env = { BFF_DEPLOY_ENV: 'local', BFF_SCHEDULER_OWNER: 'vercel', CRON_SECRET: LONG_CRON_SECRET,
       SETTLEMENT_AGENT_ENABLED: 'true', SETTLEMENT_AGENT_WORKER_SECRET: 'agent-only', SLACK_ALERT_BOT_TOKEN: 'fixture', SLACK_SIGNING_SECRET: 'fixture' };
