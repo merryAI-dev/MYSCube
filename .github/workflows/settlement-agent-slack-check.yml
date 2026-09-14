@@ -8,6 +8,10 @@ on:
         type: boolean
         required: true
         default: false
+      check_model:
+        description: 'Check configured Gemini model with a benign prompt (no business data)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -36,3 +40,11 @@ jobs:
           else
             node scripts/check-settlement-slack.mjs
           fi
+      - name: Install model SDK
+        if: inputs.check_model
+        run: npm ci --ignore-scripts
+      - name: Verify configured Gemini connection
+        if: inputs.check_model
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: node scripts/check-settlement-gemini.mjs

@@ -13,7 +13,7 @@ if (!token) {
     });
     const body = await response.json();
     if (!response.ok || !body.ok) throw new Error('Slack authentication failed');
-    console.log(JSON.stringify({ authenticated: true, teamId: body.team_id, botId: body.bot_id, user: body.user, channel }));
+    console.log(JSON.stringify({ authenticated: true, teamId: body.team_id, botId: body.bot_id, user: body.user, channel, scopes: response.headers.get('x-oauth-scopes') }));
     if (process.argv.includes('--send-test')) {
       await createSlackAlertService({
         webhookUrl: '', botToken: token, channelId: channel,
