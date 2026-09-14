@@ -8,9 +8,10 @@ export function verifySlackRequest({ body, timestamp, signature, secret, now = D
   return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 }
 
-export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR6', now = () => Date.now() }) {
+export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR6', botToken, fetchImpl = fetch, now = () => Date.now() }) {
   if (!teamId || !secret) throw new Error('Slack workspace and signing secret are required');
   return async function ingest(req, res) {
+    const started = performance.now();
     if (!verifySlackRequest({ body: req.body, timestamp: req.get('x-slack-request-timestamp'), signature: req.get('x-slack-signature'), secret, now: now() })) {
       return res.status(401).json({ error: 'invalid_signature' });
     }
@@ -34,7 +35,7 @@ export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR
         const jobRef = db.doc(`settlement_agent_jobs/${key}`);
         const conversationRef = db.doc(`settlement_agent_threads/${conversationId}`);
         const [job, stored] = await Promise.all([tx.get(jobRef), tx.get(conversationRef)]);
-        if (job.exists) return true;
+        if (job.exists) return 'duplicate';
         if (!stored.exists && event.type !== 'app_mention') return false;
         const conversation = stored.data() || { teamId, channelId, slackUserId: event.user, threadTs, turns: [], queue: [] };
         if (conversation.queue.length >= 10) throw new Error('thread_queue_full');
@@ -43,8 +44,24 @@ export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR
         tx.create(jobRef, { teamId, channelId, slackUserId: event.user, eventId: payload.event_id,
           conversationId, threadTs, question: event.text,
           status: 'queued', createdAt: new Date(queuedAt).toISOString(), attempts: 0 });
-        return true;
+        return 'created';
       });
+      const receiptTimeout = Math.min(800, Math.floor(2400 - (performance.now() - started)));
+      if (accepted === 'created' && botToken && receiptTimeout > 0) {
+        try {
+          const receipt = await fetchImpl('https://slack.com/api/chat.postMessage', {
+            method: 'POST', headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },
+            signal: AbortSignal.timeout(receiptTimeout),
+            body: JSON.stringify({ channel: channelId, thread_ts: threadTs,
+              text: `안녕하세요 <@${event.user}>님! 요청을 접수했어요. 순서대로 조회해볼게요. 결과는 이곳에 이어서 알려드릴게요.`,
+            }),
+          });
+          if (!receipt.ok || !(await receipt.json()).ok) throw new Error('receipt_failed');
+        } catch {
+          // The durable job must still run when this best-effort receipt cannot be delivered.
+          console.warn('[settlement-agent] receipt_unavailable', key.slice(0, 8));
+        }
+      }
       return res.json({ ok: true, ...(!accepted ? { ignored: true } : {}) });
     } catch (error) {
       return res.status(503).json({ error: 'queue_unavailable' });

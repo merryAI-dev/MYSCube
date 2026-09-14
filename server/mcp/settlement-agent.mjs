@@ -8,21 +8,23 @@ const statusInput = z.object({
 }).strict();
 
 // Credentials and authorization are supplied by the authenticated host, never by model arguments.
-export function settlementTools({ resolveAuthorization, baseUrl, fetchImpl, audit, readStatus }) {
+export function settlementTools({ resolveAuthorization, baseUrl, fetchImpl, audit, readStatus, projectNames = new Map() }) {
   return [{
     name: 'cashflow_status',
     description: '권한 내 프로젝트의 주정산·월결산을 조회합니다. yearMonth는 운영 주기월(주정산 월)이며 월결산 대상은 그 직전 월입니다. 예: 8월 월결산은 yearMonth=2026-09로 조회합니다.',
     schema: statusInput,
     render(result) {
-      const lines = [`주정산 조회월: ${result.yearMonth} · 월결산 대상월: ${result.monthCloseTargetYearMonth}`];
+      const lines = [`[주간정산·월결산 진행 현황]`, `주정산 조회월: ${result.yearMonth} · 월결산 대상월: ${result.monthCloseTargetYearMonth}`];
       const labels = { WAITING_FOR_UPDATE: '업데이트 대기', PENDING_APPROVAL: '조직장 승인 대기', COMPLETED: '승인 완료', SUBMITTED: '승인 대기', LOCKED: '확정' };
       const cycleLabels = { NOT_REQUESTED: '요청 전', SUBMITTED: '승인 대기', LOCKED: '확정', REOPEN_REQUESTED: '재개 요청', REOPENED: '재개됨', REJECTED: '반려', WITHDRAWN: '철회', INCONSISTENT: '확인 필요' };
       for (const item of result.items) {
-        lines.push(`사업 ID: ${item.projectId}`);
+        lines.push('', projectNames.get(item.projectId) || '사업명 확인 필요');
         const cycle = item.settlementCycle;
         lines.push(`월결산: ${cycle.health === 'OK' ? cycleLabels[cycle.businessState] : '확인 필요'}`);
-        for (const status of item.settlementStatuses.items.filter((status) => status.period !== 'MONTH')) {
-          lines.push(`${status.period.slice(5)}주차: ${labels[status.status]}`);
+        for (const value of ['COMPLETED', 'PENDING_APPROVAL', 'WAITING_FOR_UPDATE']) {
+          const weeks = item.settlementStatuses.items.filter((status) => status.period !== 'MONTH' && status.status === value)
+            .map((status) => Number(status.period.slice(5))).sort((a, b) => a - b);
+          if (weeks.length) lines.push(`- ${weeks.join('·')}주차: ${labels[value]}`);
         }
       }
       if (result.errors.length) lines.push('일부 부가 요약을 조회하지 못했습니다.');

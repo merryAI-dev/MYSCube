@@ -6,7 +6,7 @@ import { createHmac } from 'node:crypto';
 import { createSlackIngress } from '../mcp/slack-ingress.mjs';
 
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker persistence', () => {
-  it('runs search and canonical status lookup, privately replies, persists and reloads feedback', async () => {
+  it('runs search and canonical status lookup, publicly replies, keeps errors private and reloads feedback', async () => {
     const db = createFirestoreDb({ projectId: 'demo-agent-runtime', appName: 'agent-runtime-test' });
     const id = createHash('sha256').update(`job-${Date.now()}`).digest('hex');
     const memberId = `actor-${id}`;
@@ -50,9 +50,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
           expect(options.body).toBeUndefined();
           return Response.json({ ok: true, user: { team_id: 'T099F304GAY', profile: { email } } });
         }
-        expect(url).toBe('https://slack.com/api/chat.postEphemeral');
+        expect(url).toBe(`https://slack.com/api/${deliveries.length < 2 ? 'chat.postMessage' : 'chat.postEphemeral'}`);
         deliveries.push(JSON.parse(options.body));
-        return Response.json({ ok: true, message_ts: '2.1' });
+        return Response.json({ ok: true, message_ts: '2.1', ts: '2.1' });
       },
       readOverview: async ({ context, body }: any) => {
         expect(context.actorId).toBe(memberId);
@@ -74,7 +74,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     await worker();
     expect(lookups).toBe(1);
     expect(deliveries).toHaveLength(1);
-    expect(deliveries[0].user).toBe(slackUserId);
+    expect(deliveries[0].user).toBeUndefined();
+    expect(deliveries[0].channel).toBe('C0BQ6980HR6');
+    expect(deliveries[0].thread_ts).toBeDefined();
     expect(deliveries[0].text).toContain('월결산: 확정');
     expect(deliveries[0].text).not.toContain('999');
     const saved = (await firstRef.get()).data()!;
@@ -98,6 +100,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     await worker();
     expect(lookups).toBe(2);
     expect((await deniedRef.get()).data()!.audit).toContainEqual({ type: 'failure', code: 'member_unverified' });
+    expect(deliveries[2].user).toBe(slackUserId);
   });
 
   it('permits only one concurrent claimant and rejects a replaced lease', async () => {
