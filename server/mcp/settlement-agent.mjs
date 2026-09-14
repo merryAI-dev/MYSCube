@@ -69,7 +69,14 @@ export async function runSettlementAgent({
   let failed = false;
   for (let step = 0; step < maxSteps; step += 1) {
     signal.throwIfAborted();
-    const reply = await complete({ messages: structuredClone(messages), tools: definitions, signal });
+    let reply;
+    try { reply = await complete({ messages: structuredClone(messages), tools: definitions, signal }); }
+    catch (error) {
+      signal.throwIfAborted();
+      await record({ type: 'model_failure', step, code: error?.message === 'input_budget_exceeded' ? 'input_budget_exceeded' : 'model_unavailable' });
+      if (answers.length) return { status: 'partial', answer: [...answers, '추가 응답 처리를 마치지 못했습니다. 위 내용은 확인된 일부 결과입니다.'].join('\n\n') };
+      throw error;
+    }
     signal.throwIfAborted();
     const calls = reply?.tool_calls;
     if (calls !== undefined && !Array.isArray(calls)) throw new Error('도구 호출 형식이 올바르지 않습니다.');
@@ -87,6 +94,12 @@ export async function runSettlementAgent({
       try {
         if (!tool || typeof call.id !== 'string') throw new Error('Unknown tool');
         const input = tool.schema.parse(JSON.parse(call.function.arguments));
+        if (tool.observationOnly) {
+          const observation = await tool.execute(input, { signal });
+          await record({ type: 'conversation_feedback', ...observation });
+          messages.push({ role: 'tool', tool_call_id: call.id, content: JSON.stringify({ recorded: true, trainingEligible: false }) });
+          continue;
+        }
         // Authorization/tenant/user binding belongs to the host closure, never tool arguments.
         const scope = { question: question.trim(), tool: tool.name, input: structuredClone(input) };
         if (Array.isArray(scope.input.projectIds)) scope.input.projectIds.sort();
@@ -102,11 +115,13 @@ export async function runSettlementAgent({
         };
         result = await tool.execute(input, { signal });
         signal.throwIfAborted();
-        const content = JSON.stringify(result);
+        const content = JSON.stringify(tool.modelResult ? tool.modelResult(result) : result);
         if (!content || content.length > 100_000) throw new Error('Result too large');
         if (typeof tool.render !== 'function') throw new Error('Verified renderer required');
         const rendered = tool.render(result);
         if (typeof rendered !== 'string' || !rendered.trim() || rendered.length > 100_000) throw new Error('Invalid rendered result');
+        await record({ type: 'tool_result', step, tool: tool.name, input, result: tool.modelResult ? tool.modelResult(result) : result });
+        if (tool.requiresReply) return { status: 'needs_clarification', answer: rendered };
         answers.push(rendered);
         outcome = 'ok';
         messages.push({ role: 'tool', tool_call_id: call.id, content });
