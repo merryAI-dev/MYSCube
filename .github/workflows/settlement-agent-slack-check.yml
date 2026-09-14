@@ -97,3 +97,22 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
         run: node scripts/check-settlement-gemini.mjs
+      - name: Diagnose blocked Slack probes without changing firewall settings
+        if: failure() && (inputs.check_runtime || inputs.apply_slack_exception)
+        env:
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          node --input-type=module <<'JS'
+          const end = new Date(), start = new Date(end.getTime() - 600000);
+          const response = await fetch('https://api.cloudflare.com/client/v4/graphql', {
+            method: 'POST', headers: { 'X-Auth-Key': process.env.CLOUDFLARE_API_KEY, 'X-Auth-Email': process.env.CLOUDFLARE_EMAIL, 'content-type': 'application/json' },
+            body: JSON.stringify({ query: 'query($zone: String!, $start: Time!, $end: Time!) { viewer { zones(filter: {zoneTag: $zone}) { firewallEventsAdaptive(limit: 1000, filter: {datetime_geq: $start, datetime_leq: $end}, orderBy: [datetime_DESC]) { action source ref description clientRequestHTTPHost clientRequestPath edgeResponseStatus userAgent datetime rayName } } } }',
+              variables: { zone: process.env.CLOUDFLARE_ZONE_ID, start: start.toISOString().replace(/\.\d{3}Z$/, 'Z'), end: end.toISOString().replace(/\.\d{3}Z$/, 'Z') } }), signal: AbortSignal.timeout(15000),
+          });
+          const result = await response.json();
+          if (!response.ok || result.errors?.length) throw new Error(`Firewall diagnostics unavailable: ${response.status}`);
+          const events = result.data.viewer.zones[0]?.firewallEventsAdaptive || [];
+          console.log(JSON.stringify(events.filter(e => e.clientRequestHTTPHost === 'myscube.myscguard.app' && ['/api/slack/events', '/api/slack/interactions'].includes(e.clientRequestPath)), null, 2));
+          JS
