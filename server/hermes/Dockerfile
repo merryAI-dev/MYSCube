@@ -6,7 +6,7 @@ RUN git init . && git remote add origin https://github.com/nousresearch/hermes-a
     git fetch --depth 1 origin 939e45c91d751fadd94dcd1b873ac3cb44846213 && \
     git checkout --detach FETCH_HEAD && \
     test "$(git rev-parse HEAD)" = "939e45c91d751fadd94dcd1b873ac3cb44846213" && \
-    uv sync --frozen --no-dev
+    uv sync --frozen --no-dev --python /usr/local/bin/python --no-managed-python
 RUN useradd --uid 10001 --create-home harness
 COPY server/hermes/harness.py server/hermes/service.py server/hermes/test_harness.py server/hermes/test_service.py /app/
 ENV PATH="/opt/hermes/.venv/bin:$PATH" PYTHONPATH="/opt/hermes" PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
