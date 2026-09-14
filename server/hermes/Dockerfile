@@ -1,4 +1,5 @@
-FROM ghcr.io/astral-sh/uv:0.11.6-python3.13-bookworm-slim
+FROM python:3.13-slim-bookworm
+RUN pip install --no-cache-dir uv==0.11.6
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/hermes
 RUN git init . && git remote add origin https://github.com/nousresearch/hermes-agent.git && \
