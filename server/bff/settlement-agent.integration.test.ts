@@ -43,7 +43,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     }] };
     const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture' },
       fetchImpl: async (url: string, options: any) => {
-        if (url.endsWith('users.info')) return Response.json({ ok: true, user: { team_id: 'T099F304GAY', profile: { email } } });
+        if (new URL(url).pathname === '/api/users.info') {
+          expect(options.method).toBe('GET');
+          expect(new URL(url).searchParams.get('user')).toBe(slackUserId);
+          expect(options.body).toBeUndefined();
+          return Response.json({ ok: true, user: { team_id: 'T099F304GAY', profile: { email } } });
+        }
         expect(url).toBe('https://slack.com/api/chat.postEphemeral');
         deliveries.push(JSON.parse(options.body));
         return Response.json({ ok: true, message_ts: '2.1' });
