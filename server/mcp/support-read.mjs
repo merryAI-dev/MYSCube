@@ -16,10 +16,11 @@ export const SUPPORT_KNOWLEDGE = Object.freeze([
     facts: ['상위 409 오류만으로 어느 셀이 잘못됐는지 확정할 수 없습니다. 상세 blocker와 sourceCell을 확인해야 합니다.',
       'SHEET_CONTROL_TOTAL_INCOMPLETE는 Projection 또는 Actual 검산 행이 19개가 아닌 경우입니다.',
       'SHEET_CONTROL_TOTAL_INVALID는 deposit.matches 또는 검산 행 matches가 boolean으로 읽히지 않은 경우입니다. Projection과 Actual 금액이 다르다는 의미가 아닙니다.',
+      'matches는 시트 셀 값이 아니라 서버가 검산 셀의 숫자(value)와 계산 숫자(computed)를 비교해 만든 필드입니다. 둘 중 하나가 null이면 matches도 null입니다. 시트 셀을 TRUE/FALSE로 바꾸라는 뜻이 아닙니다.',
       'SHEET_CONTROL_TOTAL_MISMATCH는 비교 가능한 시트 검산값과 주차 합계의 불일치 경고입니다.',
       'BO는 기존 오류 문구에 남은 이름입니다. 실제 수정할 좌표는 상세 sourceCell 및 현재 좌표 계약으로 확인해야 합니다.'],
     nextSteps: ['플랫폼 오류 상세의 셀 주소·항목·구분을 확인하세요.', '해당 셀의 수식 결과가 숫자인지 확인하고, 사람이 시트값 다시 불러오기를 실행한 후 재확인하세요.', '상세가 없다면 특정 셀이나 수식을 임의로 수정하지 말고 사업명·대상월·오류 상세를 요청하세요.'],
-    sources: ['server/bff/routes/jvm-weekly-api.mjs#sheetControlBlockers', 'src/app/components/cashflow/cashflow-month-close-blocker-helpers.ts', 'server/bff/routes/jvm-weekly-api.test.mjs'] },
+    sources: ['server/bff/routes/jvm-weekly-api.mjs#sheetControlBlockers', 'server/bff/cashflow-sheet-snapshot.mjs', 'src/app/components/cashflow/cashflow-month-close-blocker-helpers.ts', 'server/bff/routes/jvm-weekly-api.test.mjs'] },
   { topic: 'agent_runtime', title: '에이전트 실행·QA 해석',
     facts: ['Slack 접수, 큐 실행, 도구 조회, 모델 응답, 근거 검토, Slack 발송은 서로 다른 단계입니다.',
       '작업 상태 succeeded는 메시지 전달 완료입니다. 업무 정산 완료나 답변의 정답을 의미하지 않습니다.',
@@ -43,7 +44,7 @@ export function summarizeClientError(event) {
     errorClass: ['Error', 'TypeError', 'FirebaseError', 'PlatformApiError', 'NetworkError', 'AbortError'].includes(event.name) ? event.name : 'unknown',
     area: /^\/(?:portal\/)?cashflow(?:\/|$)/.test(event.route || '') ? 'cashflow'
       : /^\/(?:portal\/)?project(?:s|s\/|\/|-)/.test(event.route || '') ? 'projects' : 'other',
-    code: safeDiagnosticCode({ code: event.extra?.code }),
+    code: codes.has(event.extra?.code) ? event.extra.code : null,
     httpStatus: Number.isInteger(event.extra?.status) && event.extra.status >= 100 && event.extra.status <= 599 ? event.extra.status : null,
   };
 }

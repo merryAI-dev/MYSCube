@@ -10,6 +10,7 @@ describe('read-only support harness', () => {
       extra: { status: 409, code: 'cashflow_month_close_validation_failed', token: 'secret' } });
     expect(value).toMatchObject({ area: 'cashflow', httpStatus: 409, code: 'cashflow_month_close_validation_failed' });
     expect(JSON.stringify(value)).not.toMatch(/secret|Bearer|actorEmail|stack/);
+    expect(summarizeClientError({ extra: { code: 'not-exposed' } }).code).toBeNull();
   });
   it('exposes verified execution metadata, never source payloads or unrecognized strings', async () => {
     const records = [];
@@ -65,5 +66,7 @@ describe('read-only support harness', () => {
     const code = readFileSync('server/bff/routes/jvm-weekly-api.mjs', 'utf8');
     expect(code).toContain('projectionRows.length !== 19 || actualRows.length !== 19');
     expect(code).toContain("typeof controls?.deposit?.matches !== 'boolean'");
+    expect(result.entries[0].facts.join(' ')).toContain('시트 셀을 TRUE/FALSE로 바꾸라는 뜻이 아닙니다');
+    expect(readFileSync('server/bff/cashflow-sheet-snapshot.mjs', 'utf8')).toContain('matches: value === null || computed === null ? null : value === computed');
   });
 });
