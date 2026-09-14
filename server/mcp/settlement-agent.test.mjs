@@ -3,6 +3,19 @@ import * as z from 'zod/v4';
 import { runSettlementAgent, settlementTools } from './settlement-agent.mjs';
 
 describe('settlement agent', () => {
+  it('uses bounded multi-turn context while answering multiple queries only from fresh tools', async () => {
+    let step = 0;
+    const result = await runSettlementAgent({ question: '그 두 사업 지난달도?', history: [
+      { role: 'user', content: 'AXR과 GGGI 9월 조회' }, { role: 'assistant', content: '이전 조회: 모두 완료' },
+    ], tools: [{ name: 'status', schema: z.object({ id: z.string() }), execute: async ({ id }) => ({ id }), render: ({ id }) => `${id}: 현재 승인 대기` }],
+    complete: async ({ messages }) => {
+      expect(messages.some((m) => m.content === 'AXR과 GGGI 9월 조회')).toBe(true);
+      return step++ ? { content: '모두 완료' } : { tool_calls: ['AXR', 'GGGI'].map((id) => ({ id, function: { name: 'status', arguments: JSON.stringify({ id }) } })) };
+    } });
+    expect(result.answer).toContain('AXR: 현재 승인 대기');
+    expect(result.answer).toContain('GGGI: 현재 승인 대기');
+    expect(result.answer).not.toContain('모두 완료');
+  });
   it('renders canonical cycle state and health rather than stale month settlement', () => {
     const tool = settlementTools({})[0];
     const result = { yearMonth: '2026-09', monthCloseTargetYearMonth: '2026-08', errors: [], items: [{

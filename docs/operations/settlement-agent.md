@@ -6,13 +6,17 @@ Slack → Vercel BFF 서명 검증 → Firestore job → Google Cloud Scheduler(
 
 ## 연결
 
-- Events: `https://myscube.myscguard.app/api/slack/events`, `app_mention` 구독
+- Events: `https://myscube.myscguard.app/api/slack/events`, `app_mention`, `message.channels` 구독 (`channels:history` 필요)
 - Interactivity: `https://myscube.myscguard.app/api/slack/interactions`
 - Scheduler: `/api/internal/workers/settlement-agent/run`, 전용 `SETTLEMENT_AGENT_WORKER_SECRET` bearer 인증. 일반 `CRON_SECRET`은 이 경로에서 사용하지 않는다.
 - Workspace `T099F304GAY`, channel `C0BQ6980HR6`
 - Google Gemini Developer API, `gemini-3.6-flash`
 - GitHub Production secrets: `SETTLEMENT_AGENT_GEMINI_API_KEY`, `SETTLEMENT_AGENT_WORKER_SECRET`, `SLACK_SIGNING_SECRET`, 기존 `SLACK_ALERT_BOT_TOKEN`. 서버에만 주입한다. 명함 인식의 기존 `GEMINI_API_KEY`는 변경하지 않는다.
 - Slack 권한 `app_mentions:read`, `users:read.email`, `chat:write` 등이 필요하다. 변경 후 앱 재설치와 URL 등록은 별도 Slack 관리자 작업이다.
+
+멘션으로 대화를 시작한 뒤 같은 사용자는 원래 스레드에 댓글로 질문을 이어간다. 최근 6회 대화를 문맥으로 전달하되 정산값은 매번 새로 조회한다. 여러 사업·기간도 조회 가능하며 조회 한도에 도달하면 확인된 일부 결과와 미완료 안내를 함께 보낸다. 다른 사용자는 직접 멘션해 별도 문맥으로 시작한다. 일반 채널 메시지, 봇 메시지, 수정 이벤트는 처리하지 않는다. 최초 멘션이 아직 서버에 도착하지 않은 스레드의 댓글은 무시되므로 최초 응답 전 누락된 질문은 멘션으로 다시 보낸다.
+
+스레드당 최대 10건을 접수 순서로 처리하며 질문과 답변은 사용자별로 분리한다. `settlement_agent_jobs`의 `status, createdAt` 복합 인덱스를 배포 전에 준비한다. 신규 정렬 조회는 `createdAt` 없는 기존 작업을 포함하지 않으므로 운영 작업 재고를 먼저 확인한다.
 
 ## 데이터·권한
 
@@ -31,7 +35,7 @@ Firestore 컬렉션:
 
 ## 실행·비용 한계
 
-`queued → running → sending → succeeded`. transaction lease와 fencing token으로 중복 실행·만료 worker의 덮어쓰기를 막는다. 발송 결과 불명확은 `delivery_unknown`으로 멈추고 무조건 재발송하지 않는다. succeeded는 전달 상태이며 실제 조회 실패는 답변·audit에 남는다. 실행 재시도 최대 3번, worker당 최대 1작업. 대화 기억·취소·자동 결과 재개·전체 조직 집계는 없다.
+`queued → running → sending → succeeded`. transaction lease와 fencing token으로 중복 실행·만료 worker의 덮어쓰기를 막는다. 발송 결과 불명확은 `delivery_unknown`으로 멈추고 무조건 재발송하지 않는다. succeeded는 전달 상태이며 실제 조회 실패는 답변·audit에 남는다. 실행 재시도 최대 3번, worker당 최대 1작업. 장기 대화 기억·취소·자동 결과 재개·전체 조직 집계는 없다.
 
 2026년 9~12월 한 시도당 500원, 월 30,000원까지 예약하고 반환하지 않는다(최대 60시도). 나머지 20,000원은 인프라 여유분이며 전체 클라우드 청구액의 강제 상한은 아니다. 호출당 입력 16,000·출력 2,048토큰, 시도당 최대 3회 호출, SDK 자동 재시도 없음. 가격·환율 변경 시 재검토하며 정책 기간 이후 유료 호출을 차단한다. 토큰 계산은 system·tools를 포함한다.
 

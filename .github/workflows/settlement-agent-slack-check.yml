@@ -16,6 +16,10 @@ on:
         description: 'Verify live Slack signatures and worker authentication without data writes'
         type: boolean
         default: false
+      inspect_firewall:
+        description: 'Read current Cloudflare custom rules before scoped Slack exceptions'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,6 +48,23 @@ jobs:
           else
             node scripts/check-settlement-slack.mjs
           fi
+      - name: Inspect Cloudflare custom rules
+        if: inputs.inspect_firewall
+        env:
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          node --input-type=module <<'JS'
+          const { CLOUDFLARE_API_KEY: key, CLOUDFLARE_EMAIL: email, CLOUDFLARE_ZONE_ID: zone } = process.env;
+          if (!key || !email || !/^[a-f0-9]{32}$/.test(zone || '')) throw new Error('Cloudflare credentials unavailable');
+          const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${zone}/rulesets/phases/http_request_firewall_custom/entrypoint`, {
+            headers: { 'X-Auth-Key': key, 'X-Auth-Email': email }, signal: AbortSignal.timeout(15000),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.success) throw new Error(`Cloudflare read failed: ${response.status}`);
+          console.log(JSON.stringify({ id: result.result.id, rules: result.result.rules.map(({ id, ref, action, expression, enabled }) => ({ id, ref, action, expression, enabled })) }, null, 2));
+          JS
       - name: Install model SDK
         if: inputs.check_model
         run: npm ci --ignore-scripts

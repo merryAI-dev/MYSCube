@@ -68,7 +68,9 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
       const complete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
         onUsage: async (usage) => audit.push({ type: 'usage', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
       });
-      const result = await runSettlementAgent({ question: job.question, tools, complete, maxSteps: 3, signal: AbortSignal.timeout(100000),
+      const result = await runSettlementAgent({ question: job.question, history: (job.turns || []).flatMap((turn) => [
+        { role: 'user', content: turn.question }, { role: 'assistant', content: turn.answer },
+      ]), tools, complete, maxSteps: 3, signal: AbortSignal.timeout(100000),
         loadFeedback: async (scope) => {
           const key = feedbackScopeKey(job, scope);
           if (!scopes.some((item) => item.key === key)) scopes.push({ key, scope });
@@ -98,13 +100,16 @@ export function createSlackWorker({ db, readOverview, env = process.env, fetchIm
   }
   return async () => {
     if (!env.SLACK_ALERT_BOT_TOKEN) throw new Error('slack_not_configured');
-    const pending = await db.collection('settlement_agent_jobs').where('status', 'in', ['queued', 'running', 'sending']).limit(10).get();
+    const pending = await db.collection('settlement_agent_jobs').where('status', 'in', ['queued', 'running', 'sending']).orderBy('createdAt', 'asc').limit(10).get();
     let processed = 0;
     for (const doc of pending.docs) {
       if (doc.data().status === 'sending' && doc.data().leaseUntil < Date.now()) {
         await db.runTransaction(async (tx) => {
           const current = (await tx.get(doc.ref)).data();
-          if (current?.status === 'sending' && current.leaseUntil < Date.now()) tx.update(doc.ref, { status: 'delivery_unknown' });
+          if (current?.status === 'sending' && current.leaseUntil < Date.now()) {
+            await finishConversation(tx, db, { ...current, id: doc.id }, 'delivery_unknown');
+            tx.update(doc.ref, { status: 'delivery_unknown' });
+          }
         });
         continue;
       }
@@ -169,10 +174,12 @@ export async function claimSlackJob({ db, jobId, now = Date.now() }) {
   return db.runTransaction(async (tx) => {
     const job = (await tx.get(ref)).data();
     if (!job || !['queued', 'running'].includes(job.status) || (job.status === 'running' && job.leaseUntil > now)) return null;
-    if (job.attempts >= 3) { tx.update(ref, { status: 'failed', reason: 'attempt_limit' }); return null; }
+    const thread = job.conversationId ? (await tx.get(db.doc(`settlement_agent_threads/${job.conversationId}`))).data() : null;
+    if (job.conversationId && (!thread || thread.queue[0] !== jobId || thread.slackUserId !== job.slackUserId || thread.teamId !== job.teamId || thread.channelId !== job.channelId || thread.threadTs !== job.threadTs)) return null;
+    if (job.attempts >= 3) { await finishConversation(tx, db, { ...job, id: jobId }, 'failed'); tx.update(ref, { status: 'failed', reason: 'attempt_limit' }); return null; }
     const leaseId = randomUUID();
     tx.update(ref, { status: 'running', leaseId, leaseUntil: now + 180_000, attempts: job.attempts + 1 });
-    return { ...job, id: jobId, leaseId };
+    return { ...job, id: jobId, leaseId, turns: thread?.turns || [] };
   });
 }
 
@@ -181,6 +188,16 @@ export async function updateClaimedJob({ db, job, patch }) {
     const ref = db.doc(`settlement_agent_jobs/${job.id}`);
     const current = (await tx.get(ref)).data();
     if (!['running', 'sending'].includes(current?.status) || current?.leaseId !== job.leaseId || current.leaseUntil < Date.now()) throw new Error('job_lease_lost');
+    if (['succeeded', 'delivery_unknown', 'failed'].includes(patch.status)) await finishConversation(tx, db, { ...current, id: job.id }, patch.status);
     tx.update(ref, patch);
   });
+}
+
+async function finishConversation(tx, db, job, status) {
+  if (!job.conversationId) return;
+  const ref = db.doc(`settlement_agent_threads/${job.conversationId}`);
+  const thread = (await tx.get(ref)).data();
+  if (!thread || thread.queue[0] !== job.id) throw new Error('conversation_order_lost');
+  tx.update(ref, { queue: thread.queue.slice(1),
+    turns: status === 'succeeded' ? [...thread.turns, { question: job.question, answer: job.answer }].slice(-6) : thread.turns });
 }

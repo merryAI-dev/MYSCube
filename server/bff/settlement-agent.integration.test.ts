@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { createFirestoreDb } from './firestore.mjs';
 import { createSlackWorker, claimSlackJob, updateClaimedJob, saveSlackFeedback } from '../mcp/slack-runtime.mjs';
 import { createHash } from 'node:crypto';
+import { createHmac } from 'node:crypto';
+import { createSlackIngress } from '../mcp/slack-ingress.mjs';
 
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker persistence', () => {
   it('runs search and canonical status lookup, privately replies, persists and reloads feedback', async () => {
@@ -11,12 +13,24 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     const projectId = `project-${id}`;
     const slackUserId = 'UAGENTTEST';
     const email = `${id}@mysc.co.kr`;
-    const jobRef = db.doc(`settlement_agent_jobs/${id}`);
     await db.doc(`orgs/mysc/members/${memberId}`).set({ email, role: 'pm', status: 'ACTIVE' });
     await db.doc(`orgs/mysc/projects/${projectId}`).set({ name: `사업-${id}` });
-    await jobRef.create({ teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId, threadTs: '1.1', question: `2026-09 사업-${id} 조회`, status: 'queued', attempts: 0 });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const threadTs = `${timestamp}.1`;
+    const ingress = createSlackIngress({ db, secret: 'fixture', teamId: 'T099F304GAY' });
+    const enqueue = async (type: string, ts: string, text: string) => {
+      const body = Buffer.from(JSON.stringify({ type: 'event_callback', team_id: 'T099F304GAY', event_id: ts,
+        event: { type, user: slackUserId, channel: 'C0BQ6980HR6', ts, thread_ts: threadTs, text } }));
+      const signature = `v0=${createHmac('sha256', 'fixture').update(`v0:${timestamp}:`).update(body).digest('hex')}`;
+      const res = { status: (code: number) => { throw new Error(`ingress ${code}`); }, json: (value: any) => { expect(value.ignored).not.toBe(true); } };
+      await ingress({ body, get: (name: string) => name.endsWith('timestamp') ? timestamp : signature }, res);
+      return db.doc(`settlement_agent_jobs/${createHash('sha256').update(`T099F304GAY:C0BQ6980HR6:${ts}`).digest('hex')}`);
+    };
+    const firstRef = await enqueue('app_mention', threadTs, `2026-09 사업-${id} 조회`);
+    const secondRef = await enqueue('message', `${timestamp}.2`, '그 사업 다시 확인해줘');
+    expect(await claimSlackJob({ db, jobId: secondRef.id })).toBeNull();
     const deliveries: any[] = [];
-    let lookedUp = false;
+    let lookups = 0;
     let turn = 0;
     const status = (period: string) => ({ period, status: period === 'MONTH' ? 'LOCKED' : 'COMPLETED', revision: 1,
       submittedAt: '', submittedBy: '', approvedAt: '', approvedBy: '', deadlineAt: '2026-09-01T00:00:00Z', approverDeadlineAt: '2026-09-02T00:00:00Z' });
@@ -37,28 +51,40 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
       readOverview: async ({ context, body }: any) => {
         expect(context.actorId).toBe(memberId);
         expect(body.projectIds).toEqual([projectId]);
-        lookedUp = true;
+        lookups++;
         return overview;
       },
-      completeFactory: () => async () => {
+      completeFactory: () => async ({ messages }: any) => {
         turn++;
+        if (turn === 4) {
+          expect(messages.filter((m: any) => m.role === 'user').map((m: any) => m.content)).toEqual([`2026-09 사업-${id} 조회`, '그 사업 다시 확인해줘']);
+          return { tool_calls: [{ id: 'c', function: { name: 'cashflow_status', arguments: JSON.stringify({ yearMonth: '2026-09', projectIds: [projectId] }) } }] };
+        }
         if (turn === 1) return { tool_calls: [{ id: 'a', function: { name: 'project_search', arguments: JSON.stringify({ query: id }) } }] };
         if (turn === 2) return { tool_calls: [{ id: 'b', function: { name: 'cashflow_status', arguments: JSON.stringify({ yearMonth: '2026-09', projectIds: [projectId] }) } }] };
         return { content: '허위 모델 답변: 999개 반려' };
       },
     });
     await worker();
-    expect(lookedUp).toBe(true);
+    expect(lookups).toBe(1);
     expect(deliveries).toHaveLength(1);
     expect(deliveries[0].user).toBe(slackUserId);
     expect(deliveries[0].text).toContain('월결산: 확정');
     expect(deliveries[0].text).not.toContain('999');
-    const saved = (await jobRef.get()).data()!;
+    const saved = (await firstRef.get()).data()!;
     expect(saved.status).toBe('succeeded');
     expect(saved.audit.length).toBeGreaterThan(0);
     await worker();
-    expect(deliveries).toHaveLength(1);
-    const payload = { team: { id: saved.teamId }, channel: { id: saved.channelId }, user: { id: slackUserId }, container: { message_ts: '2.1' }, actions: [{ action_id: 'settlement_scope_no', value: id, action_ts: '3.1' }] };
+    expect(deliveries).toHaveLength(2);
+    expect(lookups).toBe(2);
+    expect(deliveries[1].text).toContain('월결산: 확정');
+    expect((await secondRef.get()).data()!.status).toBe('succeeded');
+    const conversation = (await db.doc(`settlement_agent_threads/${saved.conversationId}`).get()).data()!;
+    expect(conversation.queue).toEqual([]);
+    expect(conversation.turns).toHaveLength(2);
+    await worker();
+    expect(deliveries).toHaveLength(2);
+    const payload = { team: { id: saved.teamId }, channel: { id: saved.channelId }, user: { id: slackUserId }, container: { message_ts: '2.1' }, actions: [{ action_id: 'settlement_scope_no', value: firstRef.id, action_ts: '3.1' }] };
     expect(await saveSlackFeedback({ db, payload, teamId: saved.teamId, channelId: saved.channelId })).toBe(true);
     expect((await db.doc(`settlement_agent_feedback/${saved.scopes[0].key}`).get()).data()!.votes[0].value).toBe(0);
   });
@@ -77,5 +103,19 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     await expect(updateClaimedJob({ db, job: old, patch: { status: 'succeeded' } })).rejects.toThrow('lease');
     await updateClaimedJob({ db, job: next, patch: { status: 'succeeded' } });
     await expect(updateClaimedJob({ db, job: next, patch: { status: 'failed' } })).rejects.toThrow('lease');
+  });
+
+  it('releases a failed conversation head without copying its answer into history', async () => {
+    const db = createFirestoreDb({ projectId: 'demo-agent-runtime', appName: 'agent-runtime-test' });
+    const conversationId = `failed-${Date.now()}`;
+    const identity = { conversationId, teamId: 'T1', channelId: 'C1', slackUserId: 'U1', threadTs: '1.1' };
+    const first = `${conversationId}-1`, second = `${conversationId}-2`;
+    const threadRef = db.doc(`settlement_agent_threads/${conversationId}`);
+    await threadRef.set({ ...identity, queue: [first, second], turns: [] });
+    for (const id of [first, second]) await db.doc(`settlement_agent_jobs/${id}`).set({ ...identity, status: 'queued', attempts: 0 });
+    const job = await claimSlackJob({ db, jobId: first });
+    await updateClaimedJob({ db, job, patch: { status: 'failed' } });
+    expect((await threadRef.get()).data()).toMatchObject({ queue: [second], turns: [] });
+    expect((await claimSlackJob({ db, jobId: second })).turns).toEqual([]);
   });
 });
