@@ -20,6 +20,10 @@ on:
         description: 'Read current Cloudflare custom rules before scoped Slack exceptions'
         type: boolean
         default: false
+      apply_slack_exception:
+        description: 'Apply reviewed two-POST-path exception to automation-client block only'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -65,11 +69,26 @@ jobs:
           if (!response.ok || !result.success) throw new Error(`Cloudflare read failed: ${response.status}`);
           console.log(JSON.stringify({ id: result.result.id, rules: result.result.rules.map(({ id, ref, action, expression, enabled }) => ({ id, ref, action, expression, enabled })) }, null, 2));
           JS
+      - name: Apply scoped Slack edge exception
+        if: inputs.apply_slack_exception
+        env:
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: node scripts/configure-slack-edge.mjs
+      - name: Preserve pre-change firewall backup
+        if: always() && inputs.apply_slack_exception
+        uses: actions/upload-artifact@v4
+        with:
+          name: slack-edge-before
+          path: slack-edge-before.json
+          retention-days: 30
+          if-no-files-found: warn
       - name: Install model SDK
         if: inputs.check_model
         run: npm ci --ignore-scripts
       - name: Verify live runtime
-        if: inputs.check_runtime
+        if: inputs.check_runtime || inputs.apply_slack_exception
         env:
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
         run: node scripts/check-settlement-runtime.mjs
@@ -78,9 +97,3 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
         run: node scripts/check-settlement-gemini.mjs
-      - name: Read deployed agent cron logs
-        if: inputs.check_runtime
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_DEPLOY_TOKEN_PRODUCTION }}
-          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-        run: npx --yes vercel@50.14.0 logs --project "$VERCEL_PROJECT_ID" --scope merryai-devs-projects --environment production --no-branch --no-follow --since 10m --limit 5 --query /api/internal/workers/settlement-agent/run --json

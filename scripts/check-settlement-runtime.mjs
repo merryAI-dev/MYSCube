@@ -5,7 +5,7 @@ const secret = process.env.SLACK_SIGNING_SECRET;
 if (!secret) throw new Error('Signing secret is required');
 async function request(path, options = {}) {
   return fetch(`${base}${path}`, { ...options, redirect: 'error', signal: AbortSignal.timeout(15000),
-    headers: { ...options.headers, ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET ? { 'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET } : {}) },
+    headers: { 'user-agent': 'Slackbot 1.0 (+https://api.slack.com/robots)', ...options.headers, ...(process.env.VERCEL_AUTOMATION_BYPASS_SECRET ? { 'x-vercel-protection-bypass': process.env.VERCEL_AUTOMATION_BYPASS_SECRET } : {}) },
   });
 }
 async function signed(path, body, type, tampered = false) {
