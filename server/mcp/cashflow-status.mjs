@@ -148,7 +148,7 @@ function validCanonicalItem(item, { yearMonth, monthCloseTargetYearMonth }) {
     && (item?.sheetCapturedAt === null || validInstant(item?.sheetCapturedAt));
 }
 
-function assertOverview(result, { projectIds, yearMonth }) {
+export function assertOverview(result, { projectIds, yearMonth }) {
   const requested = new Set(projectIds);
   const items = Array.isArray(result?.items) ? result.items : null;
   const errors = Array.isArray(result?.errors) ? result.errors : null;

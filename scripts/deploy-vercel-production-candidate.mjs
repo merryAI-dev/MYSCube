@@ -62,6 +62,11 @@ export function buildVercelProductionDeployArgs({
     ['PROJECT_REGISTRATION_SLACK_BOT_TOKEN', ''],
     ['PROJECT_REGISTRATION_SLACK_CHANNEL_ID', ''],
   ]) pair(args, '--env', name, value);
+  pair(args, '--env', 'SETTLEMENT_AGENT_ENABLED', env.SETTLEMENT_AGENT_ENABLED === 'true' && !maintenance ? 'true' : 'false');
+  if (env.SETTLEMENT_AGENT_ENABLED === 'true') {
+    pair(args, '--env', 'SLACK_SIGNING_SECRET', required(env, 'SLACK_SIGNING_SECRET'));
+    pair(args, '--env', 'GEMINI_API_KEY', required(env, 'GEMINI_API_KEY'));
+  }
   pair(args, '--meta', 'maintenanceReadOnly', String(maintenance));
   pair(args, '--meta', 'githubCommitSha', commitSha);
   pair(args, '--meta', 'githubActionsInvocation', invocation);

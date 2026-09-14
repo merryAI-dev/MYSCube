@@ -12,6 +12,10 @@ on:
         description: 'Check configured Gemini model with a benign prompt (no business data)'
         type: boolean
         default: false
+      check_runtime:
+        description: 'Verify live Slack signatures and worker authentication without data writes'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -43,6 +47,11 @@ jobs:
       - name: Install model SDK
         if: inputs.check_model
         run: npm ci --ignore-scripts
+      - name: Verify live runtime
+        if: inputs.check_runtime
+        env:
+          SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+        run: node scripts/check-settlement-runtime.mjs
       - name: Verify configured Gemini connection
         if: inputs.check_model
         env:

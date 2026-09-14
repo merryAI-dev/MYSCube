@@ -1,5 +1,5 @@
 import * as z from 'zod/v4';
-import { readCashflowStatus } from './cashflow-status.mjs';
+import { readCashflowStatus, assertOverview } from './cashflow-status.mjs';
 import { fitFeedback } from './settlement-feedback.mjs';
 
 const statusInput = z.object({
@@ -8,7 +8,7 @@ const statusInput = z.object({
 }).strict();
 
 // Credentials and authorization are supplied by the authenticated host, never by model arguments.
-export function settlementTools({ resolveAuthorization, baseUrl, fetchImpl, audit }) {
+export function settlementTools({ resolveAuthorization, baseUrl, fetchImpl, audit, readStatus }) {
   return [{
     name: 'cashflow_status',
     description: '권한 내 프로젝트의 주정산·월결산을 조회합니다. 운영 주기월과 월결산 대상월을 구분합니다.',
@@ -29,6 +29,7 @@ export function settlementTools({ resolveAuthorization, baseUrl, fetchImpl, audi
       return lines.join('\n');
     },
     async execute(input, { signal }) {
+      if (readStatus) return assertOverview(await readStatus(input, { signal }), input);
       const authorization = await resolveAuthorization();
       signal.throwIfAborted();
       return readCashflowStatus({

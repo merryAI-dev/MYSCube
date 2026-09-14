@@ -6568,4 +6568,5 @@ export function mountJvmWeeklyApiRoutes(app, {
       comparison,
     });
   }));
+  return { readWeeklyOverview };
 }

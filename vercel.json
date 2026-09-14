@@ -18,6 +18,10 @@
   },
   "crons": [
     {
+      "path": "/api/internal/workers/settlement-agent/run",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/internal/workers/work-queue/run",
       "schedule": "15 2 * * *"
     },
@@ -178,6 +182,14 @@
     }
   ],
   "rewrites": [
+    {
+      "source": "/api/slack/:path*",
+      "destination": "/api/bff?__path=/api/slack/:path*"
+    },
+    {
+      "source": "/api/internal/workers/settlement-agent/run",
+      "destination": "/api/bff?__path=/api/internal/workers/settlement-agent/run"
+    },
     {
       "source": "/__/auth/:path*",
       "destination": "https://inner-platform-live-20260316.firebaseapp.com/__/auth/:path*"
