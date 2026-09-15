@@ -1,9 +1,9 @@
 import WebSocket from 'ws';
 import * as z from 'zod/v4';
 import { fetchGoogleIdentityToken, resolveJavaWeeklyApiServiceAccountJson } from '../bff/java-weekly-auth.mjs';
-import { safeDiagnosticCode } from './support-read.mjs';
+import { classifyReadError } from './support-read.mjs';
 
-export const HERMES_READ_TOOLS = Object.freeze(['cashflow_status', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'agent_diagnostics', 'system_knowledge']);
+export const HERMES_READ_TOOLS = Object.freeze(['cashflow_status', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'accounting_report', 'agent_diagnostics', 'system_knowledge']);
 
 async function openSocket({ url, headers, signal }) {
   const socket = new WebSocket(url, { headers, maxPayload: 200000, handshakeTimeout: 15000, followRedirects: false });
@@ -104,7 +104,8 @@ export async function runHermesAgent({ question, history = [], tools, complete, 
           } catch (error) {
             signal.throwIfAborted();
             failed = true;
-            result = { error: safeDiagnosticCode(error), message: '조회하지 못했습니다. 미완료나 금액 0으로 판단하지 마세요.' };
+            const failure = classifyReadError(error);
+            result = { ...failure, error: failure.code || 'lookup_failed' };
             await record({ type: 'hermes_tool_failure', tool: tool.name, code: result.error });
           }
           if (!terminal) socket.send(JSON.stringify({ type: 'tool_result', id: message.id, result }));

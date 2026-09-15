@@ -1,4 +1,5 @@
 {
+  "ledgerCurrency": "KRW",
   "categoryEntries": [
     { "category": "CONTRACT_PAYMENT", "label": "계약금", "defaultLineIds": { "IN": "SALES_IN" } },
     { "category": "INTERIM_PAYMENT", "label": "중도금", "defaultLineIds": { "IN": "SALES_IN" } },

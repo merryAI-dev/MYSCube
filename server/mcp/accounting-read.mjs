@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import { LINE_IDS, lineRowFor, weekColumnFor, weekOrdinal } from '../bff/cashflow-coordinates.mjs';
-import { getCashflowLineLabel } from '../bff/cashflow-policy.mjs';
+import { getCashflowLineLabel, CASHFLOW_LEDGER_CURRENCY } from '../bff/cashflow-policy.mjs';
 import { getMonthFinanceWeeks, resolveFinanceWeekForDate } from '../../src/app/platform/cashflow-week-core.mjs';
 
 export const accountingInput = z.object({
@@ -36,7 +36,7 @@ export function accountingEvidence(snapshot, rawInput, retrievedAt = new Date().
   const month = matches[0];
   const warnings = [
     '금액은 JVM 원장 조회값입니다. 셀의 EMPTY/ZERO/VALUE 상태는 이 API에서 제공하지 않아 추정하지 않았습니다.',
-    'JVM 금액 통화는 제공되지 않습니다. 프로젝트 등록 통화와 원장 금액 단위의 일치는 확인되지 않았습니다.',
+    '회계 원장 금액은 MYSC 내규에 따라 KRW(원화)입니다. 프로젝트 계약 통화와 별개의 원장 단위이며 환산을 수행한 것이 아닙니다.',
     '조회 시각은 원본 시트 갱신 시각이 아닙니다. 원본 Google Sheets를 새로 불러오거나 수정하지 않았습니다.',
     'NOT_RECORDED인 주차·항목의 금액은 미확인입니다. 합계는 기록된 JVM 라인 기준이며 누락을 0으로 채우지 않았습니다.',
   ];
@@ -97,7 +97,8 @@ export function accountingEvidence(snapshot, rawInput, retrievedAt = new Date().
     detail: input.detail,
     currentWeek: resolveFinanceWeekForDate(new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date(retrievedAt))),
     ...(input.weekNo ? { weekNo: input.weekNo } : {}),
-    projectCurrency: /^[A-Z]{3}$/.test(metadata.projectCurrency || '') ? metadata.projectCurrency : null, amountCurrency: null,
+    projectCurrency: /^[A-Z]{3}$/.test(metadata.projectCurrency || '') ? metadata.projectCurrency : null,
+    amountCurrency: CASHFLOW_LEDGER_CURRENCY, currencyAuthority: 'MYSC_LEDGER_POLICY',
     fieldStateAvailability: 'NOT_EXPOSED',
     source: { authority: 'JVM', targetRevision: snapshot.targetRevision, retrievedAt,
       capturedAt: null, freshness: 'UNKNOWN', liveSheetVerified: false,
@@ -114,7 +115,7 @@ export function accountingEvidence(snapshot, rawInput, retrievedAt = new Date().
 export function createAccountingTools({ readSnapshot }) {
   return [{
     name: 'accounting_read',
-    description: '한 사업의 월/주차 Projection·Actual 입출금과 누적잔액을 JVM에서 조회합니다. 기본 summary는 주별 합계, 항목별 금액이 필요할 때만 detail=lines. 사업은 먼저 식별하세요. currentWeek는 한국시간 현재 재무 주차입니다. 캡처 버전 일치는 현재 시트의 최신 반영 증거가 아닙니다. 금액 단위 미확인을 명시하고 원본시트 최신 여부는 확인 불가로 답하세요. 원장 해시는 감사 근거용이며 사용자가 직접 요청하지 않으면 답변에 노출하지 마세요.',
+    description: '한 사업의 월/주차 Projection·Actual 입출금과 누적잔액을 JVM에서 조회합니다. 전사 전체 사업은 accounting_report를 사용하세요. 기본 summary는 주별 합계, 항목별 금액은 detail=lines. 금액은 MYSC 내규상 KRW(원화)입니다. currentWeek는 한국시간 현재 재무 주차입니다. 캡처 버전 일치는 현재 시트의 최신 반영 증거가 아닙니다. 원장 해시는 요청하지 않으면 노출하지 마세요.',
     schema: accountingInput,
     async execute(input, { signal } = {}) {
       const parsed = accountingInput.parse(input);
@@ -124,6 +125,6 @@ export function createAccountingTools({ readSnapshot }) {
       return accountingEvidence(snapshot, parsed);
     },
     modelResult: (result) => result,
-    render: (result) => `📊 ${result.projectName || '선택 사업'} · ${result.yearMonth}${result.weekNo ? ` ${result.weekNo}주차` : ''}\n금액 자료 ${result.availability === 'AVAILABLE' ? '조회 완료' : '확인 불가'}. 원본 시트의 실시간 갱신 여부·금액 통화·셀 입력 상태는 확인되지 않았습니다.`,
+    render: (result) => `📊 ${result.projectName || '선택 사업'} · ${result.yearMonth}${result.weekNo ? ` ${result.weekNo}주차` : ''}\n금액 자료 ${result.availability === 'AVAILABLE' ? '조회 완료' : '확인 불가'} · 단위 원(KRW). 원본 시트의 실시간 갱신 여부·셀 입력 상태는 확인되지 않았습니다.`,
   }];
 }

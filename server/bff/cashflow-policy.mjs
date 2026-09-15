@@ -1,5 +1,7 @@
 import cashflowPolicyData from '../../policies/cashflow-policy.json' with { type: 'json' };
 
+export const CASHFLOW_LEDGER_CURRENCY = cashflowPolicyData.ledgerCurrency;
+
 export const CASHFLOW_IN_LINES = cashflowPolicyData.lineEntries
   .filter((entry) => entry.direction === 'IN')
   .map((entry) => entry.lineId);

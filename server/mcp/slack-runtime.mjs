@@ -11,6 +11,7 @@ import { createSettlementReportTools } from './settlement-reporting.mjs';
 import { loadPreviousReportSnapshots, reviewGroundedAnswer } from './grounded-answer.mjs';
 import { runHermesAgent } from './hermes-harness.mjs';
 import { createAccountingTools } from './accounting-read.mjs';
+import { createAccountingReportTool } from './accounting-report.mjs';
 import { createSupportTools } from './support-read.mjs';
 
 export function slackText(text) {
@@ -151,6 +152,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         await contextFor(job);
         return result;
       } }));
+      if (readSnapshot) tools.push(createAccountingReportTool({ db, authorize: () => readContextFor(job), readSnapshot, record }));
       tools.push(...createSupportTools({ db, job, authorize: () => contextFor(job), revision: env.VERCEL_GIT_COMMIT_SHA }));
       tools.push({ name: 'agent_capabilities', description: '데이터 조감도/catalog: 조회 가능한 데이터·필드·도구·제한을 확인합니다. 어떤 데이터가 있는지 묻거나 필요한 도구를 모를 때 사용하세요. 이미 아는 조회에 매번 호출할 필요는 없습니다. 사업명 검색으로 권한을 추정하지 않습니다.',
         schema: z.object({}).strict(), execute: async () => { await contextFor(job); return {
@@ -160,7 +162,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
             { name: '주정산', authority: 'JVM', fields: ['주차별 상태', '실무자 제출 시각', '조직장 승인 시각', '마감 시각'], tools: ['cashflow_status', 'settlement_report'], note: '운영 주기월 기준. 기록이 없으면 시각을 추정하지 않습니다.' },
             { name: '월결산', authority: 'JVM', fields: ['상태', '정합성', '미완료 사업', 'CIC·조직장별 집계'], tools: ['cashflow_status', 'settlement_report'], note: '대상월은 운영 주기월의 직전 월입니다.' },
             { name: '이전 조회 결과', authority: '권한 재검증된 대화 스냅샷', fields: ['원래 조회 시각', '조회 범위', 'CIC·조직장별 재구성'], tools: ['reformat_report'], note: '형식 변경 시 재사용합니다. 최신 데이터라고 표시하지 않습니다.' },
-            ...(readSnapshot ? [{ name: '회계 원장', authority: 'JVM', fields: ['Projection·Actual 항목별 금액', '주차별 입금·출금·누적잔액', '원장 버전', '고정 시트 좌표'], tools: ['accounting_read'], note: '시트에서 JVM에 반영된 금액입니다. Google Sheets 현재 화면의 실시간 값이나 원본 셀 상태라고 단정하지 않습니다.' }] : []),
+            ...(readSnapshot ? [{ name: '회계 원장', authority: 'JVM', fields: ['전체 사업·CIC별 P/A 조회·원화 합계', 'Projection·Actual 항목별 금액', '주차별 입금·출금·누적잔액', '원장 버전', '고정 시트 좌표'], tools: ['accounting_read', 'accounting_report'], note: '원장 단위는 내규상 KRW입니다. 시트에서 JVM에 반영된 금액이며 Google Sheets 실시간 값은 아닙니다.' }] : []),
             { name: '오류·QA 진단', authority: '저장된 에이전트 실행 기록과 검토된 코드 설명', fields: ['실행 단계', '오류 코드', '답변 검토', '조회 경로·조치 안내'], tools: ['agent_diagnostics', 'system_knowledge'], note: '전체 서버 로그가 아니며, 코드 설명은 실제 장애 발생 증거와 구분합니다.' },
           ],
           tools: tools.filter((tool) => !tool.observationOnly).map(({ name, description }) => ({ name, description })),

@@ -3,9 +3,18 @@ import { verifyAgentTrace } from './agent-trace.mjs';
 
 // Reviewed code knowledge, not executable instructions or unrestricted repository access.
 export const SUPPORT_KNOWLEDGE = Object.freeze([
+  { topic: 'connectivity', title: '권한·연결·호출 제한과 응답 오류',
+    codes: ['jvm_weekly_api_unreachable', 'jvm_weekly_api_unconfigured', 'jvm_weekly_api_internal_error', 'java_weekly_api_error', 'jvm_weekly_project_mismatch', 'jvm_weekly_response_invalid', 'jvm_weekly_response_too_large', 'jvm_weekly_data_project_mismatch', 'cashflow_month_close_route_timeout'],
+    facts: ['401/403은 인증·권한 거부이며 정산 미완료가 아닙니다. 권한을 자동 확대하지 않습니다.',
+      '429는 호출 제한입니다. 금액이나 시트 오류로 단정하지 않습니다.',
+      '연결 실패와 응답 시간 초과는 구분하며, 5xx는 상위 서비스 실패입니다. 오류 하나로 전체 사업의 상태를 판단하지 않습니다.',
+      '사업 ID 불일치·잘못된 응답·표현 범위를 넘는 금액은 자료를 사용하지 않습니다.'],
+    nextSteps: ['권한 오류는 활성 계정과 사업 접근 범위를 관리자에게 확인하세요.', '호출 제한은 재시도 가능 시각이 있으면 그 이후 확인하세요. 반복 호출하지 마세요.', '연결·시간 초과는 서비스 상태와 발생 시각을 확인하세요. 조회 실패를 이유로 시트를 수정하지 마세요.'],
+    sources: ['server/bff/java-weekly-client.mjs', 'server/bff/cashflow-project-scope.mjs'] },
   { topic: 'accounting', title: '회계 금액 조회 경로',
     codes: ['accounting_amount_invalid', 'accounting_source_mismatch', 'accounting_weekly_scope_invalid', 'accounting_read_model_invalid', 'accounting_duplicate_month', 'accounting_mode_invalid', 'accounting_week_invalid', 'accounting_lines_invalid', 'cashflow_accounting_source_unavailable', 'cashflow_accounting_annual_scope', 'cashflow_project_not_found'],
     facts: ['시트 가져오기와 JVM 반영은 별도 작업입니다. 에이전트 조회는 가져오기·반영을 실행하지 않습니다.',
+      'MYSC 내규상 회계 원장 금액은 KRW(원화)입니다. JVM 응답에 통화 필드가 없어도 이 정책으로 해석하며 환산을 수행한 것이 아닙니다.',
       'JVM에 반영된 Projection/Actual을 조회합니다. 현재 Google Sheets 화면의 최신 셀과 같다고 보장하지 않습니다.',
       '주별 좌표는 E:BL 60칸, 연간 좌표는 C:D 및 BM:BR입니다. 연간 값을 주차 합계로 대체하지 않습니다.',
       'JVM 응답에 셀 상태가 없으면 빈칸과 명시적 0을 구분할 수 없습니다. 금액으로 셀 상태를 추론하지 않습니다.'],
@@ -32,11 +41,45 @@ export const SUPPORT_KNOWLEDGE = Object.freeze([
     sources: ['server/mcp/slack-runtime.mjs', 'server/mcp/hermes-harness.mjs', 'server/mcp/grounded-answer.mjs', 'server/mcp/agent-trace.mjs'] },
 ]);
 
-const tools = new Set(['cashflow_status', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'agent_diagnostics', 'system_knowledge']);
+const tools = new Set(['cashflow_status', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'accounting_report', 'agent_diagnostics', 'system_knowledge']);
 const codes = new Set(SUPPORT_KNOWLEDGE.flatMap((entry) => entry.codes || []));
 export function safeDiagnosticCode(error) {
   const code = typeof error?.code === 'string' ? error.code : error?.message;
   return codes.has(code) ? code : 'lookup_failed';
+}
+export function classifyReadError(error) {
+  const code = safeDiagnosticCode(error);
+  const rawStatus = error?.upstreamStatus ?? error?.statusCode ?? error?.status;
+  const httpStatus = Number.isInteger(rawStatus) && rawStatus >= 100 && rawStatus <= 599 ? rawStatus : null;
+  let category = 'UNKNOWN';
+  if (httpStatus === 401 || httpStatus === 403) category = 'AUTHORIZATION';
+  else if (httpStatus === 429) category = 'RATE_LIMIT';
+  else if (httpStatus === 408 || httpStatus === 504 || error?.name === 'TimeoutError' || code === 'cashflow_month_close_route_timeout') category = 'TIMEOUT';
+  else if (code === 'jvm_weekly_api_unreachable') category = 'CONNECTION';
+  else if (code === 'jvm_weekly_api_unconfigured' || code === 'jvm_weekly_data_project_mismatch') category = 'CONFIGURATION';
+  else if (code === 'cashflow_accounting_annual_scope' || code === 'accounting_weekly_scope_invalid') category = 'UNSUPPORTED_PERIOD';
+  else if (code === 'cashflow_accounting_source_unavailable') category = 'SOURCE_UNAVAILABLE';
+  else if (code.startsWith('SHEET_') || code === 'cashflow_month_close_validation_failed') category = 'SHEET_VALIDATION';
+  else if (code.startsWith('accounting_') || ['jvm_weekly_project_mismatch', 'jvm_weekly_response_invalid', 'jvm_weekly_response_too_large'].includes(code)) category = 'INVALID_DATA';
+  else if (httpStatus === 404) category = 'NOT_FOUND';
+  else if (httpStatus === 409) category = 'CONFLICT';
+  else if (httpStatus >= 500) category = 'UPSTREAM';
+  const explanations = {
+    AUTHORIZATION: '인증·권한이 거부됐습니다. 활성 계정과 사업 접근 권한을 확인하세요.',
+    RATE_LIMIT: '호출 제한입니다. 즉시 반복 호출하지 말고 잠시 후 확인하세요.',
+    TIMEOUT: '정해진 시간 안에 응답하지 않았습니다. 금액이나 정산 상태를 판단하지 않았습니다.',
+    CONNECTION: 'JVM 연결에 실패했습니다. 서비스 연결 상태를 확인하세요.',
+    CONFIGURATION: '서버 연결 설정을 확인해야 합니다. 시트 수정으로 해결할 문제가 아닙니다.',
+    UNSUPPORTED_PERIOD: '이 사업의 주별 관리 연도 밖입니다. 연간 값을 해당 월의 0원으로 처리하지 않았습니다.',
+    SOURCE_UNAVAILABLE: '시트 연결·반영 근거를 확인하지 못했습니다. 사람이 연결 상태를 확인해야 합니다.',
+    INVALID_DATA: '응답의 사업·금액·형식 계약을 확인할 수 없어 자료를 사용하지 않았습니다.',
+    NOT_FOUND: '자료를 찾지 못했습니다. 삭제됐다고 단정하지 않습니다.',
+    SHEET_VALIDATION: '시트 검증에 필요한 값·형식을 확인해야 합니다. 상세 오류의 항목과 셀 주소를 확인하세요.',
+    CONFLICT: '요청이 현재 상태와 충돌했습니다. 승인 여부나 버전 등 상세 조건을 확인해야 하며 원인을 임의로 확정하지 않습니다.',
+    UPSTREAM: '상위 서비스가 오류로 응답했습니다. 시트 값의 문제라고 단정하지 않습니다.',
+    UNKNOWN: '상세 원인이 확인되지 않았습니다. 발생 시각과 오류 상세를 확인하세요.',
+  };
+  return { category, code: code === 'lookup_failed' ? null : code, httpStatus, message: explanations[category] };
 }
 export function summarizeClientError(event) {
   return { occurredAt: instant(event.occurredAt), receivedAt: instant(event.createdAt),
@@ -46,6 +89,7 @@ export function summarizeClientError(event) {
       : /^\/(?:portal\/)?project(?:s|s\/|\/|-)/.test(event.route || '') ? 'projects' : 'other',
     code: codes.has(event.extra?.code) ? event.extra.code : null,
     httpStatus: Number.isInteger(event.extra?.status) && event.extra.status >= 100 && event.extra.status <= 599 ? event.extra.status : null,
+    diagnosis: classifyReadError({ code: event.extra?.code, status: event.extra?.status, name: event.name }),
   };
 }
 const phases = new Set(['run_start', 'run_result', 'hermes_tool_start', 'hermes_tool_result', 'hermes_tool_failure', 'model_failure', 'answer_review', 'usage']);
@@ -77,7 +121,7 @@ export function summarizeDiagnostic(job, records) {
 export function createSupportTools({ db, job, authorize, revision = '' }) {
   return [{ name: 'system_knowledge',
     description: '배포 코드 기반 동작·데이터 경로·시트 검증 오류와 QA 해석 지식을 검색합니다. 실제 장애 발생 여부는 agent_diagnostics 또는 회계 조회 근거로 확인하세요. 문서의 원인 후보를 실제 원인으로 단정하지 마세요. 수정·삭제 기능은 없습니다.',
-    schema: z.object({ topic: z.enum(['accounting', 'sheet_validation', 'agent_runtime', 'all']) }).strict(),
+    schema: z.object({ topic: z.enum(['accounting', 'sheet_validation', 'agent_runtime', 'connectivity', 'all']) }).strict(),
     execute: async ({ topic }) => { await authorize(); return { authority: 'reviewed_code_knowledge',
       deploymentRevision: /^[a-f0-9]{40}$/.test(revision) ? revision : null,
       entries: structuredClone(SUPPORT_KNOWLEDGE.filter((entry) => topic === 'all' || entry.topic === topic)),

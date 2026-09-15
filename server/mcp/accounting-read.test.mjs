@@ -25,7 +25,8 @@ describe('accounting read evidence', () => {
     expect(result.actual[0].lines.every((line) => line.amount === null)).toBe(true);
     expect(result.actual[0].totals).toEqual({ inflow: null, outflow: null, cumulativeBalance: null });
     expect(result.fieldStateAvailability).toBe('NOT_EXPOSED');
-    expect(result.amountCurrency).toBeNull();
+    expect(result.amountCurrency).toBe('KRW');
+    expect(result.currencyAuthority).toBe('MYSC_LEDGER_POLICY');
     expect(result.source.capturedAt).toBeNull();
     expect(result.source.sheetMirror.matchesJvmRevision).toBe(false);
     expect(result.source.sheetMirror.secret).toBeUndefined();
