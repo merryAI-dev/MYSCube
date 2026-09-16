@@ -1,3 +1,5 @@
+import { hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings } from '../../platform/project-input-policy.mjs';
+import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import {
   ArrowLeft,
   ArrowRight,
@@ -192,6 +194,7 @@ export interface ProjectEditorAction {
 interface ProjectEditorWizardProps {
   mode: ProjectEditorMode;
   initialDraft: ProjectEditorDraft;
+  initialStepIndex?: number;
   draftKey: string;
   title: string;
   description?: string;
@@ -353,6 +356,7 @@ const REGISTRATION_DOCUMENT_SLOTS: RegistrationDocumentSlot[] = [
 type AutosaveState = 'idle' | 'saving' | 'saved' | 'error';
 type StoredProjectEditorDraft = {
   schemaVersion: number;
+  acknowledgedFingerprint?: string;
   draftKey: string;
   draft: ProjectEditorDraft;
   stepIndex: number;
@@ -456,7 +460,11 @@ function readStoredProjectEditorDraft(key: string): StoredProjectEditorDraft | n
 
 function writeStoredProjectEditorDraft(key: string, value: StoredProjectEditorDraft) {
   if (typeof localStorage === 'undefined') return;
-  localStorage.setItem(getProjectEditorAutosaveStorageKey(key), JSON.stringify(value));
+  const previous = readStoredProjectEditorDraft(key);
+  const fingerprint = JSON.stringify(createProjectEditorDraft(value.draft));
+  const acknowledgedFingerprint = value.acknowledgedFingerprint
+    || (previous?.acknowledgedFingerprint === fingerprint ? fingerprint : undefined);
+  localStorage.setItem(getProjectEditorAutosaveStorageKey(key), JSON.stringify({ ...value, acknowledgedFingerprint }));
 }
 
 function removeStoredProjectEditorDraft(key: string) {
@@ -616,6 +624,7 @@ function ProjectComputedValue({ value, numeric = true }: { value: string; numeri
 export function ProjectEditorWizard({
   mode,
   initialDraft,
+  initialStepIndex = 0,
   draftKey,
   title,
   description,
@@ -656,7 +665,7 @@ export function ProjectEditorWizard({
   const [teamSyncYear, setTeamSyncYear] = useState('');
   // 시트를 공유해야 할 상대. 오류가 난 뒤에 알려주면 늦다 - 링크를 넣는 그 자리에 있어야 한다.
   const [sheetSystemAccount, setSheetSystemAccount] = useState('');
-  const [stepIndex, setStepIndex] = useState(0);
+  const [stepIndex, setStepIndex] = useState(Math.max(0, Math.min(STEPS.length - 1, initialStepIndex)));
   const [draft, setDraft] = useState<ProjectEditorDraft>(() => createProjectEditorWizardDraft(initialDraft));
   const [documentUploadState, setDocumentUploadState] = useState<Record<ProjectRequestDocumentKind, ContractUploadState>>({
     contract: 'idle',
@@ -688,6 +697,9 @@ export function ProjectEditorWizard({
   });
   const [restoreCandidate, setRestoreCandidate] = useState<StoredProjectEditorDraft | null>(null);
   const [autosaveState, setAutosaveState] = useState<AutosaveState>('idle');
+  const [submitting, setSubmitting] = useState(false);
+  const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  const savedSnapshotRef = useRef('');
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [exitIntent, setExitIntent] = useState<'cancel' | 'route' | null>(null);
   const [submitBlockedNotice, setSubmitBlockedNotice] = useState(false);
@@ -714,6 +726,7 @@ export function ProjectEditorWizard({
    */
   const documentUploadRunRef = useRef<Partial<Record<ProjectRequestDocumentKind, number>>>({});
   const submitInFlightRef = useRef(false);
+  const submittedRef = useRef(false);
   const exitInFlightRef = useRef(false);
   const leaveApprovedRef = useRef(false);
   const draftRef = useRef(draft);
@@ -741,11 +754,6 @@ export function ProjectEditorWizard({
   const registrationDocumentKinds = onProjectDocumentFileUpload
     ? REGISTRATION_DOCUMENT_KINDS
     : REGISTRATION_DOCUMENT_KINDS.filter((kind) => kind === 'contract');
-  const hasRequiredRegistrationDocuments = Boolean(
-    draft.contractDocument
-    && draft.customerBusinessRegistrationDocument
-    && (draft.quoteDocument || draft.quoteSubmissionDeferred),
-  );
   const checkoutDocumentKinds = onProjectDocumentFileUpload ? CHECKOUT_DOCUMENT_KINDS : [];
   const documentUploadMaxBytes = mode === 'admin'
     ? PROJECT_REQUEST_DOCUMENT_UPLOAD_MAX_SIZE_BYTES
@@ -757,7 +765,7 @@ export function ProjectEditorWizard({
     .some((kind) => Boolean(retryDocumentFileRef.current[kind]));
   const hasUnsavedInput = currentDraftFingerprint !== lastPersistedFingerprintRef.current;
   const shouldBlockNavigation = hasUnsavedInput || uploadInProgress || hasPendingRetryFile;
-  const shouldConfirmExit = shouldBlockNavigation || (Boolean(onLeave) && !readOnly);
+  const shouldConfirmExit = submitting || shouldBlockNavigation || (Boolean(onLeave) && !readOnly);
   const blocker = useBlocker(shouldConfirmExit);
 
   useEffect(() => {
@@ -776,11 +784,13 @@ export function ProjectEditorWizard({
       incomingFingerprint: initialDraftFingerprint,
     })) return;
     lastResetKeyRef.current = resetKey;
+    savedSnapshotRef.current = '';
+    if (isNewEditorSession) submittedRef.current = false;
     const nextDraft = createProjectEditorWizardDraft(initialDraft);
     lastPersistedFingerprintRef.current = JSON.stringify(createProjectEditorDraft(nextDraft));
     draftRef.current = nextDraft;
     setDraft(nextDraft);
-    if (isNewEditorSession) setStepIndex(0);
+    if (isNewEditorSession) setStepIndex(Math.max(0, Math.min(STEPS.length - 1, initialStepIndex)));
     setTeamSyncPreview(null);
     setTeamSyncSignature(null);
     setTeamSyncYear('');
@@ -817,8 +827,9 @@ export function ProjectEditorWizard({
     setAutosaveState('idle');
     setLastAutosavedAt('');
     setPreloadWarningVisible(false);
-    setRestoreCandidate(autosave?.key ? readStoredProjectEditorDraft(autosave.key) : null);
-  }, [autosave?.key, draftKey, initialDraft, initialDraftFingerprint]);
+    const stored = autosave?.key ? readStoredProjectEditorDraft(autosave.key) : null;
+    setRestoreCandidate(stored && stored.acknowledgedFingerprint !== JSON.stringify(createProjectEditorDraft(stored.draft)) && JSON.stringify(createProjectEditorDraft(stored.draft)) !== JSON.stringify(createProjectEditorDraft(nextDraft)) ? stored : null);
+  }, [autosave?.key, draftKey, initialDraft, initialDraftFingerprint, initialStepIndex]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
@@ -835,9 +846,12 @@ export function ProjectEditorWizard({
     // 대기 파일을 버린 경우에도 임시저장이 진행돼야 한다.
     const pendingRetryNow = [...registrationDocumentKinds, ...checkoutDocumentKinds]
       .some((kind) => Boolean(retryDocumentFileRef.current[kind]));
-    if (uploadInProgress || pendingRetryNow) return false;
+    if (submittedRef.current || uploadInProgress || pendingRetryNow) return false;
     if (readOnly || !autosave?.key || autosave.disabled) return false;
-    if (mode === 'portal-register' && !hasRequiredRegistrationDocuments) return false;
+    if (restoreCandidate) {
+      autosaveErrorRef.current = '보관된 임시저장을 불러오거나 삭제한 뒤 저장해 주세요.';
+      return false;
+    }
     const now = new Date().toISOString();
     const storedDraft: StoredProjectEditorDraft = {
       schemaVersion: PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION,
@@ -846,29 +860,40 @@ export function ProjectEditorWizard({
       stepIndex: nextStepIndex,
       updatedAt: now,
     };
-    setAutosaveState('saving');
-    try {
-      writeStoredProjectEditorDraft(autosave.key, storedDraft);
-      await autosave.onSave?.(storedDraft.draft, nextStepIndex);
-      lastPersistedFingerprintRef.current = JSON.stringify(storedDraft.draft);
-      autosaveErrorRef.current = '';
-      setLastAutosavedAt(now);
-      setAutosaveState('saved');
-      return true;
-    } catch (error) {
-      console.error('[ProjectEditorWizard] autosave failed:', error);
-      // 서버가 적어 준 원인을 실패 토스트가 보여줄 수 있게 남겨 둔다 - "잠시 후 다시"만으로는
-      // 리스 만료·검증 거부·네트워크를 구분할 수 없어 사람이 같은 실패를 반복한다.
-      autosaveErrorRef.current = error instanceof Error ? (
-        (error as { serverMessage?: string }).serverMessage || error.message
-      ) : String(error);
-      setLastAutosavedAt(now);
-      setAutosaveState('error');
-      return false;
-    }
-  }, [autosave?.disabled, autosave?.key, autosave?.onSave, draftKey, hasPendingRetryFile, hasRequiredRegistrationDocuments, mode, readOnly, uploadInProgress]);
+    const snapshot = JSON.stringify({ draft: storedDraft.draft, stepIndex: nextStepIndex });
+    try { writeStoredProjectEditorDraft(autosave.key, storedDraft); } catch { /* Remote saving remains available when local storage is full. */ }
+    const save = async () => {
+      if (submittedRef.current) return false;
+      if (savedSnapshotRef.current === snapshot) return true;
+      setAutosaveState('saving');
+      try {
+        await autosave.onSave?.(storedDraft.draft, nextStepIndex);
+        lastPersistedFingerprintRef.current = JSON.stringify(storedDraft.draft);
+        savedSnapshotRef.current = snapshot;
+        try {
+          const checkpoint = readStoredProjectEditorDraft(autosave.key);
+          if (checkpoint && JSON.stringify(createProjectEditorDraft(checkpoint.draft)) === lastPersistedFingerprintRef.current) {
+            writeStoredProjectEditorDraft(autosave.key, { ...checkpoint, acknowledgedFingerprint: lastPersistedFingerprintRef.current });
+          }
+        } catch { /* A failed local acknowledgement must not turn a successful server save into a failure. */ }
+        autosaveErrorRef.current = '';
+        setLastAutosavedAt(now);
+        setAutosaveState(JSON.stringify(createProjectEditorDraft(draftRef.current)) === JSON.stringify(storedDraft.draft) ? 'saved' : 'idle');
+        return true;
+      } catch (error) {
+        console.error('[ProjectEditorWizard] autosave failed:', error);
+        autosaveErrorRef.current = resolveProjectSaveErrorMessage(error, '임시저장하지 못했습니다. 입력 내용은 유지됩니다.');
+        setAutosaveState('error');
+        return false;
+      }
+    };
+    const pending = saveQueueRef.current.then(save, save);
+    saveQueueRef.current = pending;
+    return pending;
+  }, [autosave?.disabled, autosave?.key, autosave?.onSave, draftKey, readOnly, restoreCandidate, uploadInProgress]);
 
   const saveDraftAndRelease = useCallback(async () => {
+    if (submitInFlightRef.current) return false;
     if (uploadInProgress) {
       toast.error('첨부파일을 업로드하는 중입니다. 잠시 기다리거나 해당 파일의 업로드 취소를 누른 뒤 나가 주세요.');
       return false;
@@ -896,6 +921,7 @@ export function ProjectEditorWizard({
   }, [autosave?.disabled, autosave?.key, draft, hasPendingRetryFile, hasUnsavedInput, onLeave, persistAutosaveSnapshot, readOnly, stepIndex, uploadInProgress]);
 
   const releaseWithoutSaving = useCallback(async () => {
+    if (submitInFlightRef.current) return false;
     if (uploadInProgress || hasPendingRetryFile) {
       toast.error('첨부파일 업로드를 완료한 뒤 나갈 수 있습니다.');
       return false;
@@ -912,7 +938,7 @@ export function ProjectEditorWizard({
   }, [autosave?.key, hasPendingRetryFile, onLeave, uploadInProgress]);
 
   const finishExit = useCallback(async (saveBeforeExit: boolean) => {
-    if (exitInFlightRef.current) return;
+    if (submitInFlightRef.current || exitInFlightRef.current) return;
     exitInFlightRef.current = true;
     setExitBusy(true);
     try {
@@ -932,7 +958,7 @@ export function ProjectEditorWizard({
   }, [blocker, exitIntent, onCancel, releaseWithoutSaving, saveDraftAndRelease]);
 
   const requestCancel = () => {
-    if (exitInFlightRef.current) return;
+    if (submitInFlightRef.current || exitInFlightRef.current) return;
     if (!shouldConfirmExit) {
       void onCancel?.();
       return;
@@ -953,6 +979,7 @@ export function ProjectEditorWizard({
 
   useEffect(() => {
     if (blocker.state !== 'blocked') return;
+    if (submitInFlightRef.current) { blocker.reset(); return; }
     if (leaveApprovedRef.current) {
       leaveApprovedRef.current = false;
       blocker.proceed();
@@ -963,22 +990,42 @@ export function ProjectEditorWizard({
   }, [blocker]);
 
   useEffect(() => {
-    if (readOnly || !autosave?.key || autosave.disabled || restoreCandidate || uploadInProgress || hasPendingRetryFile) return undefined;
+    if (readOnly || !autosave?.key || autosave.disabled || restoreCandidate || uploadInProgress || hasPendingRetryFile || submitting) return undefined;
+    if (savedSnapshotRef.current === JSON.stringify({ draft: createProjectEditorDraft(draft), stepIndex })) return undefined;
     const isInitialDraft = stepIndex === 0 && JSON.stringify(createProjectEditorDraft(draft)) === initialDraftFingerprint;
-    if (isInitialDraft) return undefined;
+    if (isInitialDraft && !savedSnapshotRef.current) return undefined;
 
     const timer = window.setTimeout(() => {
-      void persistAutosaveSnapshot(draft, stepIndex);
+      if (!submitInFlightRef.current && !submittedRef.current) void persistAutosaveSnapshot(draft, stepIndex);
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [autosave?.disabled, autosave?.key, draft, hasPendingRetryFile, initialDraftFingerprint, persistAutosaveSnapshot, readOnly, restoreCandidate, stepIndex, uploadInProgress]);
+  }, [autosave?.disabled, autosave?.key, draft, hasPendingRetryFile, initialDraftFingerprint, persistAutosaveSnapshot, readOnly, restoreCandidate, stepIndex, submitting, uploadInProgress]);
+
+  useEffect(() => {
+    if (!autosave?.key || readOnly || restoreCandidate || submitting || submittedRef.current) return;
+    const timer = window.setTimeout(() => {
+      try {
+        writeStoredProjectEditorDraft(autosave.key, {
+          schemaVersion: PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION, draftKey,
+          draft: createProjectEditorDraft(draft), stepIndex, updatedAt: new Date().toISOString(),
+        });
+      } catch { /* Remote draft saving does not depend on browser storage availability. */ }
+    }, 200);
+    return () => window.clearTimeout(timer);
+  }, [autosave?.key, draft, draftKey, readOnly, restoreCandidate, stepIndex, submitting]);
 
   const restoreLocalDraft = () => {
-    if (!restoreCandidate) return;
-    setDraft(normalizeRestoredProjectEditorDraft(restoreCandidate.draft, mode));
+    if (!restoreCandidate || readOnly) return;
+    const restored = normalizeRestoredProjectEditorDraft(restoreCandidate.draft, mode);
+    if (mode === 'portal-register' || mode === 'portal-edit') {
+      for (const field of Object.values(PROJECT_DOCUMENT_FIELD)) {
+        Object.assign(restored, { [field]: initialDraft[field] ?? null });
+      }
+    }
+    setDraft(restored);
     setStepIndex(Math.max(0, Math.min(STEPS.length - 1, restoreCandidate.stepIndex || 0)));
     setLastAutosavedAt(restoreCandidate.updatedAt);
-    setAutosaveState('saved');
+    setAutosaveState('idle');
     setRestoreCandidate(null);
   };
 
@@ -1005,20 +1052,23 @@ export function ProjectEditorWizard({
       return;
     }
     submitInFlightRef.current = true;
+    setSubmitting(true);
     try {
       if (autosave?.key && !await persistAutosaveSnapshot(draft, stepIndex)) {
-        throw new Error('최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다.');
+        throw new Error(`최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다. ${autosaveErrorRef.current}`);
       }
       await onSubmit(createProjectEditorDraft(draft), actionId);
+      submittedRef.current = true;
       lastPersistedFingerprintRef.current = JSON.stringify(createProjectEditorDraft(draft));
-      if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
+      if (autosave?.key && JSON.stringify(createProjectEditorDraft(draftRef.current)) === JSON.stringify(createProjectEditorDraft(draft))) removeStoredProjectEditorDraft(autosave.key);
       setAutosaveState('idle');
       setLastAutosavedAt('');
     } catch (error) {
       console.error('[ProjectEditorWizard] submit failed:', error);
-      toast.error(error instanceof Error ? error.message : '저장에 실패했습니다.');
+      toast.error(resolveProjectSaveErrorMessage(error, '저장에 실패했습니다. 입력 내용은 유지됩니다.'));
     } finally {
       submitInFlightRef.current = false;
+      setSubmitting(false);
     }
   };
 
@@ -1033,13 +1083,7 @@ export function ProjectEditorWizard({
   const hasTotalActualCostInput = financialInputFlags.totalActualCost;
   const hasSupportAmountInput = financialInputFlags.supportAmount;
   const usesRegistrationV2 = draft.registrationRequirementsVersion === 2;
-  const hasMultiYearContract = Boolean(
-    /^\d{4}-\d{2}-\d{2}$/.test(draft.contractStart)
-    && (draft.contractEndUndecided
-      ? Number(draft.contractStart.slice(0, 4)) < new Date().getFullYear()
-      : /^\d{4}-\d{2}-\d{2}$/.test(draft.contractEnd)
-        && draft.contractStart.slice(0, 4) !== draft.contractEnd.slice(0, 4)),
-  );
+  const hasMultiYearContract = hasMultiYearProjectContract(draft);
   const settlementDetailsEnabled = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const requiresSettlementConfirmations = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const showProjectCheckout = draft.status === 'COMPLETED' || draft.status === 'COMPLETED_PENDING_PAYMENT';
@@ -1586,32 +1630,8 @@ export function ProjectEditorWizard({
         if (!customSystem) issues.push({ step: 'financial', label: '기타 정산 시스템 이름' });
         if (customSystem.length > 100) issues.push({ step: 'financial', label: '기타 정산 시스템 이름은 100자 이하여야 합니다.' });
       }
-      (!hasMultiYearContract ? ['contract', 'interim', 'final'] as const : []).forEach((field) => {
-        if (draft.paymentPlan[field] > 0 && !draft.paymentExpectedMonths[field]) {
-          const label = field === 'contract' ? '선금/계약금 입금 예상월' : field === 'interim' ? '중도금 입금 예상월' : '잔금 입금 예상월';
-          issues.push({ step: 'financial', label });
-        }
-      });
-      if (hasMultiYearContract) {
-        draft.financialYears.forEach((row) => {
-          (['contract', 'interim', 'final'] as const).forEach((field) => {
-            if ((row.paymentPlan?.[field] || 0) > 0 && !row.paymentExpectedMonths?.[field]) {
-              const label = field === 'contract' ? '선금/계약금' : field === 'interim' ? '중도금' : '잔금';
-              issues.push({ step: 'financial', label: `${row.year}년 ${label} 예상 입금 시점` });
-            }
-          });
-        });
-      }
-      const missingAnnualAdvanceInterimReason = hasMultiYearContract && draft.financialYears.some((row) => {
-        const paymentPlan = row.paymentPlan || { contract: 0, interim: 0, final: 0 };
-        const paymentTotal = paymentPlan.contract + paymentPlan.interim + paymentPlan.final;
-        return paymentTotal > 0
-          && row.contractAmount > 0
-          && (paymentPlan.contract + paymentPlan.interim) / row.contractAmount < 0.7
-          && !row.advanceInterimBelow70Reason?.trim();
-      });
-      if ((!hasMultiYearContract && requiresAdvanceInterimReason && !draft.advanceInterimBelow70Reason.trim()) || missingAnnualAdvanceInterimReason) {
-        issues.push({ step: 'financial', label: '선금·중도금 70% 미만 사유' });
+      for (const issue of projectPaymentIssues(draft)) {
+        issues.push({ step: 'financial', label: issue.label || issue.message });
       }
     }
     if (showProjectCheckout) {
@@ -2901,9 +2921,9 @@ export function ProjectEditorWizard({
               {teamSyncError}
             </p>
           ) : null}
-          {teamSyncWarning ? (
+          {teamSyncWarning || projectParticipationPeriodWarnings(draft).length > 0 ? (
             <p className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="alert">
-              ⚠ {teamSyncWarning}
+              ⚠ {[teamSyncWarning, ...projectParticipationPeriodWarnings(draft).map((issue) => issue.message)].filter(Boolean).join(' / ')}
             </p>
           ) : null}
           {teamSyncNotice ? (
@@ -3115,7 +3135,8 @@ export function ProjectEditorWizard({
         <ProjectFormRow
           label={`${financialYear.year}년 선금·중도금 합계 70% 미만 사유`}
           required
-          issueLabel="선금·중도금 70% 미만 사유"
+          issueLabel={`${financialYear.year}년 선금·중도금 70% 미만 사유`}
+          errors={fieldIssues(`${financialYear.year}년 선금·중도금 70% 미만 사유`)}
         >
           <Textarea
             value={financialYear.advanceInterimBelow70Reason || ''}
@@ -3611,7 +3632,7 @@ export function ProjectEditorWizard({
               <Button type="button" variant="outline" size="sm" onClick={discardLocalDraft}>
                 버리기
               </Button>
-              <Button type="button" size="sm" onClick={restoreLocalDraft}>
+              <Button type="button" size="sm" disabled={readOnly || submitting} onClick={restoreLocalDraft}>
                 임시저장 불러오기
               </Button>
             </div>
@@ -3708,7 +3729,7 @@ export function ProjectEditorWizard({
               ))}
             </ul>
           </div>
-          <fieldset disabled={readOnly} className="contents">
+          <fieldset disabled={readOnly || submitting} className="contents">
             {renderStep()}
           </fieldset>
         </CardContent>
@@ -3731,7 +3752,7 @@ export function ProjectEditorWizard({
                 <span className={autosaveState === 'error' ? 'text-red-600' : 'text-muted-foreground'}>
                   {autosaveState === 'saving'
                     ? '임시저장 중'
-                    : autosaveState === 'saved'
+                    : autosaveState === 'saved' && !hasUnsavedInput
                       ? `임시저장됨${lastAutosavedAt ? ` ${formatAutosaveTime(lastAutosavedAt)}` : ''}`
                       : autosaveState === 'error'
                         ? '임시저장 실패'
@@ -3746,7 +3767,7 @@ export function ProjectEditorWizard({
                 type="button"
                 variant="outline"
                 onClick={() => void handleManualAutosave()}
-                disabled={readOnly || autosaveState === 'saving' || uploadInProgress || hasPendingRetryFile || (mode === 'portal-register' && !hasRequiredRegistrationDocuments)}
+                disabled={readOnly || submitting || autosaveState === 'saving' || uploadInProgress || hasPendingRetryFile}
                 className="gap-2"
               >
                 {autosaveState === 'saving' ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
@@ -3776,7 +3797,7 @@ export function ProjectEditorWizard({
                     key={action.id}
                     type="button"
                     variant={action.variant || 'default'}
-                    disabled={readOnly || !!busyActionId || action.disabled}
+                    disabled={readOnly || submitting || !!busyActionId || action.disabled}
                     onClick={() => {
                       if (submitBlocked) {
                         setSubmitBlockedNotice(true);

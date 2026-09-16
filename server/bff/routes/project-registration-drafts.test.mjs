@@ -654,7 +654,7 @@ describe('project registration draft service', () => {
     'contract',
     'customer_business_registration',
     'quote',
-  ])('rejects a v2 save when the %s attachment is missing', async (missingKind) => {
+  ])('preserves an incomplete v2 draft when the %s attachment is missing', async (missingKind) => {
     const { db, service, base } = createHarness();
     const created = await service.create({ ...base, idempotencyKey: `idem-save-${missingKind}-create` });
     addRequiredRegistrationAttachments(db, created.body.draft.draftId);
@@ -665,7 +665,7 @@ describe('project registration draft service', () => {
       attachmentRefs: draft.attachmentRefs.filter((attachment) => attachment.documentKind !== missingKind),
     });
 
-    await expectHttpError(service.update({
+    const saved = await service.update({
       ...base,
       draftId: created.body.draft.draftId,
       leaseId: created.body.lease.leaseId,
@@ -673,7 +673,15 @@ describe('project registration draft service', () => {
       idempotencyKey: `idem-save-${missingKind}`,
       expectedDraftRevision: 0,
       payload: validRegistrationV2Payload(),
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.draft.payload).toEqual(validRegistrationV2Payload());
+    expect(saved.body.draft.attachmentRefs).toEqual(draft.attachmentRefs.filter((attachment) => attachment.documentKind !== missingKind));
+    await expectHttpError(service.submit({
+      ...base, draftId: created.body.draft.draftId, leaseId: created.body.lease.leaseId,
+      fence: created.body.lease.fence, idempotencyKey: `submit-missing-${missingKind}`, expectedDraftRevision: 1,
     }), 422, 'project_registration_invalid');
+    expect(db.documents.get(path).status).toBe('ACTIVE');
   });
 
   it.each([

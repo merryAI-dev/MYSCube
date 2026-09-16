@@ -156,7 +156,6 @@ function RegistrationEditor({
         stepIndex,
       });
       revisionRef.current = saved.draft.draftRevision;
-      setRecord(saved.draft);
     })
   )), [draftClient, enqueueMutation, record.draftId, withOwnership]);
 
@@ -313,6 +312,7 @@ function RegistrationEditor({
         description="임시저장 내용은 본인에게만 보이며, 최종 저장 후 최종 결재자 (총괄책임자)의 조직장 검토 화면에 표시됩니다."
         embeddedInShell
         initialDraft={editorDraft}
+        initialStepIndex={record?.stepIndex || 0}
         draftKey={`portal-register-${record.draftId}`}
         members={members}
         roster={roster}

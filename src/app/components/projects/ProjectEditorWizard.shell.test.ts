@@ -52,8 +52,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).toContain("label: 'RFP'");
     expect(source.match(/description: '있을 시'/g)).toHaveLength(3);
     expect(source).toContain("description: '없으면 사업요청사항을 확인할 수 있는 메일 본문 등 첨부'");
-    expect(source).toContain("&& (draft.quoteDocument || draft.quoteSubmissionDeferred)");
-    expect(source).toContain("mode === 'portal-register' && !hasRequiredRegistrationDocuments");
+    expect(source).not.toContain("mode === 'portal-register' && !hasRequiredRegistrationDocuments");
     expect(source).not.toContain("kinds: ['proposal', 'rfp_request_evidence']");
     expect(source).not.toContain('제안서와 RFP/요청 메일 중 하나만 남겨주세요.');
     expect(source).toContain('산출내역서(견적서) 이후 제출(예외 처리)');
@@ -546,11 +545,11 @@ describe('ProjectEditorWizard dropdown contract', () => {
 
   it('keeps private edit inputs read-only without disabling step navigation', () => {
     expect(source).toContain('readOnly?: boolean');
-    expect(source).toContain('<fieldset disabled={readOnly} className="contents">');
-    expect(source).toContain('disabled={readOnly || autosaveState');
-    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled}');
+    expect(source).toContain('<fieldset disabled={readOnly || submitting} className="contents">');
+    expect(source).toContain('disabled={readOnly || submitting || autosaveState');
+    expect(source).toContain('disabled={readOnly || submitting || !!busyActionId || action.disabled}');
     expect(source).toContain('shouldResetProjectEditorDraft({');
-    expect(source).toContain('autosave?.onSave, draftKey, hasPendingRetryFile, hasRequiredRegistrationDocuments, mode, readOnly, uploadInProgress');
+    expect(source).toContain('autosave?.onSave, draftKey, readOnly, restoreCandidate, uploadInProgress');
   });
 
   it('keeps failed attachment files retryable and clears the input only after success', () => {
@@ -571,22 +570,22 @@ describe('ProjectEditorWizard dropdown contract', () => {
 
   it('never double-submits or final-submits after the latest private draft save fails', () => {
     expect(source).toContain('if (submitInFlightRef.current) return');
-    expect(source).toContain("throw new Error('최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다.')");
+    expect(source).toContain('최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다.');
     expect(source.indexOf('persistAutosaveSnapshot(draft, stepIndex)')).toBeLessThan(source.indexOf('await onSubmit(createProjectEditorDraft(draft), actionId)'));
   });
 
   it('never saves or submits a stale snapshot while an attachment mutation is in flight', () => {
     // 자동저장 가드는 렌더 시점 값이 아니라 ref 를 즉석에서 본다 - 대기 파일을 버리고
     // 나가는 경로에서도 임시저장이 돼야 하기 때문이다.
-    expect(source).toContain('if (uploadInProgress || pendingRetryNow) return false;');
+    expect(source).toContain('if (submittedRef.current || uploadInProgress || pendingRetryNow) return false;');
     expect(source).toContain("toast.error('첨부파일 처리를 완료한 뒤 임시저장해 주세요.')");
     expect(source).toContain("toast.error('첨부파일 처리를 완료한 뒤 최종 저장해 주세요.')");
-    expect(source).toContain("disabled={readOnly || autosaveState === 'saving' || uploadInProgress || hasPendingRetryFile || (mode === 'portal-register' && !hasRequiredRegistrationDocuments)}");
+    expect(source).toContain("disabled={readOnly || submitting || autosaveState === 'saving' || uploadInProgress || hasPendingRetryFile}");
     expect(source).toContain("toast.error('첨부파일 처리를 완료한 뒤 최종 저장해 주세요.')");
   });
 
   it('keeps the final save button pressable and explains every reason it cannot submit yet', () => {
-    expect(source).toContain('disabled={readOnly || !!busyActionId || action.disabled}');
+    expect(source).toContain('disabled={readOnly || submitting || !!busyActionId || action.disabled}');
     expect(source).toContain('const submitBlocked = !canSubmit || Boolean(submitBlockedStatusReason);');
     expect(source).toContain('if (submitBlocked) {');
     expect(source).toContain('setSubmitBlockedNotice(true);');

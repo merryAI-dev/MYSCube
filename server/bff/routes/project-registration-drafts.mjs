@@ -30,7 +30,6 @@ import { DRAFT_ATTACHMENT_CLEANUP_EVENT_TYPE, createOutboxEvent } from '../outbo
 import { buildProjectRegistrationCanonicalDocuments } from './projects.mjs';
 import {
   PROJECT_REGISTRATION_DOCUMENT_KINDS,
-  missingProjectRegistrationRequiredDocumentKind,
   projectDocumentValidationError,
 } from '../project-document-validation.mjs';
 
@@ -812,16 +811,6 @@ export function createProjectRegistrationDraftService({
           serverNow: nowDate,
         });
         const revision = assertRevision(draft, expectedDraftRevision) + 1;
-        if (payload.registrationRequirementsVersion === 2) {
-          const missingDocumentKind = missingProjectRegistrationRequiredDocumentKind(attachmentRefs(draft), payload);
-          if (missingDocumentKind) {
-            throw createHttpError(
-              422,
-              `Project registration required attachment is missing: ${missingDocumentKind}`,
-              'project_registration_invalid',
-            );
-          }
-        }
         const next = {
           ...draft,
           payload,
