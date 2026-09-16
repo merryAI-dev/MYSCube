@@ -309,3 +309,9 @@
 ## [2026-08-25] patch-note | admin-participation-profile | 전문 프로필 레이블과 서버 필터
 - pages: [admin-participation](./pages/admin-participation.md)
 - summary: 참여율 표에 최종학력·영어·자격증 레이블을 추가하고, 권한이 있는 관리자에게만 URL 동기화 데이터 필터를 제공한다. 자격증은 최대 20개까지 선택하며 연속 선택 요청은 짧게 묶어 서버 집계를 조회한다.
+
+## [2026-09-16] patch-note | portal-register-project, portal-edit-project | 임시저장 보존 및 최종 저장 정책 정합
+- pages: [portal-register-project](./pages/portal-register-project.md), [portal-edit-project](./pages/portal-edit-project.md)
+- summary: 불필요한 반복 저장을 제거하고 지연 응답·실패 시 최신 입력을 보존한다. 다년도 입금월은 연도별 필드로 검증하며, 계약기간 밖 참여율은 경고하고 기존 월·미입력·0을 유지한다. 필수 첨부 완료 전에도 등록 초안 저장이 가능하다.
+- evidence: [PR #791](https://github.com/merryAI-dev/MYSCube/pull/791), `e44c17fa`, [운영 배포 성공](https://github.com/merryAI-dev/MYSCube/actions/runs/35087741352). 운영 초안·첨부 직접 변경·삭제 없음.
+- known issue: 이후 제보된 실비 숫자 입력 불가 현상은 별도 조사 중이다.
