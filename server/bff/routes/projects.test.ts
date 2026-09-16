@@ -193,6 +193,34 @@ describe('project route helpers', () => {
     expect(submission.projectRequest.payload.contractAnalysis).toBeNull();
   });
 
+  it('uses annual payment fields through registration, change submission and approval without filling hidden months', () => {
+    const payload = registrationV2Payload({
+      paymentExpectedMonths: { contract: '', interim: '', final: '' },
+      paymentPlan: { contract: 1, interim: 0, final: 299999 },
+      advanceInterimBelow70Reason: '',
+      teamMembersDetailed: [{
+        memberName: '참여자', memberNickname: '참여자', participationRate: 0,
+        laborAllocationStartMonth: '2025-12', laborAllocationEndMonth: '2028-01',
+        monthlyRates: { '2025-12': 10, '2026-01': null, '2026-02': 0, '2028-01': 20 },
+      }],
+    });
+    const before = structuredClone(payload);
+    const registered = registrationV2Canonical(payload);
+    const project = { ...registered.project, id: 'policy-project', version: 3 };
+    const submission = buildProjectInfoChangeSubmission({
+      tenantId: 'tenant-a', project, payload: { ...payload, name: '수정 이름' },
+      attachmentRefs: registrationV2AttachmentKinds.map((documentKind) => ({
+        documentKind, path: `orgs/tenant-a/project-registration-documents/policy-project/${documentKind}.pdf`,
+        name: `${documentKind}.pdf`, size: 100, contentType: 'application/pdf',
+      })), actorId: 'pm-a', actorName: 'PM A', timestamp: '2026-09-16T00:00:00.000Z',
+    });
+    const approved = buildProjectPatchFromChangeRequestPayload(submission.projectRequest.payload, project);
+    expect(approved.teamMembersDetailed[0].monthlyRates).toEqual(payload.teamMembersDetailed[0].monthlyRates);
+    expect(approved.financialYears).toEqual(registered.project.financialYears);
+    expect(approved.paymentExpectedMonths).toEqual({ contract: '', interim: '', final: '' });
+    expect(payload).toEqual(before);
+  });
+
   it('builds a registration v2 canonical record with contract confirmations and no retired finance week', () => {
     const canonical = registrationV2Canonical();
 
@@ -386,7 +414,7 @@ describe('project route helpers', () => {
     ]);
   });
 
-  it('rejects an open-ended sheet-backed rate after the project contract end month', () => {
+  it('preserves an open-ended sheet-backed rate after the project contract end month', () => {
     expect(() => registrationV2Canonical(registrationV2Payload({
       participationSheetLink: 'https://docs.google.com/spreadsheets/d/sheet-a/edit',
       contractEnd: '2027-12-31',
@@ -398,10 +426,10 @@ describe('project route helpers', () => {
         laborAllocationStartMonth: '2026-01',
         monthlyRates: { '2099-01': 20 },
       }],
-    }))).toThrowError(/outside the labor allocation period/);
+    }))).not.toThrow();
   });
 
-  it('rejects an explicitly long sheet stint that extends past the project contract end month', () => {
+  it('preserves an explicitly long sheet stint that extends past the project contract end month', () => {
     expect(() => registrationV2Canonical(registrationV2Payload({
       participationSheetLink: 'https://docs.google.com/spreadsheets/d/sheet-a/edit',
       contractEnd: '2027-12-31',
@@ -414,13 +442,13 @@ describe('project route helpers', () => {
         laborAllocationEndMonth: '2099-12',
         monthlyRates: { '2099-01': 20 },
       }],
-    }))).toThrowError(/outside the project contract period/);
+    }))).not.toThrow();
   });
 
   it.each([
     ['starts before the project contract', '2025-01', '2026-12'],
     ['ends after the project contract', '2026-01', '2028-12'],
-  ])('rejects a sheet stint that %s even when its saved rate month is inside the contract', (
+  ])('preserves a sheet stint that %s without moving its saved month', (
     _label,
     laborAllocationStartMonth,
     laborAllocationEndMonth,
@@ -438,7 +466,7 @@ describe('project route helpers', () => {
         laborAllocationEndMonth,
         monthlyRates: { '2026-01': 20 },
       }],
-    }))).toThrowError(/outside the project contract period/);
+    }))).not.toThrow();
   });
 
   it('requires a sheet link whenever the saved roster contains sheet-backed monthly rates', () => {
@@ -837,7 +865,7 @@ describe('project route helpers', () => {
       .toBe('https://docs.google.com/spreadsheets/d/repaired/edit');
   });
 
-  it('uses the current project contract end when a partial change omits contractEnd', () => {
+  it('preserves sheet periods when a partial change omits contractEnd', () => {
     const currentProject = {
       ...registrationV2Canonical(registrationV2Payload()).project,
       contractEnd: '2027-12-31',
@@ -855,7 +883,7 @@ describe('project route helpers', () => {
     };
 
     expect(() => buildProjectPatchFromChangeRequestPayload(payload, currentProject))
-      .toThrowError(/outside the labor allocation period/);
+      .not.toThrow();
   });
 
   it('allows only 도담 or 써니 as settlement support', () => {
@@ -1084,16 +1112,17 @@ describe('project route helpers', () => {
   it.each([
     [
       'payment expected month',
-      { paymentExpectedMonths: { contract: '', interim: '2026-06', final: '2027-12' } },
-      'Project registration paymentExpectedMonths.contract is required',
+      { contractEnd: '2026-12-31', paymentExpectedMonths: { contract: '', interim: '2026-06', final: '2026-12' } },
+      '선금/계약금 입금 예상월을 입력해 주세요.',
     ],
     [
       'below 70 percent reason',
       {
+        contractEnd: '2026-12-31',
         paymentPlan: { contract: 100_000, interim: 50_000, final: 150_000 },
         advanceInterimBelow70Reason: '',
       },
-      'Project registration advance/interim below 70% reason is required',
+      '선금·중도금 70% 미만 사유를 입력해 주세요.',
     ],
     [
       'team role',

@@ -53,6 +53,7 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
       updatedAt: input.createdAt,
     }),
     projectRegistrationDraftStorageService: storage,
+    projectRequestContractStorageService: storage,
     workerSecret: 'project-info-worker-secret',
     workerAuthPolicy: {
       deployEnv: 'local', schedulerOwner: 'manual',
@@ -120,15 +121,19 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
       }], participantCondition: '', note: '',
       contractDocument: {
         path: `orgs/${tenantId}/project-registration-documents/project-a/contract.pdf`,
+        size: VALID_PDF.byteLength, contentType: 'application/pdf', attachmentId: 'fixture-contract',
       },
       customerBusinessRegistrationDocument: {
         path: `orgs/${tenantId}/project-registration-documents/project-a/customer-business-registration.pdf`,
+        size: VALID_PDF.byteLength, contentType: 'application/pdf', attachmentId: 'fixture-customer-business-registration',
       },
       quoteDocument: {
         path: `orgs/${tenantId}/project-registration-documents/project-a/quote.pdf`,
+        size: VALID_PDF.byteLength, contentType: 'application/pdf', attachmentId: 'fixture-quote',
       },
       proposalDocument: {
         path: `orgs/${tenantId}/project-registration-documents/project-a/proposal.pdf`,
+        size: VALID_PDF.byteLength, contentType: 'application/pdf', attachmentId: 'fixture-proposal',
       },
       proposalWordOriginalDocument: null,
       proposalPptOriginalDocument: null,
@@ -150,7 +155,7 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
   async function reset() {
     await Promise.all([
       'members', 'projects', 'project_requests', 'projectRequests', 'privateEditDrafts', 'editLeases',
-      'audit_logs', 'audit_chain', 'idempotency_keys', 'outbox_deliveries',
+      'audit_logs', 'audit_chain', 'idempotency_keys', 'outbox_deliveries', 'partEntries',
     ].map((name) => clearCollection(`orgs/${tenantId}/${name}`)));
     await clearCollection('outbox');
     const batch = db.batch();
@@ -230,6 +235,70 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
     });
     expect((await db.doc(`orgs/${tenantId}/projectRequests/change-project-a`).get()).exists).toBe(false);
     expect(drafts.docs[0].data()).not.toHaveProperty('payload');
+  });
+
+  it('preserves an existing draft on failure and carries annual fields and out-of-contract months through approval', async () => {
+    const acquired = await acquire();
+    const headers = mutationHeaders(acquired.body, 'policy-open');
+    const opened = await api.post('/api/v1/project-info-drafts/project-a/open').set(headers).send({});
+    expect(opened.status).toBe(200);
+    const payload = validPayload({
+      contractStart: '2026-05-14', contractEnd: '2027-11-30', totalActualCost: 0,
+      participationSheetLink: 'https://docs.google.com/spreadsheets/d/policy-fixture/edit',
+      paymentExpectedMonths: { contract: '', interim: '', final: '' },
+      financialYears: [2026, 2027].map((year) => ({
+        year, contractAmount: 50000, salesVatAmount: 5000, totalRevenueAmount: 20000,
+        totalActualCost: 0, supportAmount: 0, profitRate: 0.4,
+        paymentPlan: { contract: 50000, interim: 0, final: 0 },
+        paymentExpectedMonths: { contract: `${year}-07`, interim: '', final: '' },
+      })),
+      teamMembersDetailed: [{
+        personId: 'person-policy', memberName: '참여자', memberNickname: '참여자', participationRate: 0,
+        laborAllocationStartMonth: '2026-04', laborAllocationEndMonth: '2028-01',
+        monthlyRates: { '2026-04': 20, '2026-05': null, '2026-06': 0, '2028-01': 10 },
+      }],
+    });
+    const invalid = structuredClone(payload);
+    invalid.financialYears[0].paymentExpectedMonths.contract = '';
+    const saved = await api.patch('/api/v1/project-info-drafts/project-a')
+      .set({ ...headers, 'idempotency-key': 'policy-incomplete-save' })
+      .send({ expectedDraftRevision: 0, payload: invalid, stepIndex: 3 });
+    expect(saved.status).toBe(200);
+    const draftRef = db.collection(`orgs/${tenantId}/privateEditDrafts`);
+    const beforeFailure = (await draftRef.get()).docs[0].data();
+    const failed = await api.post('/api/v1/project-info-drafts/project-a/submit')
+      .set({ ...headers, 'idempotency-key': 'policy-failed-submit' })
+      .send({ expectedDraftRevision: 1, expectedVersion: 3 });
+    expect(failed.status).toBe(422);
+    expect(failed.body.details.issues[0].field).toBe('financialYears.2026.paymentExpectedMonths.contract');
+    expect((await draftRef.get()).docs[0].data()).toEqual(beforeFailure);
+    expect((await db.collection(`orgs/${tenantId}/partEntries`).get()).empty).toBe(true);
+    const complete = await api.patch('/api/v1/project-info-drafts/project-a')
+      .set({ ...headers, 'idempotency-key': 'policy-complete-save' })
+      .send({ expectedDraftRevision: 1, payload, stepIndex: 3 });
+    expect(complete.status).toBe(200);
+    const beforeSubmit = (await db.doc(`orgs/${tenantId}/projects/project-a`).get()).data();
+    const submitted = await api.post('/api/v1/project-info-drafts/project-a/submit')
+      .set({ ...headers, 'idempotency-key': 'policy-submit' })
+      .send({ expectedDraftRevision: 2, expectedVersion: 3 });
+    expect(submitted.status, JSON.stringify(submitted.body)).toBe(200);
+    expect((await db.doc(`orgs/${tenantId}/projects/project-a`).get()).data()).toEqual(beforeSubmit);
+    const pending = (await db.doc(`orgs/${tenantId}/project_requests/change-project-a`).get()).data()!;
+    for (const field of ['contractDocument', 'customerBusinessRegistrationDocument', 'quoteDocument', 'proposalDocument']) {
+      const document = pending.proposedSnapshot[field];
+      storedAttachments.set(document.path, { ...document });
+    }
+    await db.doc(`orgs/${tenantId}/members/executive-a`).set({ uid: 'executive-a', role: 'pm', status: 'ACTIVE' });
+    const approved = await api.post('/api/v1/projects/project-a/executive-review')
+      .set({ ...actorHeaders('executive-a'), 'idempotency-key': 'policy-approve' })
+      .send({ requestId: 'change-project-a', reviewStatus: 'APPROVED' });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    const canonical = (await db.doc(`orgs/${tenantId}/projects/project-a`).get()).data()!;
+    expect(canonical.teamMembersDetailed[0].monthlyRates).toEqual(payload.teamMembersDetailed[0].monthlyRates);
+    expect(canonical.paymentExpectedMonths).toEqual(payload.paymentExpectedMonths);
+    expect(canonical.financialYears.map((year) => year.paymentExpectedMonths)).toEqual(payload.financialYears.map((year) => year.paymentExpectedMonths));
+    const entries = await db.collection(`orgs/${tenantId}/partEntries`).get();
+    expect(entries.docs[0].data().monthlyRates).toEqual(payload.teamMembersDetailed[0].monthlyRates);
   });
 
   it('stores same-kind private attachments permanently and leaves version conflicts private', async () => {

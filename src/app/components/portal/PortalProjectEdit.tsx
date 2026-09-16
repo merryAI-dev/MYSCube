@@ -1,3 +1,4 @@
+import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
 import {
@@ -407,16 +408,15 @@ function ProjectInfoEditor({
 
   const persistDraft = useCallback((draft: ProjectEditorDraft, stepIndex: number) => enqueueMutation(() => (
     withOwnership(async (ownership) => {
-      if (!record) throw new Error('수정 임시저장이 준비되지 않았습니다.');
+      if (!recordLoadedRef.current) throw new Error('수정 임시저장이 준비되지 않았습니다.');
       const saved = await draftClient.save(ownership, {
         expectedDraftRevision: revisionRef.current,
         payload: buildProjectRequestPayloadFromDraft(draft) as unknown as Record<string, unknown>,
         stepIndex,
       });
       revisionRef.current = saved.draft.draftRevision;
-      setRecord(saved.draft);
     })
-  )), [draftClient, enqueueMutation, record, withOwnership]);
+  )), [draftClient, enqueueMutation, withOwnership]);
 
   const uploadDocument = useCallback((kind: ProjectRequestDocumentKind, file: File) => enqueueMutation(() => (
     withOwnership(async (ownership) => {
@@ -510,7 +510,7 @@ function ProjectInfoEditor({
         // failure and leaves the local autosave and the unsaved-changes guard in place.
         throw error;
       }
-      toast.error(error instanceof Error ? error.message : '저장에 실패했습니다. 다시 시도해주세요.');
+      toast.error(resolveProjectSaveErrorMessage(error, '저장에 실패했습니다. 입력 내용은 유지됩니다.'));
       throw error;
     } finally {
       setBusyActionId(null);
@@ -683,6 +683,7 @@ function ProjectInfoEditor({
         description="임시저장 내용은 본인에게만 보이며, 최종 저장 후 승인 대기열에 표시됩니다."
         embeddedInShell
         initialDraft={initialDraft}
+        initialStepIndex={record?.stepIndex || 0}
         draftKey={autosaveKey}
         members={members}
         roster={roster}

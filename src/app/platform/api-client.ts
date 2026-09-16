@@ -517,6 +517,7 @@ export class PlatformApiClient {
               actorId: options.actor.id,
               status: error instanceof PlatformApiError ? error.status : undefined,
               responseRequestId: error instanceof PlatformApiError ? error.requestId : undefined,
+              errorCode: error instanceof PlatformApiError ? error.code : undefined,
             },
           });
           throw error;

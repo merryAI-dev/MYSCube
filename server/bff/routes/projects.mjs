@@ -1,3 +1,4 @@
+import { hasMultiYearProjectContract, projectPaymentIssues } from '../../../src/app/platform/project-input-policy.mjs';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { projectDocumentValidationError } from '../project-document-validation.mjs';
@@ -985,32 +986,11 @@ function assertParticipationSheetLinkForTeamMembers(
 }
 
 function assertRegistrationV2PaymentPlan(payload) {
-  const paymentPlan = payload.paymentPlan && typeof payload.paymentPlan === 'object'
-    ? payload.paymentPlan
-    : {};
-  const expectedMonths = payload.paymentExpectedMonths;
-  if (expectedMonths !== undefined && (!expectedMonths || typeof expectedMonths !== 'object' || Array.isArray(expectedMonths))) {
-    invalidRegistration('Project registration paymentExpectedMonths is invalid');
-  }
-  for (const field of REGISTRATION_PAYMENT_FIELDS) {
-    if (registrationAmount(paymentPlan[field]) > 0 && !normalizeExpectedMonth(expectedMonths?.[field])) {
-      invalidRegistration(`Project registration paymentExpectedMonths.${field} is required`);
-    }
-  }
-  const contractAmount = registrationAmount(payload.contractAmount);
-  const paymentTotal = REGISTRATION_PAYMENT_FIELDS.reduce(
-    (sum, field) => sum + registrationAmount(paymentPlan[field]),
-    0,
-  );
-  const advanceAndInterim = registrationAmount(paymentPlan.contract) + registrationAmount(paymentPlan.interim);
-  if (
-    contractAmount > 0
-    && paymentTotal > 0
-    && advanceAndInterim / contractAmount < 0.7
-    && !readOptionalText(payload.advanceInterimBelow70Reason)
-  ) {
-    invalidRegistration('Project registration advance/interim below 70% reason is required');
-  }
+  const issues = projectPaymentIssues(payload);
+  if (!issues.length) return;
+  const error = createHttpError(422, issues[0].message, 'project_registration_invalid');
+  error.details = { issues };
+  throw error;
 }
 
 function registrationAmount(value) {
@@ -1053,6 +1033,7 @@ function assertProjectPaymentExtensions(payload) {
     invalidRegistration('Project registration settlementSystemOther is too long');
   }
   if (!Array.isArray(payload?.financialYears)) return;
+  if (payload.registrationRequirementsVersion === 2 && !hasMultiYearProjectContract(payload)) return;
   for (const row of payload.financialYears) {
     if (!row || typeof row !== 'object' || Array.isArray(row) || row.paymentExpectedMonths === undefined) continue;
     if (!row.paymentExpectedMonths || typeof row.paymentExpectedMonths !== 'object' || Array.isArray(row.paymentExpectedMonths)) {
@@ -1331,6 +1312,7 @@ function assertRegistrationV2Requirements(payload, attachmentRefs, validateAttac
   if (settlementDetailsEnabled && settlementSystem && !SETTLEMENT_SYSTEM_CODES.has(settlementSystem)) {
     invalidRegistration('Project registration settlementSystem is invalid');
   }
+  assertRegistrationV2PaymentPlan(payload);
   assertProjectPaymentExtensions(payload);
   if (settlementDetailsEnabled && laborSettlementBasis && !LABOR_SETTLEMENT_BASES.has(laborSettlementBasis)) {
     invalidRegistration('Project registration laborSettlementBasis is invalid');
@@ -1338,7 +1320,6 @@ function assertRegistrationV2Requirements(payload, attachmentRefs, validateAttac
   if (interestRefundPolicy && !REGISTRATION_INTEREST_REFUND_POLICIES.has(interestRefundPolicy)) {
     invalidRegistration('Project registration interestRefundPolicy is invalid');
   }
-  assertRegistrationV2PaymentPlan(payload);
   const confirmations = normalizeRegistrationConfirmations(payload.registrationConfirmations);
   if (confirmations.modusignContractUsed === null) {
     invalidRegistration('Project registration modusignContractUsed is required');
@@ -2507,28 +2488,15 @@ function normalizeProjectTeamMemberMonthlyRates(member, index = null, {
   }
   const start = normalizeMonth(member?.laborAllocationStartMonth);
   const end = normalizeMonth(member?.laborAllocationEndMonth);
-  const normalizedContractStart = normalizeMonth(contractStartMonth);
-  const normalizedContractEnd = normalizeMonth(contractEndMonth);
-  const effectiveEnd = end && normalizedContractEnd
-    ? (end < normalizedContractEnd ? end : normalizedContractEnd)
-    : (end || normalizedContractEnd);
   if (!start || (end && start > end)) {
     invalidRegistration(`Project registration ${field} requires a valid labor allocation period`);
-  }
-  if (
-    (normalizedContractStart && start < normalizedContractStart)
-    || (normalizedContractEnd && start > normalizedContractEnd)
-    || (end && normalizedContractStart && end < normalizedContractStart)
-    || (end && normalizedContractEnd && end > normalizedContractEnd)
-  ) {
-    invalidRegistration(`Project registration ${field} is outside the project contract period`);
   }
   const normalized = {};
   for (const [yearMonth, rate] of Object.entries(source)) {
     if (!normalizeMonth(yearMonth)) {
       invalidRegistration(`Project registration ${field}.${yearMonth} is invalid`);
     }
-    if (yearMonth < start || (effectiveEnd && yearMonth > effectiveEnd)) {
+    if (yearMonth < start || (end && yearMonth > end)) {
       invalidRegistration(`Project registration ${field}.${yearMonth} is outside the labor allocation period`);
     }
     if (rate !== null && (
@@ -3397,7 +3365,9 @@ export function mountProjectRoutes(app, {
       );
     }
 
-    assertProjectPaymentExtensions(parsed);
+    const effectivePaymentPayload = { ...existingProject, ...parsed };
+    if (effectivePaymentPayload.registrationRequirementsVersion === 2) assertRegistrationV2PaymentPlan(effectivePaymentPayload);
+    assertProjectPaymentExtensions(effectivePaymentPayload);
     const hasSettlementSystem = Object.hasOwn(parsed, 'settlementSystem');
     const settlementSystem = hasSettlementSystem ? normalizeSettlementSystemCode(parsed.settlementSystem) : undefined;
     const financialYears = Array.isArray(parsed.financialYears)
