@@ -6,6 +6,7 @@
 
 | Page | Route | Last Updated | 현재 구현 체크포인트 |
 | --- | --- | --- | --- |
+| [admin-project-approvals](./pages/admin-project-approvals.md) | `/approvals`, `/projects/migration-audit` | 2026-09-17 | 승인 상태 필터 및 요약·대기 건수 기준 통일 |
 | [portal-dashboard](./pages/portal-dashboard.md) | `/portal` | 2026-04-15 | 포털 홈 safe fetch, 현재 상태 중심, 최소 CTA 유지 |
 | [portal-payroll](./pages/portal-payroll.md) | `/portal/payroll` | 2026-04-15 | 포털 경로 fetch 기반 거래 조회, 지급일/공지 확인 유지 |
 | [portal-weekly-expense](./pages/portal-weekly-expense.md) | `/portal/weekly-expenses` | 2026-04-14 | 기준본에서 이어쓰기, 저장 상태 구분, overwrite/backspace 복구 |
