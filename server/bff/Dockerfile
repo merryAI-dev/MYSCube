@@ -3,9 +3,11 @@ FROM node:24-alpine
 WORKDIR /app
 
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev --ignore-scripts
 
 COPY server ./server
+COPY policies ./policies
+COPY src/app/policies ./src/app/policies
 
 ENV NODE_ENV=production
 ENV BFF_WORKERS_ENABLED=false
