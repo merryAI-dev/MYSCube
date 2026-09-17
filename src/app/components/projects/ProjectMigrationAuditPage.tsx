@@ -117,7 +117,6 @@ function buildManagementPlanningRecords(records: MigrationAuditConsoleRecord[]):
 
 type ProjectMigrationAuditPageProps = {
   embedded?: boolean;
-  reviewScope?: 'all' | 'pending';
   reviewStage?: ProjectRegistrationReviewStage;
   assigneeOnly?: boolean;
 };
@@ -129,7 +128,6 @@ type ProjectMigrationAuditPageContentProps = ProjectMigrationAuditPageProps & {
 
 function ProjectMigrationAuditPageContent({
   embedded = false,
-  reviewScope = 'all',
   reviewStage = 'executive',
   assigneeOnly = false,
   projects,
@@ -215,18 +213,15 @@ function ProjectMigrationAuditPageContent({
     if (isManagementPlanning) return buildManagementPlanningRecords(records);
     return buildExecutiveRecords(records);
   }, [isManagementPlanning, records]);
-  const scopedRecords = useMemo(() => reviewScope === 'pending'
-    ? stageRecords.filter((record) => record.status === 'PENDING')
-    : stageRecords, [reviewScope, stageRecords]);
   const reviewerDepartment = String(authUser?.department || '').trim();
   const effectiveInboxScope = assigneeOnly ? 'MINE' : inboxScope;
   const inboxRecords = useMemo(() => {
-    if (isManagementPlanning || effectiveInboxScope === 'ALL') return scopedRecords;
-    return scopedRecords.filter((record) => {
+    if (isManagementPlanning || effectiveInboxScope === 'ALL') return stageRecords;
+    return stageRecords.filter((record) => {
       const approverId = resolveProjectRequestPayload(record.request)?.executiveApproverId || record.project.executiveApproverId;
       return Boolean(authUser?.uid && approverId === authUser.uid);
     });
-  }, [authUser?.uid, effectiveInboxScope, isManagementPlanning, scopedRecords]);
+  }, [authUser?.uid, effectiveInboxScope, isManagementPlanning, stageRecords]);
   const summaryRecords = useMemo(() => filterMigrationAuditConsoleRecords(inboxRecords, { cic: cicFilter, status: 'ALL', searchQuery }), [cicFilter, inboxRecords, searchQuery]);
   const filteredRecords = useMemo(() => filterMigrationAuditConsoleRecords(summaryRecords, { cic: cicFilter, status: statusFilter, searchQuery }), [cicFilter, searchQuery, statusFilter, summaryRecords]);
   const summary = useMemo(() => summarizeMigrationAuditConsole(summaryRecords), [summaryRecords]);
@@ -373,14 +368,14 @@ function ProjectMigrationAuditPageContent({
     }
   }
 
-  const pageTitle = isManagementPlanning ? '프로젝트 코드 부여' : 'PM 등록 프로젝트 검토';
+  const pageTitle = isManagementPlanning ? '프로젝트 코드 부여' : '프로젝트 등록/승인';
   const pageDescription = isManagementPlanning
     ? '조직장 승인이 끝난 프로젝트를 확인하고, 경영기획실 합의와 함께 프로젝트 코드를 부여합니다.'
-    : '내게 배정된 프로젝트 등록 요청을 먼저 확인하고, 문서형 팝업에서 기안·조직장 결재선과 등록 내용을 검토합니다.';
+    : '프로젝트 등록·수정 요청을 설정된 조직장이 확인하고 승인하거나 반려합니다.';
 
   return (
     <div className="space-y-6">
-      {!embedded ? <PageHeader icon={ClipboardCheck} iconGradient={isManagementPlanning ? 'linear-gradient(135deg, #0f2f57 0%, #174a7c 100%)' : 'linear-gradient(135deg, #0f766e 0%, #0ea5e9 100%)'} title={pageTitle} description={pageDescription} badge={isManagementPlanning ? '경영기획실 합의' : '조직장 결재'} /> : null}
+      {!embedded ? <PageHeader icon={ClipboardCheck} iconGradient={isManagementPlanning ? 'linear-gradient(135deg, #0f2f57 0%, #174a7c 100%)' : 'linear-gradient(135deg, #0f766e 0%, #0ea5e9 100%)'} title={pageTitle} description={pageDescription} badge={isManagementPlanning ? '경영기획실 합의' : loadingRequests ? '불러오는 중' : requestLoadError ? '조회 오류' : `대기 ${summary.pending}건`} /> : null}
       {requestLoadError ? <Card><CardContent className="p-4 text-[12px] text-muted-foreground">{requestLoadError}</CardContent></Card> : null}
       <MigrationAuditControlBar cicOptions={cicOptions} cicFilter={cicFilter} onCicFilterChange={setCicFilter} inboxScope={effectiveInboxScope} onInboxScopeChange={setInboxScope} reviewerDepartment={reviewerDepartment} statusFilter={statusFilter} onStatusFilterChange={setStatusFilter} searchQuery={searchQuery} onSearchQueryChange={setSearchQuery} summary={summary} reviewStage={reviewStage} assigneeOnly={assigneeOnly} />
       {loadingRequests ? <Card><CardContent className="flex items-center justify-center gap-2 py-16 text-[12px] text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />PM 등록 프로젝트와 접수 이력을 불러오는 중입니다…</CardContent></Card> : <MigrationAuditRecordList records={filteredRecords} onOpen={(record) => setOpenRecordId(record.id)} reviewStage={reviewStage} />}

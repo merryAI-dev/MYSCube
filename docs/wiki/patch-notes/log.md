@@ -314,3 +314,5 @@
 - pages: [portal-register-project](./pages/portal-register-project.md), [portal-edit-project](./pages/portal-edit-project.md)
 - summary: 계약 날짜를 비워도 기존 연도별 입력을 유지한다. 기간 축소 시 제외 연도를 명시적으로 확인하며, 단년도·다년도 전환 시 입금 계획을 보존한다. 전각·원 단위 금액을 정규화하고 잘못된 문자열은 0으로 저장하지 않는다. 미래 시작·종료 미정 사업의 재무 입력 연도를 서버 정책과 맞췄다.
 - validation: 입력·임시저장·복원·저장 차단 브라우저 회귀 및 Firestore emulator 재조회. 운영 데이터 마이그레이션 없음. 배포 전 검증 중.
+
+- [2026-09-17] 프로젝트 등록/승인: 부모의 대기 전용 필터로 승인 완료·반려 문서가 사라지는 문제 수정. 상단 대기 건수·요약·목록을 같은 요청 상태 판정으로 정렬. 원장 데이터 변경 없음. [화면 기록](./pages/admin-project-approvals.md)

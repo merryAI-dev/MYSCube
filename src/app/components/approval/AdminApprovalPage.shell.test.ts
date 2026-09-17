@@ -10,9 +10,9 @@ describe('AdminApprovalPage shell contract', () => {
     expect(routesSource).toContain("{ path: 'projects/migration-audit', element: <S C={AdminApprovalPage} /> }");
     expect(routesSource).not.toContain("{ path: 'projects/migration-audit', element: <S C={ProjectMigrationAuditPage} /> }");
     expect(source).toContain('ProjectMigrationAuditPage');
-    expect(source).toContain('<ProjectMigrationAuditPage embedded reviewScope="pending" />');
-    expect(source).toContain('pendingProjectReviews');
-    expect(source).toContain('project.executiveReviewStatus');
+    expect(source).toContain('<ProjectMigrationAuditPage />');
+    expect(source).not.toContain('reviewScope');
+    expect(source).not.toContain('project.executiveReviewStatus');
     expect(source).not.toContain('프로젝트 등록 검토');
     expect(source).not.toContain('대표 검토');
     expect(source).not.toContain('승인 대기 항목');
@@ -28,6 +28,6 @@ describe('AdminApprovalPage shell contract', () => {
     expect(source).not.toContain('MonthlySettlementApprovalSection');
     expect(source).not.toContain('pendingMonthlySettlements');
     expect(source).not.toContain('월 결산');
-    expect(source).toContain('const totalPending = pendingProjectReviews.length;');
+    expect(source).not.toContain('totalPending');
   });
 });
