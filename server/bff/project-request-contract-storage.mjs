@@ -1,3 +1,4 @@
+import { assertExistingProjectAttachment, assertExistingProjectAttachmentMetadata } from './existing-project-attachment.mjs';
 import { randomUUID } from 'node:crypto';
 import { getStorage } from 'firebase-admin/storage';
 import { getOrInitAdminApp, resolveProjectId } from './firestore.mjs';
@@ -315,6 +316,24 @@ export function createProjectRequestContractStorageService(options = {}) {
         contentType: readOptionalText(metadata?.contentType) || 'application/octet-stream',
         size: Number.parseInt(String(metadata?.size || buffer.byteLength), 10) || buffer.byteLength,
       };
+    },
+
+    async inspectExistingProjectAttachment(input) {
+      const path = assertExistingProjectAttachment(input);
+      const [metadata] = await bucket.file(path).getMetadata();
+      assertExistingProjectAttachmentMetadata(input.attachment, metadata);
+      return { path, size: Number(metadata.size), contentType: metadata.contentType,
+        attachmentId: readOptionalText(metadata?.metadata?.attachmentId) };
+    },
+
+    async downloadExistingProjectAttachment(input) {
+      const path = assertExistingProjectAttachment(input);
+      const [metadata] = await bucket.file(path).getMetadata();
+      assertExistingProjectAttachmentMetadata(input.attachment, metadata);
+      const file = metadata.generation ? bucket.file(path, { generation: metadata.generation }) : bucket.file(path);
+      const [buffer] = await file.download();
+      if (buffer.byteLength !== Number(metadata.size)) throw new Error('Existing project attachment size changed');
+      return { buffer, size: buffer.byteLength, contentType: metadata.contentType };
     },
 
     async inspectProjectRegistrationAttachment(input) {

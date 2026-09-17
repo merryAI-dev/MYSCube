@@ -1,3 +1,4 @@
+import { assertExistingProjectAttachment, isLegacyProjectAttachmentPath } from '../existing-project-attachment.mjs';
 import { hasMultiYearProjectContract, projectPaymentIssues, projectContractEndYear } from '../../../src/app/platform/project-input-policy.mjs';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
@@ -2392,20 +2393,25 @@ function assertProjectRequestAttachmentsPublished(request, tenantId) {
   }
 }
 
-async function assertProjectChangeRequestAttachmentsStored(request, tenantId, storageService) {
+async function assertProjectChangeRequestAttachmentsStored(request, tenantId, storageService, project) {
   if (!isProjectChangeRequest(request)) return;
   const projectId = readOptionalText(request?.targetProjectId || request?.approvedProjectId);
   const payload = resolveProjectRequestPayloadForReview(request);
   const documents = PROJECT_INFO_DOCUMENT_FIELDS
-    .map((field) => payload?.[field])
-    .filter((document) => readOptionalText(document?.path));
+    .map((field) => ({ field, document: payload?.[field] }))
+    .filter(({ document }) => readOptionalText(document?.path));
   if (documents.length === 0) return;
   try {
     if (!projectId || typeof storageService?.inspectProjectRegistrationAttachment !== 'function') {
       throw new Error('Project attachment storage inspection is not configured');
     }
-    await Promise.all(documents.map(async (document) => {
-      const stored = await storageService.inspectProjectRegistrationAttachment({
+    await Promise.all(documents.map(async ({ field, document }) => {
+      const legacy = isLegacyProjectAttachmentPath(document.path, tenantId);
+      const input = { tenantId, projectId, path: document.path, attachment: document, existingAttachment: project?.[field] };
+      if (legacy) assertExistingProjectAttachment(input);
+      const stored = legacy
+        ? await storageService.inspectExistingProjectAttachment(input)
+        : await storageService.inspectProjectRegistrationAttachment({
         tenantId,
         projectId,
         path: document.path,
@@ -3177,6 +3183,13 @@ export function mountProjectRoutes(app, {
     }
     const attachment = project[field];
     const path = readOptionalText(attachment?.path);
+    if (isLegacyProjectAttachmentPath(path, tenantId)) {
+      const downloaded = await projectRequestContractStorageService.downloadExistingProjectAttachment({
+        tenantId, projectId, path, attachment, existingAttachment: project[field],
+      });
+      sendPrivateProjectAttachment(res, downloaded, attachment, path.split('/').pop());
+      return;
+    }
     const expectedPrefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
     const objectName = path.startsWith(expectedPrefix) ? path.slice(expectedPrefix.length) : '';
     if (!objectName || objectName.includes('/')) {
@@ -3328,6 +3341,20 @@ export function mountProjectRoutes(app, {
     }
     const attachment = payload?.[field];
     const path = readOptionalText(attachment?.path);
+    if (isLegacyProjectAttachmentPath(path, tenantId)) {
+      const projectSnap = await db.doc(`orgs/${tenantId}/projects/${projectId}`).get();
+      const existingAttachment = projectSnap.exists ? projectSnap.data()?.[field] : null;
+      try {
+        assertExistingProjectAttachment({ tenantId, projectId, path, attachment, existingAttachment });
+      } catch {
+        throw createHttpError(409, 'Project request attachment is not ready', 'project_request_attachment_not_ready');
+      }
+      const downloaded = await projectRequestContractStorageService.downloadExistingProjectAttachment({
+        tenantId, projectId, path, attachment, existingAttachment,
+      });
+      sendPrivateProjectAttachment(res, downloaded, attachment, path.split('/').pop());
+      return;
+    }
     const expectedPrefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
     const objectName = projectId && path.startsWith(expectedPrefix) ? path.slice(expectedPrefix.length) : '';
     if (!objectName || objectName.includes('/')) {
@@ -3873,7 +3900,7 @@ export function mountProjectRoutes(app, {
     const projectPath = `orgs/${tenantId}/projects/${projectId}`;
     const reviewerName = readOptionalText(actorName) || readOptionalText(actorEmail) || actorId;
     const now = new Date().toISOString();
-    await ensureDocumentExists(db, projectPath, `Project not found: ${projectId}`);
+    const approvalProject = await ensureDocumentExists(db, projectPath, `Project not found: ${projectId}`);
     const { request, requestId: resolvedRequestId, refs } = await resolveProjectRequestDocuments({
       db,
       tenantId,
@@ -3885,6 +3912,7 @@ export function mountProjectRoutes(app, {
         request,
         tenantId,
         projectRequestContractStorageService,
+        approvalProject,
       );
     }
 
@@ -3919,6 +3947,18 @@ export function mountProjectRoutes(app, {
         }
         if (parsed.reviewStatus === 'APPROVED') {
           assertProjectRequestAttachmentsPublished(reviewRequest, tenantId);
+          if (isProjectChangeRequest(reviewRequest)) {
+            for (const field of PROJECT_INFO_DOCUMENT_FIELDS) {
+              const attachment = requestPayload?.[field];
+              if (!isLegacyProjectAttachmentPath(attachment?.path, tenantId)) continue;
+              try {
+                assertExistingProjectAttachment({ tenantId, projectId, path: attachment.path,
+                  attachment, existingAttachment: currentProject[field] });
+              } catch {
+                throw createHttpError(409, 'Project attachment changed before approval', 'canonical_version_conflict');
+              }
+            }
+          }
         }
         const legacyProjectCode = isLegacyPlanningAgreement ? requireProjectCode(currentProject.projectCode) : null;
         const submittedCode = normalizeProjectCode(parsed.projectCode);
