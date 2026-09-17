@@ -1,4 +1,4 @@
-import { hasMultiYearProjectContract, projectPaymentIssues } from '../../../src/app/platform/project-input-policy.mjs';
+import { hasMultiYearProjectContract, projectPaymentIssues, projectContractEndYear } from '../../../src/app/platform/project-input-policy.mjs';
 import express from 'express';
 import { randomUUID } from 'node:crypto';
 import { projectDocumentValidationError } from '../project-document-validation.mjs';
@@ -1347,9 +1347,7 @@ function assertRegistrationV2Requirements(payload, attachmentRefs, validateAttac
   }
   const startYear = Number(contractStart.slice(0, 4));
   // 종료 기간 없음이면 재무 계획은 시작연도~현재 연도까지를 요구한다.
-  const endYear = contractEndUndecided
-    ? Math.max(startYear, new Date().getFullYear())
-    : Number(contractEnd.slice(0, 4));
+  const endYear = projectContractEndYear({ contractStart, contractEnd, contractEndUndecided });
   if (endYear - startYear > 20) {
     invalidRegistration('Project registration financialYears are invalid');
   }

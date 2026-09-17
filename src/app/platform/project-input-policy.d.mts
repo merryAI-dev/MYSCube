@@ -2,3 +2,5 @@ export interface ProjectInputIssue { field: string; label?: string; step: 'finan
 export function hasMultiYearProjectContract(project: object, currentYear?: number): boolean;
 export function projectPaymentIssues(project: object): ProjectInputIssue[];
 export function projectParticipationPeriodWarnings(project: object): ProjectInputIssue[];
+
+export function projectContractEndYear(project: object, currentYear?: number): number;

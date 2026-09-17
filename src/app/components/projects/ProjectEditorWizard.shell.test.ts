@@ -564,7 +564,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).not.toContain('usePortalNavigationGuard');
     expect(source).toContain('useBlocker(shouldConfirmExit)');
     expect(source).toContain("window.addEventListener('beforeunload'");
-    expect(source).toContain('hasUnsavedInput || uploadInProgress || hasPendingRetryFile');
+    expect(source).toContain('hasUnsavedInput || invalidAmountLabels.length > 0 || uploadInProgress || hasPendingRetryFile');
     expect(source).toContain('saveDraftAndRelease');
   });
 

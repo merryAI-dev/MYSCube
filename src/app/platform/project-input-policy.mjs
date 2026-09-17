@@ -1,3 +1,10 @@
+export function projectContractEndYear(project, currentYear = new Date().getFullYear()) {
+  const startYear = Number(String(project.contractStart || '').slice(0, 4));
+  return project.contractEndUndecided
+    ? Math.max(startYear, currentYear)
+    : Number(String(project.contractEnd || '').slice(0, 4));
+}
+
 const paymentFields = ['contract', 'interim', 'final'];
 const paymentLabels = { contract: '선금/계약금', interim: '중도금', final: '잔금' };
 const monthPattern = /^\d{4}-(0[1-9]|1[0-2])$/;
