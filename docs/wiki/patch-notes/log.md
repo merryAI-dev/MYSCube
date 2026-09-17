@@ -309,3 +309,8 @@
 ## [2026-08-25] patch-note | admin-participation-profile | 전문 프로필 레이블과 서버 필터
 - pages: [admin-participation](./pages/admin-participation.md)
 - summary: 참여율 표에 최종학력·영어·자격증 레이블을 추가하고, 권한이 있는 관리자에게만 URL 동기화 데이터 필터를 제공한다. 자격증은 최대 20개까지 선택하며 연속 선택 요청은 짧게 묶어 서버 집계를 조회한다.
+
+## [2026-09-16] patch-note | portal-register-project, portal-edit-project | 금액·계약기간 편집 중 입력 보존
+- pages: [portal-register-project](./pages/portal-register-project.md), [portal-edit-project](./pages/portal-edit-project.md)
+- summary: 계약 날짜를 비워도 기존 연도별 입력을 유지한다. 기간 축소 시 제외 연도를 명시적으로 확인하며, 단년도·다년도 전환 시 입금 계획을 보존한다. 전각·원 단위 금액을 정규화하고 잘못된 문자열은 0으로 저장하지 않는다. 미래 시작·종료 미정 사업의 재무 입력 연도를 서버 정책과 맞췄다.
+- validation: 입력·임시저장·복원·저장 차단 브라우저 회귀 및 Firestore emulator 재조회. 운영 데이터 마이그레이션 없음. 배포 전 검증 중.

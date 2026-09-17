@@ -1,3 +1,4 @@
+import { createProjectEditorDraft, buildProjectRequestPayloadFromDraft } from '../../src/app/platform/project-editor';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createBffApp } from './app.mjs';
@@ -299,6 +300,42 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
     expect(canonical.financialYears.map((year) => year.paymentExpectedMonths)).toEqual(payload.financialYears.map((year) => year.paymentExpectedMonths));
     const entries = await db.collection(`orgs/${tenantId}/partEntries`).get();
     expect(entries.docs[0].data().monthlyRates).toEqual(payload.teamMembersDetailed[0].monthlyRates);
+  });
+
+  it('persists annual inputs through incomplete and shortened contract dates without losing rows', async () => {
+    const acquired = await acquire();
+    const headers = mutationHeaders(acquired.body, 'period-preserve-open');
+    const opened = await api.post('/api/v1/project-info-drafts/project-a/open').set(headers).send({});
+    expect(opened.status).toBe(200);
+    let revision = opened.body.draft.draftRevision;
+    let draft = createProjectEditorDraft(validPayload({
+      contractStart: '2026-01-01', contractEnd: '2027-12-31', contractAmount: 300,
+      financialYears: [2026, 2027].map((year, index) => ({
+        year, contractAmount: 100 * (index + 1), salesVatAmount: 0, totalRevenueAmount: 0,
+        totalActualCost: 100 * (index + 1), supportAmount: 0, confirmed: true,
+        paymentPlan: { contract: 100 * (index + 1), interim: 0, final: 0 },
+        paymentExpectedMonths: { contract: `${year}-07`, interim: '', final: '' },
+        advanceInterimBelow70Reason: '기존 입력', isSettled: true,
+      })),
+    }) as any);
+    const expectedRows = buildProjectRequestPayloadFromDraft(draft).financialYears;
+    for (const [index, contractEnd] of ['', '2026-12-31', '2027-12-31'].entries()) {
+      draft = createProjectEditorDraft({ ...draft, contractEnd });
+      const saved = await api.patch('/api/v1/project-info-drafts/project-a')
+        .set({ ...headers, 'idempotency-key': `period-preserve-${index}` })
+        .send({ expectedDraftRevision: revision, payload: buildProjectRequestPayloadFromDraft(draft), stepIndex: 1 });
+      expect(saved.status, JSON.stringify(saved.body)).toBe(200);
+      revision = saved.body.draft.draftRevision;
+      const stored = (await db.collection(`orgs/${tenantId}/privateEditDrafts`).get()).docs[0].data();
+      expect(stored.payload.financialYears).toEqual(expectedRows);
+      const reopened = await api.post('/api/v1/project-info-drafts/project-a/open')
+        .set({ ...headers, 'idempotency-key': `period-reopen-${index}` }).send({});
+      expect(reopened.status).toBe(200);
+      expect(reopened.body.draft.payload.financialYears).toEqual(expectedRows);
+      draft = createProjectEditorDraft(reopened.body.draft.payload);
+      revision = reopened.body.draft.draftRevision;
+    }
+    expect((await db.doc(`orgs/${tenantId}/projects/project-a`).get()).data()?.version).toBe(3);
   });
 
   it('stores same-kind private attachments permanently and leaves version conflicts private', async () => {

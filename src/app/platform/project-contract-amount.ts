@@ -114,3 +114,12 @@ export function deriveContractAmountFromItems(
     return sum + (Number.isFinite(value) ? value : 0);
   }, 0);
 }
+
+
+export function parseProjectAmountEntry(value: string): number | null {
+  const normalized = value.normalize('NFKC').trim().replace(/\s*원$/, '').replace(/,/g, '').trim();
+  if (!normalized) return value.trim() ? null : 0;
+  if (!/^\d+$/.test(normalized)) return null;
+  const amount = Number(normalized);
+  return Number.isSafeInteger(amount) ? amount : null;
+}

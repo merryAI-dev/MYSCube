@@ -1,4 +1,5 @@
-import { hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings } from '../../platform/project-input-policy.mjs';
+import { ProjectAmountInput } from './ProjectAmountInput';
+import { hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings, projectContractEndYear } from '../../platform/project-input-policy.mjs';
 import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import {
   ArrowLeft,
@@ -100,6 +101,7 @@ import {
   hasExplicitProjectAmountInput,
   normalizeProjectFinancialInputFlags,
   parseProjectAmountInput,
+  parseProjectAmountEntry,
   type ContractAmountItemField,
 } from '../../platform/project-contract-amount';
 import { buildContractDocumentEditPolicy } from '../../platform/project-contract-document-policy';
@@ -118,6 +120,7 @@ import { formatProfitRatePercentInput } from '../../platform/project-financials'
 import { isValidDriveUrl } from '../../platform/evidence-helpers';
 import {
   createProjectEditorDraft,
+  preservePaymentPlanOnContractExpansion,
   formatProjectStaffingSummary,
   hasInvalidProjectContractPeriod,
   type ProjectEditorDraft,
@@ -357,6 +360,7 @@ type AutosaveState = 'idle' | 'saving' | 'saved' | 'error';
 type StoredProjectEditorDraft = {
   schemaVersion: number;
   acknowledgedFingerprint?: string;
+  amountInputs?: Record<string, string>;
   draftKey: string;
   draft: ProjectEditorDraft;
   stepIndex: number;
@@ -452,6 +456,7 @@ function readStoredProjectEditorDraft(key: string): StoredProjectEditorDraft | n
   try {
     const parsed = JSON.parse(localStorage.getItem(getProjectEditorAutosaveStorageKey(key)) || 'null') as StoredProjectEditorDraft | null;
     if (!parsed || parsed.schemaVersion !== PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION || !parsed.draft) return null;
+    parsed.amountInputs = Object.fromEntries(Object.entries(parsed.amountInputs || {}).filter(([, value]) => typeof value === 'string'));
     return parsed;
   } catch {
     return null;
@@ -698,8 +703,23 @@ export function ProjectEditorWizard({
   const [restoreCandidate, setRestoreCandidate] = useState<StoredProjectEditorDraft | null>(null);
   const [autosaveState, setAutosaveState] = useState<AutosaveState>('idle');
   const [submitting, setSubmitting] = useState(false);
+  const [amountInputs, setAmountInputs] = useState<Record<string, string>>({});
+  const invalidAmountLabels = Object.keys(amountInputs).filter((label) => parseProjectAmountEntry(amountInputs[label]) === null);
+  const invalidAmountsRef = useRef(false);
+  invalidAmountsRef.current = invalidAmountLabels.length > 0;
+  const amountBufferProps = (label: string) => ({
+    issueLabel: `${label} 입력 형식`,
+    rawValue: amountInputs[label],
+    onRawChange: (raw: string | undefined) => setAmountInputs((previous) => {
+      const next = { ...previous };
+      if (raw === undefined) delete next[label];
+      else next[label] = raw;
+      return next;
+    }),
+  });
   const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
   const savedSnapshotRef = useRef('');
+  const [removeYearsDialogOpen, setRemoveYearsDialogOpen] = useState(false);
   const [exitDialogOpen, setExitDialogOpen] = useState(false);
   const [exitIntent, setExitIntent] = useState<'cancel' | 'route' | null>(null);
   const [submitBlockedNotice, setSubmitBlockedNotice] = useState(false);
@@ -764,7 +784,7 @@ export function ProjectEditorWizard({
   const hasPendingRetryFile = [...registrationDocumentKinds, ...checkoutDocumentKinds]
     .some((kind) => Boolean(retryDocumentFileRef.current[kind]));
   const hasUnsavedInput = currentDraftFingerprint !== lastPersistedFingerprintRef.current;
-  const shouldBlockNavigation = hasUnsavedInput || uploadInProgress || hasPendingRetryFile;
+  const shouldBlockNavigation = hasUnsavedInput || invalidAmountLabels.length > 0 || uploadInProgress || hasPendingRetryFile;
   const shouldConfirmExit = submitting || shouldBlockNavigation || (Boolean(onLeave) && !readOnly);
   const blocker = useBlocker(shouldConfirmExit);
 
@@ -775,6 +795,7 @@ export function ProjectEditorWizard({
   useEffect(() => {
     const resetKey = `${draftKey}::${autosave?.key || ''}`;
     const isNewEditorSession = lastResetKeyRef.current !== resetKey;
+    if (!isNewEditorSession && invalidAmountsRef.current) return;
     const currentFingerprint = JSON.stringify(createProjectEditorDraft(draftRef.current));
     if (!shouldResetProjectEditorDraft({
       lastResetKey: lastResetKeyRef.current,
@@ -825,10 +846,11 @@ export function ProjectEditorWizard({
       final_report: '',
     });
     setAutosaveState('idle');
+    setAmountInputs({});
     setLastAutosavedAt('');
     setPreloadWarningVisible(false);
     const stored = autosave?.key ? readStoredProjectEditorDraft(autosave.key) : null;
-    setRestoreCandidate(stored && stored.acknowledgedFingerprint !== JSON.stringify(createProjectEditorDraft(stored.draft)) && JSON.stringify(createProjectEditorDraft(stored.draft)) !== JSON.stringify(createProjectEditorDraft(nextDraft)) ? stored : null);
+    setRestoreCandidate(stored && (Object.values(stored.amountInputs || {}).some((value) => parseProjectAmountEntry(value) === null) || (stored.acknowledgedFingerprint !== JSON.stringify(createProjectEditorDraft(stored.draft)) && JSON.stringify(createProjectEditorDraft(stored.draft)) !== JSON.stringify(createProjectEditorDraft(nextDraft)))) ? stored : null);
   }, [autosave?.key, draftKey, initialDraft, initialDraftFingerprint, initialStepIndex]);
 
   useEffect(() => {
@@ -848,6 +870,10 @@ export function ProjectEditorWizard({
       .some((kind) => Boolean(retryDocumentFileRef.current[kind]));
     if (submittedRef.current || uploadInProgress || pendingRetryNow) return false;
     if (readOnly || !autosave?.key || autosave.disabled) return false;
+    if (invalidAmountsRef.current) {
+      autosaveErrorRef.current = '금액 입력 형식을 확인해 주세요. 기존 임시저장은 유지됩니다.';
+      return false;
+    }
     if (restoreCandidate) {
       autosaveErrorRef.current = '보관된 임시저장을 불러오거나 삭제한 뒤 저장해 주세요.';
       return false;
@@ -863,7 +889,7 @@ export function ProjectEditorWizard({
     const snapshot = JSON.stringify({ draft: storedDraft.draft, stepIndex: nextStepIndex });
     try { writeStoredProjectEditorDraft(autosave.key, storedDraft); } catch { /* Remote saving remains available when local storage is full. */ }
     const save = async () => {
-      if (submittedRef.current) return false;
+      if (submittedRef.current || invalidAmountsRef.current) return false;
       if (savedSnapshotRef.current === snapshot) return true;
       setAutosaveState('saving');
       try {
@@ -904,7 +930,7 @@ export function ProjectEditorWizard({
       retryDocumentFileRef.current = {};
       toast.info('업로드에 실패했던 첨부파일은 저장되지 않았습니다. 다음에 다시 첨부해 주세요.');
     }
-    if (hasUnsavedInput && autosave?.key && !autosave.disabled && !readOnly) {
+    if ((hasUnsavedInput || invalidAmountsRef.current) && autosave?.key && !autosave.disabled && !readOnly) {
       if (!await persistAutosaveSnapshot(draft, stepIndex)) {
         toast.error(`임시저장에 실패해 수정 세션을 종료하지 않았습니다.${autosaveErrorRef.current ? ` (${autosaveErrorRef.current})` : ''}`);
         return false;
@@ -990,7 +1016,7 @@ export function ProjectEditorWizard({
   }, [blocker]);
 
   useEffect(() => {
-    if (readOnly || !autosave?.key || autosave.disabled || restoreCandidate || uploadInProgress || hasPendingRetryFile || submitting) return undefined;
+    if (readOnly || !autosave?.key || autosave.disabled || restoreCandidate || uploadInProgress || hasPendingRetryFile || submitting || invalidAmountLabels.length > 0) return undefined;
     if (savedSnapshotRef.current === JSON.stringify({ draft: createProjectEditorDraft(draft), stepIndex })) return undefined;
     const isInitialDraft = stepIndex === 0 && JSON.stringify(createProjectEditorDraft(draft)) === initialDraftFingerprint;
     if (isInitialDraft && !savedSnapshotRef.current) return undefined;
@@ -999,7 +1025,7 @@ export function ProjectEditorWizard({
       if (!submitInFlightRef.current && !submittedRef.current) void persistAutosaveSnapshot(draft, stepIndex);
     }, 1000);
     return () => window.clearTimeout(timer);
-  }, [autosave?.disabled, autosave?.key, draft, hasPendingRetryFile, initialDraftFingerprint, persistAutosaveSnapshot, readOnly, restoreCandidate, stepIndex, submitting, uploadInProgress]);
+  }, [autosave?.disabled, autosave?.key, draft, hasPendingRetryFile, initialDraftFingerprint, persistAutosaveSnapshot, readOnly, restoreCandidate, stepIndex, submitting, uploadInProgress, amountInputs]);
 
   useEffect(() => {
     if (!autosave?.key || readOnly || restoreCandidate || submitting || submittedRef.current) return;
@@ -1007,12 +1033,12 @@ export function ProjectEditorWizard({
       try {
         writeStoredProjectEditorDraft(autosave.key, {
           schemaVersion: PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION, draftKey,
-          draft: createProjectEditorDraft(draft), stepIndex, updatedAt: new Date().toISOString(),
+          draft: createProjectEditorDraft(draft), amountInputs, stepIndex, updatedAt: new Date().toISOString(),
         });
       } catch { /* Remote draft saving does not depend on browser storage availability. */ }
     }, 200);
     return () => window.clearTimeout(timer);
-  }, [autosave?.key, draft, draftKey, readOnly, restoreCandidate, stepIndex, submitting]);
+  }, [autosave?.key, draft, draftKey, readOnly, restoreCandidate, stepIndex, submitting, amountInputs]);
 
   const restoreLocalDraft = () => {
     if (!restoreCandidate || readOnly) return;
@@ -1023,6 +1049,7 @@ export function ProjectEditorWizard({
       }
     }
     setDraft(restored);
+    setAmountInputs(restoreCandidate.amountInputs || {});
     setStepIndex(Math.max(0, Math.min(STEPS.length - 1, restoreCandidate.stepIndex || 0)));
     setLastAutosavedAt(restoreCandidate.updatedAt);
     setAutosaveState('idle');
@@ -1084,6 +1111,27 @@ export function ProjectEditorWizard({
   const hasSupportAmountInput = financialInputFlags.supportAmount;
   const usesRegistrationV2 = draft.registrationRequirementsVersion === 2;
   const hasMultiYearContract = hasMultiYearProjectContract(draft);
+  const financeStartYear = Number(draft.contractStart.slice(0, 4));
+  const financeEndYear = projectContractEndYear(draft);
+  const outsideFinancialYears = financeStartYear >= 2000 && financeEndYear >= financeStartYear
+    ? draft.financialYears.filter((row) => row.year < financeStartYear || row.year > financeEndYear)
+    : [];
+  const removeOutsideFinancialYears = () => {
+    if (readOnly || submitInFlightRef.current) return;
+    const excluded = new Set(outsideFinancialYears.map((row) => row.year));
+    setDraft((previous) => {
+      const financialYears = previous.financialYears.filter((row) => !excluded.has(row.year));
+      const totals = Object.fromEntries(['contractAmount', ...CONTRACT_AMOUNT_ITEM_FIELDS]
+        .map((field) => [field, financialYears.reduce((sum, row) => sum + row[field as 'contractAmount' | ContractAmountItemField], 0)]));
+      const paymentFields = financialYears.length === 1 && !hasMultiYearContract
+        ? { paymentPlan: financialYears[0].paymentPlan, paymentExpectedMonths: financialYears[0].paymentExpectedMonths, advanceInterimBelow70Reason: financialYears[0].advanceInterimBelow70Reason }
+        : {};
+      return createProjectEditorWizardDraft({ ...previous, ...totals, ...paymentFields, financialYears });
+    });
+    setAmountInputs((previous) => Object.fromEntries(Object.entries(previous)
+      .filter(([label]) => ![...excluded].some((year) => label.startsWith(`${year}년 `)))));
+    setRemoveYearsDialogOpen(false);
+  };
   const settlementDetailsEnabled = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const requiresSettlementConfirmations = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const showProjectCheckout = draft.status === 'COMPLETED' || draft.status === 'COMPLETED_PENDING_PAYMENT';
@@ -1209,7 +1257,7 @@ export function ProjectEditorWizard({
   const updateContractEndUndecided = (undecided: boolean) => {
     setDraft((prev) => {
       const next = { ...prev, contractEndUndecided: undecided, contractEnd: undecided ? '' : prev.contractEnd };
-      return createProjectEditorWizardDraft({
+      return preservePaymentPlanOnContractExpansion(prev, createProjectEditorWizardDraft({
         ...next,
         status: deriveProjectStatusFromContractPeriod({
           contractStart: next.contractStart,
@@ -1218,14 +1266,14 @@ export function ProjectEditorWizard({
           currentStatus: next.status,
           today: new Date().toISOString().slice(0, 10),
         }),
-      });
+      }));
     });
   };
 
   const updateContractPeriod = (key: 'contractStart' | 'contractEnd', value: string) => {
     setDraft((prev) => {
       const next = { ...prev, [key]: value };
-      return createProjectEditorWizardDraft({
+      return preservePaymentPlanOnContractExpansion(prev, createProjectEditorWizardDraft({
         ...next,
         status: deriveProjectStatusFromContractPeriod({
           contractStart: next.contractStart,
@@ -1234,7 +1282,7 @@ export function ProjectEditorWizard({
           currentStatus: next.status,
           today: new Date().toISOString().slice(0, 10),
         }),
-      });
+      }));
     });
   };
 
@@ -1563,7 +1611,7 @@ export function ProjectEditorWizard({
   });
 
   const submitIssues = useMemo(() => {
-    const issues: Array<{ step: ProjectEditorStep; label: string }> = [];
+    const issues: Array<{ step: ProjectEditorStep; label: string }> = invalidAmountLabels.map((label) => ({ step: 'financial', label: `${label} 입력 형식` }));
     const normalizedDepartment = normalizeProjectDepartment(draft.department);
     if (!normalizedDepartment || !departmentOptionSet.has(normalizedDepartment)) issues.push({ step: 'basic', label: '담당조직(CIC)' });
     if (!draft.name.trim()) issues.push({ step: 'basic', label: '프로젝트명' });
@@ -1599,12 +1647,11 @@ export function ProjectEditorWizard({
       }
       const startYear = Number(draft.contractStart.slice(0, 4));
       // 종료 기간 없음이면 재무 계획은 시작연도~현재 연도까지를 요구한다.
-      const endYear = draft.contractEndUndecided && !draft.contractEnd.trim()
-        ? new Date().getFullYear()
-        : Number(draft.contractEnd.slice(0, 4));
-      const expectedYears = Number.isSafeInteger(startYear) && Number.isSafeInteger(endYear) && startYear <= endYear
+      const endYear = projectContractEndYear(draft);
+      const expectedYears = Number.isSafeInteger(startYear) && Number.isSafeInteger(endYear) && startYear >= 2000 && endYear <= 2099 && startYear <= endYear && endYear - startYear <= 20
         ? Array.from({ length: endYear - startYear + 1 }, (_, offset) => startYear + offset)
         : [];
+      if (outsideFinancialYears.length) issues.push({ step: 'financial', label: `계약기간 밖 재무 입력: ${outsideFinancialYears.map((row) => `${row.year}년`).join(', ')}. 계약기간을 확인하거나 제외 연도를 정리해 주세요.` });
       const financialYearsComplete = expectedYears.length > 0
         && draft.financialYears.length === expectedYears.length
         && expectedYears.every((year) => draft.financialYears.some((row) => row.year === year));
@@ -1663,7 +1710,7 @@ export function ProjectEditorWizard({
     // 정산지원 담당자는 저장을 막지 않는다. 담당이 정해져 있다는 안내일 뿐이고,
     // 담당자가 바뀌거나 자리를 비운 사이에 프로젝트 등록 자체가 막히면 안 된다.
     return issues;
-  }, [departmentOptionSet, draft, hasContractAmountInput, hasMultiYearContract, onProjectDocumentFileUpload, participationSyncIssue, requiresAdvanceInterimReason, requiresParticipationSheetLink, requiresSettlementConfirmations, selectedExecutiveApprover, showProjectCheckout, usesRegistrationV2]);
+  }, [amountInputs, departmentOptionSet, draft, hasContractAmountInput, hasMultiYearContract, onProjectDocumentFileUpload, participationSyncIssue, requiresAdvanceInterimReason, requiresParticipationSheetLink, requiresSettlementConfirmations, selectedExecutiveApprover, showProjectCheckout, usesRegistrationV2]);
 
   const canSubmit = submitIssues.length === 0;
 
@@ -2027,6 +2074,7 @@ export function ProjectEditorWizard({
             <p className={cn('mt-2', FORM_HINT_CLASS)}>
               {description}
             </p>
+            <p className={cn('mt-1', FORM_HINT_CLASS)}>첨부파일은 파일당 {documentUploadMaxLabel}까지 업로드할 수 있습니다.</p>
             {document ? (
               <div className={cn('mt-3 flex flex-wrap items-center gap-2', FORM_VALUE_CLASS)}>
                 <span className="max-w-full truncate font-medium text-slate-900">{document.name}</span>
@@ -2142,6 +2190,7 @@ export function ProjectEditorWizard({
        * 미첨부는 오류가 아니라 대기이므로 필수만 앰버로, 선택은 슬레이트로 말한다.
        */
       <div className={cn('divide-y divide-slate-100 border-y border-slate-200 bg-white', FORM_VALUE_CLASS)}>
+        <p className={cn('py-2', FORM_HINT_CLASS)}>첨부파일은 파일당 {documentUploadMaxLabel}까지 업로드할 수 있습니다.</p>
         {REGISTRATION_DOCUMENT_SLOTS.map((slot) => {
           const kind = slot.kinds[0];
           const requirement = requirementOf(slot.number);
@@ -2332,6 +2381,12 @@ export function ProjectEditorWizard({
             </SelectContent>
           </Select>
         </ProjectFormRow>
+        {outsideFinancialYears.length > 0 && (
+          <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
+            <p>계약기간 밖인 {outsideFinancialYears.map((row) => `${row.year}년`).join(', ')} 재무 입력을 보관하고 있습니다. 계약기간을 확인하거나 제외 연도를 정리한 뒤 최종 저장해 주세요.</p>
+            <Button type="button" variant="outline" onClick={() => setRemoveYearsDialogOpen(true)}>제외 연도 정리</Button>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[760px] border-collapse text-left">
             <thead>
@@ -2363,11 +2418,11 @@ export function ProjectEditorWizard({
                           <span className="text-[11px] font-normal leading-4 text-slate-400">계산됨</span>
                         </div>
                       ) : (
-                        <Input
-                          inputMode="numeric"
+                        <ProjectAmountInput
+                          {...amountBufferProps(`${row.year}년 ${label}`)}
                           aria-label={`${row.year}년 ${label}`}
                           value={formatProjectAmountInput(row[field], true)}
-                          onChange={(event) => updateFinancialYear(index, field, parseProjectAmountInput(event.target.value))}
+                          onValueChange={(rawValue) => updateFinancialYear(index, field, parseProjectAmountInput(rawValue))}
                           className={cn('min-w-[116px]', FORM_NUMERIC_CONTROL_CLASS)}
                         />
                       )}
@@ -2558,46 +2613,46 @@ export function ProjectEditorWizard({
                 contractAmountCheck.message,
               ]}
             >
-              <Input
-                inputMode="numeric"
+              <ProjectAmountInput
+                {...amountBufferProps('계약금액')}
                 value={formatProjectAmountInput(draft.contractAmount, hasContractAmountInput)}
-                onChange={(event) => updateAmount('contractAmount', event.target.value)}
+                onValueChange={(rawValue) => updateAmount('contractAmount', rawValue)}
                 placeholder="0"
                 className={cn('max-w-[220px]', FORM_NUMERIC_CONTROL_CLASS)}
               />
             </ProjectFormRow>
             <ProjectFormRow label="총매출부가세" hints={[amountHint(draft.salesVatAmount, hasSalesVatAmountInput)]}>
-              <Input
-                inputMode="numeric"
+              <ProjectAmountInput
+                {...amountBufferProps('총매출부가세')}
                 value={formatProjectAmountInput(draft.salesVatAmount, hasSalesVatAmountInput)}
-                onChange={(event) => updateAmount('salesVatAmount', event.target.value)}
+                onValueChange={(rawValue) => updateAmount('salesVatAmount', rawValue)}
                 placeholder="0"
                 className={cn('max-w-[220px]', FORM_NUMERIC_CONTROL_CLASS)}
               />
             </ProjectFormRow>
             <ProjectFormRow label="총수익" hints={[amountHint(draft.totalRevenueAmount, hasTotalRevenueAmountInput)]}>
-              <Input
-                inputMode="numeric"
+              <ProjectAmountInput
+                {...amountBufferProps('총수익')}
                 value={formatProjectAmountInput(draft.totalRevenueAmount, hasTotalRevenueAmountInput)}
-                onChange={(event) => updateAmount('totalRevenueAmount', event.target.value)}
+                onValueChange={(rawValue) => updateAmount('totalRevenueAmount', rawValue)}
                 placeholder="0"
                 className={cn('max-w-[220px]', FORM_NUMERIC_CONTROL_CLASS)}
               />
             </ProjectFormRow>
             <ProjectFormRow label="총실비(원가)" hints={[amountHint(draft.totalActualCost, hasTotalActualCostInput)]}>
-              <Input
-                inputMode="numeric"
+              <ProjectAmountInput
+                {...amountBufferProps('총실비(원가)')}
                 value={formatProjectAmountInput(draft.totalActualCost, hasTotalActualCostInput)}
-                onChange={(event) => updateAmount('totalActualCost', event.target.value)}
+                onValueChange={(rawValue) => updateAmount('totalActualCost', rawValue)}
                 placeholder="0"
                 className={cn('max-w-[220px]', FORM_NUMERIC_CONTROL_CLASS)}
               />
             </ProjectFormRow>
             <ProjectFormRow label="총지원금" hints={[amountHint(draft.supportAmount, hasSupportAmountInput)]}>
-              <Input
-                inputMode="numeric"
+              <ProjectAmountInput
+                {...amountBufferProps('총지원금')}
                 value={formatProjectAmountInput(draft.supportAmount, hasSupportAmountInput)}
-                onChange={(event) => updateAmount('supportAmount', event.target.value)}
+                onValueChange={(rawValue) => updateAmount('supportAmount', rawValue)}
                 placeholder="0"
                 className={cn('max-w-[220px]', FORM_NUMERIC_CONTROL_CLASS)}
               />
@@ -2644,19 +2699,19 @@ export function ProjectEditorWizard({
       {mode === 'admin' ? (
         <ProjectFormSection title="관리자 입력">
           <ProjectFormRow label="당해연도 예산" hints={[amountHint(draft.budgetCurrentYear, draft.budgetCurrentYear > 0)]}>
-            <Input
-              inputMode="numeric"
+            <ProjectAmountInput
+              {...amountBufferProps('당해 예산')}
               value={formatProjectAmountInput(draft.budgetCurrentYear, draft.budgetCurrentYear > 0)}
-              onChange={(event) => update('budgetCurrentYear', parseProjectAmountInput(event.target.value))}
+              onValueChange={(rawValue) => update('budgetCurrentYear', parseProjectAmountInput(rawValue))}
               placeholder="0"
               className={cn('max-w-[220px]', FORM_NUMERIC_CONTROL_CLASS)}
             />
           </ProjectFormRow>
           <ProjectFormRow label="세금계산서 발행액" hints={[amountHint(draft.taxInvoiceAmount, draft.taxInvoiceAmount > 0)]}>
-            <Input
-              inputMode="numeric"
+            <ProjectAmountInput
+              {...amountBufferProps('세금계산서 금액')}
               value={formatProjectAmountInput(draft.taxInvoiceAmount, draft.taxInvoiceAmount > 0)}
-              onChange={(event) => update('taxInvoiceAmount', parseProjectAmountInput(event.target.value))}
+              onValueChange={(rawValue) => update('taxInvoiceAmount', parseProjectAmountInput(rawValue))}
               placeholder="0"
               className={cn('max-w-[220px]', FORM_NUMERIC_CONTROL_CLASS)}
             />
@@ -3071,10 +3126,11 @@ export function ProjectEditorWizard({
                 <tr key={field} className="border-b border-slate-100" data-issue-label={issueLabel}>
                   <th scope="row" className={cn('whitespace-nowrap py-2 pr-3 text-slate-900', FORM_LABEL_CLASS)}>{label}</th>
                   <td className="px-3 py-2">
-                    <Input
+                    <ProjectAmountInput
+                      {...amountBufferProps(`${yearPrefix}${label} 금액`)}
                       aria-label={`${yearPrefix}${label} 금액`}
                       value={formatProjectAmountInput(paymentPlan[field], true)}
-                      onChange={(event) => updatePaymentPlan(field, parseProjectAmountInput(event.target.value))}
+                      onValueChange={(rawValue) => updatePaymentPlan(field, parseProjectAmountInput(rawValue))}
                       className={cn('min-w-[130px]', FORM_NUMERIC_CONTROL_CLASS)}
                     />
                   </td>
@@ -3752,7 +3808,7 @@ export function ProjectEditorWizard({
                 <span className={autosaveState === 'error' ? 'text-red-600' : 'text-muted-foreground'}>
                   {autosaveState === 'saving'
                     ? '임시저장 중'
-                    : autosaveState === 'saved' && !hasUnsavedInput
+                    : autosaveState === 'saved' && !hasUnsavedInput && invalidAmountLabels.length === 0
                       ? `임시저장됨${lastAutosavedAt ? ` ${formatAutosaveTime(lastAutosavedAt)}` : ''}`
                       : autosaveState === 'error'
                         ? '임시저장 실패'
@@ -3817,6 +3873,20 @@ export function ProjectEditorWizard({
         </div>
       </div>
 
+      <AlertDialog open={removeYearsDialogOpen} onOpenChange={setRemoveYearsDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>계약기간 밖 연도별 입력을 제외할까요?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {outsideFinancialYears.map((row) => `${row.year}년 계약금액 ${fmtKRW(row.contractAmount)}원`).join(', ')}의 금액과 입금 계획을 현재 초안에서 제거하고 남은 연도로 합계를 다시 계산합니다.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>유지하기</AlertDialogCancel>
+            <AlertDialogAction disabled={readOnly || submitting} onClick={removeOutsideFinancialYears}>확인 후 제외</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       <AlertDialog
         open={exitDialogOpen}
         onOpenChange={(open) => {

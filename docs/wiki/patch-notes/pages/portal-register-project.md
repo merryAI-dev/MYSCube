@@ -3,7 +3,7 @@
 - route: `/portal/register-project`
 - primary users: PM, 사업 등록 제안 담당자
 - status: active
-- last updated: 2026-07-14
+- last updated: 2026-09-16
 
 ## Purpose
 
@@ -21,6 +21,11 @@
 
 ## Current Feature Checklist
 
+- [x] 날짜 편집 중 기존 연도별 금액·입금 계획 유지
+- [x] 계약기간 밖 연도는 확인 후 제외하고 합계를 다시 계산
+- [x] 전각 숫자·원 단위 금액 입력, 형식 오류 시 기존 금액 보존
+- [x] 미래 시작·종료 미정 사업의 시작 연도 재무 입력
+
 - [x] 단계형 사업 등록 제안 가능
 - [x] 초안 자동저장 가능
 - [x] 직접 입력형 자금 흐름(`DIRECT_ENTRY`) 등록 가능
@@ -36,6 +41,8 @@
 - [x] AI 초안 카드와 최종 검토 영역은 값이 있는 필드만 노출
 
 ## Recent Changes
+
+- [2026-09-16] 날짜 공란·기간 축소로 연도별 입력을 자동 삭제하지 않게 했다. 잘못된 금액 문자열은 0으로 저장하지 않고 정정할 때까지 저장을 차단한다. 단년도·다년도 전환 시 기존 입금 계획을 해당 연도에 유지한다.
 
 - [2026-07-14] 프로젝트 등록 PPT 기준의 기본정보 안내, 첨부 7종, 다년도 재무, 정산시스템, 입금 예상월, 참여인력 구분을 v2 최종저장 계약에 반영했다. 최종저장 후 사업관리 폴더를 자동 생성한다.
 - [2026-07-13] 화면 이탈 시 한 번 확인한 뒤 최신 입력을 임시저장하고 수정 lease를 해제하도록 연결했다. 저장 또는 해제 실패 시 현재 화면에 남아 재시도할 수 있다.
@@ -60,6 +67,9 @@
 - `src/app/routes.tsx`
 
 ## Related Tests
+
+- `tests/e2e/project-amount-investigation.spec.ts`
+- `src/app/platform/project-input-preservation.test.ts`
 
 - `src/app/components/portal/project-proposal.test.ts`
 - `src/app/platform/project-request-registration.test.ts`

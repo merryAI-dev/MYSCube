@@ -1,3 +1,4 @@
+import { hasMultiYearProjectContract, projectContractEndYear } from './project-input-policy.mjs';
 import type {
   AccountType,
   InterestRefundPolicy,
@@ -340,18 +341,18 @@ function projectFinancialYears(
   if (version !== 2) return [...normalized.values()].sort((a, b) => a.year - b.year);
   const startYear = dateYear(contractStart);
   const endYear = dateYear(contractEnd);
-  if (!startYear || !endYear || startYear > endYear || endYear - startYear > 20) return [];
+  if (!startYear || !endYear || startYear > endYear || endYear - startYear > 20) return [...normalized.values()].sort((a, b) => a.year - b.year);
   // 단년도도 행 하나를 만든다. 금액을 넣는 자리를 연도 수와 무관하게 표 하나로 통일한다.
-  return Array.from({ length: endYear - startYear + 1 }, (_, offset) => {
+  const coveredRows = Array.from({ length: endYear - startYear + 1 }, (_, offset) => {
     const year = startYear + offset;
     return normalized.get(year) || {
       year,
-      contractAmount: offset === 0 ? nonNegativeAmount(totals.contractAmount) : 0,
-      salesVatAmount: offset === 0 ? nonNegativeAmount(totals.salesVatAmount) : 0,
-      totalRevenueAmount: offset === 0 ? nonNegativeAmount(totals.totalRevenueAmount) : 0,
-      totalActualCost: offset === 0 ? nonNegativeAmount(totals.totalActualCost) : 0,
-      supportAmount: offset === 0 ? nonNegativeAmount(totals.supportAmount) : 0,
-      profitRate: offset === 0
+      contractAmount: offset === 0 && normalized.size === 0 ? nonNegativeAmount(totals.contractAmount) : 0,
+      salesVatAmount: offset === 0 && normalized.size === 0 ? nonNegativeAmount(totals.salesVatAmount) : 0,
+      totalRevenueAmount: offset === 0 && normalized.size === 0 ? nonNegativeAmount(totals.totalRevenueAmount) : 0,
+      totalActualCost: offset === 0 && normalized.size === 0 ? nonNegativeAmount(totals.totalActualCost) : 0,
+      supportAmount: offset === 0 && normalized.size === 0 ? nonNegativeAmount(totals.supportAmount) : 0,
+      profitRate: offset === 0 && normalized.size === 0
         ? projectFinancialYearProfitRate(
           nonNegativeAmount(totals.contractAmount),
           nonNegativeAmount(totals.totalRevenueAmount),
@@ -365,6 +366,8 @@ function projectFinancialYears(
       isSettled: false,
     };
   });
+  return [...coveredRows, ...[...normalized.values()].filter((row) => row.year < startYear || row.year > endYear)]
+    .sort((a, b) => a.year - b.year);
 }
 
 function projectFinancialYearsForWrite(rows: ProjectFinancialYear[]): ProjectFinancialYear[] {
@@ -621,7 +624,7 @@ export function createProjectEditorDraft(overrides: Partial<ProjectEditorDraft> 
       overrides.contractStart ?? DEFAULT_DRAFT.contractStart,
       // 종료 기간 없음이면 재무 계획은 시작연도~현재 연도까지 편다.
       overrides.contractEndUndecided === true && !text(overrides.contractEnd)
-        ? `${new Date().getFullYear()}-12-31`
+        ? `${projectContractEndYear(overrides)}-12-31`
         : (overrides.contractEnd ?? DEFAULT_DRAFT.contractEnd),
       totals,
       version,
@@ -1085,4 +1088,19 @@ export function buildProjectEditorProjectPatch(
   }
 
   return normalizeProjectRevenueFields(patch, 'totalRevenueAmount');
+}
+
+
+export function preservePaymentPlanOnContractExpansion(previous: ProjectEditorDraft, next: ProjectEditorDraft): ProjectEditorDraft {
+  if (previous.financialYears.length !== 1 || hasMultiYearProjectContract(previous) || !hasMultiYearProjectContract(next)) return next;
+  const year = previous.financialYears[0].year;
+  return {
+    ...next,
+    financialYears: next.financialYears.map((row) => row.year === year ? {
+      ...row,
+      paymentPlan: { ...previous.paymentPlan },
+      paymentExpectedMonths: { ...previous.paymentExpectedMonths },
+      advanceInterimBelow70Reason: previous.advanceInterimBelow70Reason,
+    } : row),
+  };
 }
