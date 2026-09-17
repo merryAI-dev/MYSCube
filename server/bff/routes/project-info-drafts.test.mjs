@@ -580,6 +580,34 @@ describe('project information private drafts', () => {
     expect(h.auditChainService.appendManyInTransaction).not.toHaveBeenCalled();
   });
 
+  it.each(['project-request-contracts', 'project-request-documents'])('previews an unchanged %s attachment and rejects a different field reference without modifying records', async prefix => {
+    const downloadExistingProjectAttachment = vi.fn(async () => ({
+      buffer: VALID_PDF, contentType: 'application/pdf', size: VALID_PDF.byteLength,
+    }));
+    const downloadProjectRegistrationAttachment = vi.fn();
+    const h = harness({ storageService: { downloadExistingProjectAttachment, downloadProjectRegistrationAttachment } });
+    const projectPath = 'orgs/tenant-a/projects/project-a';
+    const attachment = { path: `orgs/tenant-a/${prefix}/original-owner/contract.pdf`,
+      name: 'original.pdf', size: VALID_PDF.byteLength, contentType: 'application/pdf' };
+    h.db.documents.set(projectPath, { ...h.db.documents.get(projectPath), contractDocument: attachment });
+    await openedDraft(h);
+    const beforeRead = clone([...h.db.documents.entries()]);
+    const input = { tenantId: 'tenant-a', actorId: 'actor-a', projectId: 'project-a', documentKind: 'contract' };
+    await expect(h.service.readAttachment(input)).resolves.toMatchObject({ buffer: VALID_PDF, name: 'original.pdf' });
+    expect(downloadExistingProjectAttachment).toHaveBeenCalledWith({
+      tenantId: 'tenant-a', projectId: 'project-a', path: attachment.path, attachment, existingAttachment: attachment,
+    });
+    expect([...h.db.documents.entries()]).toEqual(beforeRead);
+    expect(downloadProjectRegistrationAttachment).not.toHaveBeenCalled();
+    const [draftPath] = [...h.db.documents.keys()].filter(path => path.includes('/privateEditDrafts/'));
+    const draft = h.db.documents.get(draftPath);
+    h.db.documents.set(draftPath, { ...draft, payload: { ...draft.payload,
+      contractDocument: { ...attachment, path: `orgs/tenant-a/${prefix}/another-owner/other.pdf` } } });
+    await expect(h.service.readAttachment(input)).rejects.toMatchObject({ statusCode: 404, code: 'not_found' });
+    await expect(h.service.readAttachment({ ...input, actorId: 'actor-admin' })).rejects.toMatchObject({ statusCode: 404, code: 'not_found' });
+    expect(downloadExistingProjectAttachment).toHaveBeenCalledTimes(1);
+  });
+
   it('downloads a stored edit-draft attachment only for its owner and exact document kind', async () => {
     const downloadDraftAttachment = vi.fn(async () => ({
       buffer: Buffer.from('private-edit-pdf'), contentType: 'application/pdf', size: 16,
@@ -886,10 +914,12 @@ describe('project information private drafts', () => {
     expect(staffingChange.after).toBe('총괄 리드 / 실무 박실무 / 운영 오퍼 / 멘토 하늘 / 정산지원 도담');
   });
 
-  it('archives a submitted request and only uploads Drive files that are missing', async () => {
+  it.each(['canonical', 'legacy'])('archives a submitted request with %s attachments and only uploads missing Drive files', async (kind) => {
     const requestPath = 'orgs/tenant-a/project_requests/change-project-a';
     const outboxPath = 'outbox/archive-a';
-    const attachmentPath = 'orgs/tenant-a/project-registration-documents/project-a/contract.pdf';
+    const attachmentPath = kind === 'legacy'
+      ? 'orgs/tenant-a/project-request-contracts/original-owner/contract.pdf'
+      : 'orgs/tenant-a/project-registration-documents/project-a/contract.pdf';
     const submittedRequest = {
       id: 'change-project-a', requestKind: 'CHANGE', targetProjectId: 'project-a',
       requestVersion: 2, targetProjectVersion: 4, submittedOutboxId: 'archive-a',
@@ -897,12 +927,13 @@ describe('project information private drafts', () => {
       requestedBy: 'actor-a', requestedByName: 'Actor A', changedFields: ['name', 'contractDocument'],
       proposedSnapshot: {
         name: 'Changed project',
-        contractDocument: { path: attachmentPath, name: 'contract.pdf', contentType: 'application/pdf' },
+        contractDocument: { path: attachmentPath, name: 'contract.pdf', size: VALID_PDF.byteLength, contentType: 'application/pdf' },
       },
     };
     const db = createDb({
       'orgs/tenant-a/projects/project-a': {
         id: 'project-a', name: 'Project A', version: 3, evidenceDriveRootFolderId: 'project-root-a',
+        contractDocument: { ...submittedRequest.proposedSnapshot.contractDocument },
       },
       [requestPath]: submittedRequest,
       [outboxPath]: { status: 'PROCESSING', claimToken: 'claim-a' },
@@ -923,6 +954,9 @@ describe('project information private drafts', () => {
         buffer: VALID_PDF, contentType: 'application/pdf', size: VALID_PDF.byteLength,
       })),
     };
+    storage.downloadExistingProjectAttachment = vi.fn(async () => ({
+      buffer: VALID_PDF, contentType: 'application/pdf', size: VALID_PDF.byteLength,
+    }));
     const handler = createProjectInfoSubmittedOutboxHandler({
       db, driveService, projectRegistrationAttachmentStorageService: storage,
       now: () => '2026-09-07T10:00:00.000Z',
@@ -949,9 +983,19 @@ describe('project information private drafts', () => {
       .toEqual(['request-json', 'document-contract']);
     const requestUpload = driveService.uploadFileToFolder.mock.calls[0][0];
     expect(JSON.parse(Buffer.from(requestUpload.contentBase64, 'base64').toString('utf8'))).toEqual(submittedRequest);
-    expect(storage.downloadProjectRegistrationAttachment).toHaveBeenCalledWith({
-      tenantId: 'tenant-a', projectId: 'project-a', path: attachmentPath,
-    });
+    if (kind === 'legacy') {
+      expect(storage.downloadExistingProjectAttachment).toHaveBeenCalledWith({
+        tenantId: 'tenant-a', projectId: 'project-a', path: attachmentPath,
+        attachment: submittedRequest.proposedSnapshot.contractDocument,
+        existingAttachment: db.documents.get('orgs/tenant-a/projects/project-a').contractDocument,
+      });
+      expect(storage.downloadProjectRegistrationAttachment).not.toHaveBeenCalled();
+    } else {
+      expect(storage.downloadProjectRegistrationAttachment).toHaveBeenCalledWith({
+        tenantId: 'tenant-a', projectId: 'project-a', path: attachmentPath,
+      });
+      expect(storage.downloadExistingProjectAttachment).not.toHaveBeenCalled();
+    }
     expect(db.documents.get(requestPath)).toMatchObject({
       status: 'PENDING', proposedSnapshot: { name: 'Changed project' },
       driveArchiveFolderId: 'change-folder-a',

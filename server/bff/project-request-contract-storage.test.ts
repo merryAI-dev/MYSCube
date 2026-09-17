@@ -286,3 +286,113 @@ describe('project-request-contract-storage', () => {
     })).rejects.toThrow('project registration attachment path is outside its canonical prefix');
   });
 });
+
+describe('existing project attachment compatibility security boundary', () => {
+  function fixture(metadataPatch: Record<string, unknown> = {}) {
+    const bytes = Buffer.from('legacy-pdf');
+    const getMetadata = vi.fn(async () => [{ size: String(bytes.length), contentType: 'application/pdf', ...metadataPatch }]);
+    const download = vi.fn(async () => [bytes]);
+    const save = vi.fn();
+    const deleteFile = vi.fn();
+    const file = vi.fn((_path: string, _options?: { generation: string }) => ({ getMetadata, download, save, delete: deleteFile }));
+    const service = createProjectRequestContractStorageService({
+      projectId: 'demo-bff-it', bucketName: 'demo-bff-it.firebasestorage.app',
+      storage: { bucket: vi.fn(() => ({ file })) },
+    });
+    const attachment = { path: 'orgs/tenant-a/project-request-contracts/original-owner/contract.pdf',
+      size: bytes.length, contentType: 'application/pdf' };
+    const input = { tenantId: 'tenant-a', projectId: 'project-a', path: attachment.path,
+      attachment, existingAttachment: { ...attachment } };
+    return { service, input, file, getMetadata, download, save, deleteFile, bytes };
+  }
+
+  it.each(['project-request-contracts', 'project-request-documents'])('reads an existing %s file without uploading, deleting or requiring a new attachment ID', async prefix => {
+    const f = fixture();
+    const path = `orgs/tenant-a/${prefix}/original-owner/계약서.pdf`;
+    const input = { ...f.input, path, attachment: { ...f.input.attachment, path },
+      existingAttachment: { ...f.input.existingAttachment, path } };
+    await expect(f.service.inspectExistingProjectAttachment(input)).resolves.toMatchObject({
+      path, size: f.bytes.length, contentType: 'application/pdf',
+    });
+    await expect(f.service.downloadExistingProjectAttachment(input)).resolves.toMatchObject({
+      buffer: f.bytes, size: f.bytes.length, contentType: 'application/pdf',
+    });
+    expect(f.file.mock.calls.every(([value]) => value === path)).toBe(true);
+    expect(f.save).not.toHaveBeenCalled();
+    expect(f.deleteFile).not.toHaveBeenCalled();
+    expect(input.attachment).toEqual(input.existingAttachment);
+    expect(input.attachment).not.toHaveProperty('attachmentId');
+  });
+
+  it.each([
+    'orgs/tenant-b/project-request-contracts/original-owner/contract.pdf',
+    'orgs/tenant-a/project-request-contracts/../contract.pdf',
+    'orgs/tenant-a/project-request-contracts/bad owner/contract.pdf',
+    'orgs/tenant-a/project-request-contracts/original-owner/nested/contract.pdf',
+    'orgs/tenant-a/project-request-contracts/original-owner/..',
+    'orgs/tenant-a/project-request-contracts/original-owner/',
+    'orgs/tenant-a/unrelated-documents/original-owner/contract.pdf',
+    'orgs/tenant-a/project-registration-documents/project-b/contract.pdf',
+  ])('rejects unsafe or out-of-scope paths before storage access: %s', async path => {
+    const f = fixture();
+    const attachment = { ...f.input.attachment, path };
+    const input = { ...f.input, path, attachment, existingAttachment: { ...attachment } };
+    await expect(f.service.inspectExistingProjectAttachment(input)).rejects.toThrow();
+    await expect(f.service.downloadExistingProjectAttachment(input)).rejects.toThrow();
+    expect(f.file).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    undefined,
+    { path: 'orgs/tenant-a/project-request-contracts/someone-else/other.pdf' },
+    { size: 99 },
+    { contentType: 'image/png' },
+    { attachmentId: 'another-attachment' },
+  ])('rejects absent or different canonical field references before storage access (%j)', async mismatch => {
+    const f = fixture();
+    const input = { ...f.input, existingAttachment: mismatch === undefined ? undefined : { ...f.input.existingAttachment, ...mismatch } };
+    await expect(f.service.inspectExistingProjectAttachment(input)).rejects.toThrow();
+    await expect(f.service.downloadExistingProjectAttachment(input)).rejects.toThrow();
+    expect(f.file).not.toHaveBeenCalled();
+  });
+
+  it('rejects a requested path different from the attachment field even when both are legacy paths', async () => {
+    const f = fixture();
+    const input = { ...f.input, path: 'orgs/tenant-a/project-request-contracts/original-owner/other.pdf' };
+    await expect(f.service.inspectExistingProjectAttachment(input)).rejects.toThrow();
+    await expect(f.service.downloadExistingProjectAttachment(input)).rejects.toThrow();
+    expect(f.file).not.toHaveBeenCalled();
+  });
+
+  it.each([{ size: '999' }, { contentType: 'image/png' }, { metadata: { attachmentId: 'unexpected-id' } }])('rejects storage metadata different from the preserved attachment (%j)', async metadata => {
+    const f = fixture(metadata);
+    await expect(f.service.inspectExistingProjectAttachment(f.input)).rejects.toThrow();
+    await expect(f.service.downloadExistingProjectAttachment(f.input)).rejects.toThrow();
+    expect(f.save).not.toHaveBeenCalled();
+    expect(f.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('keeps a missing storage object unavailable', async () => {
+    const f = fixture();
+    f.getMetadata.mockRejectedValue(new Error('Object not found'));
+    await expect(f.service.inspectExistingProjectAttachment(f.input)).rejects.toThrow();
+    await expect(f.service.downloadExistingProjectAttachment(f.input)).rejects.toThrow();
+    expect(f.save).not.toHaveBeenCalled();
+    expect(f.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('downloads the inspected object generation and rejects unexpected byte length', async () => {
+    const f = fixture({ generation: '123456' });
+    await f.service.downloadExistingProjectAttachment(f.input);
+    expect(f.file).toHaveBeenCalledWith(f.input.path, { generation: '123456' });
+    f.download.mockResolvedValue([Buffer.from('changed')]);
+    await expect(f.service.downloadExistingProjectAttachment(f.input)).rejects.toThrow();
+  });
+
+  it('does not widen the canonical storage inspector or downloader to legacy paths', async () => {
+    const f = fixture();
+    await expect(f.service.inspectProjectRegistrationAttachment(f.input)).rejects.toThrow();
+    await expect(f.service.downloadProjectRegistrationAttachment(f.input)).rejects.toThrow();
+    expect(f.file).not.toHaveBeenCalled();
+  });
+});

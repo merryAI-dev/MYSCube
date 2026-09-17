@@ -1,3 +1,4 @@
+import { assertExistingProjectAttachment, isLegacyProjectAttachmentPath } from '../existing-project-attachment.mjs';
 import { randomUUID } from 'node:crypto';
 import {
   PROJECT_REQUEST_ROUTE_ROLES,
@@ -462,7 +463,7 @@ export function createProjectInfoSubmittedOutboxHandler({
     const documents = Object.entries(DOCUMENT_FIELD_BY_KIND).flatMap(([documentKind, field]) => {
       const document = source[field];
       const path = readOptionalText(document?.path);
-      return path ? [{ documentKind, path, document }] : [];
+      return path ? [{ documentKind, field, path, document }] : [];
     });
     if (documents.length > 0 && typeof projectRegistrationAttachmentStorageService?.downloadProjectRegistrationAttachment !== 'function') {
       throw new Error('Project information attachment download is not configured');
@@ -503,11 +504,11 @@ export function createProjectInfoSubmittedOutboxHandler({
         key: 'request-summary', fileName: '요청요약.txt', mimeType: 'text/plain',
         contentBase64: Buffer.from(`${summary}\n`, 'utf8').toString('base64'),
       },
-      ...documents.map(({ documentKind, path, document }) => ({
+      ...documents.map(({ documentKind, field, path, document }) => ({
         key: `document-${documentKind}`,
         fileName: `${documentKind}_${(readOptionalText(document.name) || path.split('/').at(-1) || 'attachment').replace(/[\\/]/g, '_')}`,
         mimeType: readOptionalText(document.contentType) || 'application/octet-stream',
-        path,
+        path, document, existingAttachment: delivery.project[field],
       })),
     ];
     for (const file of archiveFiles) {
@@ -515,9 +516,13 @@ export function createProjectInfoSubmittedOutboxHandler({
       let contentBase64 = file.contentBase64;
       let mimeType = file.mimeType;
       if (file.path) {
-        const downloaded = await projectRegistrationAttachmentStorageService.downloadProjectRegistrationAttachment({
-          tenantId, projectId, path: file.path,
-        });
+        const downloaded = isLegacyProjectAttachmentPath(file.path, tenantId)
+          ? await projectRegistrationAttachmentStorageService.downloadExistingProjectAttachment({
+            tenantId, projectId, path: file.path, attachment: file.document, existingAttachment: file.existingAttachment,
+          })
+          : await projectRegistrationAttachmentStorageService.downloadProjectRegistrationAttachment({
+            tenantId, projectId, path: file.path,
+          });
         const buffer = Buffer.isBuffer(downloaded?.buffer)
           ? downloaded.buffer
           : downloaded?.buffer instanceof Uint8Array ? Buffer.from(downloaded.buffer) : null;
@@ -683,7 +688,7 @@ export function createProjectInfoDraftService({
     });
   }
 
-  async function assertSubmittedAttachmentsStored(current, draft) {
+  async function assertSubmittedAttachmentsStored(current, draft, project) {
     const attachments = draftAttachments(draft);
     if (attachments.length === 0) return;
     if (typeof draftStorageService?.inspectProjectRegistrationAttachment !== 'function') {
@@ -691,7 +696,12 @@ export function createProjectInfoDraftService({
     }
     try {
       await Promise.all(attachments.map(async (attachment) => {
-        const stored = await draftStorageService.inspectProjectRegistrationAttachment({
+        const legacy = isLegacyProjectAttachmentPath(attachment.path, current.tenantId);
+        const input = { tenantId: current.tenantId, projectId: current.projectId, path: attachment.path,
+          attachment, existingAttachment: project?.[DOCUMENT_FIELD_BY_KIND[attachment.documentKind]] };
+        if (legacy) assertExistingProjectAttachment(input);
+        const stored = legacy ? await draftStorageService.inspectExistingProjectAttachment(input)
+          : await draftStorageService.inspectProjectRegistrationAttachment({
           tenantId: current.tenantId,
           projectId: current.projectId,
           path: attachment.path,
@@ -1076,6 +1086,16 @@ export function createProjectInfoDraftService({
       const stored = await db.runTransaction(async (tx) => {
         const { draft, project } = await ownedDraft(tx, current);
         const match = draftAttachments(draft).findLast((item) => item?.documentKind === documentKind);
+        const candidate = match || draft.payload?.[field];
+        if (isLegacyProjectAttachmentPath(candidate?.path, current.tenantId)) {
+          try {
+            assertExistingProjectAttachment({ tenantId: current.tenantId, projectId: current.projectId,
+              path: candidate.path, attachment: candidate, existingAttachment: project[field] });
+          } catch {
+            throw createHttpError(404, 'Project information draft attachment not found', 'not_found');
+          }
+          return { source: 'existing', attachment: candidate, existingAttachment: project[field] };
+        }
         if (match && readOptionalText(match.path)) {
           const permanentPrefix = `orgs/${current.tenantId}/project-registration-documents/${current.projectId}/`;
           return readOptionalText(match.path).startsWith(permanentPrefix)
@@ -1106,7 +1126,12 @@ export function createProjectInfoDraftService({
 
         throw createHttpError(404, 'Project information draft attachment not found', 'not_found');
       });
-      const downloaded = stored.source === 'draft'
+      const downloaded = stored.source === 'existing'
+        ? await draftStorageService.downloadExistingProjectAttachment({
+          tenantId: current.tenantId, projectId: current.projectId, path: stored.attachment.path,
+          attachment: stored.attachment, existingAttachment: stored.existingAttachment,
+        })
+        : stored.source === 'draft'
         ? await draftStorageService.downloadDraftAttachment({
           tenantId: current.tenantId,
           draftId: stored.draftId || current.draftDocumentId,
@@ -1527,7 +1552,7 @@ export function createProjectInfoDraftService({
             'canonical_version_conflict',
           );
         }
-        await assertSubmittedAttachmentsStored(current, draft);
+        await assertSubmittedAttachmentsStored(current, draft, project);
         const nextVersion = actualVersion + 1;
         const { projectRequest } = buildProjectInfoChangeSubmission({
           tenantId: current.tenantId,
