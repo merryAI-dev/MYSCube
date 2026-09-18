@@ -99,6 +99,28 @@ function completeMirror(projectId, amount = 900, overrides = {}) {
       { mode, year: 2024, periodKind: 'ANNUAL', derivedKind: 'balance', state: 'VALUE', amount: balance },
     );
   }
+  // 주별 연도(2026)의 시트 BS열 Total. 주별 합과 다르게 두어 그대로 옮기는지 확인한다.
+  for (const mode of ['projection', 'actual']) {
+    const projection = mode === 'projection';
+    const total = projection ? amount + 400 : 0;
+    for (const lineId of CASHFLOW_ALL_LINES) {
+      const selected = lineId === 'SALES_IN';
+      annualCells.push({
+        mode,
+        year: 2026,
+        periodKind: 'GRAND_TOTAL',
+        lineId,
+        direction: lineId.endsWith('_IN') ? 'IN' : 'OUT',
+        state: selected ? (total === 0 ? 'ZERO' : 'VALUE') : 'EMPTY',
+        ...(selected ? { amount: total } : {}),
+      });
+    }
+    annualDerivedCells.push(
+      { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'deposit_total', state: total === 0 ? 'ZERO' : 'VALUE', amount: total },
+      { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'withdrawal_total', state: 'ZERO', amount: 0 },
+      { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'balance', state: 'VALUE', amount: projection ? 5_000 + total : 4_000 },
+    );
+  }
   return {
     projectId,
     weeklyYear: 2026,
@@ -241,22 +263,26 @@ describe('cashflow export route contract', () => {
     const rows = workbook.getWorksheet('Projection').getSheetValues()
       .filter(Boolean)
       .map((row) => Array.isArray(row) ? row.slice(1) : []);
-    expect(rows.find((row) => row[0] === '매출액(입금)')).toEqual(['매출액(입금)', 900]);
+    // 주차 5칸 뒤 맨 오른쪽은 시트 BS열 Total 이다(주별 합 900이 아니라 시트의 1,300).
+    expect(rows.find((row) => row[0] === '항목')).toEqual([
+      '항목', '26-1-1', '26-1-2', '26-1-3', '26-1-4', '26-1-5', '2026년 연간 합계(1~12월)',
+    ]);
+    expect(rows.find((row) => row[0] === '매출액(입금)')).toEqual([
+      '매출액(입금)', 900, undefined, undefined, undefined, undefined, 1300,
+    ]);
     expect(rows.find((row) => row[0] === '입금 합계')).toEqual([
-      '입금 합계', 900, 0, 0, 0, 0,
+      '입금 합계', 900, 0, 0, 0, 0, 1300,
     ]);
     expect(rows.find((row) => row[0] === '잔액')).toEqual([
-      '잔액', 5900, 5900, 5900, 5900, 5900,
+      '잔액', 5900, 5900, 5900, 5900, 5900, 6300,
     ]);
     const actualRows = workbook.getWorksheet('Actual').getSheetValues()
       .filter(Boolean)
       .map((row) => Array.isArray(row) ? row.slice(1) : []);
     expect(actualRows.find((row) => row[0] === '매출액(입금)')).toEqual([
-      '매출액(입금)', 0,
+      '매출액(입금)', 0, undefined, undefined, undefined, undefined, 0,
     ]);
-    const salesRowNumber = workbook.getWorksheet('Projection').getSheetValues()
-      .findIndex((row) => Array.isArray(row) && row[1] === '매출액(입금)');
-    expect(workbook.getWorksheet('Projection').getCell(salesRowNumber, 7).value).toBeNull();
+    expect(rows.some((row) => row.some((cell) => /-Total$/.test(String(cell ?? ''))))).toBe(false);
     expect(collectionReads.some((path) => path.endsWith('/cashflow_weeks'))).toBe(false);
   });
 
@@ -347,7 +373,7 @@ describe('cashflow export route contract', () => {
       .filter(Boolean)
       .map((row) => Array.isArray(row) ? row.slice(1) : []);
     expect(secondSheetRows.find((row) => row[0] === '매출액(입금)')).toEqual([
-      '매출액(입금)', 700,
+      '매출액(입금)', 700, undefined, undefined, undefined, undefined, 1100,
     ]);
   });
 

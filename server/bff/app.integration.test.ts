@@ -133,6 +133,29 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         { mode, year: 2024, periodKind: 'ANNUAL', derivedKind: 'balance', state: 'VALUE', amount: balance },
       );
     }
+    // 주별 연도(2026)의 시트 BS열 Total. 운영 미러는 모두 이 값을 갖는다. 주별 합과 다르게
+    // 두어 내보내기가 더하지 않고 시트 값을 옮기는지 확인한다.
+    for (const mode of ['projection', 'actual']) {
+      const amount = (mode === 'projection' ? projectionAmount : actualAmount) + 1_000;
+      const balance = (mode === 'projection' ? projectionBalance : actualBalance) + 1_000;
+      for (const lineId of CASHFLOW_ALL_LINES) {
+        const selected = lineId === 'SALES_IN';
+        annualCells.push({
+          mode,
+          year: 2026,
+          periodKind: 'GRAND_TOTAL',
+          lineId,
+          direction: lineId.endsWith('_IN') ? 'IN' : 'OUT',
+          state: selected ? 'VALUE' : 'EMPTY',
+          ...(selected ? { amount } : {}),
+        });
+      }
+      annualDerivedCells.push(
+        { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'deposit_total', state: 'VALUE', amount },
+        { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'withdrawal_total', state: 'ZERO', amount: 0 },
+        { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'balance', state: 'VALUE', amount: balance },
+      );
+    }
     await db.doc(`orgs/${tenantId}/cashflow_sheet_mirrors/${targetProjectId}`).set({
       projectId: targetProjectId,
       weeklyYear: 2026,
@@ -2417,13 +2440,14 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     const salesRow = rows.find((row) => row[0] === '매출액(입금)');
 
     expect(salesRow).toBeTruthy();
-    expect(salesRow).toEqual(['매출액(입금)', 1250]);
-    expect(rows.find((row) => row[0] === '잔액')).toEqual([
-      '잔액', 6250, 6250, 6250, 6250, 6250,
+    // 월 합계 열 없이 주차 5칸, 맨 오른쪽은 시트 BS열 Total(주별 합 1,250이 아니라 2,250).
+    expect(rows.find((row) => row[0] === '항목')).toEqual([
+      '항목', '26-1-1', '26-1-2', '26-1-3', '26-1-4', '26-1-5', '2026년 연간 합계(1~12월)',
     ]);
-    const salesRowNumber = worksheet.getSheetValues()
-      .findIndex((row) => Array.isArray(row) && row[1] === '매출액(입금)');
-    expect(worksheet.getCell(salesRowNumber, 7).value).toBeNull();
+    expect(salesRow).toEqual(['매출액(입금)', 1250, undefined, undefined, undefined, undefined, 2250]);
+    expect(rows.find((row) => row[0] === '잔액')).toEqual([
+      '잔액', 6250, 6250, 6250, 6250, 6250, 7250,
+    ]);
   });
 
   it('filters exported projects by accountType', async () => {
