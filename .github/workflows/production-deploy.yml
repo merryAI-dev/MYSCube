@@ -494,7 +494,9 @@ jobs:
           JVM_WEEKLY_INTERNAL_API_TOKEN: ${{ secrets.JVM_WEEKLY_INTERNAL_API_TOKEN_LIVE }}
           GOOGLE_APPLICATION_CREDENTIALS: ${{ steps.jvm_release_verifier_auth.outputs.credentials_file_path }}
           # Read-only inventory: p1779869011617 has a matching canonical request/coordinator (2026-09, rev 1).
-          SETTLEMENT_NORMALIZATION_PROJECTS: p1773817948751,p1775209262483,p1780662870530,p1779869011617
+          # p1784081899245 (아름다운재단 교육) has a matching canonical request/coordinator (2026-09, rev 1),
+          # submitted 2026-09-17T08:37 by its PM; verified via read-only inventory before this deploy.
+          SETTLEMENT_NORMALIZATION_PROJECTS: p1773817948751,p1775209262483,p1780662870530,p1779869011617,p1784081899245
         run: |
           set -euo pipefail
           test -n "${CASHFLOW_ACTOR_UID}"
