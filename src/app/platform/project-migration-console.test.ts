@@ -202,6 +202,44 @@ describe('project-migration-console', () => {
     expect(records[0]?.status).toBe(expectedStatus);
   });
 
+  it.each(['REVISION_REJECTED', 'DUPLICATE_DISCARDED', 'PLANNING_AGREED'] as const)(
+    'shows a %s project with a pending change request as awaiting the organization head',
+    (executiveReviewStatus) => {
+      // 서버 executive-review 는 대기 중인 수정 요청을 조직장 결재 대기로 받는다. 화면이 이전
+      // 결재를 먼저 보면 승인 버튼이 사라져 지정 결재자가 처리할 수 없다.
+      const records = buildMigrationAuditConsoleRecords(
+        [makeProject({ id: 'p-rejected-change', executiveReviewStatus })],
+        [
+          makeRequest({
+            id: 'change-p-rejected-change',
+            requestKind: 'CHANGE',
+            targetProjectId: 'p-rejected-change',
+            approvedProjectId: 'p-rejected-change',
+            status: 'PENDING',
+          }),
+        ],
+      );
+
+      expect(records[0]?.status).toBe('PENDING');
+      expect(getMigrationAuditStatusLabel(records[0]!.status)).toBe('검토 대기');
+    },
+  );
+
+  it('keeps a rejected project rejected when its change request was also rejected', () => {
+    const records = buildMigrationAuditConsoleRecords(
+      [makeProject({ id: 'p-rejected-change', executiveReviewStatus: 'REVISION_REJECTED' })],
+      [makeRequest({
+        id: 'change-p-rejected-change',
+        requestKind: 'CHANGE',
+        targetProjectId: 'p-rejected-change',
+        approvedProjectId: 'p-rejected-change',
+        status: 'REJECTED',
+      })],
+    );
+
+    expect(records[0]?.status).toBe('REVISION_REJECTED');
+  });
+
   it('keeps rejected projects rejected until the project is explicitly resubmitted', () => {
     const records = buildMigrationAuditConsoleRecords(
       [
