@@ -17,8 +17,9 @@ export function hasMultiYearProjectContract(project, currentYear = new Date().ge
     : /^\d{4}-\d{2}-\d{2}$/.test(end) && start.slice(0, 4) !== end.slice(0, 4));
 }
 
-// 단년도 사업의 입금 계획은 사업 단위 칸이 원본이다. 연도별 행은 같은 값을 그대로 비춰야
-// 연도별 표만 읽는 화면(결재 문서 등)이 0원으로 보이지 않는다.
+// 단년도 사업의 입금 계획은 사업 단위 칸이 원본이다. 연도별 표만 읽는 화면(결재 문서 등)이
+// 0원으로 보이지 않도록 읽을 때만 비춘다. 저장값에 쓰면 기간을 잠시 줄였다 되돌릴 때 다년도
+// 연도별 입력을 덮으므로 저장 경로에는 쓰지 않는다.
 export function projectFinancialYearsWithPaymentPlan(project) {
   const rows = Array.isArray(project?.financialYears) ? project.financialYears : [];
   const start = String(project?.contractStart || '');

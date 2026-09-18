@@ -1,4 +1,4 @@
-import { hasMultiYearProjectContract, projectContractEndYear, projectFinancialYearsWithPaymentPlan } from './project-input-policy.mjs';
+import { hasMultiYearProjectContract, projectContractEndYear } from './project-input-policy.mjs';
 import type {
   AccountType,
   InterestRefundPolicy,
@@ -873,7 +873,7 @@ export function buildProjectRequestPayloadFromDraft(draftInput: ProjectEditorDra
     supportAmount: nonNegativeAmount(draft.supportAmount),
     financialInputFlags: normalizeProjectFinancialInputFlagsForAmounts(draft.financialInputFlags, draft),
     registrationRequirementsVersion: draft.registrationRequirementsVersion,
-    financialYears: projectFinancialYearsForWrite(projectFinancialYearsWithPaymentPlan(draft)),
+    financialYears: projectFinancialYearsForWrite(draft.financialYears),
     registrationOptionalDocumentNotes: draft.registrationOptionalDocumentNotes,
     registrationConfirmations: draft.registrationConfirmations,
     checkout: draft.checkout,
@@ -1023,7 +1023,7 @@ export function buildProjectEditorProjectPatch(
     salesVatAmount: nonNegativeAmount(draft.salesVatAmount),
     financialInputFlags: flags,
     registrationRequirementsVersion: draft.registrationRequirementsVersion,
-    financialYears: projectFinancialYearsForWrite(projectFinancialYearsWithPaymentPlan(draft)),
+    financialYears: projectFinancialYearsForWrite(draft.financialYears),
     registrationOptionalDocumentNotes: draft.registrationOptionalDocumentNotes,
     registrationConfirmations: draft.registrationConfirmations,
     finalPaymentExpectedWeek: normalizeFinanceWeek(draft.finalPaymentExpectedWeek),

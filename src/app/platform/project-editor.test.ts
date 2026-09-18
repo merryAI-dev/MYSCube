@@ -254,34 +254,6 @@ describe('project editor draft mapping', () => {
     });
   });
 
-  it('saves the single-year payment plan into its annual row so review tables read the same amounts', () => {
-    const paymentPlan = { contract: 313_432_000, interim: 89_552_000, final: 44_776_000 };
-    const paymentExpectedMonths = { contract: '2026-08', interim: '2026-12', final: '2027-01' };
-    const draft = createProjectEditorDraft({
-      registrationRequirementsVersion: 2,
-      contractStart: '2026-06-04',
-      contractEnd: '2026-12-31',
-      contractAmount: 447_760_000,
-      totalRevenueAmount: 195_494_560,
-      paymentPlan,
-      paymentExpectedMonths,
-    });
-    // 단년도 입력 화면은 사업 단위 칸에만 쓴다. 연도별 행은 비어 있는 채로 시작한다.
-    expect(draft.financialYears[0].paymentPlan).toEqual({ contract: 0, interim: 0, final: 0 });
-
-    const payload = buildProjectRequestPayloadFromDraft(draft);
-    const patch = buildProjectEditorProjectPatch(draft, {
-      mode: 'admin',
-      actorId: 'admin-1',
-      actorName: '관리자',
-      now: '2026-09-18T00:00:00.000Z',
-    });
-    for (const written of [payload, patch]) {
-      expect(written.paymentPlan).toEqual(paymentPlan);
-      expect(written.financialYears).toEqual([expect.objectContaining({ year: 2026, paymentPlan, paymentExpectedMonths })]);
-    }
-  });
-
   it('gives a single-year contract one annual row so amounts have one home', () => {
     const draft = createProjectEditorDraft({
       registrationRequirementsVersion: 2,
