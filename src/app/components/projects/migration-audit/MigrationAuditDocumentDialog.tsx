@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { INTEREST_REFUND_POLICY_LABELS, type FileAttachment, type ProjectRegistrationOptionalDocumentNotes } from '../../../data/types';
 import type { MigrationAuditConsoleRecord } from '../../../platform/project-migration-console';
-import { getMigrationAuditStatusLabel } from '../../../platform/project-migration-console';
+import { getMigrationAuditStatusLabel, hasPendingProjectChangeRequest } from '../../../platform/project-migration-console';
 import { resolveProjectRequestPayload } from '../../../platform/project-change-request';
 import type { ProjectRequestDocumentKind } from '../../../platform/project-contract-upload';
 import { buildMigrationReviewDossier } from '../../../platform/project-migration-review-dossier';
@@ -228,16 +228,23 @@ export function MigrationAuditDocumentDialog({
   const designatedApproverName = reviewPayload?.executiveApproverName || '';
   const isManagementPlanning = reviewStage === 'managementPlanning';
   const organizationReviewStatus = record.project.executiveReviewStatus;
-  const organizationDecisionState = organizationReviewStatus === 'APPROVED'
-    ? 'approved'
-    : organizationReviewStatus === 'REVISION_REJECTED' || organizationReviewStatus === 'DUPLICATE_DISCARDED'
-      ? 'rejected'
-      : null;
+  // 새 수정 요청이 대기 중이면 이전 결재 도장은 이 요청에 대한 판단이 아니다.
+  const organizationDecisionState = hasPendingProjectChangeRequest(record.request)
+    ? null
+    : organizationReviewStatus === 'APPROVED'
+      ? 'approved'
+      : organizationReviewStatus === 'REVISION_REJECTED' || organizationReviewStatus === 'DUPLICATE_DISCARDED'
+        ? 'rejected'
+        : null;
   const latestOrganizationDecision = organizationDecisionState
     ? [...(record.project.executiveReviewHistory || [])].reverse().find((entry) => entry.status === organizationReviewStatus)
     : undefined;
-  const organizationReviewedByName = latestOrganizationDecision?.reviewedByName || record.project.executiveReviewedByName || '';
-  const organizationReviewedAt = latestOrganizationDecision?.reviewedAt || record.project.executiveReviewedAt || '';
+  const organizationReviewedByName = organizationDecisionState
+    ? latestOrganizationDecision?.reviewedByName || record.project.executiveReviewedByName || ''
+    : '';
+  const organizationReviewedAt = organizationDecisionState
+    ? latestOrganizationDecision?.reviewedAt || record.project.executiveReviewedAt || ''
+    : '';
   const managementReview = getManagementPlanningReview(record.project);
   const managementDecisionState = managementReview.status === 'AGREED'
     ? 'approved'
