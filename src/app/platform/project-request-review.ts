@@ -20,6 +20,7 @@ import {
   SETTLEMENT_TYPE_LABELS,
 } from '../data/types';
 import { formatProjectTeamMemberLine } from './project-team-members';
+import { projectFinancialYearsWithPaymentPlan } from './project-input-policy.mjs';
 
 export type ProjectRequestReviewStatus = 'ready' | 'needs-check' | 'missing';
 export type ProjectRequestReviewBadgeTone = 'neutral' | 'warning' | 'critical' | 'success';
@@ -214,7 +215,7 @@ function formatFundInputMode(value: ProjectRequestPayload['fundInputMode']): str
 }
 
 function formatFinancialYears(payload: ProjectRequestPayload): string {
-  return (payload.financialYears || []).map((row) => {
+  return projectFinancialYearsWithPaymentPlan(payload).map((row) => {
     const payments = row.paymentPlan
       ? ` · 입금 선금 ${formatShortAmount(row.paymentPlan.contract)} / 중도금 ${formatShortAmount(row.paymentPlan.interim)} / 잔금 ${formatShortAmount(row.paymentPlan.final)}`
       : '';

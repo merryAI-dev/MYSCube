@@ -17,6 +17,26 @@ export function hasMultiYearProjectContract(project, currentYear = new Date().ge
     : /^\d{4}-\d{2}-\d{2}$/.test(end) && start.slice(0, 4) !== end.slice(0, 4));
 }
 
+// 단년도 사업의 입금 계획은 사업 단위 칸이 원본이다. 연도별 행은 같은 값을 그대로 비춰야
+// 연도별 표만 읽는 화면(결재 문서 등)이 0원으로 보이지 않는다.
+export function projectFinancialYearsWithPaymentPlan(project) {
+  const rows = Array.isArray(project?.financialYears) ? project.financialYears : [];
+  const start = String(project?.contractStart || '');
+  const end = String(project?.contractEnd || '');
+  // 날짜를 고치는 중(종료일 비움 등)이면 단년도로 확정된 것이 아니다. 다년도 연도별 값을 덮지 않는다.
+  const singleYear = /^\d{4}-\d{2}-\d{2}$/.test(start)
+    && (project?.contractEndUndecided || (/^\d{4}-\d{2}-\d{2}$/.test(end) && end.slice(0, 4) === start.slice(0, 4)))
+    && !hasMultiYearProjectContract(project);
+  if (!project?.paymentPlan || !singleYear) return rows;
+  const year = Number(start.slice(0, 4));
+  return rows.map((row) => row?.year === year ? {
+    ...row,
+    paymentPlan: { ...project.paymentPlan },
+    paymentExpectedMonths: { ...(project.paymentExpectedMonths || row.paymentExpectedMonths || {}) },
+    advanceInterimBelow70Reason: String(project.advanceInterimBelow70Reason || ''),
+  } : row);
+}
+
 export function projectPaymentIssues(project) {
   const annual = hasMultiYearProjectContract(project);
   const sources = annual ? (Array.isArray(project.financialYears) ? project.financialYears : []) : [project];

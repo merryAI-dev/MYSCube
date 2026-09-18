@@ -5,6 +5,7 @@ import { getMigrationAuditStatusLabel } from '../../../platform/project-migratio
 import { resolveProjectRequestPayload } from '../../../platform/project-change-request';
 import type { ProjectRequestDocumentKind } from '../../../platform/project-contract-upload';
 import { buildMigrationReviewDossier } from '../../../platform/project-migration-review-dossier';
+import { projectFinancialYearsWithPaymentPlan } from '../../../platform/project-input-policy.mjs';
 import {
   getManagementPlanningReview,
   getManagementPlanningReviewLabel,
@@ -216,7 +217,7 @@ export function MigrationAuditDocumentDialog({
   const dossier = buildMigrationReviewDossier(record.project, record.request);
   const reviewPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
   const totalActualCost = reviewPayload?.totalActualCost;
-  const financialYears = reviewPayload?.financialYears;
+  const financialYears = projectFinancialYearsWithPaymentPlan(reviewPayload);
   const interestRefundPolicy = reviewPayload?.interestRefundPolicy;
   const registrationNote = reviewPayload?.note;
   const confirmations = reviewPayload?.registrationConfirmations;

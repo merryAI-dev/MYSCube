@@ -21,6 +21,7 @@ import {
   resolveProjectRequestKind,
 } from '../../../platform/project-change-request';
 import { buildMigrationReviewDossier } from '../../../platform/project-migration-review-dossier';
+import { projectFinancialYearsWithPaymentPlan } from '../../../platform/project-input-policy.mjs';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { Card, CardContent } from '../../ui/card';
@@ -209,7 +210,7 @@ export function MigrationAuditDetailPanel({
   const useRequestPayloadAsCurrent = isChangeRequest && record.request?.status === 'PENDING';
   const requestPayload = resolveProjectRequestPayload(record.request);
   const totalActualCost = requestPayload?.totalActualCost ?? record.project.totalActualCost;
-  const financialYears = requestPayload?.financialYears ?? record.project.financialYears;
+  const financialYears = projectFinancialYearsWithPaymentPlan(requestPayload?.financialYears ? requestPayload : record.project);
   const interestRefundPolicy = requestPayload?.interestRefundPolicy ?? record.project.interestRefundPolicy;
   const registrationNote = requestPayload?.note ?? record.project.note;
   const quoteDocument = requestPayload?.quoteDocument !== undefined ? requestPayload.quoteDocument : record.project.quoteDocument;
