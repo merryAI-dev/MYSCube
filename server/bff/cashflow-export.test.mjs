@@ -86,6 +86,30 @@ function completeMirror(projectId, overrides = {}) {
       { mode, year: 2024, periodKind: 'ANNUAL', derivedKind: 'balance', state: 'VALUE', amount: balance },
     );
   }
+  // 주별 연도(2026)의 시트 BS열 Total. 주별 값의 합(900)과 일부러 다르게 둔다 - 내보내기는
+  // 더해서 만들지 않고 시트에 적힌 값을 옮겨야 한다. 배열 가운데에 두어, 첫/끝 칸을 고치는
+  // 2024 연간 검증 테스트가 계속 2024 셀을 겨냥하게 한다.
+  const grandTotalCells = [];
+  const grandTotalDerivedCells = [];
+  for (const mode of ['projection', 'actual']) {
+    const projection = mode === 'projection';
+    for (const lineId of CASHFLOW_ALL_LINES) {
+      const cell = { mode, year: 2026, periodKind: 'GRAND_TOTAL', lineId, direction: lineId.endsWith('_IN') ? 'IN' : 'OUT' };
+      if (lineId === 'SALES_IN') Object.assign(cell, projection ? { state: 'VALUE', amount: 1_300 } : { state: 'ZERO', amount: 0 });
+      else if (lineId === 'DIRECT_COST_OUT') Object.assign(cell, { state: 'VALUE', amount: projection ? 410 : 20 });
+      else cell.state = 'EMPTY';
+      grandTotalCells.push(cell);
+    }
+    grandTotalDerivedCells.push(
+      { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'deposit_total', state: projection ? 'VALUE' : 'ZERO', amount: projection ? 1_300 : 0 },
+      { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'withdrawal_total', state: 'VALUE', amount: projection ? 410 : 20 },
+      projection
+        ? { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'balance', state: 'VALUE', amount: 890 }
+        : { mode, year: 2026, periodKind: 'GRAND_TOTAL', derivedKind: 'balance', state: 'EMPTY' },
+    );
+  }
+  annualCells.splice(CASHFLOW_ALL_LINES.length, 0, ...grandTotalCells);
+  annualDerivedCells.splice(3, 0, ...grandTotalDerivedCells);
   return {
     projectId,
     weeklyYear: 2026,
@@ -165,6 +189,97 @@ describe('cashflow export bff helper', () => {
       projectionTotals: { totalIn: 900, totalOut: 0, balance: 5900 },
       actualTotals: { totalIn: 0, totalOut: 0, balance: 4000 },
     });
+  });
+
+  it('carries the sheet BS Total of the weekly year exactly, without summing weeks', () => {
+    const { yearTotal } = buildCashflowExportSourceFromMirror({
+      projectId: 'proj-a',
+      mirror: completeMirror('proj-a'),
+      yearMonths: ['2026-01'],
+    });
+
+    // 주별 SALES_IN 합은 900이지만 시트 Total은 1,300이다. 시트 값을 그대로 쓴다.
+    expect(yearTotal).toMatchObject({
+      year: 2026,
+      projection: { SALES_IN: 1_300, DIRECT_COST_OUT: 410 },
+      actual: { SALES_IN: 0, DIRECT_COST_OUT: 20 },
+      projectionStates: { SALES_IN: 'VALUE', TEAM_SUPPORT_IN: 'EMPTY' },
+      actualStates: { SALES_IN: 'ZERO', TEAM_SUPPORT_IN: 'EMPTY' },
+      projectionTotals: { totalIn: 1_300, totalOut: 410, balance: 890 },
+      actualTotals: { totalIn: 0, totalOut: 20, balance: null },
+    });
+    expect(yearTotal.projection).not.toHaveProperty('TEAM_SUPPORT_IN');
+  });
+
+  it('rejects a weekly export when the sheet Total cells are missing, duplicated, or invalid', () => {
+    const grandTotalIndex = (cells) => cells.findIndex((cell) => cell.periodKind === 'GRAND_TOTAL');
+    const mirrors = [];
+    const missing = completeMirror('proj-a');
+    missing.annualCells.splice(grandTotalIndex(missing.annualCells), 1);
+    mirrors.push(missing);
+    const duplicate = completeMirror('proj-a');
+    duplicate.annualCells.push({ ...duplicate.annualCells[grandTotalIndex(duplicate.annualCells)] });
+    mirrors.push(duplicate);
+    const invalidState = completeMirror('proj-a');
+    const index = grandTotalIndex(invalidState.annualCells);
+    invalidState.annualCells[index] = { ...invalidState.annualCells[index], state: 'ZERO', amount: 5 };
+    mirrors.push(invalidState);
+    const missingDerived = completeMirror('proj-a');
+    missingDerived.annualDerivedCells.splice(grandTotalIndex(missingDerived.annualDerivedCells), 1);
+    mirrors.push(missingDerived);
+
+    for (const mirror of mirrors) {
+      expect(() => buildCashflowExportSourceFromMirror({ projectId: 'proj-a', mirror, yearMonths: ['2026-01'] }))
+        .toThrow(CashflowTemplateMismatchError);
+    }
+  });
+
+  it('writes the sheet Total as the rightmost annual column for every row', async () => {
+    const source = buildCashflowExportSourceFromMirror({
+      projectId: 'proj-a',
+      mirror: completeMirror('proj-a'),
+      yearMonths: ['2026-01'],
+    });
+    const buffer = await buildCashflowExportWorkbookBuffer({
+      variant: 'single-project',
+      yearMonths: ['2026-01'],
+      projects: [{ id: 'proj-a', name: '경기 사업', ...source }],
+    });
+
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(buffer);
+    const expectations = {
+      Projection: { sales: 1_300, direct: 410, totalIn: 1_300, totalOut: 410, balance: 890 },
+      Actual: { sales: 0, direct: 20, totalIn: 0, totalOut: 20, balance: null },
+    };
+    for (const [sheetName, expected] of Object.entries(expectations)) {
+      const worksheet = workbook.getWorksheet(sheetName);
+      const rowNumber = (label) => worksheet.getSheetValues()
+        .findIndex((row) => Array.isArray(row) && row[1] === label);
+      const yearColumn = 7;
+      expect(worksheet.columnCount).toBe(yearColumn);
+      expect(worksheet.getCell(rowNumber('항목'), yearColumn).value).toBe('2026년 연간 합계(1~12월)');
+      expect(worksheet.getCell(rowNumber('매출액(입금)'), yearColumn).value).toBe(expected.sales);
+      expect(worksheet.getCell(rowNumber('직접사업비'), yearColumn).value).toBe(expected.direct);
+      expect(worksheet.getCell(rowNumber('입금 합계'), yearColumn).value).toBe(expected.totalIn);
+      expect(worksheet.getCell(rowNumber('출금 합계'), yearColumn).value).toBe(expected.totalOut);
+      expect(worksheet.getCell(rowNumber('잔액'), yearColumn).value).toBe(expected.balance);
+      // EMPTY 는 빈칸, ZERO 는 0 으로 남는다.
+      expect(worksheet.getCell(rowNumber('팀지원금(입금)'), yearColumn).value).toBeNull();
+    }
+  });
+
+  it('rejects a year Total that belongs to a different year than the exported weeks', async () => {
+    const source = buildCashflowExportSourceFromMirror({
+      projectId: 'proj-a',
+      mirror: completeMirror('proj-a'),
+      yearMonths: ['2026-01'],
+    });
+    await expect(buildCashflowExportWorkbookBuffer({
+      variant: 'single-project',
+      yearMonths: ['2026-01'],
+      projects: [{ id: 'proj-a', name: '경기 사업', ...source, yearTotal: { ...source.yearTotal, year: 2025 } }],
+    })).rejects.toThrow(CashflowTemplateMismatchError);
   });
 
   it('copies declared weekly totals even when they differ from the line amounts', async () => {
@@ -363,8 +478,9 @@ describe('cashflow export bff helper', () => {
 
   it.each([2027, 2032])('maps annual coordinate boundary %i without inference', (year) => {
     const mirror = completeMirror('proj-a');
-    mirror.annualCells = mirror.annualCells.map((cell) => ({ ...cell, year }));
-    mirror.annualDerivedCells = mirror.annualDerivedCells.map((cell) => ({ ...cell, year }));
+    const moveAnnual = (cell) => (cell.periodKind === 'ANNUAL' ? { ...cell, year } : cell);
+    mirror.annualCells = mirror.annualCells.map(moveAnnual);
+    mirror.annualDerivedCells = mirror.annualDerivedCells.map(moveAnnual);
     const yearMonths = Array.from({ length: 12 }, (_, index) => `${year}-${String(index + 1).padStart(2, '0')}`);
     expect(buildCashflowExportSourceFromMirror({ projectId: 'proj-a', mirror, yearMonths }).annual)
       .toMatchObject({ year, projection: { SALES_IN: 1_200 } });
@@ -657,12 +773,11 @@ describe('cashflow export bff helper', () => {
     const salesRow = rows.find((row) => row[0] === '매출액(입금)');
 
     expect(rows.filter((row) => row[0] === '매출액(입금)')).toHaveLength(1);
+    // 월 합계 열은 없다. 주차 열만 이어진다.
     expect(headerRow).toEqual([
       '항목',
       '26-1-1', '26-1-2', '26-1-3', '26-1-4', '26-1-5',
-      '26-1-Total',
       '26-2-1', '26-2-2', '26-2-3', '26-2-4', '26-2-5',
-      '26-2-Total',
     ]);
     expect(rows.some((row) => row[0] === '기간')).toBe(false);
     expect(rows.some((row) => row[0] === 'Projection')).toBe(false);
@@ -670,16 +785,11 @@ describe('cashflow export bff helper', () => {
     expect(salesRow).toEqual([
       '매출액(입금)',
       100, undefined, undefined, undefined, undefined,
-      undefined,
       200,
     ]);
-    const salesRowNumber = worksheet.getSheetValues()
-      .findIndex((row) => Array.isArray(row) && row[1] === '매출액(입금)');
-    expect(worksheet.getCell(salesRowNumber, 7).value).toBeNull();
-    expect(worksheet.getCell(salesRowNumber, 13).value).toBeNull();
   });
 
-  it('applies the MYSCube cashflow worksheet format and monthly Total column', async () => {
+  it('applies the MYSCube cashflow worksheet format without monthly Total columns', async () => {
     const buffer = await buildCashflowExportWorkbookBuffer({
       variant: 'single-project',
       yearMonths: ['2026-01'],
@@ -700,12 +810,12 @@ describe('cashflow export bff helper', () => {
       worksheet.getSheetValues().findIndex((row) => Array.isArray(row) && row[1] === '매출액(입금)'),
     );
 
-    expect(header.values.slice(1)).toEqual(['항목', '26-1-1', '26-1-2', '26-1-3', '26-1-4', '26-1-5', '26-1-Total']);
+    expect(header.values.slice(1)).toEqual(['항목', '26-1-1', '26-1-2', '26-1-3', '26-1-4', '26-1-5']);
     expect(sales.values.slice(1)).toEqual(['매출액(입금)', 1000]);
-    for (let column = 3; column <= 7; column += 1) {
+    for (let column = 3; column <= 6; column += 1) {
       expect(sales.getCell(column).value).toBeNull();
     }
-    expect(sales.getCell(7).value).toBeNull();
+    expect(worksheet.columnCount).toBe(6);
     expect(worksheet.views[0]).toMatchObject({ state: 'frozen', xSplit: 1, ySplit: 2 });
     expect(worksheet.getColumn(1).width).toBeGreaterThanOrEqual(22);
     expect(header.getCell(1).font.bold).toBe(true);
