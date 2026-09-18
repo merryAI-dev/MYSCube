@@ -68,10 +68,17 @@ function deriveProjectRequestMap(requests: ProjectRequest[]): Map<string, Projec
   return map;
 }
 
+export function hasPendingProjectChangeRequest(request?: ProjectRequest | null): boolean {
+  return resolveProjectRequestKind(request) === 'CHANGE' && request?.status === 'PENDING';
+}
+
 export function deriveMigrationAuditStatus(
   project: Project,
   request?: ProjectRequest | null,
 ): MigrationAuditConsoleStatus {
+  // 서버(executive-review)는 대기 중인 수정 요청이 있으면 이전 결재와 무관하게 조직장 결재 대기로 본다.
+  // 여기서 이전 반려를 먼저 보면 승인 버튼이 사라져 결재자가 처리할 방법이 없어진다.
+  if (hasPendingProjectChangeRequest(request)) return 'PENDING';
   if (
     project.executiveReviewStatus === 'PLANNING_AGREED'
     ||
@@ -80,9 +87,8 @@ export function deriveMigrationAuditStatus(
   ) {
     return project.executiveReviewStatus;
   }
-  if (resolveProjectRequestKind(request) === 'CHANGE') {
-    if (request?.status === 'PENDING') return 'PENDING';
-    if (request?.status === 'REJECTED') return 'REVISION_REJECTED';
+  if (resolveProjectRequestKind(request) === 'CHANGE' && request?.status === 'REJECTED') {
+    return 'REVISION_REJECTED';
   }
   // A management-planning return reopens only that stage. The executive seal remains authoritative.
   if (project.executiveReviewStatus === 'APPROVED') return 'APPROVED';
