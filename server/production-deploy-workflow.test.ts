@@ -44,6 +44,15 @@ describe('production deployment decisions', () => {
     expect(workflow.match(/node scripts\/verify-cashflow-settlement-candidate\.mjs/g)).toHaveLength(1);
   });
 
+  it('classifies web and JVM changes against their own deployed baselines', () => {
+    const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
+    const classification = workflow.split('- name: Classify Production release mode')[1]
+      .split('- name: Skip Production for JVM-only release')[0];
+    expect(classification).toContain('classifyCashflowSettlementProductionBaselines(');
+    expect(classification).toContain('jvmDeployedSha ? changedPathsBetween(jvmDeployedSha, head) : null');
+    expect(classification).not.toContain('...changedPathsBetween(jvmDeployedSha, head)');
+  });
+
   it('routes mixed settlement code only through the atomic cutover owner', () => {
     expect(classifyCashflowSettlementProductionRelease([
       'server/jvm-weekly-api/src/main/java/example/Settlement.java',

@@ -687,7 +687,7 @@ describe('ProjectEditorWizard form skeleton contract', () => {
     expect(source).toContain('errors={fieldIssues(\'프로젝트명\')}');
     expect(source).toContain('data-issue-label');
     expect(source).toContain("row.scrollIntoView({ block: 'center', behavior: 'smooth' })");
-    expect(source).toContain('const goToIssue = (issue: { step: ProjectEditorStep; label: string }) =>');
+    expect(source).toContain('const goToIssue = (issue: { step: ProjectEditorStep; label: string; field?: string }) =>');
     expect(source).toContain('onClick={() => goToIssue(issue)}');
   });
 

@@ -94,6 +94,16 @@ export function classifyCashflowSettlementProductionRelease(paths, options = {})
   };
 }
 
+export function classifyCashflowSettlementProductionBaselines(aliasPaths, jvmPaths, options = {}) {
+  const pendingPaths = jvmPaths == null
+    ? aliasPaths
+    : [
+        ...aliasPaths.filter((path) => !path.startsWith(JVM_ROOT)),
+        ...classifyCashflowSettlementReleasePaths(jvmPaths, options).jvm,
+      ];
+  return classifyCashflowSettlementProductionRelease(pendingPaths, options);
+}
+
 export function assertCashflowSettlementReleaseBoundary(paths, options) {
   return classifyCashflowSettlementProductionRelease(paths, options);
 }

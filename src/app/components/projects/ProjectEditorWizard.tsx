@@ -1627,7 +1627,7 @@ export function ProjectEditorWizard({
   });
 
   const submitIssues = useMemo(() => {
-    const issues: Array<{ step: ProjectEditorStep; label: string }> = invalidAmountLabels.map((label) => ({ step: 'financial', label: `${label} 입력 형식` }));
+    const issues: Array<{ step: ProjectEditorStep; label: string; field?: string }> = invalidAmountLabels.map((label) => ({ step: 'financial', label: `${label} 입력 형식` }));
     const normalizedDepartment = normalizeProjectDepartment(draft.department);
     if (!normalizedDepartment || !departmentOptionSet.has(normalizedDepartment)) issues.push({ step: 'basic', label: '담당조직(CIC)' });
     if (!draft.name.trim()) issues.push({ step: 'basic', label: '프로젝트명' });
@@ -1726,7 +1726,7 @@ export function ProjectEditorWizard({
     }
     if (usesRegistrationV2) {
       for (const issue of projectSubmissionCompletenessIssues(draft)) {
-        if (!issues.some(existing => existing.label === issue.label)) issues.push({ step: issue.step, label: issue.message });
+        if (!issues.some(existing => existing.label === issue.label)) issues.push({ step: issue.step, label: issue.message, field: issue.field });
       }
     }
     return issues;
@@ -1762,9 +1762,9 @@ export function ProjectEditorWizard({
     return () => window.clearTimeout(timer);
   }, [pendingIssueFocus, stepIndex]);
 
-  const goToIssue = (issue: { step: ProjectEditorStep; label: string }) => {
+  const goToIssue = (issue: { step: ProjectEditorStep; label: string; field?: string }) => {
     setStepIndex(Math.max(0, STEPS.findIndex((step) => step.id === issue.step)));
-    setPendingIssueFocus(issue.label);
+    setPendingIssueFocus(issue.field || issue.label);
   };
 
   const submitBlockedStatusReason = uploadInProgress
@@ -1815,6 +1815,7 @@ export function ProjectEditorWizard({
   };
 
   const renderBasicStep = () => (
+    <div className={FORM_SECTION_STACK_CLASS}>
     <ProjectFormSection title="기본 정보">
       <ProjectFormRow label="프로젝트 진행 상태" hints={['현재 저장된 상태입니다. 상태 수정은 초안에 보관되며 최종 제출 후 조직장 승인으로 반영됩니다.']}>
         <div className="space-y-2">
@@ -1949,6 +1950,8 @@ export function ProjectEditorWizard({
         />
       </ProjectFormRow>
     </ProjectFormSection>
+    {usesRegistrationV2 ? <ProjectSubmissionResponses step="basic" draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
+    </div>
   );
 
   const renderContractTypeSelect = () => (
@@ -2553,6 +2556,7 @@ export function ProjectEditorWizard({
 
   const renderFinancialStep = () => (
     <div className={FORM_SECTION_STACK_CLASS}>
+      {usesRegistrationV2 ? <ProjectSubmissionResponses step="financial" draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
       {onContractFileUpload || onProjectDocumentFileUpload ? (
         <div>
           {usesRegistrationV2 ? (
@@ -2915,8 +2919,16 @@ export function ProjectEditorWizard({
         orgId={orgId}
         actor={user}
         staffing={draft.staffing}
-        onChange={(next) => update('staffing', next)}
+        submissionResponses={draft.submissionResponses}
+        onChange={(next, responses) => setDraft(prev => {
+          const submissionResponses = { ...(responses || prev.submissionResponses) };
+          for (const [key, value] of Object.entries(next)) {
+            if (value !== prev.staffing[key as keyof typeof next] && (Array.isArray(value) ? value.length > 0 : Boolean(value))) delete submissionResponses[`staffing.${key}`];
+          }
+          return createProjectEditorWizardDraft({ ...prev, staffing: next, submissionResponses });
+        })}
       />
+      {usesRegistrationV2 ? <ProjectSubmissionResponses step="team" draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
       <ProjectFormSection title="담당자와 결재자">
         <ProjectFormRow
           label="최종 보고자 (실무책임자)"
@@ -3397,7 +3409,7 @@ export function ProjectEditorWizard({
 
   const renderReviewStep = () => (
     <div className="space-y-4">
-      {usesRegistrationV2 ? <ProjectSubmissionResponses draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
+      {usesRegistrationV2 ? <ProjectSubmissionResponses step="review" draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
       <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
         <Card className="shadow-none lg:col-start-1 lg:row-start-1 lg:self-start">
           <CardHeader className="pb-2"><CardTitle className={FORM_SECTION_CLASS}>기본 정보</CardTitle></CardHeader>
