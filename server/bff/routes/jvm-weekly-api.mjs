@@ -1904,6 +1904,13 @@ export function buildCashflowManagementChecks({
   projectionOpeningBalance = 0, weeklyYear = null, monthState = null,
 }) {
   const canonicalWeeklyYear = readWeeklyYear(weeklyYear);
+  // allowlist 는 fail-closed 다 - 모르는 상태면 조용히 통과시키지 않고 빈 결과를 낸다.
+  // 이 함수의 호출부(:2032, :2047, :2316)가 넘기는 값은 LIVE_AMENDED 와 LIVE_CURRENT
+  // 뿐이다. FROZEN_COMPLETE 는 JVM 이 실제로 만드는 snapshotCompatibility 값이지만
+  // (WeeklyExpenseController.frozenSnapshotCompatibility), 확정월은 저장된
+  // managementChecks 를 그대로 쓰는 분기로 빠지므로 여기까지 오지 않는다.
+  // MONTH_CELLS 도 현재 생산자가 없다. 둘을 지우면 그 상태가 들어왔을 때 빈 결과가
+  // 아니라 LIVE_* 처럼 처리되므로, 도달하지 않더라도 allowlist 에 남겨 둔다.
   const hasCanonicalSource = canonicalWeeklyYear !== null
     && ['FROZEN_COMPLETE', 'MONTH_CELLS', 'LIVE_CURRENT', 'LIVE_AMENDED'].includes(monthState);
   const weeks = hasCanonicalSource
