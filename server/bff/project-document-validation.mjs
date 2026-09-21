@@ -1,3 +1,5 @@
+import { projectProposalFileFormat } from '../../src/app/platform/project-proposal-file-formats.mjs';
+
 export const PROJECT_REGISTRATION_DOCUMENT_KINDS = Object.freeze([
   'contract',
   'customer_business_registration',
@@ -61,7 +63,7 @@ function hasZipMagic(buffer) {
     || (buffer[2] === 0x07 && buffer[3] === 0x08);
 }
 
-function hasMsgMagic(buffer) {
+function hasOleMagic(buffer) {
   return buffer.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
 }
 
@@ -83,6 +85,13 @@ function isPptx(buffer, mimeType, fileExtension) {
   return mimeType === PPTX_MIME && fileExtension === '.pptx' && hasZipMagic(buffer);
 }
 
+export function projectProposalFileMetadataError({ fileName, mimeType, documentKind }) {
+  if (documentKind !== 'proposal_word_original') return '';
+  const format = projectProposalFileFormat(fileName);
+  return format && [format.mimeType, ...(format.aliases || [])].includes(String(mimeType || '').trim().toLowerCase())
+    ? '' : '제안서 파일은 PDF, DOC/DOCX, HWP/HWPX, PPT/PPTX, XLS/XLSX 형식이어야 합니다. 파일 형식과 확장자를 확인해 주세요.';
+}
+
 export function projectDocumentValidationError({ buffer, mimeType, fileName, documentKind }) {
   const normalizedMime = String(mimeType || '').trim().toLowerCase();
   const fileExtension = extension(fileName);
@@ -91,7 +100,15 @@ export function projectDocumentValidationError({ buffer, mimeType, fileName, doc
     return isPdf(buffer, normalizedMime, fileExtension) ? '' : 'Attachment must be a valid PDF';
   }
   if (documentKind === 'proposal_word_original') {
-    return isDocx(buffer, normalizedMime, fileExtension) ? '' : 'Proposal Word original must be a valid DOCX';
+    const format = projectProposalFileFormat(fileName);
+    const metadataError = projectProposalFileMetadataError({ fileName, mimeType, documentKind });
+    const signatureMatches = format && (
+      (format.signature === 'pdf' && hasPdfMagic(buffer))
+      || (format.signature === 'zip' && hasZipMagic(buffer))
+      || (format.signature === 'ole' && hasOleMagic(buffer))
+      || (format.signature === 'hwp' && hasOleMagic(buffer))
+    );
+    return !metadataError && signatureMatches ? '' : metadataError || '제안서 파일의 내용과 확장자가 일치하지 않습니다. 파일이 정상적으로 열리는지 확인한 뒤 다시 업로드해 주세요.';
   }
   if (documentKind === 'proposal_ppt_original' || documentKind === 'presentation_ppt_original') {
     return isPptx(buffer, normalizedMime, fileExtension) ? '' : 'Presentation original must be a valid PPTX';
@@ -103,7 +120,7 @@ export function projectDocumentValidationError({ buffer, mimeType, fileName, doc
       || (
         fileExtension === '.msg'
         && ['application/vnd.ms-outlook', 'application/x-msg'].includes(normalizedMime)
-        && hasMsgMagic(buffer)
+        && hasOleMagic(buffer)
       );
     return valid ? '' : 'RFP evidence must be a valid PDF, DOCX, EML, or MSG';
   }

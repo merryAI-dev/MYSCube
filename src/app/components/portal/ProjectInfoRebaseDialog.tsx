@@ -58,7 +58,7 @@ const FIELD_LABELS: Record<string, string> = {
   quoteDocument: '산출내역서(견적서)',
   quoteSubmissionDeferred: '산출내역서 이후 제출',
   proposalDocument: '제안서',
-  proposalWordOriginalDocument: '제안서(워드)',
+  proposalWordOriginalDocument: '제안서 파일',
   proposalPptOriginalDocument: '제안서 원본(PPT)',
   presentationPptOriginalDocument: '발표자료 원본(PPT)',
   rfpRequestEvidenceDocument: 'RFP',

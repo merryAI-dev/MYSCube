@@ -1,3 +1,4 @@
+import { PROJECT_PROPOSAL_FILE_FORMATS } from '../../../src/app/platform/project-proposal-file-formats.mjs';
 import { completeProjectSubmissionFixture } from '../../../src/app/platform/project-submission-completeness.fixture.mjs';
 import { createProjectEditorDraft } from '../../../src/app/platform/project-editor';
 import { serializeProjectEditorPrivateDraft } from '../../../src/app/platform/project-editor-draft-persistence';
@@ -2096,7 +2097,7 @@ describe('project information private drafts', () => {
     });
   });
 
-  it('maps a new original-document kind into the canonical change request field', async () => {
+  it.each(PROJECT_PROPOSAL_FILE_FORMATS)('maps proposal $extension into the same canonical change request field', async format => {
     const storage = {
       uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
         path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
@@ -2109,14 +2110,14 @@ describe('project information private drafts', () => {
     };
     const h = harness({ storageService: storage });
     await openedDraft(h);
-    const docx = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]);
+    const docx = format.signature === 'pdf' ? Buffer.from('%PDF-1.7') : format.signature === 'zip' ? Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]) : Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
     await h.service.addAttachment({
       ...h.base,
       idempotencyKey: 'proposal-word-upload',
       expectedDraftRevision: 0,
       documentKind: 'proposal_word_original',
-      fileName: 'proposal.docx',
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      fileName: `proposal${format.extension}`,
+      mimeType: format.mimeType,
       fileSize: docx.byteLength,
       buffer: docx,
     });
@@ -2284,8 +2285,9 @@ describe('project information private drafts', () => {
       documentKind: 'tax_invoice',
     }));
   });
-  it('issues a signed upload URL and accepts a storagePath attachment through the same contract', async () => {
-    const readIncomingUpload = vi.fn(async () => ({ buffer: VALID_PDF }));
+  it.each([{ extension: '.pdf', mimeType: 'application/pdf', signature: 'pdf', documentKind: 'contract' }, ...PROJECT_PROPOSAL_FILE_FORMATS.map(format => ({ ...format, documentKind: 'proposal_word_original' }))])('issues and binds $documentKind $extension through the same contract', async format => {
+    const content = format.signature === 'pdf' ? VALID_PDF : format.signature === 'zip' ? Buffer.from([0x50, 0x4b, 0x03, 0x04]) : Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+    const readIncomingUpload = vi.fn(async () => ({ buffer: content }));
     const deleteIncomingUpload = vi.fn(async () => undefined);
     const storageService = {
       uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
@@ -2310,10 +2312,10 @@ describe('project information private drafts', () => {
     const issued = await h.service.issueAttachmentUploadUrl({
       ...h.base,
       idempotencyKey: 'upload-url-direct',
-      documentKind: 'contract',
-      fileName: 'big-contract.pdf',
-      mimeType: 'application/pdf',
-      fileSize: VALID_PDF.byteLength,
+      documentKind: format.documentKind,
+      fileName: `proposal${format.extension}`,
+      mimeType: format.mimeType,
+      fileSize: content.byteLength,
     });
     expect(issued.status).toBe(200);
     expect(issued.body.uploadUrl).toBe('https://storage.example/signed-put');
@@ -2324,14 +2326,14 @@ describe('project information private drafts', () => {
       ...h.base,
       idempotencyKey: 'upload-direct',
       expectedDraftRevision: 0,
-      documentKind: 'contract',
-      fileName: 'big-contract.pdf',
-      mimeType: 'application/pdf',
-      fileSize: VALID_PDF.byteLength,
+      documentKind: format.documentKind,
+      fileName: `proposal${format.extension}`,
+      mimeType: format.mimeType,
+      fileSize: content.byteLength,
       storagePath,
     });
     expect(uploaded.status).toBe(200);
-    expect(uploaded.body.attachment.size).toBe(VALID_PDF.byteLength);
+    expect(uploaded.body.attachment.size).toBe(content.byteLength);
     expect(readIncomingUpload).toHaveBeenCalledWith(expect.objectContaining({ path: storagePath }));
     expect(deleteIncomingUpload).toHaveBeenCalledWith(expect.objectContaining({ path: storagePath }));
   });

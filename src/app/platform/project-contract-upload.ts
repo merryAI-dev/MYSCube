@@ -2,6 +2,7 @@ import { getDownloadURL, ref, uploadBytesResumable, type UploadTaskSnapshot } fr
 import { getStorageInstance } from '../lib/firebase';
 import type { FileAttachment } from '../data/types';
 import type { ActorLike } from '../lib/platform-bff-client';
+import { PROJECT_PROPOSAL_FILE_ACCEPT, projectProposalFileFormat } from './project-proposal-file-formats.mjs';
 
 export type ProjectRequestDocumentKind =
   | 'contract'
@@ -30,7 +31,7 @@ const PDF_ONLY_KINDS = new Set<ProjectRequestDocumentKind>([
 ]);
 
 export function getProjectDocumentUploadAccept(kind: ProjectRequestDocumentKind): string {
-  if (kind === 'proposal_word_original') return `${DOCX_MIME},.docx`;
+  if (kind === 'proposal_word_original') return PROJECT_PROPOSAL_FILE_ACCEPT;
   if (kind === 'proposal_ppt_original' || kind === 'presentation_ppt_original') return `${PPTX_MIME},.pptx`;
   if (kind === 'rfp_request_evidence') {
     return `application/pdf,${DOCX_MIME},message/rfc822,application/vnd.ms-outlook,application/x-msg,.pdf,.docx,.eml,.msg`;
@@ -41,7 +42,7 @@ export function getProjectDocumentUploadAccept(kind: ProjectRequestDocumentKind)
 export function isProjectDocumentFileAllowed(kind: ProjectRequestDocumentKind, file: Pick<File, 'name'>): boolean {
   const name = file.name.trim().toLowerCase();
   if (PDF_ONLY_KINDS.has(kind)) return name.endsWith('.pdf');
-  if (kind === 'proposal_word_original') return name.endsWith('.docx');
+  if (kind === 'proposal_word_original') return projectProposalFileFormat(name) !== null;
   if (kind === 'proposal_ppt_original' || kind === 'presentation_ppt_original') return name.endsWith('.pptx');
   return ['.pdf', '.docx', '.eml', '.msg'].some((suffix) => name.endsWith(suffix));
 }
@@ -51,6 +52,10 @@ export function resolveProjectDocumentMimeType(
   file: Pick<File, 'name' | 'type'>,
 ): string {
   const name = file.name.trim().toLowerCase();
+  if (kind === 'proposal_word_original') {
+    const format = projectProposalFileFormat(name);
+    if (format) return format.mimeType;
+  }
   if (name.endsWith('.docx')) return DOCX_MIME;
   if (name.endsWith('.pptx')) return PPTX_MIME;
   if (name.endsWith('.eml')) return 'message/rfc822';

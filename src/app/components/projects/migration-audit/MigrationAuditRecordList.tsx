@@ -4,6 +4,7 @@ import { getMigrationAuditStatusLabel } from '../../../platform/project-migratio
 import { getManagementPlanningReview } from '../../../platform/project-management-planning-review';
 import { Card, CardContent } from '../../ui/card';
 import { Button } from '../../ui/button';
+import { ProjectSubmissionFormatBadge } from './ProjectSubmissionFormatBadge';
 
 interface MigrationAuditRecordListProps {
   records: MigrationAuditConsoleRecord[];
@@ -66,6 +67,7 @@ export function MigrationAuditRecordList({ records, onOpen, reviewStage = 'execu
                   <td className="px-4 py-3 text-[12px] text-slate-700">{record.cic}</td>
                   <td className="max-w-[330px] px-4 py-3">
                     <p className="truncate text-[13px] font-semibold text-slate-950">{record.title}</p>
+                    <ProjectSubmissionFormatBadge request={record.request} />
                     <p className="mt-1 truncate text-[11px] text-slate-500">{record.clientOrg || '계약 대상 미지정'}</p>
                   </td>
                   <td className="px-4 py-3 text-[12px] text-slate-700">{record.managerName || '-'}</td>

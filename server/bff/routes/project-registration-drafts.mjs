@@ -32,6 +32,7 @@ import { buildProjectRegistrationCanonicalDocuments } from './projects.mjs';
 import {
   PROJECT_REGISTRATION_DOCUMENT_KINDS,
   projectDocumentValidationError,
+  projectProposalFileMetadataError,
 } from '../project-document-validation.mjs';
 
 const RESOURCE_TYPE = 'project-registration';
@@ -1315,6 +1316,8 @@ export function createProjectRegistrationDraftService({
       }
       const fileName = requiredText(input?.fileName, 'fileName');
       const mimeType = requiredText(input?.mimeType, 'mimeType');
+      const metadataError = projectProposalFileMetadataError({ fileName, mimeType, documentKind });
+      if (metadataError) throw createHttpError(422, metadataError, 'draft_attachment_invalid');
       await db.runTransaction(async (tx) => {
         const nowDate = clockDate(now);
         const { draft } = await ownedDraft(tx, current);

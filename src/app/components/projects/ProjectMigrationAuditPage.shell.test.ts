@@ -91,7 +91,7 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(documentSource).toContain('data-testid="migration-review-document-slots"');
     expect(documentSource).toContain("number: 1");
     expect(documentSource).toContain("number: 7");
-    expect(documentSource).toContain("number: 4, label: '제안서 Word 원본'");
+    expect(documentSource).toContain("number: 4, label: '제안서 파일'");
     expect(documentSource).toContain("number: 7, label: 'RFP/요청 메일 증빙'");
     expect(documentSource).toContain('customerBusinessRegistrationDocument');
     expect(documentSource).toContain('proposalWordOriginalDocument');
@@ -112,7 +112,7 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(previewSource).toContain('<iframe');
     expect(previewSource).toContain('새 탭');
     expect(documentSource).toContain('제출 원문을 안전하게 불러오는 중입니다.');
-    expect(documentSource).toContain('PDF 미리보기가 비어 있으면 새 탭에서 원문을 확인하고');
+    expect(documentSource).toContain('PDF 미리보기가 표시되지 않거나 다른 형식의 파일이면');
   });
 
   it('does not fill an omitted submitted document from the old project', () => {

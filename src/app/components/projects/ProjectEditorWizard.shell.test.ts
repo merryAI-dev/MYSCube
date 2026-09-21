@@ -44,7 +44,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).toContain('계약서를 써니(사업지원팀)에게 제출했습니다.');
     expect(source).toContain("label: '고객사 사업자등록증 *'");
     expect(source).toContain("label: '산출내역서(견적서) *'");
-    expect(source).toContain("label: '제안서(워드)'");
+    expect(source).toContain("label: '제안서 파일'");
     // 이 칸이 받는 건 proposal_ppt_original 이고 입력값은 구글드라이브 링크다.
     // 내용(PPT)을 앞에 두고 매체는 괄호로 덧붙여 6번과 같은 말로 읽히게 한다.
     expect(source).toContain("label: '제안서 PPT 링크(구글드라이브 링크)'");
@@ -462,7 +462,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).not.toContain('특이사항 (메모란)');
     expect(source).not.toContain('lg:sticky lg:bottom-4');
     expect(source).not.toContain('발주처');
-    expect(source).toMatch(/number: 4,\s+label: '제안서\(워드\)'/);
+    expect(source).toMatch(/number: 4,\s+label: '제안서 파일'/);
     // 5번 칸이 받는 건 proposal_ppt_original 이다. 내용이 앞, 매체가 괄호다.
     expect(source).toMatch(/number: 5,\s+label: '제안서 PPT 링크\(구글드라이브 링크\)'/);
     expect(source).toMatch(/number: 6,\s+label: '발표자료\(구글드라이브 링크\)'/);

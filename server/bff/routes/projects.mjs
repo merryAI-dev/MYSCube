@@ -1,4 +1,5 @@
 import { projectSubmissionCompletenessIssues } from '../../../src/app/platform/project-submission-completeness.mjs';
+import { projectSettlementConsistencyIssue } from '../../../src/app/platform/project-settlement-consistency.mjs';
 import { buildProjectReviewReadiness, mapProjectReviewReadinessError } from '../project-review-readiness.mjs';
 import { projectReviewVersionToken, assertProjectReviewVersion } from '../project-review-version.mjs';
 import { PROJECT_SUBMISSION_FIELDS, projectSubmissionOwnedPatch } from '../../../src/app/platform/project-submission-fields.mjs';
@@ -1804,6 +1805,14 @@ function normalizeSettlementType(value) {
   return ['TYPE1', 'TYPE2', 'TYPE3', 'TYPE4', 'TYPE5'].includes(value) ? value : 'NONE';
 }
 
+function assertProjectSettlementConsistency(payload, currentProject = {}) {
+  const issue = projectSettlementConsistencyIssue(payload, currentProject);
+  if (!issue) return;
+  const error = createHttpError(422, `${issue.detail} ${issue.action}`, issue.code);
+  error.reviewIssues = [issue];
+  throw error;
+}
+
 function normalizeAccountType(value) {
   return value === 'DEDICATED' || value === 'OPERATING' || value === 'OTHER' ? value : 'NONE';
 }
@@ -1845,7 +1854,7 @@ export function buildProjectRequestPayloadFromProject(project, existingPayload =
   const basis = normalizeBasis(pickText('basis'));
   const settlementDetailsEnabled = Number(pickValue('registrationRequirementsVersion')) === 2
     ? basis !== 'NONE'
-    : settlementType !== 'NONE';
+    : settlementType !== 'NONE' || basis !== 'NONE';
 
   return {
     ...existingRequestPayload,
@@ -1880,7 +1889,7 @@ export function buildProjectRequestPayloadFromProject(project, existingPayload =
     contractEndUndecided: pickValue('contractEndUndecided') === true,
     contractType: normalizeProjectContractType(pickText('contractType')),
     settlementType,
-    basis: Number(pickValue('registrationRequirementsVersion')) === 2 || settlementDetailsEnabled ? basis : 'NONE',
+    basis,
     accountType: !settlementDetailsEnabled ? 'NONE' : normalizeAccountType(pickText('accountType')),
     settlementSystem: !settlementDetailsEnabled ? 'NONE' : normalizeSettlementSystemCode(pickText('settlementSystem')),
     settlementSystemOther: settlementDetailsEnabled && normalizeSettlementSystemCode(pickText('settlementSystem')) === 'OTHER'
@@ -2007,7 +2016,7 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
     : undefined;
   const settlementType = normalizeSettlementType(readOptionalText(payload.settlementType));
   const basis = normalizeBasis(readOptionalText(payload.basis));
-  const settlementDetailsEnabled = registrationVersion === 2 ? basis !== 'NONE' : settlementType !== 'NONE';
+  const settlementDetailsEnabled = registrationVersion === 2 ? basis !== 'NONE' : settlementType !== 'NONE' || basis !== 'NONE';
   const historicalFinancialWeeks = new Map((Array.isArray(currentProject.financialYears) ? currentProject.financialYears : [])
     .map((row) => [row?.year, readOptionalText(row?.finalPaymentExpectedWeek)]));
   const financialYears = normalizeRegistrationFinancialYears(payload.financialYears).map((row) => ({
@@ -2055,7 +2064,7 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
       : currentProject.contractEndUndecided,
     contractType: normalizeProjectContractType(payload.contractType),
     settlementType,
-    basis: registrationVersion === 2 || settlementDetailsEnabled ? basis : 'NONE',
+    basis,
     accountType: !settlementDetailsEnabled ? 'NONE' : normalizeAccountType(readOptionalText(payload.accountType)),
     settlementSystem: !settlementDetailsEnabled ? 'NONE' : normalizeSettlementSystemCode(payload.settlementSystem),
     settlementSystemOther: settlementDetailsEnabled && normalizeSettlementSystemCode(payload.settlementSystem) === 'OTHER'
@@ -2117,6 +2126,7 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
 }
 
 export function buildProjectPatchFromChangeRequestPayload(payload = {}, currentProject = {}) {
+  assertProjectSettlementConsistency(payload, currentProject);
   return projectSubmissionOwnedPatch(payload, buildProjectPatchFromChangeRequestPayloadInternal(payload, currentProject));
 }
 
@@ -2170,7 +2180,7 @@ const PROJECT_INFO_CHANGE_LABELS = {
   contractDocument: '계약서 PDF',
   quoteDocument: '견적서 PDF',
   proposalDocument: '제안서 PDF',
-  proposalWordOriginalDocument: '제안서 Word 원본',
+  proposalWordOriginalDocument: '제안서 파일',
   proposalPptOriginalDocument: '제안서 PPT 원본',
   presentationPptOriginalDocument: '발표자료 PPT 원본',
   rfpRequestEvidenceDocument: 'RFP 또는 요청 메일 증빙',
@@ -2312,6 +2322,7 @@ export function buildProjectInfoChangeSubmission({
   reviewComment,
 }) {
   const trustedStoredDocuments = trustedStoredChangeRequestDocuments(previousRequest);
+  assertProjectSettlementConsistency(payload, project);
   assertRegistrationPayload(payload, {
     participationSheetLinkRequired: registrationRequirementsVersion(payload.registrationRequirementsVersion) === 2
       && (
@@ -4040,6 +4051,7 @@ export function mountProjectRoutes(app, {
           throw createHttpError(403, 'Only the designated executive approver can review this project', 'executive_approver_mismatch');
         }
         if (parsed.reviewStatus === 'APPROVED') {
+          assertProjectSettlementConsistency(requestPayload || currentProject, currentProject);
           assertProjectRequestAttachmentsPublished(reviewRequest, tenantId);
           if (isProjectChangeRequest(reviewRequest)) {
             for (const field of PROJECT_INFO_DOCUMENT_FIELDS) {
