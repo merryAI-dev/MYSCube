@@ -1,3 +1,4 @@
+import { projectReviewVersionToken } from '../project-review-version.mjs';
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
@@ -157,6 +158,13 @@ function changeSubmission(payload: Record<string, unknown>, project: Record<stri
 }
 
 describe('project route helpers', () => {
+  it('preserves a canonical final report for an older change snapshot that omitted the field, while honoring explicit removal', () => {
+    const finalReportDocument = { path: 'orgs/mysc/project-registration-documents/project-a/final-report.pdf', name: '결과보고서.pdf' };
+    const project = { ...registrationV2Canonical().project, finalReportDocument };
+    expect({ ...project, ...buildProjectPatchFromChangeRequestPayload({}, project) }.finalReportDocument).toEqual(finalReportDocument);
+    expect(buildProjectPatchFromChangeRequestPayload({}, project)).not.toHaveProperty('finalReportDocument');
+    expect(buildProjectPatchFromChangeRequestPayload({ finalReportDocument: null }, project).finalReportDocument).toBeNull();
+  });
   it('does not restore canonical contract analysis when a private replacement omits analysis', () => {
     const canonical = registrationV2Canonical(
       registrationV2Payload({ contractAnalysis: { summary: 'canonical contract A analysis' } }),
@@ -1195,7 +1203,8 @@ describe('project route helpers', () => {
       { id: 'existing-project', groupwareName: '기존 그룹웨어 등록명' },
     );
 
-    expect(patch.groupwareName).toBe('기존 그룹웨어 등록명');
+    expect(patch).not.toHaveProperty('groupwareName');
+    expect({ groupwareName: '기존 그룹웨어 등록명', ...patch }.groupwareName).toBe('기존 그룹웨어 등록명');
   });
 
   it.each(['pm', 'viewer'])('requires the private draft flow when %s creates a project directly', async (actorRole) => {
@@ -2220,6 +2229,7 @@ describe('project route helpers', () => {
     });
 
     const response = await request(app).post('/api/v1/projects/p001/executive-review').send({
+      expectedReviewToken: projectReviewVersionToken(project, projectRequest),
       requestId: 'pr001',
       reviewStatus: 'APPROVED',
       reviewerName: '조작된 이름',
@@ -2392,6 +2402,7 @@ describe('project route helpers', () => {
     });
 
     const response = await request(app).post('/api/v1/projects/p001/executive-review').send({
+      expectedReviewToken: projectReviewVersionToken(project, projectRequest),
       requestId,
       reviewStatus: 'APPROVED',
     });
@@ -2477,6 +2488,7 @@ describe('project route helpers', () => {
     });
 
     const response = await request(app).post('/api/v1/projects/p001/executive-review').send({
+      expectedReviewToken: projectReviewVersionToken(project, projectRequest),
       requestId: 'registration-p001',
       reviewStatus: 'APPROVED',
     });
@@ -2541,6 +2553,7 @@ describe('project route helpers', () => {
     });
 
     const response = await request(app).post('/api/v1/projects/p001/executive-review').send({
+      expectedReviewToken: projectReviewVersionToken(project, projectRequest),
       requestId: 'pr001',
       reviewStatus: 'APPROVED',
       reviewerName: '관리자',
@@ -2619,6 +2632,7 @@ describe('project route helpers', () => {
     });
 
     const response = await request(app).post('/api/v1/projects/p001/executive-review').send({
+      expectedReviewToken: projectReviewVersionToken(project, projectRequest),
       requestId: 'pr001',
       reviewStatus: 'APPROVED',
     });
@@ -2700,6 +2714,7 @@ describe('project route helpers', () => {
     });
 
     const response = await request(app).post('/api/v1/projects/p001/executive-review').send({
+      expectedReviewToken: projectReviewVersionToken(project, projectRequest),
       requestId: 'pr001',
       reviewStatus: 'APPROVED',
     });
@@ -2766,6 +2781,7 @@ describe('project route helpers', () => {
     });
 
     const response = await request(app).post('/api/v1/projects/p001/executive-review').send({
+      expectedReviewToken: projectReviewVersionToken(project, projectRequest),
       requestId: 'pr001',
       reviewStatus: 'APPROVED',
       reviewerName: '조작된 이름',

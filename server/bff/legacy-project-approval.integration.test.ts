@@ -1,3 +1,4 @@
+import { projectReviewVersionToken } from './project-review-version.mjs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createBffApp } from './app.mjs';
@@ -35,8 +36,9 @@ suite('legacy project approval persistence (emulator only)', () => {
   afterAll(async () => { await db.terminate(); });
 
   it('persists approval once, preserves the original reference and serves it after approval', async () => {
+    const expectedReviewToken = projectReviewVersionToken((await projectRef.get()).data(), (await requestRef.get()).data());
     const submit = () => api.post('/api/v1/projects/p001/executive-review').set(headers()).set('idempotency-key', 'legacy-approved-once')
-      .send({ requestId: 'change-p001', reviewStatus: 'APPROVED' });
+      .send({ requestId: 'change-p001', reviewStatus: 'APPROVED', expectedReviewToken });
     const first = await submit();
     expect(first.status, JSON.stringify(first.body)).toBe(200);
     const replay = await submit();
@@ -56,14 +58,14 @@ suite('legacy project approval persistence (emulator only)', () => {
     const beforeProject = (await projectRef.get()).data();
     const beforeRequest = (await requestRef.get()).data();
     const denied = await api.post('/api/v1/projects/p001/executive-review').set(headers('other-head')).set('idempotency-key', 'legacy-denied')
-      .send({ requestId: 'change-p001', reviewStatus: 'APPROVED' });
+      .send({ requestId: 'change-p001', reviewStatus: 'APPROVED', expectedReviewToken: projectReviewVersionToken((await projectRef.get()).data(), (await requestRef.get()).data()) });
     expect(denied.status).toBe(403);
     expect((await projectRef.get()).data()).toEqual(beforeProject);
     expect((await requestRef.get()).data()).toEqual(beforeRequest);
     await requestRef.update({ 'proposedSnapshot.contractDocument.path': `orgs/${tenantId}/project-request-contracts/other/other.pdf` });
     const forged = (await requestRef.get()).data();
     const rejected = await api.post('/api/v1/projects/p001/executive-review').set(headers()).set('idempotency-key', 'legacy-forged')
-      .send({ requestId: 'change-p001', reviewStatus: 'APPROVED' });
+      .send({ requestId: 'change-p001', reviewStatus: 'APPROVED', expectedReviewToken: projectReviewVersionToken((await projectRef.get()).data(), (await requestRef.get()).data()) });
     expect(rejected.status).toBe(422);
     expect((await projectRef.get()).data()).toEqual(beforeProject);
     expect((await requestRef.get()).data()).toEqual(forged);

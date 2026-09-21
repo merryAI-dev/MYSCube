@@ -971,6 +971,24 @@ describe('참여율 월별 저장 경로', () => {
 });
 
 describe('실제 투입인력 (staffing)', () => {
+  it('기타 빈 행과 입력 중 역할명은 임시저장 재열기까지 보존하고 제출에서만 정리한다', async () => {
+    const { serializeProjectEditorPrivateDraft } = await import('./project-editor-draft-persistence');
+    let draft = createProjectEditorDraft();
+    draft = createProjectEditorDraft({ ...draft, staffing: { ...draft.staffing,
+      others: [{ role: '', slot: null }, { role: '외부 ', slot: null }] } });
+    expect(draft.staffing.others).toHaveLength(2);
+    expect(draft.staffing.others[1].role).toBe('외부 ');
+    const reopened = createProjectEditorDraft(serializeProjectEditorPrivateDraft(draft));
+    expect(reopened.staffing.others).toEqual(draft.staffing.others);
+    reopened.staffing.others[0] = { role: '멘토', slot: { personId: 'p-9', name: '박하늘', nickname: '하늘' } };
+    reopened.staffing.others[1].role += '강사';
+    const submitted = buildProjectRequestPayloadFromDraft(reopened);
+    expect(submitted.staffing?.others).toEqual(reopened.staffing.others);
+    reopened.staffing.others[0].role = '';
+    expect(createProjectEditorDraft(reopened).staffing.others).toHaveLength(2);
+    expect(buildProjectRequestPayloadFromDraft(reopened).staffing?.others).toHaveLength(1);
+  });
+
   it('personId 없는 슬롯은 미정(null)으로 정규화하고 운영매니저는 채워진 슬롯만 남긴다', async () => {
     const { normalizeProjectStaffing } = await import('./project-editor');
     const staffing = normalizeProjectStaffing({
@@ -1033,6 +1051,21 @@ describe('실제 투입인력 (staffing)', () => {
     expect(staffing.others).toHaveLength(PROJECT_STAFFING_OTHERS_MAX);
     for (const item of staffing.others) {
       expect(item.role.length).toBe(PROJECT_STAFFING_ROLE_MAX_LENGTH);
+    }
+  });
+});
+
+describe('final report submission mapping', () => {
+  it('preserves the uploaded reference and an explicit removal in registration and edit submissions', () => {
+    const draft = createProjectEditorDraft(baseProject);
+    const document = { name: '최종보고.pdf', path: 'orgs/mysc/project-info-drafts/pm-1/draft-1/final_report/report.pdf',
+      size: 120, contentType: 'application/pdf', uploadedAt: '2026-09-21T00:00:00Z', downloadURL: '' };
+    for (const attachment of [document, null]) {
+      draft.finalReportDocument = attachment;
+      expect(buildProjectRequestPayloadFromDraft(draft).finalReportDocument).toEqual(attachment);
+      expect(buildProjectEditorProjectPatch(draft, { baseProject, mode: 'portal-edit',
+        actorId: 'pm-1', actorName: 'PM', now: '2026-09-21T00:00:00Z' }).finalReportDocument).toEqual(attachment);
+      expect(draft.finalReportDocument).toEqual(attachment);
     }
   });
 });

@@ -1016,6 +1016,7 @@ export interface ProjectRequestPayload {
 }
 
 export interface ProjectRequest {
+  snapshotSchemaVersion?: 1;
   id: string;
   tenantId?: string;
   requestKind?: ProjectRequestKind;

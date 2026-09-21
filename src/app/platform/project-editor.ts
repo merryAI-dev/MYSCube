@@ -1,3 +1,4 @@
+import { assertProjectSubmissionFields } from './project-submission-fields.mjs';
 import { hasMultiYearProjectContract, projectContractEndYear } from './project-input-policy.mjs';
 import type {
   AccountType,
@@ -616,7 +617,7 @@ export function createProjectEditorDraft(overrides: Partial<ProjectEditorDraft> 
       overrides.laborTransferPlan ?? DEFAULT_DRAFT.laborTransferPlan,
     ),
     teamMembersDetailed: normalizeProjectTeamMembers(overrides.teamMembersDetailed),
-    staffing: normalizeProjectStaffing(overrides.staffing ?? DEFAULT_DRAFT.staffing),
+    staffing: normalizeProjectStaffing(overrides.staffing ?? DEFAULT_DRAFT.staffing, { preserveDraftRows: true }),
     registrationRequirementsVersion: version,
     contractEndUndecided: overrides.contractEndUndecided === true && !text(overrides.contractEnd),
     financialYears: projectFinancialYears(
@@ -811,16 +812,20 @@ export function normalizeStaffingRoleName(value: unknown): string {
   return text(value).replace(/\s+/g, ' ').slice(0, PROJECT_STAFFING_ROLE_MAX_LENGTH);
 }
 
-export function normalizeProjectStaffing(value: unknown): ProjectStaffing {
+export function normalizeProjectStaffing(value: unknown, options: { preserveDraftRows?: boolean } = {}): ProjectStaffing {
   const source = (value && typeof value === 'object' ? value : {}) as Partial<ProjectStaffing>;
   const operators = (Array.isArray(source.operators) ? source.operators : [])
     .map((slot) => normalizeStaffingSlot(slot))
     .filter((slot): slot is ProjectStaffingSlot => slot !== null);
-  // 역할명이 비면 저장하지 않는다 - 사람만 있고 역할이 없는 줄은 읽는 쪽에서 뜻을 알 수 없다.
+  // 편집 중의 빈 행은 유지하고, 제출 시에만 역할명 없는 행을 제외한다.
   const others: ProjectStaffingOtherRole[] = [];
   for (const item of Array.isArray(source.others) ? source.others : []) {
-    const role = normalizeStaffingRoleName((item as ProjectStaffingOtherRole | undefined)?.role);
-    if (!role) continue;
+    if (!item || typeof item !== 'object') continue;
+    const rawRole = (item as ProjectStaffingOtherRole).role;
+    const role = options.preserveDraftRows
+      ? String(rawRole ?? '').slice(0, PROJECT_STAFFING_ROLE_MAX_LENGTH)
+      : normalizeStaffingRoleName(rawRole);
+    if (!role && !options.preserveDraftRows) continue;
     others.push({ role, slot: normalizeStaffingSlot((item as ProjectStaffingOtherRole).slot) });
     if (others.length >= PROJECT_STAFFING_OTHERS_MAX) break;
   }
@@ -852,7 +857,7 @@ export function formatProjectStaffingSummary(value: unknown): string {
 export function buildProjectRequestPayloadFromDraft(draftInput: ProjectEditorDraft): ProjectRequestPayload {
   const draft = createProjectEditorDraft(draftInput);
   const teamMembersDetailed = projectTeamMembersForWrite(draft.teamMembersDetailed);
-  return {
+  return assertProjectSubmissionFields({
     name: text(draft.name),
     officialContractName: text(draft.officialContractName),
     type: normalizeProjectType(draft.type),
@@ -924,8 +929,9 @@ export function buildProjectRequestPayloadFromDraft(draftInput: ProjectEditorDra
     performanceCertificateDocument: draft.performanceCertificateDocument,
     taxInvoiceDocument: draft.taxInvoiceDocument,
     finalSettlementReportDocument: draft.finalSettlementReportDocument,
+    finalReportDocument: draft.finalReportDocument,
     contractAnalysis: draft.contractAnalysis,
-  };
+  });
 }
 
 export function buildProjectEditorReviewChanges(
@@ -1042,6 +1048,7 @@ export function buildProjectEditorProjectPatch(
     performanceCertificateDocument: draft.performanceCertificateDocument,
     taxInvoiceDocument: draft.taxInvoiceDocument,
     finalSettlementReportDocument: draft.finalSettlementReportDocument,
+    finalReportDocument: draft.finalReportDocument,
     contractAnalysis: draft.contractAnalysis,
     department: normalizeProjectDepartment(draft.department),
     cic: resolveProjectCic({ department: draft.department }),

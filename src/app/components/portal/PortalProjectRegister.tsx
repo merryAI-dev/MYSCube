@@ -1,3 +1,4 @@
+import { serializeProjectEditorPrivateDraft } from '../../platform/project-editor-draft-persistence';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { CheckCircle2, Clock3, LockKeyhole, Pencil, Send } from 'lucide-react';
@@ -22,7 +23,6 @@ import {
 import { analyzeProjectRequestContractViaBff, type ActorLike } from '../../lib/platform-bff-client';
 import { openEditSession, type EditSession } from '../../platform/edit-session';
 import {
-  buildProjectRequestPayloadFromDraft,
   createProjectEditorDraft,
   type ProjectEditorDraft,
 } from '../../platform/project-editor';
@@ -152,7 +152,7 @@ function RegistrationEditor({
     withOwnership(async (ownership) => {
       const saved = await draftClient.save(record.draftId, ownership, {
         expectedDraftRevision: revisionRef.current,
-        payload: buildProjectRequestPayloadFromDraft(draft) as unknown as Record<string, unknown>,
+        payload: serializeProjectEditorPrivateDraft(draft),
         stepIndex,
       });
       revisionRef.current = saved.draft.draftRevision;
@@ -429,7 +429,7 @@ export function PortalProjectRegister() {
             createDraftPromiseRef.current = {
               ownerKey,
               promise: client.create({
-                payload: buildProjectRequestPayloadFromDraft(initial) as unknown as Record<string, unknown>,
+                payload: serializeProjectEditorPrivateDraft(initial),
                 stepIndex: 0,
               }),
             };

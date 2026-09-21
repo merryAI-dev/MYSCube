@@ -371,6 +371,9 @@ export interface ProjectRequestRegistrationNotificationResult {
 }
 
 export interface ProjectExecutiveReviewPayload {
+  expectedReviewToken?: string;
+  expectedRequestVersion?: number;
+  expectedProjectVersion?: number;
   requestId?: string;
   reviewStatus: ProjectExecutiveReviewStatus;
   reviewComment?: string;
@@ -528,6 +531,9 @@ function normalizeProjectExecutiveReviewPayload(
   const reviewerName = normalizeOptionalText(payload.reviewerName);
   const projectCode = normalizeOptionalText(payload.projectCode);
   return {
+    expectedReviewToken: payload.expectedReviewToken,
+    expectedRequestVersion: payload.expectedRequestVersion,
+    expectedProjectVersion: payload.expectedProjectVersion,
     ...(requestId ? { requestId } : {}),
     reviewStatus: payload.reviewStatus,
     ...(reviewComment ? { reviewComment } : {}),
@@ -3173,6 +3179,21 @@ export async function notifyProjectRequestRegistrationViaBff(params: {
       retries: 0,
     },
   );
+  return response.data;
+}
+
+export interface ProjectReviewReadiness {
+  legacy: boolean;
+  issues: Array<{ code: string; severity: 'warning' | 'blocking'; title: string; detail: string; action: string; field?: string }>;
+}
+
+export async function fetchProjectReviewDocumentViaBff(params: {
+  tenantId: string; actor: ActorLike; projectId: string; requestId?: string; client?: PlatformApiClientLike;
+}): Promise<{ project: Project; request: ProjectRequest | null; reviewToken: string; readiness?: ProjectReviewReadiness }> {
+  const response = await resolveClient(params.client).get<{ project: Project; request: ProjectRequest | null; reviewToken: string; readiness?: ProjectReviewReadiness }>(
+    `/api/v1/projects/${encodeURIComponent(params.projectId)}/review-document${params.requestId ? `?requestId=${encodeURIComponent(params.requestId)}` : ''}`, {
+      tenantId: params.tenantId, actor: toRequestActor(params.actor),
+    });
   return response.data;
 }
 

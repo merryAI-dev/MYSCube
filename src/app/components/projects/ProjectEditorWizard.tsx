@@ -1,5 +1,7 @@
+import { submissionAmount, submissionPaymentPlan, submissionAdvanceRatio, submissionRate, submissionContractWarning } from '../../platform/project-submission-display';
+import { FinancialYearsTable } from './migration-audit/FinancialYearsTable';
 import { ProjectAmountInput } from './ProjectAmountInput';
-import { hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings, projectContractEndYear } from '../../platform/project-input-policy.mjs';
+import { projectEffectivePaymentPlan, projectFinancialYearsWithPaymentPlan, hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings, projectContractEndYear } from '../../platform/project-input-policy.mjs';
 import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import {
   ArrowLeft,
@@ -565,9 +567,9 @@ function mergeContractAnalysisIntoDraft(
   });
 }
 
-function formatPaymentPlanAmount(amount: number, contractAmount: number) {
-  if (!Number.isFinite(amount)) return '-';
-  const amountLabel = formatStoredProjectAmount(amount, true);
+function formatPaymentPlanAmount(amount: number | undefined, contractAmount: number, currency = 'KRW') {
+  if (typeof amount !== 'number' || !Number.isFinite(amount)) return '-';
+  const amountLabel = submissionAmount(amount, currency);
   if (!Number.isFinite(contractAmount) || contractAmount <= 0) return amountLabel;
   return `${amountLabel} (${((amount / contractAmount) * 100).toFixed(0)}%)`;
 }
@@ -1135,13 +1137,7 @@ export function ProjectEditorWizard({
   const settlementDetailsEnabled = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const requiresSettlementConfirmations = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const showProjectCheckout = draft.status === 'COMPLETED' || draft.status === 'COMPLETED_PENDING_PAYMENT';
-  const effectivePaymentPlan = hasMultiYearContract
-    ? draft.financialYears.reduce((total, row) => ({
-      contract: total.contract + (row.paymentPlan?.contract || 0),
-      interim: total.interim + (row.paymentPlan?.interim || 0),
-      final: total.final + (row.paymentPlan?.final || 0),
-    }), { contract: 0, interim: 0, final: 0 })
-    : draft.paymentPlan;
+  const effectivePaymentPlan = projectEffectivePaymentPlan(draft) ?? { contract: 0, interim: 0, final: 0 };
   const paymentPlanTotal = effectivePaymentPlan.contract + effectivePaymentPlan.interim + effectivePaymentPlan.final;
   const advanceInterimRatio = draft.contractAmount > 0
     ? (effectivePaymentPlan.contract + effectivePaymentPlan.interim) / draft.contractAmount
@@ -3101,7 +3097,7 @@ export function ProjectEditorWizard({
       ['interim', '중도금', financialYear ? `${financialYear.year}년 중도금 예상 입금 시점` : '중도금 입금 예상월'],
       ['final', '잔금', financialYear ? `${financialYear.year}년 잔금 예상 입금 시점` : '잔금 입금 예상월'],
     ] as const;
-    const paymentBase = financialYear?.contractAmount || draft.contractAmount;
+    const paymentBase = financialYear ? financialYear.contractAmount : draft.contractAmount;
     const paymentSum = paymentPlan.contract + paymentPlan.interim + paymentPlan.final;
     const koreanPaymentSum = formatKoreanAmountUnit(paymentSum);
     const advanceRatio = financialYear ? yearAdvanceInterimRatio : advanceInterimRatio;
@@ -3135,7 +3131,7 @@ export function ProjectEditorWizard({
                     />
                   </td>
                   <td className={cn('whitespace-nowrap px-3 py-2 text-right text-slate-600', FORM_NUMERIC_VALUE_CLASS)}>
-                    {formatPaymentPlanAmount(paymentPlan[field], paymentBase)}
+                    {formatPaymentPlanAmount(paymentPlan[field], paymentBase, draft.currency)}
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1">
@@ -3325,7 +3321,7 @@ export function ProjectEditorWizard({
     )}>
       <span className={cn('shrink-0', FORM_LABEL_CLASS)}>{label}</span>
       <div className={cn(
-        'whitespace-pre-line font-medium text-slate-900',
+        'min-w-0 whitespace-pre-line break-words [overflow-wrap:anywhere] font-medium text-slate-900',
         FORM_NUMERIC_VALUE_CLASS,
         stacked ? 'mt-2 w-full text-left' : 'text-right',
       )}>
@@ -3361,13 +3357,14 @@ export function ProjectEditorWizard({
           <CardHeader className="pb-2"><CardTitle className={FORM_SECTION_CLASS}>계약/재무</CardTitle></CardHeader>
           <CardContent>
             <ReviewRow label="기간" value={`${draft.contractStart || '-'} ~ ${draft.contractEndUndecided ? '종료 기간 없음' : draft.contractEnd || '-'}`} />
+            {submissionContractWarning(draft) ? <p role="status" className={`mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-amber-900 ${FORM_HINT_CLASS}`}>{submissionContractWarning(draft)}</p> : null}
             <ReviewRow label="통화" value={PROJECT_CURRENCY_LABELS[draft.currency]} />
-            <ReviewRow label="계약금액" value={formatStoredProjectAmount(draft.contractAmount, financialInputFlags.contractAmount)} />
-            <ReviewRow label="총매출부가세" value={formatStoredProjectAmount(draft.salesVatAmount, financialInputFlags.salesVatAmount)} />
-            <ReviewRow label="총수익" value={formatStoredProjectAmount(draft.totalRevenueAmount, financialInputFlags.totalRevenueAmount)} />
-            <ReviewRow label="총실비(원가)" value={formatStoredProjectAmount(draft.totalActualCost, financialInputFlags.totalActualCost)} />
-            <ReviewRow label="총지원금" value={formatStoredProjectAmount(draft.supportAmount, financialInputFlags.supportAmount)} />
-            <ReviewRow label="총수익률" value={profitRateLabel ? `${profitRateLabel}%` : '-'} />
+            <ReviewRow label="계약금액" value={submissionAmount(draft.contractAmount, draft.currency, financialInputFlags.contractAmount)} />
+            <ReviewRow label="총매출부가세" value={submissionAmount(draft.salesVatAmount, draft.currency, financialInputFlags.salesVatAmount)} />
+            <ReviewRow label="총수익" value={submissionAmount(draft.totalRevenueAmount, draft.currency, financialInputFlags.totalRevenueAmount)} />
+            <ReviewRow label="총실비(원가)" value={submissionAmount(draft.totalActualCost, draft.currency, financialInputFlags.totalActualCost)} />
+            <ReviewRow label="총지원금" value={submissionAmount(draft.supportAmount, draft.currency, financialInputFlags.supportAmount)} />
+            <ReviewRow label="총수익률" value={submissionRate(draft.totalRevenueAmount, draft.contractAmount, financialInputFlags)} />
             <ReviewRow label={usesRegistrationV2 ? '사업유형' : '정산 유형'} value={SETTLEMENT_TYPE_LABELS[draft.settlementType]} />
             {usesRegistrationV2 && hasMultiYearContract ? (
               <ReviewRow label="정산 기준" value={REGISTRATION_V2_BASIS_LABELS[draft.basis as Exclude<Basis, '기타'>]} />
@@ -3386,9 +3383,8 @@ export function ProjectEditorWizard({
               <>
                 <ReviewRow
                   label="연도별 재무"
-                  value={draft.financialYears.map((row) => (
-                    `${row.year}년 계약 ${fmtKRW(row.contractAmount)}원 · 매출VAT ${fmtKRW(row.salesVatAmount)}원 · 총수익 ${fmtKRW(row.totalRevenueAmount)}원 · 총실비 ${fmtKRW(row.totalActualCost)}원 · 지원금 ${fmtKRW(row.supportAmount)}원 · 선금 ${fmtKRW(row.paymentPlan?.contract || 0)}원 (${row.paymentExpectedMonths?.contract || '-'}) · 중도금 ${fmtKRW(row.paymentPlan?.interim || 0)}원 (${row.paymentExpectedMonths?.interim || '-'}) · 잔금 ${fmtKRW(row.paymentPlan?.final || 0)}원 (${row.paymentExpectedMonths?.final || '-'}) · 정산 ${row.isSettled ? '완료' : '미완료'}${row.advanceInterimBelow70Reason ? ` · 70% 미만 사유 ${row.advanceInterimBelow70Reason}` : ''} · 수익률 ${(row.profitRate * 100).toFixed(2)}%${row.confirmed ? ' · 확인' : ' · 미확인'}`
-                  )).join('\n')}
+                  stacked
+                  value={<FinancialYearsTable years={projectFinancialYearsWithPaymentPlan(draft)} currency={draft.currency} />}
                 />
                 <ReviewRow
                   label="등록 제출서류 7종"
@@ -3430,13 +3426,14 @@ export function ProjectEditorWizard({
         <Card className="shadow-none lg:col-start-1 lg:row-start-3 lg:self-start">
           <CardHeader className="pb-2"><CardTitle className={FORM_SECTION_CLASS}>계약/재무 입금 계획</CardTitle></CardHeader>
           <CardContent>
-            <ReviewRow label="선금/계약금" value={formatPaymentPlanAmount(effectivePaymentPlan.contract, draft.contractAmount)} />
-            {!hasMultiYearContract ? <ReviewRow label="선금/계약금 예상월" value={draft.paymentExpectedMonths.contract} /> : null}
-            <ReviewRow label="중도금" value={formatPaymentPlanAmount(effectivePaymentPlan.interim, draft.contractAmount)} />
-            {!hasMultiYearContract ? <ReviewRow label="중도금 예상월" value={draft.paymentExpectedMonths.interim} /> : null}
-            <ReviewRow label="잔금" value={formatPaymentPlanAmount(effectivePaymentPlan.final, draft.contractAmount)} />
-            {!hasMultiYearContract ? <ReviewRow label="잔금 예상월" value={draft.paymentExpectedMonths.final} /> : null}
-            <ReviewRow label="선금+중도금 비율" value={advanceInterimRatio === null ? '-' : `${(advanceInterimRatio * 100).toFixed(1)}%`} />
+            {submissionPaymentPlan(draft).legacy ? <ReviewRow label="입금 계획 범위" value="전체 계약기간 계획(연도별 배분 미기록)" /> : null}
+            <ReviewRow label="선금/계약금" value={formatPaymentPlanAmount(submissionPaymentPlan(draft).plan?.contract, draft.contractAmount, draft.currency)} />
+            {!hasMultiYearContract || submissionPaymentPlan(draft).legacy ? <ReviewRow label="선금/계약금 예상월" value={draft.paymentExpectedMonths.contract} /> : null}
+            <ReviewRow label="중도금" value={formatPaymentPlanAmount(submissionPaymentPlan(draft).plan?.interim, draft.contractAmount, draft.currency)} />
+            {!hasMultiYearContract || submissionPaymentPlan(draft).legacy ? <ReviewRow label="중도금 예상월" value={draft.paymentExpectedMonths.interim} /> : null}
+            <ReviewRow label="잔금" value={formatPaymentPlanAmount(submissionPaymentPlan(draft).plan?.final, draft.contractAmount, draft.currency)} />
+            {!hasMultiYearContract || submissionPaymentPlan(draft).legacy ? <ReviewRow label="잔금 예상월" value={draft.paymentExpectedMonths.final} /> : null}
+            <ReviewRow label="선금+중도금 비율" value={submissionAdvanceRatio(draft)} />
             {requiresAdvanceInterimReason ? <ReviewRow label="70% 미만 사유" value={draft.advanceInterimBelow70Reason} /> : null}
             <ReviewRow label="기타 메모" value={draft.paymentPlanDesc} />
             {showProjectCheckout ? (

@@ -290,9 +290,11 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
       storedAttachments.set(document.path, { ...document });
     }
     await db.doc(`orgs/${tenantId}/members/executive-a`).set({ uid: 'executive-a', role: 'pm', status: 'ACTIVE' });
+    const reviewDocument = await api.get('/api/v1/projects/project-a/review-document?requestId=change-project-a').set(actorHeaders('executive-a'));
+    expect(reviewDocument.status, JSON.stringify(reviewDocument.body)).toBe(200);
     const approved = await api.post('/api/v1/projects/project-a/executive-review')
       .set({ ...actorHeaders('executive-a'), 'idempotency-key': 'policy-approve' })
-      .send({ requestId: 'change-project-a', reviewStatus: 'APPROVED' });
+      .send({ requestId: 'change-project-a', reviewStatus: 'APPROVED', expectedReviewToken: reviewDocument.body.reviewToken });
     expect(approved.status, JSON.stringify(approved.body)).toBe(200);
     const canonical = (await db.doc(`orgs/${tenantId}/projects/project-a`).get()).data()!;
     expect(canonical.teamMembersDetailed[0].monthlyRates).toEqual(payload.teamMembersDetailed[0].monthlyRates);

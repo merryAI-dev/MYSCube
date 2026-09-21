@@ -1,17 +1,15 @@
 import { Fragment } from 'react';
+import { submissionAmount, submissionRate, submissionConfirmation } from '../../../platform/project-submission-display';
 import type { Project } from '../../../data/types';
 
 type FinancialYearRow = NonNullable<Project['financialYears']>[number];
-
-function money(value?: number) {
-  return Number.isFinite(value) ? `${Number(value).toLocaleString('ko-KR')}원` : '-';
-}
 
 /**
  * 결재 문서의 연도별 계약/재무. 한 줄 문자열로 이으면 다년도 사업은 읽을 수 없어
  * 표 안의 표로 그린다. 입금 예정월은 금액 아래 작은 글씨로 붙인다.
  */
-export function FinancialYearsTable({ years }: { years?: FinancialYearRow[] }) {
+export function FinancialYearsTable({ years, currency = 'KRW' }: { years?: FinancialYearRow[]; currency?: string }) {
+  const money = (value?: number) => submissionAmount(value, currency);
   const rows = Array.isArray(years) ? years : [];
   if (rows.length === 0) return <span className="text-slate-400">-</span>;
   const paymentCell = (amount?: number, month?: string) => (
@@ -21,19 +19,23 @@ export function FinancialYearsTable({ years }: { years?: FinancialYearRow[] }) {
     </div>
   );
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full min-w-[720px] border-collapse text-[11px] leading-5">
+    <div className="min-w-0">
+      <p className="mb-1 text-[10px] text-slate-500">표를 좌우로 이동하면 수익률과 재무 확인 상태까지 볼 수 있습니다.</p>
+      <div className="overflow-x-auto">
+      <table className="w-full min-w-[960px] border-collapse text-[11px] leading-5">
         <thead>
           <tr className="border-b border-slate-400 bg-slate-50 text-slate-700">
             <th className="border-r border-slate-300 px-2 py-1.5 text-left font-semibold">연도</th>
             <th className="border-r border-slate-300 px-2 py-1.5 text-right font-semibold">계약금액</th>
-            <th className="border-r border-slate-300 px-2 py-1.5 text-right font-semibold">총수익</th>
+            <th className="border-r border-slate-300 px-2 py-1.5 text-right font-semibold">매출부가세</th>
+            <th className="px-2 py-1.5 text-right">총수익</th>
             <th className="border-r border-slate-300 px-2 py-1.5 text-right font-semibold">총실비(원가)</th>
             <th className="border-r border-slate-300 px-2 py-1.5 text-right font-semibold">지원금</th>
             <th className="border-r border-slate-300 px-2 py-1.5 text-right font-semibold">선금</th>
             <th className="border-r border-slate-300 px-2 py-1.5 text-right font-semibold">중도금</th>
             <th className="border-r border-slate-300 px-2 py-1.5 text-right font-semibold">잔금</th>
             <th className="px-2 py-1.5 text-center font-semibold">정산</th>
+            <th className="px-2 py-1.5">수익률</th><th className="px-2 py-1.5">재무 확인</th>
           </tr>
         </thead>
         <tbody>
@@ -44,17 +46,21 @@ export function FinancialYearsTable({ years }: { years?: FinancialYearRow[] }) {
                   {row.year}년
                 </th>
                 <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.contractAmount)}</td>
-                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.totalRevenueAmount)}</td>
+                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.salesVatAmount)}</td>
+                <td className="px-2 py-1.5 text-right">{money(row.totalRevenueAmount)}</td>
                 <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.totalActualCost)}</td>
                 <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.supportAmount)}</td>
                 <td className="border-r border-slate-300 px-2 py-1.5">{paymentCell(row.paymentPlan?.contract, row.paymentExpectedMonths?.contract)}</td>
                 <td className="border-r border-slate-300 px-2 py-1.5">{paymentCell(row.paymentPlan?.interim, row.paymentExpectedMonths?.interim)}</td>
                 <td className="border-r border-slate-300 px-2 py-1.5">{paymentCell(row.paymentPlan?.final, row.paymentExpectedMonths?.final)}</td>
-                <td className="px-2 py-1.5 text-center">{row.isSettled ? '완료' : '미완료'}</td>
+                <td className="px-2 py-1.5 text-center">{submissionConfirmation(row.isSettled, '완료', '미완료')}</td>
+                <td className="px-2 py-1.5">{submissionRate(row.totalRevenueAmount, row.contractAmount)}</td>
+                <td className="px-2 py-1.5">{submissionConfirmation(row.confirmed)}</td>
               </tr>
+              {row.finalPaymentExpectedWeek ? <tr className="border-b border-slate-200"><td colSpan={12} className="px-2 py-1.5 text-[10px] text-slate-600">{row.year}년 잔금 입금 예정 주차 · {row.finalPaymentExpectedWeek}</td></tr> : null}
               {String(row.advanceInterimBelow70Reason || '').trim() ? (
                 <tr className="border-b border-slate-200 last:border-b-0">
-                  <td colSpan={9} className="bg-amber-50/60 px-2 py-1.5 text-[10px] text-amber-900">
+                  <td colSpan={12} className="bg-amber-50/60 px-2 py-1.5 text-[10px] text-amber-900">
                     {row.year}년 선금·중도금 70% 미만 사유 · {row.advanceInterimBelow70Reason}
                   </td>
                 </tr>
@@ -63,6 +69,7 @@ export function FinancialYearsTable({ years }: { years?: FinancialYearRow[] }) {
           ))}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

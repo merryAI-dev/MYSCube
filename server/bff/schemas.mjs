@@ -160,6 +160,9 @@ export const projectRestoreSchema = z.object({
 }).strict();
 
 export const projectExecutiveReviewSchema = z.object({
+  expectedReviewToken: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  expectedRequestVersion: z.number().int().positive().optional(),
+  expectedProjectVersion: z.number().int().positive().optional(),
   requestId: NON_EMPTY_STRING.optional(),
   reviewStatus: z.enum(['PLANNING_AGREED', 'APPROVED', 'REVISION_REJECTED', 'DUPLICATE_DISCARDED']),
   reviewComment: z.string().trim().max(2000).optional(),

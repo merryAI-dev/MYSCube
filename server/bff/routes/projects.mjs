@@ -1,3 +1,6 @@
+import { buildProjectReviewReadiness, mapProjectReviewReadinessError } from '../project-review-readiness.mjs';
+import { projectReviewVersionToken, assertProjectReviewVersion } from '../project-review-version.mjs';
+import { PROJECT_SUBMISSION_FIELDS, projectSubmissionOwnedPatch } from '../../../src/app/platform/project-submission-fields.mjs';
 import { assertExistingProjectAttachment, isLegacyProjectAttachmentPath } from '../existing-project-attachment.mjs';
 import { hasMultiYearProjectContract, projectPaymentIssues, projectContractEndYear } from '../../../src/app/platform/project-input-policy.mjs';
 import express from 'express';
@@ -1137,6 +1140,7 @@ function registrationPrivateDocuments(attachmentRefs) {
     performanceCertificateDocument: latest.get('performance_certificate') || null,
     taxInvoiceDocument: latest.get('tax_invoice') || null,
     finalSettlementReportDocument: latest.get('final_settlement_report') || null,
+    finalReportDocument: latest.get('final_report') || null,
   };
 }
 
@@ -1419,6 +1423,7 @@ const PROJECT_INFO_DOCUMENT_FIELDS = [
     'performanceCertificateDocument',
     'taxInvoiceDocument',
     'finalSettlementReportDocument',
+    'finalReportDocument',
   ]),
 ];
 
@@ -1630,7 +1635,7 @@ export function buildProjectRegistrationCanonicalDocuments({
     phase: normalizeProjectPhase(readOptionalText(payload.phase)),
     description: readOptionalText(payload.description),
     clientOrg: readOptionalText(payload.clientOrg),
-    businessManagementGoogleFolderLink: readOptionalText(payload.businessManagementGoogleFolderLink) || undefined,
+    businessManagementGoogleFolderLink: Object.hasOwn(payload, 'businessManagementGoogleFolderLink') ? readOptionalText(payload.businessManagementGoogleFolderLink) : undefined,
     participationSheetLink: readOptionalText(payload.participationSheetLink) || undefined,
     staffing: normalizeProjectStaffingForWrite(payload.staffing),
     department: normalizeProjectOrganizationLabel(payload.department),
@@ -1659,7 +1664,7 @@ export function buildProjectRegistrationCanonicalDocuments({
     settlementSystem: !settlementDetailsEnabled ? 'NONE' : normalizeSettlementSystemCode(payload.settlementSystem),
     settlementSystemOther: settlementDetailsEnabled && normalizeSettlementSystemCode(payload.settlementSystem) === 'OTHER'
       ? normalizeSettlementSystemOther(payload.settlementSystemOther)
-      : undefined,
+      : (Object.hasOwn(payload, 'settlementSystemOther') ? '' : undefined),
     laborSettlementBasis: !settlementDetailsEnabled
       ? 'NONE'
       : normalizeLaborSettlementBasis(payload.laborSettlementBasis),
@@ -1741,6 +1746,7 @@ export function buildProjectRegistrationCanonicalDocuments({
     sourceDraftId,
     tenantId,
     requestKind: 'REGISTRATION',
+    snapshotSchemaVersion: 1,
     requestVersion: 1,
     status: 'PENDING',
     reviewOutcome: null,
@@ -1834,7 +1840,7 @@ export function buildProjectRequestPayloadFromProject(project, existingPayload =
     checkout: pickValue('checkout'),
     contractStart: pickText('contractStart'),
     contractEnd: pickText('contractEnd'),
-    contractEndUndecided: pickValue('contractEndUndecided') === true ? true : undefined,
+    contractEndUndecided: pickValue('contractEndUndecided') === true,
     contractType: normalizeProjectContractType(pickText('contractType')),
     settlementType,
     basis: Number(pickValue('registrationRequirementsVersion')) === 2 || settlementDetailsEnabled ? basis : 'NONE',
@@ -1842,7 +1848,7 @@ export function buildProjectRequestPayloadFromProject(project, existingPayload =
     settlementSystem: !settlementDetailsEnabled ? 'NONE' : normalizeSettlementSystemCode(pickText('settlementSystem')),
     settlementSystemOther: settlementDetailsEnabled && normalizeSettlementSystemCode(pickText('settlementSystem')) === 'OTHER'
       ? normalizeSettlementSystemOther(pickText('settlementSystemOther'))
-      : undefined,
+      : '',
     laborSettlementBasis: !settlementDetailsEnabled
       ? 'NONE'
       : normalizeLaborSettlementBasis(pickText('laborSettlementBasis')),
@@ -1897,6 +1903,7 @@ export function buildProjectRequestPayloadFromProject(project, existingPayload =
     finalSettlementReportDocument: project?.finalSettlementReportDocument
       ?? existingPayload.finalSettlementReportDocument
       ?? null,
+    finalReportDocument: project?.finalReportDocument ?? existingPayload.finalReportDocument ?? null,
     contractAnalysis: project?.contractAnalysis ?? existingPayload.contractAnalysis ?? null,
   };
 }
@@ -1978,7 +1985,7 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
     phase: normalizeProjectPhase(readOptionalText(payload.phase) || currentProject.phase),
     description: readOptionalText(payload.description),
     clientOrg: readOptionalText(payload.clientOrg),
-    businessManagementGoogleFolderLink: readOptionalText(payload.businessManagementGoogleFolderLink) || undefined,
+    businessManagementGoogleFolderLink: Object.hasOwn(payload, 'businessManagementGoogleFolderLink') ? readOptionalText(payload.businessManagementGoogleFolderLink) : undefined,
     participationSheetLink: readOptionalText(payload.participationSheetLink) || undefined,
     staffing: Object.hasOwn(payload, 'staffing')
       ? normalizeProjectStaffingForWrite(payload.staffing)
@@ -2005,8 +2012,8 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
     contractStart: readOptionalText(payload.contractStart),
     contractEnd: readOptionalText(payload.contractEnd),
     contractEndUndecided: Object.hasOwn(payload, 'contractEndUndecided')
-      ? (payload.contractEndUndecided === true ? true : undefined)
-      : (currentProject.contractEndUndecided === true ? true : undefined),
+      ? payload.contractEndUndecided === true
+      : currentProject.contractEndUndecided,
     contractType: normalizeProjectContractType(payload.contractType),
     settlementType,
     basis: registrationVersion === 2 || settlementDetailsEnabled ? basis : 'NONE',
@@ -2014,7 +2021,7 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
     settlementSystem: !settlementDetailsEnabled ? 'NONE' : normalizeSettlementSystemCode(payload.settlementSystem),
     settlementSystemOther: settlementDetailsEnabled && normalizeSettlementSystemCode(payload.settlementSystem) === 'OTHER'
       ? normalizeSettlementSystemOther(payload.settlementSystemOther)
-      : undefined,
+      : (Object.hasOwn(payload, 'settlementSystemOther') ? '' : undefined),
     laborSettlementBasis: !settlementDetailsEnabled
       ? 'NONE'
       : normalizeLaborSettlementBasis(payload.laborSettlementBasis),
@@ -2060,6 +2067,9 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
     performanceCertificateDocument: payload.performanceCertificateDocument || null,
     taxInvoiceDocument: payload.taxInvoiceDocument || null,
     finalSettlementReportDocument: payload.finalSettlementReportDocument || null,
+    finalReportDocument: Object.hasOwn(payload, 'finalReportDocument')
+      ? payload.finalReportDocument || null
+      : currentProject.finalReportDocument || null,
     contractAnalysis: payload.contractAnalysis || null,
     budgetCurrentYear: Number.isFinite(Number(payload.contractAmount))
       ? Math.max(0, Math.round(Number(payload.contractAmount)))
@@ -2068,7 +2078,7 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
 }
 
 export function buildProjectPatchFromChangeRequestPayload(payload = {}, currentProject = {}) {
-  return buildProjectPatchFromChangeRequestPayloadInternal(payload, currentProject);
+  return projectSubmissionOwnedPatch(payload, buildProjectPatchFromChangeRequestPayloadInternal(payload, currentProject));
 }
 
 const PROJECT_INFO_CHANGE_LABELS = {
@@ -2133,28 +2143,10 @@ const PROJECT_INFO_CHANGE_LABELS = {
   performanceCertificateDocument: '수행확인서 PDF',
   taxInvoiceDocument: '세금계산서 PDF',
   finalSettlementReportDocument: '최종 정산보고서 PDF',
+  finalReportDocument: '최종 결과보고서 PDF',
 };
 
-const PROJECT_INFO_PAYLOAD_FIELDS = [
-  'name', 'officialContractName', 'type', 'status', 'phase', 'description', 'clientOrg', 'businessManagementGoogleFolderLink',
-  'participationSheetLink',
-  'department', 'groupwareName', 'currency', 'contractAmount', 'salesVatAmount',
-  'totalRevenueAmount', 'totalActualCost', 'supportAmount', 'financialInputFlags', 'registrationRequirementsVersion',
-  'financialYears', 'registrationConfirmations', 'registrationOptionalDocumentNotes', 'checkout', 'contractStart', 'contractEnd', 'contractEndUndecided',
-  'contractType', 'settlementType', 'basis', 'accountType', 'settlementSystem', 'settlementSystemOther',
-  'laborSettlementBasis', 'laborTransferPlan', 'fundInputMode', 'settlementSheetPolicy', 'paymentPlan',
-  'paymentExpectedMonths', 'finalPaymentExpectedWeek', 'interestRefundPolicy', 'quoteSubmissionDeferred',
-  'advanceInterimBelow70Reason', 'paymentPlanDesc', 'settlementGuide',
-  'finalPaymentNote', 'projectPurpose', 'registeredById', 'registeredByName',
-  'registeredByEmail', 'executiveApproverId', 'executiveApproverName', 'executiveApproverEmail',
-  'managerId', 'managerName', 'teamName', 'teamMembers',
-  'teamMembersDetailed', 'staffing', 'participantCondition', 'note', 'contractDocument',
-  'customerBusinessRegistrationDocument', 'quoteDocument', 'proposalDocument',
-  'proposalWordOriginalDocument', 'proposalPptOriginalDocument',
-  'presentationPptOriginalDocument', 'rfpRequestEvidenceDocument',
-  'performanceCertificateDocument', 'taxInvoiceDocument', 'finalSettlementReportDocument',
-  'contractAnalysis',
-];
+const PROJECT_INFO_PAYLOAD_FIELDS = PROJECT_SUBMISSION_FIELDS;
 
 function projectInfoChangeValue(value) {
   if (value === null || value === undefined || value === '') return '-';
@@ -2236,6 +2228,7 @@ function projectInfoPayloadWithDocuments(
     performanceCertificateDocument: effectiveDocument('performanceCertificateDocument'),
     taxInvoiceDocument: effectiveDocument('taxInvoiceDocument'),
     finalSettlementReportDocument: effectiveDocument('finalSettlementReportDocument'),
+    finalReportDocument: effectiveDocument('finalReportDocument'),
     contractAnalysis: contractAnalysis && typeof contractAnalysis === 'object'
       ? contractAnalysis
       : null,
@@ -2332,6 +2325,7 @@ export function buildProjectInfoChangeSubmission({
     id: projectRequestId,
     tenantId,
     requestKind: 'CHANGE',
+    snapshotSchemaVersion: 1,
     targetProjectId: project.id,
     approvedProjectId: project.id,
     baseProjectVersion: currentVersion,
@@ -2401,34 +2395,34 @@ async function assertProjectChangeRequestAttachmentsStored(request, tenantId, st
     .map((field) => ({ field, document: payload?.[field] }))
     .filter(({ document }) => readOptionalText(document?.path));
   if (documents.length === 0) return;
-  try {
-    if (!projectId || typeof storageService?.inspectProjectRegistrationAttachment !== 'function') {
-      throw new Error('Project attachment storage inspection is not configured');
-    }
-    await Promise.all(documents.map(async ({ field, document }) => {
+  const failures = [];
+  await Promise.all(documents.map(async ({ field, document }) => {
+    try {
+      if (!projectId || typeof storageService?.inspectProjectRegistrationAttachment !== 'function') {
+        throw new Error('Storage inspection unavailable');
+      }
       const legacy = isLegacyProjectAttachmentPath(document.path, tenantId);
       const input = { tenantId, projectId, path: document.path, attachment: document, existingAttachment: project?.[field] };
       if (legacy) assertExistingProjectAttachment(input);
       const stored = legacy
         ? await storageService.inspectExistingProjectAttachment(input)
-        : await storageService.inspectProjectRegistrationAttachment({
-        tenantId,
-        projectId,
-        path: document.path,
-      });
-      if (
-        readOptionalText(stored?.path) !== readOptionalText(document?.path)
+        : await storageService.inspectProjectRegistrationAttachment({ tenantId, projectId, path: document.path });
+      if (readOptionalText(stored?.path) !== readOptionalText(document?.path)
         || readOptionalText(stored?.attachmentId) !== readOptionalText(document?.attachmentId)
         || Number(stored?.size) !== Number(document?.size)
-        || readOptionalText(stored?.contentType) !== readOptionalText(document?.contentType)
-      ) throw new Error('Project attachment metadata does not match');
-    }));
-  } catch {
-    throw createHttpError(
-      422,
-      '제출 파일을 확인할 수 없습니다. 다시 첨부해 주세요.',
-      'project_attachment_unavailable',
-    );
+        || readOptionalText(stored?.contentType) !== readOptionalText(document?.contentType)) {
+        throw new Error('Attachment metadata mismatch');
+      }
+    } catch {
+      const issue = mapProjectReviewReadinessError({ code: 'project_attachment_unavailable' });
+      failures.push({ ...issue, field, title: `${PROJECT_INFO_CHANGE_LABELS[field] || '첨부파일'} 확인 필요`,
+        detail: `${PROJECT_INFO_CHANGE_LABELS[field] || '첨부파일'}: ${issue.detail}` });
+    }
+  }));
+  if (failures.length) {
+    const error = createHttpError(422, '제출 파일을 확인할 수 없습니다. 승인 전 확인사항에서 해당 서류와 조치 방법을 확인해 주세요.', 'project_attachment_unavailable');
+    error.reviewIssues = failures.sort((a, b) => a.field.localeCompare(b.field));
+    throw error;
   }
 }
 
@@ -3317,6 +3311,7 @@ export function mountProjectRoutes(app, {
       performance_certificate: 'performanceCertificateDocument',
       tax_invoice: 'taxInvoiceDocument',
       final_settlement_report: 'finalSettlementReportDocument',
+      final_report: 'finalReportDocument',
     }[documentKind];
     if (!requestId || requestId.includes('/') || !field) {
       throw createHttpError(400, 'Project request attachment is invalid', 'project_request_attachment_invalid');
@@ -3881,6 +3876,63 @@ export function mountProjectRoutes(app, {
     };
   }));
 
+  app.get('/api/v1/projects/:projectId/review-document', asyncHandler(async (req, res) => {
+    const { tenantId, actorId } = req.context;
+    const projectId = readOptionalText(req.params.projectId);
+    const requestId = readOptionalText(req.query.requestId);
+    if (!projectId || projectId.includes('/') || requestId.includes('/')) {
+      throw createHttpError(400, 'Project review lookup is invalid', 'project_request_query_invalid');
+    }
+    const member = await readProjectAttachmentMember({ db, tenantId, actorId });
+    const result = await db.runTransaction(async (tx) => {
+      const projectSnap = await tx.get(db.doc(`orgs/${tenantId}/projects/${projectId}`));
+      if (!projectSnap.exists) throw createHttpError(404, 'Project not found', 'not_found');
+      const project = projectSnap.data() || {};
+      let request = null;
+      if (requestId) {
+        const snapshots = await Promise.all(['project_requests', 'projectRequests'].map((collection) =>
+          tx.get(db.doc(`orgs/${tenantId}/${collection}/${requestId}`))));
+        const present = snapshots.filter((snapshot) => snapshot.exists);
+        if (present.length > 1) throw createHttpError(409, 'Duplicate project request collections', 'request_collection_conflict');
+        if (!present.length) throw createHttpError(404, 'Project request not found', 'not_found');
+        request = { ...present[0].data(), id: requestId };
+        assertProjectRequestMatchesProject(request, projectId);
+      }
+      const requestApproverId = readOptionalText(resolveProjectRequestPayloadForReview(request)?.executiveApproverId);
+      if (!hasProjectRequestAccess({ actorId, member, projectId, project }) && requestApproverId !== actorId) {
+        throw createHttpError(403, 'Project request access denied', 'forbidden');
+      }
+      return { project: { ...project, id: projectId }, request,
+        reviewToken: projectReviewVersionToken(project, request) };
+    });
+    const readiness = buildProjectReviewReadiness(result.request, result.project);
+    const isPending = result.request ? result.request.status === 'PENDING' : result.project.executiveReviewStatus === 'PENDING';
+    if (isPending) {
+      const checks = [
+        () => assertProjectRequestAttachmentsPublished(result.request, tenantId),
+        () => assertProjectChangeRequestAttachmentsStored(result.request, tenantId, projectRequestContractStorageService, result.project),
+        () => {
+          if (!isProjectChangeRequest(result.request)) return;
+          const actualVersion = Number.isInteger(result.project.version) && result.project.version > 0 ? result.project.version : 1;
+          if (result.request.baseProjectVersion !== actualVersion || result.request.targetProjectVersion !== actualVersion + 1) {
+            throw createHttpError(409, 'Project version changed', 'canonical_version_conflict');
+          }
+          buildProjectPatchFromChangeRequestPayload(resolveProjectRequestPayloadForReview(result.request), result.project);
+        },
+      ];
+      for (const check of checks) {
+        try { await check(); } catch (error) {
+          const issues = error.reviewIssues || [mapProjectReviewReadinessError(error)];
+          for (const issue of issues) {
+            if (!readiness.issues.some((existing) => existing.code === issue.code && existing.field === issue.field)) readiness.issues.push(issue);
+          }
+        }
+      }
+    }
+    res.setHeader('cache-control', 'private, no-store');
+    res.status(200).json({ ...result, readiness });
+  }));
+
   app.post('/api/v1/projects/:projectId/executive-review', createMutatingRoute(idempotencyService, async (req) => {
     const { tenantId, actorId, actorEmail, actorName } = req.context;
     assertActorRoleAllowed(req, PROJECT_REQUEST_ROUTE_ROLES, 'review project executive status');
@@ -3921,9 +3973,10 @@ export function mountProjectRoutes(app, {
       projectPath,
       buildProjectPatch: async (currentProject, currentRequest, _nextVersion, tx) => {
         const reviewRequest = currentRequest || request;
+        assertProjectReviewVersion(parsed, currentProject, currentRequest, createHttpError);
         if (
           isProjectChangeRequest(reviewRequest)
-          && Number(reviewRequest?.requestVersion) !== Number(request?.requestVersion)
+          && reviewRequest?.requestVersion !== request?.requestVersion
         ) {
           throw createHttpError(409, 'Project request changed before approval', 'canonical_version_conflict');
         }

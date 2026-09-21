@@ -1,3 +1,4 @@
+import { submissionAmount, submittedParticipationLines, submissionPaymentPlan } from './project-submission-display';
 import {
   ACCOUNT_TYPE_LABELS,
   BASIS_LABELS,
@@ -26,7 +27,7 @@ import {
   normalizeProjectTeamMembers,
 } from './project-team-members';
 import { getMigrationAuditStatusLabel } from './project-migration-console';
-import { resolveProjectRequestKind, resolveProjectRequestPayload } from './project-change-request';
+import { resolveProjectRequestPayload } from './project-change-request';
 import { formatProjectStaffingSummary } from './project-editor';
 
 export interface MigrationReviewDossier {
@@ -65,6 +66,7 @@ export interface MigrationReviewDossier {
   people: {
     teamName: string;
     members: string[];
+    submittedParticipation: string[];
     staffingSummary: string;
     participationSheetLink: string;
   };
@@ -140,7 +142,7 @@ const REQUEST_FIELD_LABELS: Record<string, string> = {
   teamMembersDetailed: '팀원·참여율 상세', participantCondition: '참여 조건', note: '등록 메모', contractDocument: '계약서', quoteDocument: '견적서',
   quoteSubmissionDeferred: '견적서 추후 제출', proposalDocument: '제안서', proposalWordOriginalDocument: '제안서 원본(워드)', proposalPptOriginalDocument: '제안서 원본(PPT)',
   presentationPptOriginalDocument: '발표자료 원본(PPT)', rfpRequestEvidenceDocument: 'RFP·요청 근거', customerBusinessRegistrationDocument: '계약 대상 사업자등록증',
-  performanceCertificateDocument: '수행실적증명서', taxInvoiceDocument: '세금계산서', finalSettlementReportDocument: '최종 정산 보고서', contractAnalysis: '계약서 분석',
+  performanceCertificateDocument: '수행실적증명서', taxInvoiceDocument: '세금계산서', finalSettlementReportDocument: '최종 정산 보고서', finalReportDocument: '최종 보고서', contractAnalysis: '계약서 분석',
 };
 
 function formatSubmittedValue(value: unknown): string {
@@ -183,10 +185,7 @@ function readable(value: string | null | undefined, fallback = '-') {
   return normalized || fallback;
 }
 
-function formatStoredProjectAmount(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-';
-  return `${Number(value).toLocaleString('ko-KR')}원`;
-}
+
 
 function formatDate(value: string | null | undefined): string {
   const normalized = readable(value, '');
@@ -213,24 +212,26 @@ function formatDateTime(value: string | null | undefined): string {
 }
 
 function formatPaymentPlanSplit(
-  plan: Project['paymentPlan'] | ProjectRequest['payload']['paymentPlan'] | null | undefined,
+  plan: Partial<NonNullable<Project['paymentPlan']>> | null | undefined,
   contractAmount: number | null | undefined,
+  currency?: string,
+  months?: Project['paymentExpectedMonths'],
 ): string {
   if (!plan) return '-';
   const normalizedContractAmount = Number(contractAmount);
   const entries = [
-    ['선금/계약금', plan.contract],
-    ['중도금', plan.interim],
-    ['잔금', plan.final],
+    ['선금/계약금', plan.contract, months?.contract],
+    ['중도금', plan.interim, months?.interim],
+    ['잔금', plan.final, months?.final],
   ] as const;
   const label = entries
-    .filter(([, value]) => Number.isFinite(Number(value)))
-    .map(([name, value]) => {
+    .map(([name, value, month]) => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return `${name} 미입력${month ? ` · ${month}` : ''}`;
       const amount = Number(value);
       const percent = Number.isFinite(normalizedContractAmount) && normalizedContractAmount > 0
         ? ` (${((amount / normalizedContractAmount) * 100).toFixed(0)}%)`
         : '';
-      return `${name} ${amount.toLocaleString('ko-KR')}원${percent}`;
+      return `${name} ${submissionAmount(amount, currency)}${percent}${month ? ` · ${month}` : ''}`;
     })
     .join(' · ');
   return label || '-';
@@ -289,29 +290,19 @@ function readReviewChangesFromRequest(request: ProjectRequest | null) {
   return normalizeReviewChanges(request?.changedFields);
 }
 
-function preferRequestPayloadForChange<T>(
+function submittedValue<T>(
   request: ProjectRequest | null,
   projectValue: T,
   payloadValue: T | undefined,
 ): T | undefined {
-  return resolveProjectRequestKind(request) === 'CHANGE'
-    ? (payloadValue ?? projectValue)
-    : (projectValue ?? payloadValue);
+  return request ? payloadValue : projectValue;
 }
 
-/**
- * A pending change request is the source of truth while it is being reviewed;
- * otherwise keep the registered project's contract as the primary preview.
- */
 export function resolveMigrationReviewContractDocument(
   project: Project,
   request: ProjectRequest | null,
 ) {
-  const payload = resolveProjectRequestPayload(request);
-  const useRequestDocument = resolveProjectRequestKind(request) === 'CHANGE' && Boolean(payload?.contractDocument);
-  return useRequestDocument
-    ? (payload?.contractDocument || project.contractDocument || null)
-    : (project.contractDocument || payload?.contractDocument || null);
+  return (request ? resolveProjectRequestPayload(request)?.contractDocument : project.contractDocument) ?? null;
 }
 
 export function buildMigrationReviewDossier(
@@ -319,25 +310,20 @@ export function buildMigrationReviewDossier(
   request: ProjectRequest | null,
 ): MigrationReviewDossier {
   const payload = resolveProjectRequestPayload(request);
-  const usePayloadAsCurrent = resolveProjectRequestKind(request) === 'CHANGE' && request?.status === 'PENDING';
+  const snapshot = request ? payload : project;
+  const formatStoredProjectAmount = (value: unknown, explicit?: boolean) => submissionAmount(value, snapshot?.currency, explicit);
   const contractDocument = resolveMigrationReviewContractDocument(project, request);
-  const contractAnalysis = usePayloadAsCurrent
-    ? (payload?.contractAnalysis || project.contractAnalysis || null)
-    : (project.contractAnalysis || payload?.contractAnalysis || null);
-  const currentName = preferRequestPayloadForChange(request, project.name, payload?.name);
-  const currentOfficialContractName = preferRequestPayloadForChange(request, project.officialContractName, payload?.officialContractName);
-  const currentClientOrg = preferRequestPayloadForChange(request, project.clientOrg, payload?.clientOrg);
-  const currentDepartment = preferRequestPayloadForChange(request, project.department, payload?.department);
-  const currentManagerName = preferRequestPayloadForChange(request, project.registeredByName || project.managerName, payload?.registeredByName || payload?.managerName);
-  const currentTeamName = preferRequestPayloadForChange(request, project.teamName, payload?.teamName);
-  const rawMembers = usePayloadAsCurrent && Array.isArray(payload?.teamMembersDetailed)
-    ? payload?.teamMembersDetailed
-    : Array.isArray(project.teamMembersDetailed)
-      ? project.teamMembersDetailed
-      : payload?.teamMembersDetailed;
+  const contractAnalysis = snapshot?.contractAnalysis;
+  const currentName = submittedValue(request, project.name, payload?.name);
+  const currentOfficialContractName = submittedValue(request, project.officialContractName, payload?.officialContractName);
+  const currentClientOrg = submittedValue(request, project.clientOrg, payload?.clientOrg);
+  const currentDepartment = submittedValue(request, project.department, payload?.department);
+  const currentManagerName = submittedValue(request, project.registeredByName || project.managerName, payload?.registeredByName || payload?.managerName);
+  const currentTeamName = submittedValue(request, project.teamName, payload?.teamName);
+  const rawMembers = snapshot?.teamMembersDetailed;
   const members = Array.isArray(rawMembers)
     ? normalizeProjectTeamMembers(rawMembers).map(formatProjectTeamMemberLine)
-    : readable(payload?.teamMembers, '')
+    : readable(request ? payload?.teamMembers : undefined, '')
         .split(/[,\n]/)
         .map((member) => member.trim())
         .filter(Boolean);
@@ -351,64 +337,68 @@ export function buildMigrationReviewDossier(
     headerTitle: readable(currentName),
     identity: {
       clientOrg: readable(currentClientOrg),
-      cic: readable(project.cic || currentDepartment),
+      cic: readable(request ? currentDepartment : (project.cic || currentDepartment)),
       pmName: readable(currentManagerName),
       department: readable(currentDepartment),
       officialContractName: readable(currentOfficialContractName || currentName),
-      groupwareName: readable(preferRequestPayloadForChange(request, project.groupwareName, payload?.groupwareName)),
+      groupwareName: readable(submittedValue(request, project.groupwareName, payload?.groupwareName)),
     },
     contract: {
-      projectTypeLabel: PROJECT_TYPE_LABELS[normalizeProjectType(preferRequestPayloadForChange(request, project.type, payload?.type))] || readable(project.type || payload?.type),
+      projectTypeLabel: snapshot?.type == null || String(snapshot.type).trim() === '' ? '미입력' : PROJECT_TYPE_LABELS[normalizeProjectType(submittedValue(request, project.type, payload?.type))] || readable(snapshot?.type),
       periodLabel: (() => {
-        const start = readable(preferRequestPayloadForChange(request, project.contractStart, payload?.contractStart));
-        const openEnded = (usePayloadAsCurrent ? payload?.contractEndUndecided : (project.contractEndUndecided ?? payload?.contractEndUndecided)) === true;
-        const end = readable(preferRequestPayloadForChange(request, project.contractEnd, payload?.contractEnd));
+        const start = readable(submittedValue(request, project.contractStart, payload?.contractStart));
+        const openEnded = snapshot?.contractEndUndecided === true;
+        const end = readable(submittedValue(request, project.contractEnd, payload?.contractEnd));
         // 종료 기간 없음(명시 플래그)은 미입력('-')과 다른 상태라 다르게 적는다.
         return `${start} ~ ${openEnded ? '종료 기간 없음' : end}`;
       })(),
-      contractType: readable(normalizeProjectContractType(preferRequestPayloadForChange(request, project.contractType, payload?.contractType))),
-      settlementTypeLabel: SETTLEMENT_TYPE_LABELS[normalizeSettlementType(preferRequestPayloadForChange(request, project.settlementType, payload?.settlementType))] || '-',
-      basisLabel: BASIS_LABELS[normalizeBasis(preferRequestPayloadForChange(request, project.basis, payload?.basis))] || '-',
-      accountTypeLabel: ACCOUNT_TYPE_LABELS[normalizeAccountType(preferRequestPayloadForChange(request, project.accountType, payload?.accountType))] || '-',
-      fundInputModeLabel: PROJECT_FUND_INPUT_MODE_LABELS[normalizeProjectFundInputMode(preferRequestPayloadForChange(request, project.fundInputMode, payload?.fundInputMode))] || '-',
+      contractType: snapshot?.contractType == null ? '-' : readable(normalizeProjectContractType(snapshot.contractType)),
+      settlementTypeLabel: snapshot?.settlementType == null || String(snapshot.settlementType).trim() === '' ? '미입력' : SETTLEMENT_TYPE_LABELS[normalizeSettlementType(submittedValue(request, project.settlementType, payload?.settlementType))] || '-',
+      basisLabel: snapshot?.basis == null || String(snapshot.basis).trim() === '' ? '미입력' : BASIS_LABELS[normalizeBasis(submittedValue(request, project.basis, payload?.basis))] || '-',
+      accountTypeLabel: snapshot?.accountType == null || String(snapshot.accountType).trim() === '' ? '미입력' : ACCOUNT_TYPE_LABELS[normalizeAccountType(submittedValue(request, project.accountType, payload?.accountType))] || '-',
+      fundInputModeLabel: snapshot?.fundInputMode == null || String(snapshot.fundInputMode).trim() === '' ? '미입력' : PROJECT_FUND_INPUT_MODE_LABELS[normalizeProjectFundInputMode(submittedValue(request, project.fundInputMode, payload?.fundInputMode))] || '-',
       settlementSystemLabel: (() => {
-        const code = normalizeSettlementSystemCode(preferRequestPayloadForChange(request, project.settlementSystem, payload?.settlementSystem));
+        if (snapshot?.settlementSystem == null || String(snapshot.settlementSystem).trim() === '') return '미입력';
+        const code = normalizeSettlementSystemCode(submittedValue(request, project.settlementSystem, payload?.settlementSystem));
         if (code === 'OTHER') {
-          const other = readable(preferRequestPayloadForChange(request, project.settlementSystemOther, payload?.settlementSystemOther), '');
+          const other = readable(submittedValue(request, project.settlementSystemOther, payload?.settlementSystemOther), '');
           return other ? `기타 · ${other}` : '기타';
         }
         return SETTLEMENT_SYSTEM_LABELS[code] || '-';
       })(),
-      laborSettlementBasisLabel: LABOR_SETTLEMENT_BASIS_LABELS[normalizeLaborSettlementBasis(preferRequestPayloadForChange(request, project.laborSettlementBasis, payload?.laborSettlementBasis))] || '-',
+      laborSettlementBasisLabel: snapshot?.laborSettlementBasis == null || String(snapshot.laborSettlementBasis).trim() === '' ? '미입력' : LABOR_SETTLEMENT_BASIS_LABELS[normalizeLaborSettlementBasis(submittedValue(request, project.laborSettlementBasis, payload?.laborSettlementBasis))] || '-',
     },
     budget: {
-      currencyLabel: PROJECT_CURRENCY_LABELS[normalizeProjectCurrency(preferRequestPayloadForChange(request, project.currency, payload?.currency))] || 'KRW',
-      contractAmountLabel: formatStoredProjectAmount(preferRequestPayloadForChange(request, project.contractAmount, payload?.contractAmount)),
-      salesVatAmountLabel: formatStoredProjectAmount(preferRequestPayloadForChange(request, project.salesVatAmount, payload?.salesVatAmount)),
-      paymentPlanDesc: readable(preferRequestPayloadForChange(request, project.paymentPlanDesc, payload?.paymentPlanDesc)),
-      paymentPlanSplitLabel: formatPaymentPlanSplit(
-        preferRequestPayloadForChange(request, project.paymentPlan, payload?.paymentPlan),
-        preferRequestPayloadForChange(request, project.contractAmount, payload?.contractAmount),
+      currencyLabel: PROJECT_CURRENCY_LABELS[normalizeProjectCurrency(submittedValue(request, project.currency, payload?.currency))] || 'KRW',
+      contractAmountLabel: formatStoredProjectAmount(submittedValue(request, project.contractAmount, payload?.contractAmount), snapshot?.financialInputFlags?.contractAmount),
+      salesVatAmountLabel: formatStoredProjectAmount(submittedValue(request, project.salesVatAmount, payload?.salesVatAmount), snapshot?.financialInputFlags?.salesVatAmount),
+      paymentPlanDesc: readable(submittedValue(request, project.paymentPlanDesc, payload?.paymentPlanDesc)),
+      paymentPlanSplitLabel: (submissionPaymentPlan(snapshot).legacy ? '전체 계약기간 계획(연도별 배분 미기록) · ' : '') + formatPaymentPlanSplit(
+        submissionPaymentPlan(snapshot).plan,
+        submittedValue(request, project.contractAmount, payload?.contractAmount),
+        snapshot?.currency,
+        submissionPaymentPlan(snapshot).legacy ? snapshot?.paymentExpectedMonths : undefined,
       ),
-      finalPaymentNote: readable(preferRequestPayloadForChange(request, project.finalPaymentNote, payload?.finalPaymentNote)),
-      totalRevenueAmountLabel: formatStoredProjectAmount(preferRequestPayloadForChange(request, project.totalRevenueAmount, payload?.totalRevenueAmount)),
-      supportAmountLabel: formatStoredProjectAmount(preferRequestPayloadForChange(request, project.supportAmount, payload?.supportAmount)),
-      advanceInterimBelow70Reason: readable(preferRequestPayloadForChange(request, project.advanceInterimBelow70Reason, payload?.advanceInterimBelow70Reason), ''),
-      finalPaymentExpectedWeek: readable(preferRequestPayloadForChange(request, project.finalPaymentExpectedWeek, payload?.finalPaymentExpectedWeek), ''),
+      finalPaymentNote: readable(submittedValue(request, project.finalPaymentNote, payload?.finalPaymentNote)),
+      totalRevenueAmountLabel: formatStoredProjectAmount(submittedValue(request, project.totalRevenueAmount, payload?.totalRevenueAmount), snapshot?.financialInputFlags?.totalRevenueAmount),
+      supportAmountLabel: formatStoredProjectAmount(submittedValue(request, project.supportAmount, payload?.supportAmount), snapshot?.financialInputFlags?.supportAmount),
+      advanceInterimBelow70Reason: readable(submittedValue(request, project.advanceInterimBelow70Reason, payload?.advanceInterimBelow70Reason), ''),
+      finalPaymentExpectedWeek: readable(submittedValue(request, project.finalPaymentExpectedWeek, payload?.finalPaymentExpectedWeek), ''),
     },
     people: {
       teamName: readable(currentTeamName),
       members,
+      submittedParticipation: submittedParticipationLines(rawMembers),
       staffingSummary: formatProjectStaffingSummary(
-        usePayloadAsCurrent ? (payload?.staffing ?? project.staffing) : (project.staffing ?? payload?.staffing),
+        snapshot?.staffing,
       ),
-      participationSheetLink: readable(preferRequestPayloadForChange(request, project.participationSheetLink, payload?.participationSheetLink), ''),
+      participationSheetLink: readable(submittedValue(request, project.participationSheetLink, payload?.participationSheetLink), ''),
     },
     notes: {
-      description: readable(preferRequestPayloadForChange(request, project.description, payload?.description)),
-      projectPurpose: readable(preferRequestPayloadForChange(request, project.projectPurpose, payload?.projectPurpose)),
-      participantCondition: readable(preferRequestPayloadForChange(request, project.participantCondition, payload?.participantCondition)),
-      note: readable(payload?.note),
+      description: readable(submittedValue(request, project.description, payload?.description)),
+      projectPurpose: readable(submittedValue(request, project.projectPurpose, payload?.projectPurpose)),
+      participantCondition: readable(submittedValue(request, project.participantCondition, payload?.participantCondition)),
+      note: readable(snapshot?.note),
     },
     audit: {
       requestSummary: readable(request?.humanSummary),

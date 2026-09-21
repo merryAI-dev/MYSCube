@@ -1,3 +1,4 @@
+import { serializeProjectEditorPrivateDraft } from '../../platform/project-editor-draft-persistence';
 import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router';
@@ -50,7 +51,6 @@ import {
 import { openEditSession, type EditSession } from '../../platform/edit-session';
 import {
   buildProjectEditorDraftFromProject,
-  buildProjectRequestPayloadFromDraft,
   createProjectEditorDraft,
   type ProjectEditorDraft,
 } from '../../platform/project-editor';
@@ -411,7 +411,7 @@ function ProjectInfoEditor({
       if (!recordLoadedRef.current) throw new Error('수정 임시저장이 준비되지 않았습니다.');
       const saved = await draftClient.save(ownership, {
         expectedDraftRevision: revisionRef.current,
-        payload: buildProjectRequestPayloadFromDraft(draft) as unknown as Record<string, unknown>,
+        payload: serializeProjectEditorPrivateDraft(draft),
         stepIndex,
       });
       revisionRef.current = saved.draft.draftRevision;

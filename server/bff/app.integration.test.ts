@@ -1,3 +1,4 @@
+import { projectReviewVersionToken } from './project-review-version.mjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import ExcelJS from 'exceljs';
@@ -486,7 +487,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     const approved = await reviewApi
       .post('/api/v1/projects/p_exec_review_001/executive-review')
       .set({ ...defaultHeaders, 'idempotency-key': 'idem-project-executive-review-001' })
-      .send({ requestId: 'pr_exec_review_001', reviewStatus: 'APPROVED' });
+      .send({ expectedReviewToken: await fixtureReviewToken(db, tenantId, 'p_exec_review_001', 'pr_exec_review_001'), requestId: 'pr_exec_review_001', reviewStatus: 'APPROVED' });
     expect(approved.status).toBe(200);
 
     const agreement = await reviewApi
@@ -546,7 +547,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         ...defaultHeaders,
         'idempotency-key': `idem-${targetProjectId}`,
       })
-      .send({ requestId, ...reviewBody });
+      .send({ requestId, ...reviewBody, ...(path.endsWith('/executive-review') ? { expectedReviewToken: await fixtureReviewToken(db, tenantId, targetProjectId, requestId) } : {}) });
 
     expect(response.status).toBe(200);
     const synced = await db.doc(`orgs/${tenantId}/partEntries/pte-${targetProjectId}-able__2026-01`).get();
@@ -628,7 +629,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         ...defaultHeaders,
         'idempotency-key': `idem-${targetProjectId}`,
       })
-      .send({ requestId, ...reviewBody });
+      .send({ requestId, ...reviewBody, ...(path.endsWith('/executive-review') ? { expectedReviewToken: await fixtureReviewToken(db, tenantId, targetProjectId, requestId) } : {}) });
 
     expect(response.status).toBe(200);
     expect((await oldSyncRef.get()).data()).toEqual(oldSyncEntry);
@@ -658,7 +659,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     const response = await reviewApi
       .post('/api/v1/projects/p_exec_review_002/executive-review')
       .set({ ...defaultHeaders, 'idempotency-key': 'idem-project-executive-review-002' })
-      .send({
+      .send({ expectedReviewToken: await fixtureReviewToken(db, tenantId, 'p_exec_review_002'),
         reviewStatus: 'REVISION_REJECTED',
         reviewerName: '임원B',
       });
@@ -676,7 +677,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     const newAgreement = await reviewApi
       .post('/api/v1/projects/p_new_planning_001/executive-review')
       .set({ ...defaultHeaders, 'idempotency-key': 'idem-new-planning-before-exec' })
-      .send({ reviewStatus: 'PLANNING_AGREED', projectCode: 'PRJ-2026-legacy' });
+      .send({ expectedReviewToken: await fixtureReviewToken(db, tenantId, 'p_new_planning_001'), reviewStatus: 'PLANNING_AGREED', projectCode: 'PRJ-2026-legacy' });
     expect(newAgreement.status).toBe(409);
     expect(newAgreement.body.error).toBe('legacy_planning_agreement_read_only');
 
@@ -692,7 +693,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     const approved = await reviewApi
       .post('/api/v1/projects/p_legacy_planning_001/executive-review')
       .set({ ...defaultHeaders, 'idempotency-key': 'idem-legacy-planning-final-approved' })
-      .send({ reviewStatus: 'APPROVED' });
+      .send({ expectedReviewToken: await fixtureReviewToken(db, tenantId, 'p_legacy_planning_001'), reviewStatus: 'APPROVED' });
     expect(approved.status).toBe(200);
     expect((await db.doc(`orgs/${tenantId}/projects/p_legacy_planning_001`).get()).data()).toMatchObject({
       executiveReviewStatus: 'APPROVED',
@@ -718,12 +719,12 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     const firstApproval = await reviewApi
       .post('/api/v1/projects/p_code_owner_001/executive-review')
       .set({ ...defaultHeaders, 'idempotency-key': 'idem-project-code-owner-exec-001' })
-      .send({ reviewStatus: 'APPROVED' });
+      .send({ expectedReviewToken: await fixtureReviewToken(db, tenantId, 'p_code_owner_001'), reviewStatus: 'APPROVED' });
     expect(firstApproval.status).toBe(200);
     const secondApproval = await reviewApi
       .post('/api/v1/projects/p_code_owner_002/executive-review')
       .set({ ...defaultHeaders, 'idempotency-key': 'idem-project-code-owner-exec-002' })
-      .send({ reviewStatus: 'APPROVED' });
+      .send({ expectedReviewToken: await fixtureReviewToken(db, tenantId, 'p_code_owner_002'), reviewStatus: 'APPROVED' });
     expect(secondApproval.status).toBe(200);
 
     const agreed = await reviewApi
@@ -753,7 +754,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     const response = await reviewApi
       .post('/api/v1/projects/p_designated_exec_001/executive-review')
       .set({ ...defaultHeaders, 'idempotency-key': 'idem-designated-exec-001' })
-      .send({ reviewStatus: 'APPROVED' });
+      .send({ expectedReviewToken: await fixtureReviewToken(db, tenantId, 'p_designated_exec_001'), reviewStatus: 'APPROVED' });
     expect(response.status).toBe(403);
     expect(response.body.error).toBe('executive_approver_mismatch');
   });
@@ -789,7 +790,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     const response = await reviewApi
       .post('/api/v1/projects/p_reassigned_exec_001/executive-review')
       .set({ ...defaultHeaders, 'idempotency-key': 'idem-reassigned-exec-001' })
-      .send({ requestId: 'pr_reassigned_exec_001', reviewStatus: 'APPROVED' });
+      .send({ expectedReviewToken: await fixtureReviewToken(db, tenantId, 'p_reassigned_exec_001', 'pr_reassigned_exec_001'), requestId: 'pr_reassigned_exec_001', reviewStatus: 'APPROVED' });
 
     expect(response.status).toBe(200);
     expect((await db.doc(`orgs/${tenantId}/projects/p_reassigned_exec_001`).get()).data()).toMatchObject({
@@ -818,7 +819,7 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     const response = await reviewApi
       .post('/api/v1/projects/p_exec_discard_001/executive-review')
       .set({ ...defaultHeaders, 'idempotency-key': 'idem-project-executive-discard-001' })
-      .send({
+      .send({ expectedReviewToken: await fixtureReviewToken(db, tenantId, 'p_exec_discard_001'),
         reviewStatus: 'DUPLICATE_DISCARDED',
         reviewComment: '동일 계약 프로젝트가 이미 등록되어 있습니다.',
         reviewerName: '임원B',
@@ -3885,3 +3886,13 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
     expect(doneAfter.empty).toBe(false);
   });
 });
+
+async function fixtureReviewToken(db: any, tenantId: string, projectId: string, requestId?: string) {
+  const project = (await db.doc(`orgs/${tenantId}/projects/${projectId}`).get()).data() || {};
+  let document = null;
+  if (requestId) {
+    const current = await db.doc(`orgs/${tenantId}/project_requests/${requestId}`).get();
+    document = current.exists ? current.data() : (await db.doc(`orgs/${tenantId}/projectRequests/${requestId}`).get()).data();
+  }
+  return projectReviewVersionToken(project, document);
+}

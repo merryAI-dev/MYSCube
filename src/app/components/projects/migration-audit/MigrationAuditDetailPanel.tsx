@@ -1,3 +1,4 @@
+import { submissionAmount, submissionRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
 import {
   CheckCircle2,
   FileText,
@@ -8,7 +9,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { INTEREST_REFUND_POLICY_LABELS } from '../../../data/types';
+import { INTEREST_REFUND_POLICY_LABELS, PROJECT_STATUS_LABELS } from '../../../data/types';
 import type { MigrationAuditConsoleRecord } from '../../../platform/project-migration-console';
 import {
   describeMigrationAuditActionState,
@@ -64,9 +65,6 @@ function valueClass(value: string, missing = false) {
   return missing || value === '미입력' ? 'text-rose-700' : value === '-' ? 'text-slate-400' : 'text-slate-950';
 }
 
-function formatMoney(value?: number) {
-  return Number.isFinite(value) ? `${Number(value).toLocaleString('ko-KR')}원` : '-';
-}
 
 function ReviewSection({
   eyebrow,
@@ -111,7 +109,7 @@ function ReviewFactGrid({ items }: { items: ReviewFact[] }) {
           }`}
         >
           <dt className="text-[11px] font-medium text-slate-500">{item.label}</dt>
-          <dd className={`mt-1 whitespace-pre-wrap break-words text-[13px] leading-6 font-medium ${valueClass(item.value, item.missing)}`}>
+          <dd className={`mt-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[13px] leading-6 font-medium ${valueClass(item.value, item.missing)}`}>
             {item.value || '-'}
           </dd>
         </div>
@@ -207,18 +205,15 @@ export function MigrationAuditDetailPanel({
     fallbackActorName: record.managerName,
     fallbackRequestedAt: record.requestedAt,
   });
-  const useRequestPayloadAsCurrent = isChangeRequest && record.request?.status === 'PENDING';
-  const requestPayload = resolveProjectRequestPayload(record.request);
-  const totalActualCost = requestPayload?.totalActualCost ?? record.project.totalActualCost;
-  const financialYears = projectFinancialYearsWithPaymentPlan(requestPayload?.financialYears ? requestPayload : record.project);
-  const interestRefundPolicy = requestPayload?.interestRefundPolicy ?? record.project.interestRefundPolicy;
-  const registrationNote = requestPayload?.note ?? record.project.note;
-  const quoteDocument = requestPayload?.quoteDocument !== undefined ? requestPayload.quoteDocument : record.project.quoteDocument;
-  const quoteSubmissionDeferred = requestPayload?.quoteSubmissionDeferred ?? record.project.quoteSubmissionDeferred;
-  const registrationConfirmations = requestPayload?.registrationConfirmations ?? record.project.registrationConfirmations;
-  const contractDocument = useRequestPayloadAsCurrent
-    ? (requestPayload?.contractDocument || record.project.contractDocument || null)
-    : (record.project.contractDocument || requestPayload?.contractDocument || null);
+  const reviewPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
+  const totalActualCost = reviewPayload?.totalActualCost;
+  const financialYears = projectFinancialYearsWithPaymentPlan(reviewPayload);
+  const interestRefundPolicy = reviewPayload?.interestRefundPolicy;
+  const registrationNote = reviewPayload?.note;
+  const quoteDocument = reviewPayload?.quoteDocument;
+  const quoteSubmissionDeferred = reviewPayload?.quoteSubmissionDeferred;
+  const registrationConfirmations = reviewPayload?.registrationConfirmations;
+  const contractDocument = reviewPayload?.contractDocument ?? null;
 
   return (
     <Card
@@ -233,8 +228,8 @@ export function MigrationAuditDetailPanel({
                 <Badge className="border border-slate-200 bg-slate-50 text-slate-700">
                   {getMigrationAuditStatusLabel(record.status)}
                 </Badge>
-                <Badge variant="outline">{record.cic}</Badge>
-                <Badge variant="outline">{record.clientOrg || '계약 대상 미지정'}</Badge>
+                <Badge variant="outline">{dossier.identity.cic}</Badge>
+                <Badge variant="outline">{dossier.identity.clientOrg}</Badge>
                 {isChangeRequest && record.status === 'PENDING' ? (
                   <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">수정 중</Badge>
                 ) : null}
@@ -244,7 +239,7 @@ export function MigrationAuditDetailPanel({
                   {isChangeRequest ? 'PM 수정 요청' : isPmPortalProject ? 'PM 등록 요청' : '프로젝트 원장'}
                 </p>
                 <h2 className="mt-1 text-[24px] font-semibold tracking-[-0.02em] text-slate-950">
-                  {record.title}
+                  {dossier.headerTitle}
                 </h2>
                 <p className="mt-2 max-w-3xl text-[12px] leading-6 text-slate-600">
                   {requestVersionDescription}
@@ -311,8 +306,12 @@ export function MigrationAuditDetailPanel({
             title="계약 구조와 재무 계획"
             description="계약·정산 기준과 연도별 금액·입금 계획을 한 번에 확인합니다."
           >
+            {submissionContractWarning(reviewPayload) ? <p role="status" className="mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">{submissionContractWarning(reviewPayload)}</p> : null}
             <ReviewFactGrid
               items={[
+                { label: '제출 당시 프로젝트 상태', value: reviewPayload?.status ? PROJECT_STATUS_LABELS[reviewPayload.status] : '기록 없음' },
+                { label: '사업관리 폴더', value: reviewPayload?.businessManagementGoogleFolderLink || '미입력', wide: true },
+                { label: '총수익률', value: submissionRate(reviewPayload?.totalRevenueAmount, reviewPayload?.contractAmount, reviewPayload?.financialInputFlags) },
                 { label: '프로젝트 유형', value: dossier.contract.projectTypeLabel },
                 { label: '계약 기간', value: dossier.contract.periodLabel },
                 { label: '계약서 유형', value: dossier.contract.contractType },
@@ -323,9 +322,10 @@ export function MigrationAuditDetailPanel({
                 { label: '계약금액', value: dossier.budget.contractAmountLabel },
                 { label: '총매출부가세', value: dossier.budget.salesVatAmountLabel },
                 { label: '총수익', value: dossier.budget.totalRevenueAmountLabel },
-                { label: '총실비(원가)', value: formatMoney(totalActualCost) },
+                { label: '총실비(원가)', value: submissionAmount(totalActualCost, reviewPayload?.currency, reviewPayload?.financialInputFlags?.totalActualCost) },
                 { label: '총지원금', value: dossier.budget.supportAmountLabel },
                 { label: '정산 시스템', value: dossier.contract.settlementSystemLabel },
+                { label: '등록 확인 사항', value: submittedConfirmationLines(reviewPayload?.registrationConfirmations), wide: true },
                 { label: '인건비 정산 기준', value: dossier.contract.laborSettlementBasisLabel },
                 { label: '이자 반납 여부', value: interestRefundPolicy ? INTEREST_REFUND_POLICY_LABELS[interestRefundPolicy] : '-' },
                 { label: '입금 계획', value: dossier.budget.paymentPlanDesc, wide: true },
@@ -338,7 +338,7 @@ export function MigrationAuditDetailPanel({
             <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
               <p className="text-[11px] font-medium text-slate-500">연도별 계약/재무</p>
               <div className="mt-2">
-                <FinancialYearsTable years={financialYears} />
+                <FinancialYearsTable years={financialYears} currency={reviewPayload?.currency} />
               </div>
             </div>
           </ReviewSection>
@@ -357,10 +357,11 @@ export function MigrationAuditDetailPanel({
                 <div>
                   <p className="text-[11px] font-medium text-slate-500">실제 투입인력</p>
                   <p className="mt-1 text-[13px] font-medium text-slate-900">{dossier.people.staffingSummary}</p>
+                  <p className="whitespace-pre-wrap break-words text-xs">{dossier.people.submittedParticipation.join('\n\n') || '저장된 참여율 기록 없음'}</p>
                   <p className="mt-3 text-[11px] font-medium text-slate-500">서류상 참여인력</p>
                   <p className="mt-1 text-[12px] leading-5 text-slate-700">
                     {dossier.people.members.length > 0 ? `${dossier.people.members.length}명 등록됨 · ` : ''}
-                    월별 참여율 원본은 참여율 시트에서 확인해 주세요.
+                    아래는 제출 당시 저장된 참여율입니다. 현재 시트는 이후 변경될 수 있습니다.
                     {dossier.people.participationSheetLink ? (
                       <>
                         {' '}

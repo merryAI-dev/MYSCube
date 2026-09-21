@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ClipboardCheck, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../../data/auth-store';
@@ -8,6 +8,8 @@ import type { Project, ProjectExecutiveReviewStatus, ProjectRequest } from '../.
 import { useFirebase } from '../../lib/firebase-context';
 import {
   fetchAssignedProjectRequestsViaBff,
+  fetchProjectReviewDocumentViaBff,
+  type ProjectReviewReadiness,
   fetchProjectReviewInboxViaBff,
   isPlatformApiEnabled,
   reviewProjectExecutiveStatusViaBff,
@@ -42,6 +44,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '../ui/alert-dialog';
+import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
+import { PlatformApiError } from '../../platform/api-client';
 import { Textarea } from '../ui/textarea';
 import { Input } from '../ui/input';
 
@@ -56,6 +60,10 @@ const REVIEW_DOCUMENT_FIELDS = {
   proposal_word_original: 'proposalWordOriginalDocument',
   proposal_ppt_original: 'proposalPptOriginalDocument',
   presentation_ppt_original: 'presentationPptOriginalDocument',
+  performance_certificate: 'performanceCertificateDocument',
+  tax_invoice: 'taxInvoiceDocument',
+  final_settlement_report: 'finalSettlementReportDocument',
+  final_report: 'finalReportDocument',
 } as const satisfies Partial<Record<ProjectRequestDocumentKind, keyof Project>>;
 type ReviewDocumentField = typeof REVIEW_DOCUMENT_FIELDS[keyof typeof REVIEW_DOCUMENT_FIELDS];
 
@@ -143,11 +151,16 @@ function ProjectMigrationAuditPageContent({
   const [statusFilter, setStatusFilter] = useState<'ALL' | MigrationAuditConsoleStatus>('PENDING');
   const [searchQuery, setSearchQuery] = useState('');
   const [inboxScope, setInboxScope] = useState<'MINE' | 'ALL'>('MINE');
-  const [openRecordId, setOpenRecordId] = useState<string | null>(null);
+  const [openRecord, setOpenRecord] = useState<MigrationAuditConsoleRecord | null>(null);
+  const [reviewToken, setReviewToken] = useState<string | undefined>();
+  const [loadingDocument, setLoadingDocument] = useState(false);
+  const documentLoadSequence = useRef(0);
   const [actionMode, setActionMode] = useState<ReviewActionMode | null>(null);
   const [reviewComment, setReviewComment] = useState('');
   const [projectCode, setProjectCode] = useState('');
   const [acting, setActing] = useState(false);
+  const [reviewError, setReviewError] = useState('');
+  const [readiness, setReadiness] = useState<ProjectReviewReadiness>();
   const [requestReloadVersion, setRequestReloadVersion] = useState(0);
   const isManagementPlanning = reviewStage === 'managementPlanning';
   const reviewProjectIds = useMemo(() => projects.map((project) => project.id).filter(Boolean), [projects]);
@@ -226,7 +239,32 @@ function ProjectMigrationAuditPageContent({
   const filteredRecords = useMemo(() => filterMigrationAuditConsoleRecords(summaryRecords, { cic: cicFilter, status: statusFilter, searchQuery }), [cicFilter, searchQuery, statusFilter, summaryRecords]);
   const summary = useMemo(() => summarizeMigrationAuditConsole(summaryRecords), [summaryRecords]);
   const cicOptions = useMemo(() => collectMigrationAuditCicOptions(inboxRecords), [inboxRecords]);
-  const openRecord = useMemo(() => summaryRecords.find((record) => record.id === openRecordId) || null, [openRecordId, summaryRecords]);
+  async function openReviewDocument(record: MigrationAuditConsoleRecord) {
+    if (!authUser?.uid) return;
+    if (openRecord?.id !== record.id) setReviewComment('');
+    const sequence = ++documentLoadSequence.current;
+    setLoadingDocument(true);
+    setReviewToken(undefined);
+    setReadiness(undefined);
+    try {
+      const result = await fetchProjectReviewDocumentViaBff({
+        tenantId: orgId,
+        actor: { uid: authUser.uid, email: authUser.email, role: authUser.role, idToken: authUser.idToken },
+        projectId: record.project.id, requestId: record.request?.id,
+      });
+      if (sequence !== documentLoadSequence.current) return;
+      const loaded = buildMigrationAuditConsoleRecords([result.project], result.request ? [result.request] : [])[0];
+      if (!loaded) throw new Error('검토할 문서를 찾지 못했습니다. 목록을 새로고침해 주세요.');
+      setOpenRecord(loaded);
+      setReviewToken(result.reviewToken);
+      setReadiness(result.readiness);
+      setReviewError('');
+    } catch (error) {
+      if (sequence === documentLoadSequence.current) toast.error('결재 문서 조회 실패', { description: error instanceof Error ? error.message : '잠시 후 다시 시도해 주세요.' });
+    } finally {
+      if (sequence === documentLoadSequence.current) setLoadingDocument(false);
+    }
+  }
   const existingProjectCode = String(openRecord?.project.projectCode || '').trim();
   const reviewDocumentAccess = useMemo(() => {
     const sources = new Map<ProjectRequestDocumentKind, ReviewDocumentSource>();
@@ -291,7 +329,7 @@ function ProjectMigrationAuditPageContent({
   const canExecutiveFinalize = Boolean(authUser?.uid && designatedApproverId === authUser.uid);
   const role = String(authUser?.role || '').trim().toLowerCase();
   const canManagementPlanningFinalize = role === 'admin' || role === 'finance';
-  const canFinalize = isManagementPlanning ? canManagementPlanningFinalize : canExecutiveFinalize;
+  const canFinalize = !loadingDocument && Boolean(reviewToken) && (isManagementPlanning ? canManagementPlanningFinalize : canExecutiveFinalize);
 
   async function handleConfirmAction() {
     if (!openRecord || !actionMode) return;
@@ -344,6 +382,10 @@ function ProjectMigrationAuditPageContent({
       return;
     }
 
+    if (actionMode === 'approve' && readiness?.issues.some((issue) => issue.severity === 'blocking')) {
+      setReviewError('승인 전 확인사항을 작성자와 해결한 뒤 문서를 다시 열어 주세요. 작성한 의견은 유지됩니다.');
+      return;
+    }
     const nextExecutiveStatus = toExecutiveStatus(actionMode);
     if (nextExecutiveStatus !== 'APPROVED' && !trimmedComment) {
       toast.error(actionMode === 'reject' ? '반려 사유를 입력해 주세요.' : '폐기 사유를 입력해 주세요.');
@@ -355,14 +397,19 @@ function ProjectMigrationAuditPageContent({
         tenantId: orgId,
         actor: { uid: authUser.uid, email: authUser.email, role: authUser.role, idToken: authUser.idToken },
         projectId: openRecord.project.id,
-        review: { requestId: openRecord.request?.id, reviewStatus: nextExecutiveStatus, reviewComment: trimmedComment || undefined, reviewerName },
+        review: { expectedReviewToken: reviewToken, expectedRequestVersion: openRecord.request?.requestVersion, expectedProjectVersion: openRecord.project.version, requestId: openRecord.request?.id, reviewStatus: nextExecutiveStatus, reviewComment: trimmedComment || undefined, reviewerName },
       });
       toast.success(actionMode === 'approve' ? '프로젝트를 승인했습니다.' : actionMode === 'reject' ? '수정 요청 후 반려로 처리했습니다.' : '중복·폐기로 처리했습니다.', { description: openRecord.title });
       setRequestReloadVersion((version) => version + 1);
       setActionMode(null);
       setReviewComment('');
+      setOpenRecord(null);
+      setReviewToken(undefined);
     } catch (error) {
-      toast.error('조직장 결재 저장 실패', { description: error instanceof Error ? error.message : '다시 시도해 주세요.' });
+      const message = resolveProjectSaveErrorMessage(error, '결재를 저장하지 못했습니다.');
+      setReviewError(message);
+      if (error instanceof PlatformApiError && ['review_version_conflict', 'review_version_required', 'canonical_version_conflict'].includes(error.code)) setReviewToken(undefined);
+      toast.error('조직장 결재 저장 실패', { description: message });
     } finally {
       setActing(false);
     }
@@ -378,9 +425,9 @@ function ProjectMigrationAuditPageContent({
       {!embedded ? <PageHeader icon={ClipboardCheck} iconGradient={isManagementPlanning ? 'linear-gradient(135deg, #0f2f57 0%, #174a7c 100%)' : 'linear-gradient(135deg, #0f766e 0%, #0ea5e9 100%)'} title={pageTitle} description={pageDescription} badge={isManagementPlanning ? '경영기획실 합의' : loadingRequests ? '불러오는 중' : requestLoadError ? '조회 오류' : `대기 ${summary.pending}건`} /> : null}
       {requestLoadError ? <Card><CardContent className="p-4 text-[12px] text-muted-foreground">{requestLoadError}</CardContent></Card> : null}
       <MigrationAuditControlBar cicOptions={cicOptions} cicFilter={cicFilter} onCicFilterChange={setCicFilter} inboxScope={effectiveInboxScope} onInboxScopeChange={setInboxScope} reviewerDepartment={reviewerDepartment} statusFilter={statusFilter} onStatusFilterChange={setStatusFilter} searchQuery={searchQuery} onSearchQueryChange={setSearchQuery} summary={summary} reviewStage={reviewStage} assigneeOnly={assigneeOnly} />
-      {loadingRequests ? <Card><CardContent className="flex items-center justify-center gap-2 py-16 text-[12px] text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />PM 등록 프로젝트와 접수 이력을 불러오는 중입니다…</CardContent></Card> : <MigrationAuditRecordList records={filteredRecords} onOpen={(record) => setOpenRecordId(record.id)} reviewStage={reviewStage} />}
-      <MigrationAuditDocumentDialog open={!!openRecord} record={openRecord} acting={acting} canFinalize={canFinalize} documentPreviewUrls={documentPreviewUrls} documentPreviewStates={documentPreviewStates} reviewStage={reviewStage} onLoadDocumentPreview={loadDocumentPreview} onOpenChange={(open) => { if (!open) setOpenRecordId(null); }} onApprove={() => { setActionMode('approve'); setReviewComment(''); setProjectCode(String(openRecord?.project.projectCode || '').trim()); }} onReject={() => { setActionMode('reject'); setReviewComment(isManagementPlanning ? '' : (openRecord?.project.executiveReviewComment || '')); setProjectCode(''); }} />
-      <AlertDialog open={!!actionMode} onOpenChange={(open) => { if (!open) { setActionMode(null); setReviewComment(''); setProjectCode(''); } }}>
+      {loadingRequests || loadingDocument ? <Card><CardContent className="flex items-center justify-center gap-2 py-16 text-[12px] text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />PM 등록 프로젝트와 접수 이력을 불러오는 중입니다…</CardContent></Card> : <MigrationAuditRecordList records={filteredRecords} onOpen={(record) => { void openReviewDocument(record); }} reviewStage={reviewStage} />}
+      <MigrationAuditDocumentDialog readiness={isManagementPlanning ? undefined : readiness} open={!!openRecord} record={openRecord} acting={acting} canFinalize={canFinalize} documentPreviewUrls={documentPreviewUrls} documentPreviewStates={documentPreviewStates} reviewStage={reviewStage} onLoadDocumentPreview={loadDocumentPreview} onOpenChange={(open) => { if (!open) { documentLoadSequence.current += 1; setLoadingDocument(false); setOpenRecord(null); setReviewToken(undefined); } }} onApprove={() => { setActionMode('approve'); setProjectCode(String(openRecord?.project.projectCode || '').trim()); }} onReject={() => { setActionMode('reject'); setReviewComment((comment) => comment || (isManagementPlanning ? '' : (openRecord?.project.executiveReviewComment || ''))); setProjectCode(''); }} />
+      <AlertDialog open={!!actionMode} onOpenChange={(open) => { if (!open) { setActionMode(null); setProjectCode(''); } }}>
         <AlertDialogContent>
           <AlertDialogHeader><AlertDialogTitle>{getReviewDialogTitle(actionMode || 'approve', reviewStage)}</AlertDialogTitle><AlertDialogDescription>{getProjectRequestReviewDescription(actionMode || 'approve', openRecord?.request, reviewStage)}</AlertDialogDescription></AlertDialogHeader>
           <div className="space-y-2">
@@ -389,7 +436,8 @@ function ProjectMigrationAuditPageContent({
             <Textarea value={reviewComment} onChange={(event) => setReviewComment(event.target.value)} maxLength={2000} placeholder={actionMode === 'approve' ? (isManagementPlanning ? '합의 판단 근거를 남길 수 있습니다.' : '승인 판단 근거를 남길 수 있습니다.') : 'PM이 보완 내용을 이해할 수 있도록 반려 사유를 남겨 주세요.'} className="min-h-[120px]" />
             <p className="text-right text-[10px] text-slate-500">{reviewComment.length.toLocaleString()}/2,000자</p>
           </div>
-          <AlertDialogFooter><AlertDialogCancel disabled={acting}>취소</AlertDialogCancel><AlertDialogAction onClick={(event) => { event.preventDefault(); void handleConfirmAction(); }} disabled={acting || (isManagementPlanning && actionMode === 'approve' && !projectCode.trim()) || (actionMode !== 'approve' && !reviewComment.trim())}>{acting ? '저장 중...' : actionMode === 'approve' ? (isManagementPlanning ? '합의 및 코드 저장' : '승인 저장') : actionMode === 'reject' ? '반려 저장' : '폐기 저장'}</AlertDialogAction></AlertDialogFooter>
+          {reviewError ? <div role="alert" className="space-y-2 text-sm text-red-700"><p>{reviewError}</p>{!reviewToken && openRecord ? <button type="button" className="underline" onClick={() => { setActionMode(null); void openReviewDocument(openRecord); }}>작성한 의견을 유지하고 변경된 문서 다시 검토</button> : null}</div> : null}
+          <AlertDialogFooter><AlertDialogCancel disabled={acting}>취소</AlertDialogCancel><AlertDialogAction onClick={(event) => { event.preventDefault(); void handleConfirmAction(); }} disabled={acting || !canFinalize || (isManagementPlanning && actionMode === 'approve' && !projectCode.trim()) || (actionMode !== 'approve' && !reviewComment.trim())}>{acting ? '저장 중...' : actionMode === 'approve' ? (isManagementPlanning ? '합의 및 코드 저장' : '승인 저장') : actionMode === 'reject' ? '반려 저장' : '폐기 저장'}</AlertDialogAction></AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
     </div>
