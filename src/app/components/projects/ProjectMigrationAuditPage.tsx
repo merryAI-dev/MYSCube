@@ -56,6 +56,10 @@ const REVIEW_DOCUMENT_FIELDS = {
   proposal_word_original: 'proposalWordOriginalDocument',
   proposal_ppt_original: 'proposalPptOriginalDocument',
   presentation_ppt_original: 'presentationPptOriginalDocument',
+  performance_certificate: 'performanceCertificateDocument',
+  tax_invoice: 'taxInvoiceDocument',
+  final_settlement_report: 'finalSettlementReportDocument',
+  final_report: 'finalReportDocument',
 } as const satisfies Partial<Record<ProjectRequestDocumentKind, keyof Project>>;
 type ReviewDocumentField = typeof REVIEW_DOCUMENT_FIELDS[keyof typeof REVIEW_DOCUMENT_FIELDS];
 

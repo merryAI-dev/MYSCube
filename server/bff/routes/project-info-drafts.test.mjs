@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createIdempotencyService } from '../idempotency.mjs';
 import { buildActiveEditLeaseDocument, resolveEditLeaseDocumentId } from '../edit-lease.mjs';
 import { loadRbacPolicy } from '../rbac-policy.mjs';
+import { mountProjectRoutes } from './projects.mjs';
 import {
   createProjectInfoDraftService,
   createProjectInfoSubmittedOutboxHandler,
@@ -36,6 +37,7 @@ function createDb(seed = {}) {
     const prefix = `${collectionPath}/`;
     const state = { filters: [], limit: Infinity };
     const query = {
+      doc(id) { return doc(`${collectionPath}/${id}`); },
       where(field, op, value) {
         if (op !== '==') throw new Error('mock collection only supports ==');
         state.filters.push([field, value]);
@@ -64,7 +66,7 @@ function createDb(seed = {}) {
     async runTransaction(callback) {
       const writes = [];
       const tx = {
-        get: async (ref) => snapshot(ref.path),
+        get: async (ref) => ref.path ? snapshot(ref.path) : ref.get(),
         set: (ref, value, options = {}) => writes.push({ type: 'set', ref, value: clone(value), options }),
         create: (ref, value) => writes.push({ type: 'create', ref, value: clone(value), options: {} }),
       };
@@ -267,6 +269,93 @@ async function openedDraft(h, key = 'open-a') {
 }
 
 describe('project information private drafts', () => {
+  it.each(['PENDING', 'REJECTED'])('retains a server-stored final report when reopening a %s request', async (status) => {
+    const h = harness();
+    const report = { path: 'orgs/tenant-a/project-registration-documents/project-a/final-report.pdf', name: '결과보고서.pdf' };
+    const requestPath = 'orgs/tenant-a/project_requests/change-project-a';
+    const payload = validV2Payload({ finalReportDocument: report });
+    h.db.documents.set(requestPath, { id: 'change-project-a', requestKind: 'CHANGE', status, requestVersion: 1,
+      targetProjectId: 'project-a', targetProjectVersion: 4, payload, proposedSnapshot: payload });
+    const opened = await openedDraft(h);
+    expect(opened.body.draft.payload.finalReportDocument).toEqual(report);
+    await h.service.update({ ...h.base, idempotencyKey: 'save-final-report', expectedDraftRevision: 0, payload });
+    await h.service.submit({ ...h.base, idempotencyKey: 'submit-trusted-final-report', expectedDraftRevision: 1,
+      expectedVersion: 3, resubmit: status === 'REJECTED', reviewComment: '보완' });
+    expect(h.db.documents.get(requestPath).proposedSnapshot.finalReportDocument).toMatchObject(report);
+  });
+  it('rejects an untrusted final-report path without changing the saved draft or canonical project', async () => {
+    const h = harness();
+    await openedDraft(h);
+    await h.service.update({ ...h.base, idempotencyKey: 'save-forged-final-report', expectedDraftRevision: 0,
+      payload: validV2Payload({ finalReportDocument: { path: 'orgs/tenant-a/project-registration-documents/other-project/report.pdf' } }) });
+    const before = clone([...h.db.documents.entries()]);
+    await expect(h.service.submit({ ...h.base, idempotencyKey: 'submit-forged-final-report', expectedDraftRevision: 1,
+      expectedVersion: 3 })).rejects.toMatchObject({ statusCode: 422 });
+    expect([...h.db.documents.entries()]).toEqual(before);
+  });
+  it('preserves a final report through temporary save, submission, organization-head approval and both document reads', async () => {
+    const storage = {
+      uploadProjectRegistrationAttachment: vi.fn(async (input) => ({
+        path: `orgs/${input.tenantId}/project-registration-documents/${input.projectId}/${input.attachmentId}-${input.fileName}`,
+        name: input.fileName, size: input.buffer.byteLength, contentType: input.mimeType,
+        uploadedAt: '2026-07-12T00:01:00.000Z',
+      })),
+      downloadProjectRegistrationAttachment: vi.fn(async () => ({ buffer: VALID_PDF, contentType: 'application/pdf' })),
+      deleteProjectRegistrationAttachment: vi.fn(async () => undefined),
+    };
+    const h = harness({ storageService: storage });
+    const projectPath = 'orgs/tenant-a/projects/project-a';
+    const project = h.db.documents.get(projectPath);
+    for (const [key, document] of Object.entries(project)) {
+      if (key.endsWith('Document') && document?.path) {
+        project[key] = { ...document, size: VALID_PDF.length, contentType: 'application/pdf' };
+      }
+    }
+    h.db.documents.set(projectPath, project);
+    const before = clone(project);
+    await openedDraft(h);
+    const uploaded = await h.service.addAttachment({ ...h.base, idempotencyKey: 'final-report-upload', expectedDraftRevision: 0,
+      documentKind: 'final_report', fileName: '최종 결과보고서.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length, buffer: VALID_PDF });
+    const attachment = uploaded.body.attachment;
+    await h.service.update({ ...h.base, idempotencyKey: 'final-report-save', expectedDraftRevision: 1,
+      payload: { ...uploaded.body.draft.payload, finalReportDocument: attachment, description: '최종 결과보고서 제출' } });
+    expect(h.db.documents.get(projectPath)).toEqual(before);
+    const reloaded = await h.service.get(h.base);
+    expect(reloaded.draft.payload.finalReportDocument.path).toBe(attachment.path);
+    const unrelatedDraftPath = 'orgs/tenant-a/privateEditDrafts/unrelated';
+    h.db.documents.set(unrelatedDraftPath, { payload: { note: '다른 실무자의 임시저장' } });
+    await h.service.submit({ ...h.base, idempotencyKey: 'final-report-submit', expectedDraftRevision: 2, expectedVersion: 3 });
+    const submitted = h.db.documents.get('orgs/tenant-a/project_requests/change-project-a');
+    expect(submitted.proposedSnapshot.finalReportDocument).toMatchObject({ path: attachment.path, documentKind: 'final_report' });
+    expect(submitted.changedFields).toContainEqual(expect.objectContaining({ key: 'finalReportDocument', label: '최종 결과보고서 PDF' }));
+    expect(h.db.documents.get(projectPath)).toEqual(before);
+    const app = express();
+    app.use(express.json());
+    app.use((req, _res, next) => {
+      req.context = { tenantId: 'tenant-a', actorId: project.executiveApproverId, actorRole: 'pm',
+        requestId: 'review-final-report', idempotencyKey: 'review-final-report' };
+      next();
+    });
+    h.db.documents.set(`orgs/tenant-a/members/${project.executiveApproverId}`, { uid: project.executiveApproverId, role: 'pm', status: 'ACTIVE' });
+    mountProjectRoutes(app, { db: h.db, now: () => '2026-07-12T00:02:00.000Z',
+      idempotencyService: { begin: async () => ({ mode: 'acquired' }), complete: vi.fn(), fail: vi.fn() },
+      projectRequestContractStorageService: { ...storage, inspectProjectRegistrationAttachment: async ({ path }) =>
+        Object.values(submitted.proposedSnapshot).find((value) => value?.path === path) },
+    });
+    app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.code, message: error.message }));
+    const pendingRead = await request(app).get('/api/v1/project-requests/change-project-a/attachments/final_report');
+    expect(pendingRead.status, JSON.stringify(pendingRead.body)).toBe(200);
+    expect(pendingRead.body).toEqual(VALID_PDF);
+    const approved = await request(app).post('/api/v1/projects/project-a/executive-review')
+      .send({ requestId: 'change-project-a', reviewStatus: 'APPROVED' });
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(h.db.documents.get(projectPath).finalReportDocument.path).toBe(attachment.path);
+    expect(h.db.documents.get('orgs/tenant-a/project_requests/change-project-a').approvedSnapshot.finalReportDocument.path).toBe(attachment.path);
+    const canonicalRead = await request(app).get('/api/v1/projects/project-a/attachments/final_report');
+    expect(canonicalRead.status, JSON.stringify(canonicalRead.body)).toBe(200);
+    expect(canonicalRead.body).toEqual(VALID_PDF);
+    expect(h.db.documents.get(unrelatedDraftPath)).toEqual({ payload: { note: '다른 실무자의 임시저장' } });
+  });
   it('keeps an inherited unpublished attachment immutable when the next draft removes it', async () => {
     const storageService = {
       uploadProjectRegistrationAttachment: vi.fn(async (input) => ({

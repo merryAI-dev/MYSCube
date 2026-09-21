@@ -157,6 +157,12 @@ function changeSubmission(payload: Record<string, unknown>, project: Record<stri
 }
 
 describe('project route helpers', () => {
+  it('preserves a canonical final report for an older change snapshot that omitted the field, while honoring explicit removal', () => {
+    const finalReportDocument = { path: 'orgs/mysc/project-registration-documents/project-a/final-report.pdf', name: '결과보고서.pdf' };
+    const project = { ...registrationV2Canonical().project, finalReportDocument };
+    expect(buildProjectPatchFromChangeRequestPayload({}, project).finalReportDocument).toEqual(finalReportDocument);
+    expect(buildProjectPatchFromChangeRequestPayload({ finalReportDocument: null }, project).finalReportDocument).toBeNull();
+  });
   it('does not restore canonical contract analysis when a private replacement omits analysis', () => {
     const canonical = registrationV2Canonical(
       registrationV2Payload({ contractAnalysis: { summary: 'canonical contract A analysis' } }),

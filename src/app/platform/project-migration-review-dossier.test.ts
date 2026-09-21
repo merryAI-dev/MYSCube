@@ -129,12 +129,12 @@ describe('buildMigrationReviewDossier', () => {
 
     expect(dossier.headerTitle).toBe('2026 다자간협력');
     expect(dossier.identity.clientOrg).toBe('KOICA');
-    expect(dossier.identity.groupwareName).toBe('2026 다자간협력 운영');
+    expect(dossier.identity.groupwareName).toBe('-');
     expect(dossier.identity.cic).toBe('CIC1');
     expect(dossier.identity.pmName).toBe('변민욱');
 
     expect(dossier.contract.projectTypeLabel).toBeTruthy();
-    expect(dossier.contract.contractType).toBe('계약서(날인)');
+    expect(dossier.contract.contractType).toBe('-');
     expect(dossier.contract.periodLabel).toContain('2026-01-01');
     expect(dossier.contract.basisLabel).toBe('공급가액 기준');
     expect(dossier.contract.accountTypeLabel).toBe('일반사업(MYSC법인통장)');
@@ -142,8 +142,8 @@ describe('buildMigrationReviewDossier', () => {
 
     expect(dossier.budget.contractAmountLabel).toContain('120,000,000');
     expect(dossier.budget.salesVatAmountLabel).toContain('10,000,000');
-    expect(dossier.budget.paymentPlanSplitLabel).toBe('선금/계약금 48,000,000원 (40%) · 중도금 36,000,000원 (30%) · 잔금 36,000,000원 (30%)');
-    expect(dossier.budget.finalPaymentNote).toBe('잔금은 최종 검수 후 입금');
+    expect(dossier.budget.paymentPlanSplitLabel).toBe('-');
+    expect(dossier.budget.finalPaymentNote).toBe('-');
     expect(dossier.people.teamName).toBe('임팩트 CIC');
     expect(dossier.people.members[0]).toContain('변민욱');
     expect(dossier.people.members[0]).toContain('PM');
@@ -153,9 +153,9 @@ describe('buildMigrationReviewDossier', () => {
     expect(dossier.audit.requestedByName).toBe('변민욱');
     expect(dossier.audit.requestUpdatedAt).toBe('2026. 04. 20. 17:30');
     expect(dossier.audit.reviewedByName).toBe('임원A');
-    expect(dossier.analysis.summary).toContain('계약 기간과 계약금액');
-    expect(dossier.contractDocument.name).toBe('네팔_계약서.pdf');
-    expect(dossier.contractDocument.downloadURL).toContain('contract.pdf');
+    expect(dossier.analysis.summary).toBe('-');
+    expect(dossier.contractDocument.name).toBe('-');
+    expect(dossier.contractDocument.downloadURL).toBe('-');
     expect(dossier.submittedFields.find((field) => field.label === '인건비 정산 기준')?.value).toBe('미입력');
     expect(dossier.submittedFields.find((field) => field.label === '정산 가이드')?.value).toBe('정산 가이드');
     expect(dossier.submittedFields.find((field) => field.label === '등록 메모')?.value).toBe('임원 검토 메모 없음');
@@ -363,7 +363,7 @@ describe('buildMigrationReviewDossier', () => {
     })?.name).toBe('제안_계약서.pdf');
   });
 
-  it('prefers current project team members over stale request payload values', () => {
+  it('keeps submitted team members even when the project has since changed', () => {
     const dossier = buildMigrationReviewDossier(
       {
         ...project,
@@ -385,12 +385,11 @@ describe('buildMigrationReviewDossier', () => {
     );
 
     expect(dossier.people.members).toEqual([
-      '변민욱 (보람) / PM / 80%',
-      '이지영 (이지) / 정산 / 20%',
+      '김다은 (데이나) / 운영 / 100%',
     ]);
   });
 
-  it('treats an explicit empty project team list as current in CIC review', () => {
+  it('preserves an explicit empty submitted team list', () => {
     const dossier = buildMigrationReviewDossier(
       {
         ...project,
@@ -400,10 +399,8 @@ describe('buildMigrationReviewDossier', () => {
         ...request,
         payload: {
           ...request.payload,
-          teamMembers: '김다은(데이나)',
-          teamMembersDetailed: [
-            { memberName: '김다은', memberNickname: '데이나', role: '운영', participationRate: 100 },
-          ],
+          teamMembers: '',
+          teamMembersDetailed: [],
         },
       },
     );
@@ -422,7 +419,8 @@ describe('buildMigrationReviewDossier', () => {
         ...request,
         payload: {
           ...request.payload,
-          paymentPlan: { contract: 50_000, interim: 30_000, final: 20_000 },
+          contractAmount: 100_000,
+          paymentPlan: { contract: 0, interim: 20_000, final: 0 },
         },
       },
     );
@@ -430,7 +428,7 @@ describe('buildMigrationReviewDossier', () => {
     expect(dossier.budget.paymentPlanSplitLabel).toBe('선금/계약금 0원 (0%) · 중도금 20,000원 (20%) · 잔금 0원 (0%)');
   });
 
-  it('prefers current project settlement fields over stale request payload values', () => {
+  it('keeps submitted settlement fields independent of the current project', () => {
     const dossier = buildMigrationReviewDossier(
       {
         ...project,
@@ -451,9 +449,41 @@ describe('buildMigrationReviewDossier', () => {
       },
     );
 
-    expect(dossier.contract.settlementTypeLabel).toBe('Type1. 세금계산서발행+공급가액');
-    expect(dossier.contract.basisLabel).toBe('공급가액 기준');
-    expect(dossier.contract.accountTypeLabel).toBe('전용계좌 사업(이나라도움)');
-    expect(dossier.contract.fundInputModeLabel).toBe('직접 입력');
+    expect(dossier.contract.settlementTypeLabel).toBe('정산 없음');
+    expect(dossier.contract.basisLabel).toBe('정산 없음');
+    expect(dossier.contract.accountTypeLabel).toBe('일반사업(MYSC법인통장)');
+    expect(dossier.contract.fundInputModeLabel).toBe('통장내역 업로드');
+  });
+});
+
+describe('submitted snapshot isolation', () => {
+  it.each(['REGISTRATION', 'CHANGE'] as const)('%s never fills submitted blanks from a later project', (requestKind) => {
+    for (const status of ['PENDING', 'APPROVED', 'REJECTED'] as const) {
+      const snapshot = { ...request.payload, name: '제출본', contractAmount: 0,
+        contractDocument: null, teamMembersDetailed: [], teamMembers: '', staffing: undefined,
+        contractAnalysis: null, contractEndUndecided: false };
+      const submitted = { ...request, requestKind, status, payload: snapshot,
+        ...(requestKind === 'CHANGE' ? { proposedSnapshot: snapshot } : {}) };
+      const dossier = buildMigrationReviewDossier({ ...project, name: '현재 원장', contractEndUndecided: true }, submitted);
+      expect(dossier.headerTitle).toBe('제출본');
+      expect(dossier.budget.contractAmountLabel).toBe('0원');
+      expect(dossier.people.members).toEqual([]);
+      expect(dossier.contractDocument.name).toBe('-');
+      expect(dossier.analysis.summary).toBe('-');
+      expect(dossier.contract.periodLabel).toContain('2026-12-31');
+      expect(resolveMigrationReviewContractDocument(project, submitted)).toBeNull();
+    }
+  });
+
+  it('uses the multi-year submitted payment rows for the overall ratio without rewriting them', () => {
+    const snapshot = { ...request.payload, contractStart: '2025-01-01', contractEnd: '2029-12-31',
+      contractAmount: 3_500_000_000, paymentPlan: { contract: 490_000_000, interim: 0, final: 210_000_000 },
+      financialYears: [2025, 2026, 2027, 2028, 2029].map(year => ({ year, contractAmount: 700_000_000,
+        salesVatAmount: 0, totalRevenueAmount: 0, totalActualCost: 0, supportAmount: 0, profitRate: 0, confirmed: false,
+        paymentPlan: { contract: 490_000_000, interim: 0, final: 210_000_000 } })) };
+    const before = JSON.stringify(snapshot);
+    const dossier = buildMigrationReviewDossier(project, { ...request, payload: snapshot });
+    expect(dossier.budget.paymentPlanSplitLabel).toContain('선금/계약금 2,450,000,000원 (70%)');
+    expect(JSON.stringify(snapshot)).toBe(before);
   });
 });

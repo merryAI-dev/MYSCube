@@ -207,18 +207,15 @@ export function MigrationAuditDetailPanel({
     fallbackActorName: record.managerName,
     fallbackRequestedAt: record.requestedAt,
   });
-  const useRequestPayloadAsCurrent = isChangeRequest && record.request?.status === 'PENDING';
-  const requestPayload = resolveProjectRequestPayload(record.request);
-  const totalActualCost = requestPayload?.totalActualCost ?? record.project.totalActualCost;
-  const financialYears = projectFinancialYearsWithPaymentPlan(requestPayload?.financialYears ? requestPayload : record.project);
-  const interestRefundPolicy = requestPayload?.interestRefundPolicy ?? record.project.interestRefundPolicy;
-  const registrationNote = requestPayload?.note ?? record.project.note;
-  const quoteDocument = requestPayload?.quoteDocument !== undefined ? requestPayload.quoteDocument : record.project.quoteDocument;
-  const quoteSubmissionDeferred = requestPayload?.quoteSubmissionDeferred ?? record.project.quoteSubmissionDeferred;
-  const registrationConfirmations = requestPayload?.registrationConfirmations ?? record.project.registrationConfirmations;
-  const contractDocument = useRequestPayloadAsCurrent
-    ? (requestPayload?.contractDocument || record.project.contractDocument || null)
-    : (record.project.contractDocument || requestPayload?.contractDocument || null);
+  const reviewPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
+  const totalActualCost = reviewPayload?.totalActualCost;
+  const financialYears = projectFinancialYearsWithPaymentPlan(reviewPayload);
+  const interestRefundPolicy = reviewPayload?.interestRefundPolicy;
+  const registrationNote = reviewPayload?.note;
+  const quoteDocument = reviewPayload?.quoteDocument;
+  const quoteSubmissionDeferred = reviewPayload?.quoteSubmissionDeferred;
+  const registrationConfirmations = reviewPayload?.registrationConfirmations;
+  const contractDocument = reviewPayload?.contractDocument ?? null;
 
   return (
     <Card
@@ -233,8 +230,8 @@ export function MigrationAuditDetailPanel({
                 <Badge className="border border-slate-200 bg-slate-50 text-slate-700">
                   {getMigrationAuditStatusLabel(record.status)}
                 </Badge>
-                <Badge variant="outline">{record.cic}</Badge>
-                <Badge variant="outline">{record.clientOrg || '계약 대상 미지정'}</Badge>
+                <Badge variant="outline">{dossier.identity.cic}</Badge>
+                <Badge variant="outline">{dossier.identity.clientOrg}</Badge>
                 {isChangeRequest && record.status === 'PENDING' ? (
                   <Badge variant="outline" className="border-amber-300 bg-amber-50 text-amber-800">수정 중</Badge>
                 ) : null}
@@ -244,7 +241,7 @@ export function MigrationAuditDetailPanel({
                   {isChangeRequest ? 'PM 수정 요청' : isPmPortalProject ? 'PM 등록 요청' : '프로젝트 원장'}
                 </p>
                 <h2 className="mt-1 text-[24px] font-semibold tracking-[-0.02em] text-slate-950">
-                  {record.title}
+                  {dossier.headerTitle}
                 </h2>
                 <p className="mt-2 max-w-3xl text-[12px] leading-6 text-slate-600">
                   {requestVersionDescription}

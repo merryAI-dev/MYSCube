@@ -318,3 +318,10 @@
 - [2026-09-17] 프로젝트 등록/승인: 부모의 대기 전용 필터로 승인 완료·반려 문서가 사라지는 문제 수정. 상단 대기 건수·요약·목록을 같은 요청 상태 판정으로 정렬. 원장 데이터 변경 없음. [화면 기록](./pages/admin-project-approvals.md)
 
 - [2026-09-17] 기존 계약서 승인 호환: JLIN·전남의 과거 첨부 경로가 새 승인 검사에서 거절되는 원인을 수정. 동일 tenant·프로젝트 원장의 동일 필드 참조와 실제 파일 메타데이터를 검증한 기존 파일만 승인/조회에 허용. 신규 업로드 경로 제한·결재 권한·버전 검증 유지. 운영 데이터 쓰기 및 파일 마이그레이션 없음.
+
+## [2026-09-21] patch-note | project-review-consistency | 최종 제출·승인 문서 정합성
+
+- pages: [portal-register-project](./pages/portal-register-project.md), [portal-edit-project](./pages/portal-edit-project.md), [admin-project-approvals](./pages/admin-project-approvals.md)
+- 원인: 승인 문서에서 제출본과 현재 원장이 혼용되고, 일부 첨부 매핑·다년도 입금 계산 기준이 달랐다.
+- 조치: 제출본 기준 표시 통일, 최종 보고서 제출·승인 매핑 연결, 추가 문서와 Drive 링크 표시, 공통 입금 계산 적용.
+- 결과: 격리 테스트에서 임시저장 보존과 제출·승인 조회 일치를 확인했다. 운영 데이터 변경은 없으며 배포 완료 여부는 별도 확인한다.

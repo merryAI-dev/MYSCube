@@ -46,7 +46,11 @@ type ReviewDocumentField =
   | 'rfpRequestEvidenceDocument'
   | 'proposalWordOriginalDocument'
   | 'proposalPptOriginalDocument'
-  | 'presentationPptOriginalDocument';
+  | 'presentationPptOriginalDocument'
+  | 'performanceCertificateDocument'
+  | 'taxInvoiceDocument'
+  | 'finalSettlementReportDocument'
+  | 'finalReportDocument';
 
 type ReviewDocumentDefinition = {
   kind: ProjectRequestDocumentKind;
@@ -82,6 +86,10 @@ const REVIEW_DOCUMENT_DEFINITIONS: ReviewDocumentDefinition[] = [
   { kind: 'proposal_word_original', field: 'proposalWordOriginalDocument', label: '제안서 Word 원본' },
   { kind: 'proposal_ppt_original', field: 'proposalPptOriginalDocument', label: '제안서 PPT 원본' },
   { kind: 'presentation_ppt_original', field: 'presentationPptOriginalDocument', label: '발표자료 PPT 원본' },
+  { kind: 'performance_certificate', field: 'performanceCertificateDocument', label: '수행확인서' },
+  { kind: 'tax_invoice', field: 'taxInvoiceDocument', label: '세금계산서' },
+  { kind: 'final_settlement_report', field: 'finalSettlementReportDocument', label: '최종 정산보고서' },
+  { kind: 'final_report', field: 'finalReportDocument', label: '최종 결과보고서' },
 ];
 
 const REVIEW_DOCUMENT_SLOTS: ReviewDocumentSlotDefinition[] = [
@@ -114,7 +122,12 @@ export function buildMigrationReviewDocumentSlots(record: MigrationAuditConsoleR
     documentByKind.set(definition.kind, { ...definition, document });
   });
 
-  return REVIEW_DOCUMENT_SLOTS.map((slot) => {
+  const additionalSlots = REVIEW_DOCUMENT_DEFINITIONS
+    .filter((definition) => !REVIEW_DOCUMENT_SLOTS.some((slot) => slot.kinds.includes(definition.kind))
+      && documentByKind.has(definition.kind))
+    .map((definition, index) => ({ number: 8 + index, label: definition.label, kinds: [definition.kind] }));
+
+  return [...REVIEW_DOCUMENT_SLOTS, ...additionalSlots].map((slot: ReviewDocumentSlotDefinition) => {
     const entries = slot.kinds.flatMap((kind) => {
       const entry = documentByKind.get(kind);
       return entry ? [entry] : [];
@@ -222,7 +235,7 @@ export function MigrationAuditDocumentDialog({
   const registrationNote = reviewPayload?.note;
   const confirmations = reviewPayload?.registrationConfirmations;
   const checkout = reviewPayload?.checkout;
-  const checkoutVisible = record.project.status === 'COMPLETED' || record.project.status === 'COMPLETED_PENDING_PAYMENT';
+  const checkoutVisible = reviewPayload?.status === 'COMPLETED' || reviewPayload?.status === 'COMPLETED_PENDING_PAYMENT';
   const quoteDocument = reviewPayload?.quoteDocument;
   const quoteSubmissionDeferred = reviewPayload?.quoteSubmissionDeferred;
   const designatedApproverName = reviewPayload?.executiveApproverName || '';
@@ -281,6 +294,7 @@ export function MigrationAuditDocumentDialog({
       <DialogContent className="max-h-[calc(100dvh-2rem)] max-w-[1180px] overflow-y-auto rounded-none border border-slate-500 bg-slate-100 p-5 shadow-2xl sm:max-w-[1180px]">
         <DialogHeader className="sr-only"><DialogTitle>프로젝트 등록 및 승인서</DialogTitle><DialogDescription>프로젝트 등록 내용을 결재 문서 형식으로 확인합니다.</DialogDescription></DialogHeader>
         <article className="mx-auto w-full max-w-[1020px] border border-slate-400 bg-white px-8 py-9 text-slate-900" data-testid="migration-review-document">
+          {record.request ? <p className="mb-4 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[12px] text-blue-900">최종 제출한 내용을 기준으로 검토합니다. 제출 후 임시저장한 수정 내용은 이 결재 문서에 포함되지 않습니다.</p> : null}
           <header className="border-b-2 border-slate-700 pb-5">
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_410px]">
               <div className="flex min-h-[138px] flex-col justify-center">
@@ -324,7 +338,7 @@ export function MigrationAuditDocumentDialog({
           <section className="mt-6 border border-slate-400">
             <DocumentCell label="문서 번호" value={record.request?.id || record.id} />
             <DocumentCell label="작성 일자" value={formatDateTime(record.requestedAt)} />
-            <DocumentCell label="기안 부서" value={record.cic} />
+            <DocumentCell label="기안 부서" value={dossier.identity.cic} />
             <DocumentCell label="기안자" value={dossier.audit.requestedByName} />
             <DocumentCell label="결재 상태" value={documentStatus} />
           </section>
@@ -388,7 +402,7 @@ export function MigrationAuditDocumentDialog({
             <DocumentCell label="프로젝트 목적" value={dossier.notes.projectPurpose} /><DocumentCell label="상세 설명" value={dossier.notes.description} /><DocumentCell label="참여 조건" value={dossier.notes.participantCondition} /><DocumentCell label="등록 메모" value={registrationNote || '-'} />
           </dl></section>
           <section className="mt-6">
-            <h3 className="border-b-2 border-slate-700 pb-2 text-[14px] font-bold">등록 제출서류 7종</h3>
+            <h3 className="border-b-2 border-slate-700 pb-2 text-[14px] font-bold">등록 제출서류 7종{documentSlots.length > 7 ? ' 및 추가 제출서류' : ''}</h3>
             <div className="border border-t-0 border-slate-400" data-testid="migration-review-document-slots">
               <div className="hidden grid-cols-[48px_220px_minmax(0,1fr)_108px] border-b border-slate-400 bg-slate-100 text-[11px] font-semibold text-slate-700 md:grid">
                 <div className="border-r border-slate-400 px-2 py-2 text-center">번호</div>
@@ -429,15 +443,15 @@ export function MigrationAuditDocumentDialog({
                           </p>
                         ) : null}
                       </div>
-                    ) : slot.link ? (
-                      <a className="break-all text-blue-700 underline" href={slot.link} target="_blank" rel="noreferrer">{slot.link}</a>
-                    ) : slot.note ? (
+                    ) : slot.link ? null
+                    : slot.note ? (
                       <p><span className="font-semibold text-slate-600">미첨부 사유</span> · {slot.note}</p>
                     ) : slot.optional ? (
                       <p className="text-slate-500">선택 · 미제출</p>
                     ) : (
                       <p className="text-rose-700">미제출</p>
                     )}
+                    {slot.link ? <a className="block break-all text-blue-700 underline" href={slot.link} target="_blank" rel="noreferrer">{slot.link}</a> : null}
                   </div>
                   <div className="flex items-center justify-center px-3 py-3">
                     {slot.entries.length > 0 ? (

@@ -924,6 +924,7 @@ export function buildProjectRequestPayloadFromDraft(draftInput: ProjectEditorDra
     performanceCertificateDocument: draft.performanceCertificateDocument,
     taxInvoiceDocument: draft.taxInvoiceDocument,
     finalSettlementReportDocument: draft.finalSettlementReportDocument,
+    finalReportDocument: draft.finalReportDocument,
     contractAnalysis: draft.contractAnalysis,
   };
 }
@@ -1042,6 +1043,7 @@ export function buildProjectEditorProjectPatch(
     performanceCertificateDocument: draft.performanceCertificateDocument,
     taxInvoiceDocument: draft.taxInvoiceDocument,
     finalSettlementReportDocument: draft.finalSettlementReportDocument,
+    finalReportDocument: draft.finalReportDocument,
     contractAnalysis: draft.contractAnalysis,
     department: normalizeProjectDepartment(draft.department),
     cic: resolveProjectCic({ department: draft.department }),

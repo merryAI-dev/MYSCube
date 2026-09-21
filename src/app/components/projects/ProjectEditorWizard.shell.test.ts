@@ -512,8 +512,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).toContain('INTEREST_REFUND_POLICY_LABELS');
     expect(source).not.toContain('최종 입금 재무주차');
     expect(source).not.toContain('placeholder="예: 26-8-1"');
-    expect(source).toContain('const effectivePaymentPlan = hasMultiYearContract');
-    expect(source).toContain('total.contract + (row.paymentPlan?.contract || 0)');
+    expect(source).toContain('const effectivePaymentPlan = projectEffectivePaymentPlan(draft)');
     expect(source).toContain('년 선금·중도금 합계 70% 미만 사유`}');
     expect(source).toContain("updateFinancialYear(financialYearIndex!, 'advanceInterimBelow70Reason'");
     expect(source).not.toContain('년 계약/재무 정산 완료');

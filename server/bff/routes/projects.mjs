@@ -1137,6 +1137,7 @@ function registrationPrivateDocuments(attachmentRefs) {
     performanceCertificateDocument: latest.get('performance_certificate') || null,
     taxInvoiceDocument: latest.get('tax_invoice') || null,
     finalSettlementReportDocument: latest.get('final_settlement_report') || null,
+    finalReportDocument: latest.get('final_report') || null,
   };
 }
 
@@ -1419,6 +1420,7 @@ const PROJECT_INFO_DOCUMENT_FIELDS = [
     'performanceCertificateDocument',
     'taxInvoiceDocument',
     'finalSettlementReportDocument',
+    'finalReportDocument',
   ]),
 ];
 
@@ -1897,6 +1899,7 @@ export function buildProjectRequestPayloadFromProject(project, existingPayload =
     finalSettlementReportDocument: project?.finalSettlementReportDocument
       ?? existingPayload.finalSettlementReportDocument
       ?? null,
+    finalReportDocument: project?.finalReportDocument ?? existingPayload.finalReportDocument ?? null,
     contractAnalysis: project?.contractAnalysis ?? existingPayload.contractAnalysis ?? null,
   };
 }
@@ -2060,6 +2063,9 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
     performanceCertificateDocument: payload.performanceCertificateDocument || null,
     taxInvoiceDocument: payload.taxInvoiceDocument || null,
     finalSettlementReportDocument: payload.finalSettlementReportDocument || null,
+    finalReportDocument: Object.hasOwn(payload, 'finalReportDocument')
+      ? payload.finalReportDocument || null
+      : currentProject.finalReportDocument || null,
     contractAnalysis: payload.contractAnalysis || null,
     budgetCurrentYear: Number.isFinite(Number(payload.contractAmount))
       ? Math.max(0, Math.round(Number(payload.contractAmount)))
@@ -2133,6 +2139,7 @@ const PROJECT_INFO_CHANGE_LABELS = {
   performanceCertificateDocument: '수행확인서 PDF',
   taxInvoiceDocument: '세금계산서 PDF',
   finalSettlementReportDocument: '최종 정산보고서 PDF',
+  finalReportDocument: '최종 결과보고서 PDF',
 };
 
 const PROJECT_INFO_PAYLOAD_FIELDS = [
@@ -2153,6 +2160,7 @@ const PROJECT_INFO_PAYLOAD_FIELDS = [
   'proposalWordOriginalDocument', 'proposalPptOriginalDocument',
   'presentationPptOriginalDocument', 'rfpRequestEvidenceDocument',
   'performanceCertificateDocument', 'taxInvoiceDocument', 'finalSettlementReportDocument',
+  'finalReportDocument',
   'contractAnalysis',
 ];
 
@@ -2236,6 +2244,7 @@ function projectInfoPayloadWithDocuments(
     performanceCertificateDocument: effectiveDocument('performanceCertificateDocument'),
     taxInvoiceDocument: effectiveDocument('taxInvoiceDocument'),
     finalSettlementReportDocument: effectiveDocument('finalSettlementReportDocument'),
+    finalReportDocument: effectiveDocument('finalReportDocument'),
     contractAnalysis: contractAnalysis && typeof contractAnalysis === 'object'
       ? contractAnalysis
       : null,
@@ -3317,6 +3326,7 @@ export function mountProjectRoutes(app, {
       performance_certificate: 'performanceCertificateDocument',
       tax_invoice: 'taxInvoiceDocument',
       final_settlement_report: 'finalSettlementReportDocument',
+      final_report: 'finalReportDocument',
     }[documentKind];
     if (!requestId || requestId.includes('/') || !field) {
       throw createHttpError(400, 'Project request attachment is invalid', 'project_request_attachment_invalid');

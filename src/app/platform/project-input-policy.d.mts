@@ -7,3 +7,5 @@ export function projectFinancialYearsWithPaymentPlan<Row extends { year: number 
 export function projectParticipationPeriodWarnings(project: object): ProjectInputIssue[];
 
 export function projectContractEndYear(project: object, currentYear?: number): number;
+
+export function projectEffectivePaymentPlan(project: object | null | undefined): { contract: number; interim: number; final: number } | undefined;

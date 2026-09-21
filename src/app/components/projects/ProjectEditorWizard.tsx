@@ -1,5 +1,5 @@
 import { ProjectAmountInput } from './ProjectAmountInput';
-import { hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings, projectContractEndYear } from '../../platform/project-input-policy.mjs';
+import { projectEffectivePaymentPlan, hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings, projectContractEndYear } from '../../platform/project-input-policy.mjs';
 import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import {
   ArrowLeft,
@@ -1135,13 +1135,7 @@ export function ProjectEditorWizard({
   const settlementDetailsEnabled = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const requiresSettlementConfirmations = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const showProjectCheckout = draft.status === 'COMPLETED' || draft.status === 'COMPLETED_PENDING_PAYMENT';
-  const effectivePaymentPlan = hasMultiYearContract
-    ? draft.financialYears.reduce((total, row) => ({
-      contract: total.contract + (row.paymentPlan?.contract || 0),
-      interim: total.interim + (row.paymentPlan?.interim || 0),
-      final: total.final + (row.paymentPlan?.final || 0),
-    }), { contract: 0, interim: 0, final: 0 })
-    : draft.paymentPlan;
+  const effectivePaymentPlan = projectEffectivePaymentPlan(draft) ?? { contract: 0, interim: 0, final: 0 };
   const paymentPlanTotal = effectivePaymentPlan.contract + effectivePaymentPlan.interim + effectivePaymentPlan.final;
   const advanceInterimRatio = draft.contractAmount > 0
     ? (effectivePaymentPlan.contract + effectivePaymentPlan.interim) / draft.contractAmount
@@ -3101,7 +3095,7 @@ export function ProjectEditorWizard({
       ['interim', '중도금', financialYear ? `${financialYear.year}년 중도금 예상 입금 시점` : '중도금 입금 예상월'],
       ['final', '잔금', financialYear ? `${financialYear.year}년 잔금 예상 입금 시점` : '잔금 입금 예상월'],
     ] as const;
-    const paymentBase = financialYear?.contractAmount || draft.contractAmount;
+    const paymentBase = financialYear ? financialYear.contractAmount : draft.contractAmount;
     const paymentSum = paymentPlan.contract + paymentPlan.interim + paymentPlan.final;
     const koreanPaymentSum = formatKoreanAmountUnit(paymentSum);
     const advanceRatio = financialYear ? yearAdvanceInterimRatio : advanceInterimRatio;

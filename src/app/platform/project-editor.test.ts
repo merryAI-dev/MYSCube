@@ -1036,3 +1036,18 @@ describe('실제 투입인력 (staffing)', () => {
     }
   });
 });
+
+describe('final report submission mapping', () => {
+  it('preserves the uploaded reference and an explicit removal in registration and edit submissions', () => {
+    const draft = createProjectEditorDraft(baseProject);
+    const document = { name: '최종보고.pdf', path: 'orgs/mysc/project-info-drafts/pm-1/draft-1/final_report/report.pdf',
+      size: 120, contentType: 'application/pdf', uploadedAt: '2026-09-21T00:00:00Z', downloadURL: '' };
+    for (const attachment of [document, null]) {
+      draft.finalReportDocument = attachment;
+      expect(buildProjectRequestPayloadFromDraft(draft).finalReportDocument).toEqual(attachment);
+      expect(buildProjectEditorProjectPatch(draft, { baseProject, mode: 'portal-edit',
+        actorId: 'pm-1', actorName: 'PM', now: '2026-09-21T00:00:00Z' }).finalReportDocument).toEqual(attachment);
+      expect(draft.finalReportDocument).toEqual(attachment);
+    }
+  });
+});

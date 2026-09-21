@@ -38,6 +38,16 @@ export function projectFinancialYearsWithPaymentPlan(project) {
   } : row);
 }
 
+export function projectEffectivePaymentPlan(project) {
+  if (!project) return undefined;
+  if (!hasMultiYearProjectContract(project)) return project.paymentPlan;
+  const rows = Array.isArray(project.financialYears) ? project.financialYears : [];
+  if (!rows.length) return undefined;
+  return Object.fromEntries(paymentFields.map((field) => [field,
+    rows.reduce((total, row) => total + (Number(row?.paymentPlan?.[field]) || 0), 0),
+  ]));
+}
+
 export function projectPaymentIssues(project) {
   const annual = hasMultiYearProjectContract(project);
   const sources = annual ? (Array.isArray(project.financialYears) ? project.financialYears : []) : [project];
