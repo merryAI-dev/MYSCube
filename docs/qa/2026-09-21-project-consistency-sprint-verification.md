@@ -46,3 +46,8 @@
 - 단위/회귀: 전체 4,252개 통과, 282개 skip. 초안 저장/재열기 및 완성한 기타 역할 제출 보존을 추가 검증했다. 기존 실제 infoDraft service의 staffing 제출·검토 diff 테스트도 통과했다.
 - 빌드 통과(19.55초). 이전 검사와 비교한 신규 타입 오류 0. 로그: `/tmp/myscube-staffing-unit.log`, `/tmp/myscube-staffing-build.log`, `/tmp/myscube-staffing-tsc.log`.
 - 독립 브라우저 QA PASS: 실제 Wizard와 infoDraft service를 격리 연결하여 추가→공백 포함 역할 입력→빈 두 번째 행→서버 초안 저장→로컬 캐시 제거 후 재열기→첫 행 삭제를 확인했다. JavaScript 오류 0. 증거 `/tmp/myscube-staffing-qa/result.json`, `after.png`. 실제 운영 인증/인력 명부 선택은 이 fixture 검증 범위가 아니다.
+
+## 배포 승인 후 최종 리뷰
+
+- 재조회 중 문서를 닫을 때 로딩 상태가 남는 문제를 발견해 닫기 처리에서 해제했다. 독립 브라우저 4/4 통과: 기존 3개와 지연 재조회→닫기→목록 복귀→늦은 응답 무시→다시 열기 1개. 로그 `/tmp/review-version-close-browser.log`. 기존 정합성 4개를 합쳐 승인 화면 검증은 8개다.
+- 사용자가 배포를 승인했다. PR #801의 CI를 거쳐 main 자동 배포를 진행한다. 배포 전에 열었던 승인 화면은 새로고침이 필요하다.

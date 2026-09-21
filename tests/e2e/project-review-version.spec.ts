@@ -106,7 +106,7 @@ test('closing a delayed reread restores the list and ignores the late document r
  await page.getByRole('button',{name:'승인 저장',exact:true}).click();
  await page.getByRole('button',{name:'작성한 의견을 유지하고 변경된 문서 다시 검토'}).click();
  await expect.poll(()=>reads).toBe(2);
- await page.keyboard.press('Escape');
+ await page.getByRole('button',{name:'Close',exact:true}).click();
  await expect(doc).toHaveCount(0);
  await expect(list).toBeVisible();
  release();await responded;
