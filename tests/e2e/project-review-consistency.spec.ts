@@ -30,6 +30,11 @@ async function openDocument(page: Page, options: { payload?: Record<string, unkn
     const path = new URL(route.request().url()).pathname;
     if (path.includes('draft')) draftReads.push(path);
     if (path === '/api/v1/projects') return route.fulfill({ json: { items: [options.canonical || project], nextCursor: null } });
+    if (path === '/api/v1/projects/qa-review/review-document') return route.fulfill({ json: {
+      project: options.canonical || project,
+      request: { id: 'change-qa-review', targetProjectId: project.id, requestKind: 'CHANGE', status: 'PENDING', requestVersion: 2,
+        requestedAt: '2026-09-21T00:00:00Z', proposedSnapshot: payload }, reviewToken: 'isolated-review-token',
+    } });
     if (path === '/api/v1/project-requests/review-inbox') return route.fulfill({ json: { items: [{ id: 'change-qa-review',
       targetProjectId: project.id, requestKind: 'CHANGE', status: 'PENDING', requestVersion: 2,
       requestedAt: '2026-09-21T00:00:00Z', proposedSnapshot: payload }] } });

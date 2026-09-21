@@ -1,3 +1,4 @@
+import { submissionAmount, submittedParticipationLines, submissionPaymentPlan } from './project-submission-display';
 import {
   ACCOUNT_TYPE_LABELS,
   BASIS_LABELS,
@@ -27,7 +28,6 @@ import {
 } from './project-team-members';
 import { getMigrationAuditStatusLabel } from './project-migration-console';
 import { resolveProjectRequestPayload } from './project-change-request';
-import { projectEffectivePaymentPlan } from './project-input-policy.mjs';
 import { formatProjectStaffingSummary } from './project-editor';
 
 export interface MigrationReviewDossier {
@@ -66,6 +66,7 @@ export interface MigrationReviewDossier {
   people: {
     teamName: string;
     members: string[];
+    submittedParticipation: string[];
     staffingSummary: string;
     participationSheetLink: string;
   };
@@ -184,10 +185,7 @@ function readable(value: string | null | undefined, fallback = '-') {
   return normalized || fallback;
 }
 
-function formatStoredProjectAmount(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return '-';
-  return `${Number(value).toLocaleString('ko-KR')}원`;
-}
+
 
 function formatDate(value: string | null | undefined): string {
   const normalized = readable(value, '');
@@ -214,24 +212,26 @@ function formatDateTime(value: string | null | undefined): string {
 }
 
 function formatPaymentPlanSplit(
-  plan: Project['paymentPlan'] | ProjectRequest['payload']['paymentPlan'] | null | undefined,
+  plan: Partial<NonNullable<Project['paymentPlan']>> | null | undefined,
   contractAmount: number | null | undefined,
+  currency?: string,
+  months?: Project['paymentExpectedMonths'],
 ): string {
   if (!plan) return '-';
   const normalizedContractAmount = Number(contractAmount);
   const entries = [
-    ['선금/계약금', plan.contract],
-    ['중도금', plan.interim],
-    ['잔금', plan.final],
+    ['선금/계약금', plan.contract, months?.contract],
+    ['중도금', plan.interim, months?.interim],
+    ['잔금', plan.final, months?.final],
   ] as const;
   const label = entries
-    .filter(([, value]) => Number.isFinite(Number(value)))
-    .map(([name, value]) => {
+    .map(([name, value, month]) => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return `${name} 미입력${month ? ` · ${month}` : ''}`;
       const amount = Number(value);
       const percent = Number.isFinite(normalizedContractAmount) && normalizedContractAmount > 0
         ? ` (${((amount / normalizedContractAmount) * 100).toFixed(0)}%)`
         : '';
-      return `${name} ${amount.toLocaleString('ko-KR')}원${percent}`;
+      return `${name} ${submissionAmount(amount, currency)}${percent}${month ? ` · ${month}` : ''}`;
     })
     .join(' · ');
   return label || '-';
@@ -311,6 +311,7 @@ export function buildMigrationReviewDossier(
 ): MigrationReviewDossier {
   const payload = resolveProjectRequestPayload(request);
   const snapshot = request ? payload : project;
+  const formatStoredProjectAmount = (value: unknown, explicit?: boolean) => submissionAmount(value, snapshot?.currency, explicit);
   const contractDocument = resolveMigrationReviewContractDocument(project, request);
   const contractAnalysis = snapshot?.contractAnalysis;
   const currentName = submittedValue(request, project.name, payload?.name);
@@ -343,7 +344,7 @@ export function buildMigrationReviewDossier(
       groupwareName: readable(submittedValue(request, project.groupwareName, payload?.groupwareName)),
     },
     contract: {
-      projectTypeLabel: PROJECT_TYPE_LABELS[normalizeProjectType(submittedValue(request, project.type, payload?.type))] || readable(snapshot?.type),
+      projectTypeLabel: snapshot?.type == null || String(snapshot.type).trim() === '' ? '미입력' : PROJECT_TYPE_LABELS[normalizeProjectType(submittedValue(request, project.type, payload?.type))] || readable(snapshot?.type),
       periodLabel: (() => {
         const start = readable(submittedValue(request, project.contractStart, payload?.contractStart));
         const openEnded = snapshot?.contractEndUndecided === true;
@@ -352,11 +353,12 @@ export function buildMigrationReviewDossier(
         return `${start} ~ ${openEnded ? '종료 기간 없음' : end}`;
       })(),
       contractType: snapshot?.contractType == null ? '-' : readable(normalizeProjectContractType(snapshot.contractType)),
-      settlementTypeLabel: SETTLEMENT_TYPE_LABELS[normalizeSettlementType(submittedValue(request, project.settlementType, payload?.settlementType))] || '-',
-      basisLabel: BASIS_LABELS[normalizeBasis(submittedValue(request, project.basis, payload?.basis))] || '-',
-      accountTypeLabel: ACCOUNT_TYPE_LABELS[normalizeAccountType(submittedValue(request, project.accountType, payload?.accountType))] || '-',
-      fundInputModeLabel: PROJECT_FUND_INPUT_MODE_LABELS[normalizeProjectFundInputMode(submittedValue(request, project.fundInputMode, payload?.fundInputMode))] || '-',
+      settlementTypeLabel: snapshot?.settlementType == null || String(snapshot.settlementType).trim() === '' ? '미입력' : SETTLEMENT_TYPE_LABELS[normalizeSettlementType(submittedValue(request, project.settlementType, payload?.settlementType))] || '-',
+      basisLabel: snapshot?.basis == null || String(snapshot.basis).trim() === '' ? '미입력' : BASIS_LABELS[normalizeBasis(submittedValue(request, project.basis, payload?.basis))] || '-',
+      accountTypeLabel: snapshot?.accountType == null || String(snapshot.accountType).trim() === '' ? '미입력' : ACCOUNT_TYPE_LABELS[normalizeAccountType(submittedValue(request, project.accountType, payload?.accountType))] || '-',
+      fundInputModeLabel: snapshot?.fundInputMode == null || String(snapshot.fundInputMode).trim() === '' ? '미입력' : PROJECT_FUND_INPUT_MODE_LABELS[normalizeProjectFundInputMode(submittedValue(request, project.fundInputMode, payload?.fundInputMode))] || '-',
       settlementSystemLabel: (() => {
+        if (snapshot?.settlementSystem == null || String(snapshot.settlementSystem).trim() === '') return '미입력';
         const code = normalizeSettlementSystemCode(submittedValue(request, project.settlementSystem, payload?.settlementSystem));
         if (code === 'OTHER') {
           const other = readable(submittedValue(request, project.settlementSystemOther, payload?.settlementSystemOther), '');
@@ -364,26 +366,29 @@ export function buildMigrationReviewDossier(
         }
         return SETTLEMENT_SYSTEM_LABELS[code] || '-';
       })(),
-      laborSettlementBasisLabel: LABOR_SETTLEMENT_BASIS_LABELS[normalizeLaborSettlementBasis(submittedValue(request, project.laborSettlementBasis, payload?.laborSettlementBasis))] || '-',
+      laborSettlementBasisLabel: snapshot?.laborSettlementBasis == null || String(snapshot.laborSettlementBasis).trim() === '' ? '미입력' : LABOR_SETTLEMENT_BASIS_LABELS[normalizeLaborSettlementBasis(submittedValue(request, project.laborSettlementBasis, payload?.laborSettlementBasis))] || '-',
     },
     budget: {
       currencyLabel: PROJECT_CURRENCY_LABELS[normalizeProjectCurrency(submittedValue(request, project.currency, payload?.currency))] || 'KRW',
-      contractAmountLabel: formatStoredProjectAmount(submittedValue(request, project.contractAmount, payload?.contractAmount)),
-      salesVatAmountLabel: formatStoredProjectAmount(submittedValue(request, project.salesVatAmount, payload?.salesVatAmount)),
+      contractAmountLabel: formatStoredProjectAmount(submittedValue(request, project.contractAmount, payload?.contractAmount), snapshot?.financialInputFlags?.contractAmount),
+      salesVatAmountLabel: formatStoredProjectAmount(submittedValue(request, project.salesVatAmount, payload?.salesVatAmount), snapshot?.financialInputFlags?.salesVatAmount),
       paymentPlanDesc: readable(submittedValue(request, project.paymentPlanDesc, payload?.paymentPlanDesc)),
-      paymentPlanSplitLabel: formatPaymentPlanSplit(
-        projectEffectivePaymentPlan(snapshot),
+      paymentPlanSplitLabel: (submissionPaymentPlan(snapshot).legacy ? '전체 계약기간 계획(연도별 배분 미기록) · ' : '') + formatPaymentPlanSplit(
+        submissionPaymentPlan(snapshot).plan,
         submittedValue(request, project.contractAmount, payload?.contractAmount),
+        snapshot?.currency,
+        submissionPaymentPlan(snapshot).legacy ? snapshot?.paymentExpectedMonths : undefined,
       ),
       finalPaymentNote: readable(submittedValue(request, project.finalPaymentNote, payload?.finalPaymentNote)),
-      totalRevenueAmountLabel: formatStoredProjectAmount(submittedValue(request, project.totalRevenueAmount, payload?.totalRevenueAmount)),
-      supportAmountLabel: formatStoredProjectAmount(submittedValue(request, project.supportAmount, payload?.supportAmount)),
+      totalRevenueAmountLabel: formatStoredProjectAmount(submittedValue(request, project.totalRevenueAmount, payload?.totalRevenueAmount), snapshot?.financialInputFlags?.totalRevenueAmount),
+      supportAmountLabel: formatStoredProjectAmount(submittedValue(request, project.supportAmount, payload?.supportAmount), snapshot?.financialInputFlags?.supportAmount),
       advanceInterimBelow70Reason: readable(submittedValue(request, project.advanceInterimBelow70Reason, payload?.advanceInterimBelow70Reason), ''),
       finalPaymentExpectedWeek: readable(submittedValue(request, project.finalPaymentExpectedWeek, payload?.finalPaymentExpectedWeek), ''),
     },
     people: {
       teamName: readable(currentTeamName),
       members,
+      submittedParticipation: submittedParticipationLines(rawMembers),
       staffingSummary: formatProjectStaffingSummary(
         snapshot?.staffing,
       ),

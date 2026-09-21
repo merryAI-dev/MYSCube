@@ -487,3 +487,12 @@ describe('submitted snapshot isolation', () => {
     expect(JSON.stringify(snapshot)).toBe(before);
   });
 });
+
+ it('does not invent settlement choices when the submitted field is missing', () => {
+  const sparse = { ...project, settlementType: undefined, basis: undefined, accountType: undefined, settlementSystem: undefined };
+  const dossier = buildMigrationReviewDossier(sparse as unknown as Project, null);
+  expect(dossier.contract.settlementTypeLabel).toBe('미입력');
+  expect(dossier.contract.basisLabel).toBe('미입력');
+  expect(dossier.contract.accountTypeLabel).toBe('미입력');
+  expect(dossier.contract.settlementSystemLabel).toBe('미입력');
+});

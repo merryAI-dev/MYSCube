@@ -971,6 +971,24 @@ describe('참여율 월별 저장 경로', () => {
 });
 
 describe('실제 투입인력 (staffing)', () => {
+  it('기타 빈 행과 입력 중 역할명은 임시저장 재열기까지 보존하고 제출에서만 정리한다', async () => {
+    const { serializeProjectEditorPrivateDraft } = await import('./project-editor-draft-persistence');
+    let draft = createProjectEditorDraft();
+    draft = createProjectEditorDraft({ ...draft, staffing: { ...draft.staffing,
+      others: [{ role: '', slot: null }, { role: '외부 ', slot: null }] } });
+    expect(draft.staffing.others).toHaveLength(2);
+    expect(draft.staffing.others[1].role).toBe('외부 ');
+    const reopened = createProjectEditorDraft(serializeProjectEditorPrivateDraft(draft));
+    expect(reopened.staffing.others).toEqual(draft.staffing.others);
+    reopened.staffing.others[0] = { role: '멘토', slot: { personId: 'p-9', name: '박하늘', nickname: '하늘' } };
+    reopened.staffing.others[1].role += '강사';
+    const submitted = buildProjectRequestPayloadFromDraft(reopened);
+    expect(submitted.staffing?.others).toEqual(reopened.staffing.others);
+    reopened.staffing.others[0].role = '';
+    expect(createProjectEditorDraft(reopened).staffing.others).toHaveLength(2);
+    expect(buildProjectRequestPayloadFromDraft(reopened).staffing?.others).toHaveLength(1);
+  });
+
   it('personId 없는 슬롯은 미정(null)으로 정규화하고 운영매니저는 채워진 슬롯만 남긴다', async () => {
     const { normalizeProjectStaffing } = await import('./project-editor');
     const staffing = normalizeProjectStaffing({

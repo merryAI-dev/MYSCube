@@ -1,3 +1,5 @@
+import { createProjectEditorDraft } from '../../../src/app/platform/project-editor';
+import { serializeProjectEditorPrivateDraft } from '../../../src/app/platform/project-editor-draft-persistence';
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
@@ -311,6 +313,7 @@ describe('project information private drafts', () => {
         project[key] = { ...document, size: VALID_PDF.length, contentType: 'application/pdf' };
       }
     }
+    Object.assign(project, { contractEndUndecided: true, contractEnd: '', businessManagementGoogleFolderLink: 'https://drive.google.com/drive/folders/old-folder', participationSheetLink: 'https://docs.google.com/spreadsheets/d/qa-participation/edit', budgetCurrentYear: 777 });
     h.db.documents.set(projectPath, project);
     const before = clone(project);
     await openedDraft(h);
@@ -318,7 +321,7 @@ describe('project information private drafts', () => {
       documentKind: 'final_report', fileName: '최종 결과보고서.pdf', mimeType: 'application/pdf', fileSize: VALID_PDF.length, buffer: VALID_PDF });
     const attachment = uploaded.body.attachment;
     await h.service.update({ ...h.base, idempotencyKey: 'final-report-save', expectedDraftRevision: 1,
-      payload: { ...uploaded.body.draft.payload, finalReportDocument: attachment, description: '최종 결과보고서 제출' } });
+      payload: { ...uploaded.body.draft.payload, finalReportDocument: attachment, description: '최종 결과보고서 제출', contractEndUndecided: false, contractEnd: '2026-12-31', businessManagementGoogleFolderLink: '' } });
     expect(h.db.documents.get(projectPath)).toEqual(before);
     const reloaded = await h.service.get(h.base);
     expect(reloaded.draft.payload.finalReportDocument.path).toBe(attachment.path);
@@ -326,6 +329,8 @@ describe('project information private drafts', () => {
     h.db.documents.set(unrelatedDraftPath, { payload: { note: '다른 실무자의 임시저장' } });
     await h.service.submit({ ...h.base, idempotencyKey: 'final-report-submit', expectedDraftRevision: 2, expectedVersion: 3 });
     const submitted = h.db.documents.get('orgs/tenant-a/project_requests/change-project-a');
+    expect(submitted.proposedSnapshot).toMatchObject({ contractEndUndecided: false, contractEnd: '2026-12-31', businessManagementGoogleFolderLink: '' });
+    expect(submitted.snapshotSchemaVersion).toBe(1);
     expect(submitted.proposedSnapshot.finalReportDocument).toMatchObject({ path: attachment.path, documentKind: 'final_report' });
     expect(submitted.changedFields).toContainEqual(expect.objectContaining({ key: 'finalReportDocument', label: '최종 결과보고서 PDF' }));
     expect(h.db.documents.get(projectPath)).toEqual(before);
@@ -346,9 +351,12 @@ describe('project information private drafts', () => {
     const pendingRead = await request(app).get('/api/v1/project-requests/change-project-a/attachments/final_report');
     expect(pendingRead.status, JSON.stringify(pendingRead.body)).toBe(200);
     expect(pendingRead.body).toEqual(VALID_PDF);
+    const reviewDocument = await request(app).get('/api/v1/projects/project-a/review-document?requestId=change-project-a');
+    expect(reviewDocument.status).toBe(200);
     const approved = await request(app).post('/api/v1/projects/project-a/executive-review')
-      .send({ requestId: 'change-project-a', reviewStatus: 'APPROVED' });
+      .send({ requestId: 'change-project-a', reviewStatus: 'APPROVED', expectedReviewToken: reviewDocument.body.reviewToken });
     expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+    expect(h.db.documents.get(projectPath)).toMatchObject({ contractEndUndecided: false, contractEnd: '2026-12-31', businessManagementGoogleFolderLink: '', budgetCurrentYear: 777 });
     expect(h.db.documents.get(projectPath).finalReportDocument.path).toBe(attachment.path);
     expect(h.db.documents.get('orgs/tenant-a/project_requests/change-project-a').approvedSnapshot.finalReportDocument.path).toBe(attachment.path);
     const canonicalRead = await request(app).get('/api/v1/projects/project-a/attachments/final_report');
@@ -835,6 +843,20 @@ describe('project information private drafts', () => {
     expect(downloadDraftAttachment).toHaveBeenCalledWith({
       tenantId: 'tenant-a', draftId, path: rfpPath,
     });
+  });
+
+  it('roundtrips personal editor input without replacing attachment refs or canonical data', async () => {
+    const h = harness();
+    const opened = await openedDraft(h);
+    const before = structuredClone(h.db.documents.get('orgs/tenant-a/projects/project-a'));
+    const draft = createProjectEditorDraft({ name: '  unfinished  ', note: '  multiline\ntext  ',
+      finalPaymentNote: '  pending  ', businessManagementGoogleFolderLink: '', contractEndUndecided: false });
+    const saved = await h.service.update({ ...h.base, idempotencyKey: 'raw-save', expectedDraftRevision: 0,
+      payload: serializeProjectEditorPrivateDraft(draft) });
+    const reopened = await h.service.get(h.base);
+    expect(createProjectEditorDraft(reopened.draft.payload)).toEqual(draft);
+    expect(h.db.documents.get('orgs/tenant-a/projects/project-a')).toEqual(before);
+    expect(saved.body.draft.attachmentRefs).toEqual(opened.body.draft.attachmentRefs);
   });
 
   it('temporary save changes only the private draft and rejects stale revisions', async () => {

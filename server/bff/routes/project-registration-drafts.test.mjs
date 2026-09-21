@@ -1,3 +1,5 @@
+import { createProjectEditorDraft } from '../../../src/app/platform/project-editor';
+import { serializeProjectEditorPrivateDraft } from '../../../src/app/platform/project-editor-draft-persistence';
 import express from 'express';
 import request from 'supertest';
 import { describe, expect, it, vi } from 'vitest';
@@ -605,6 +607,20 @@ describe('project registration draft service', () => {
     );
     expect(downloadDraftAttachment).toHaveBeenCalledOnce();
     expect(downloadDraftAttachment).toHaveBeenCalledWith({ tenantId: 'tenant-a', draftId, path });
+  });
+
+  it('roundtrips personal editor input through create, save and owner read', async () => {
+    const { service, base } = createHarness();
+    const initial = createProjectEditorDraft({ name: '  unfinished  ', note: '  multiline\ntext  ' });
+    const created = await service.create({ ...base, idempotencyKey: 'raw-create', payload: serializeProjectEditorPrivateDraft(initial) });
+    const draft = { ...initial, finalPaymentNote: '  pending  ', businessManagementGoogleFolderLink: '', contractEndUndecided: false };
+    const saved = await service.update({ ...base, draftId: created.body.draft.draftId,
+      leaseId: created.body.lease.leaseId, fence: created.body.lease.fence,
+      idempotencyKey: 'raw-save', expectedDraftRevision: 0, payload: serializeProjectEditorPrivateDraft(draft) });
+    const reopened = await service.get({ ...base, draftId: created.body.draft.draftId });
+    expect(createProjectEditorDraft(reopened.draft.payload)).toEqual(draft);
+    expect(created.body.draft.payload.name).toBe(initial.name);
+    expect(saved.body.draft.attachmentRefs).toEqual(created.body.draft.attachmentRefs);
   });
 
   it('revision-saves only the draft, replays exactly, and rejects stale or wrong-session writes', async () => {
