@@ -1,3 +1,4 @@
+import { PROJECT_PROPOSAL_FILE_FORMATS } from '../../../src/app/platform/project-proposal-file-formats.mjs';
 import { completeProjectSubmissionFixture } from '../../../src/app/platform/project-submission-completeness.fixture.mjs';
 import { createProjectEditorDraft } from '../../../src/app/platform/project-editor';
 import { serializeProjectEditorPrivateDraft } from '../../../src/app/platform/project-editor-draft-persistence';
@@ -1065,8 +1066,9 @@ describe('project registration draft service', () => {
     expect(auditChainService.appendManyInTransaction).toHaveBeenCalledTimes(2);
   });
 
-  it('accepts the seven PPT page 29 registration documents end to end', async () => {
+  it.each(PROJECT_PROPOSAL_FILE_FORMATS)('submits registration documents with proposal $extension', async format => {
     const storageService = {
+      createIncomingUploadUrl: vi.fn(async () => ({ uploadUrl: 'https://storage.example/signed-put', path: 'incoming/proposal', expiresAt: '2026-07-10T00:10:00.000Z' })),
       uploadDraftAttachment: vi.fn(async ({ tenantId, draftId, attachmentId, fileName, buffer, mimeType }) => ({
         path: `orgs/${tenantId}/project-registration-drafts/${draftId}/${attachmentId}-${fileName}`,
         name: fileName,
@@ -1082,11 +1084,16 @@ describe('project registration draft service', () => {
       idempotencyKey: 'idem-v2-create',
       payload: validRegistrationV2Payload(),
     });
+    const uploadContext = { ...base, idempotencyKey: 'proposal-init', draftId: created.body.draft.draftId, leaseId: created.body.lease.leaseId, fence: created.body.lease.fence, documentKind: 'proposal_word_original' };
+    const uploadUrl = await service.issueAttachmentUploadUrl({ ...uploadContext, fileName: `proposal${format.extension}`, mimeType: format.mimeType });
+    expect(uploadUrl.body.uploadUrl).toBe('https://storage.example/signed-put');
+    await expect(service.issueAttachmentUploadUrl({ ...uploadContext, fileName: `proposal${format.extension}.exe`, mimeType: format.mimeType })).rejects.toMatchObject({ code: 'draft_attachment_invalid' });
+    expect(storageService.createIncomingUploadUrl).toHaveBeenCalledTimes(1);
     const documents = [
       ['contract', 'contract.pdf', 'application/pdf', VALID_PDF],
       ['customer_business_registration', 'customer.pdf', 'application/pdf', VALID_PDF],
       ['quote', 'quote.pdf', 'application/pdf', VALID_PDF],
-      ['proposal_word_original', 'proposal.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', VALID_ZIP],
+      ['proposal_word_original', `proposal${format.extension}`, format.mimeType, format.signature === 'pdf' ? VALID_PDF : format.signature === 'zip' ? VALID_ZIP : Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])],
       ['proposal_ppt_original', 'proposal.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', VALID_ZIP],
       ['presentation_ppt_original', 'presentation.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation', VALID_ZIP],
       ['rfp_request_evidence', 'rfp.pdf', 'application/pdf', VALID_PDF],

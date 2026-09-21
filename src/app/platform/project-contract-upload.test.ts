@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { PROJECT_PROPOSAL_FILE_FORMATS } from './project-proposal-file-formats.mjs';
 import {
   getProjectDocumentUploadAccept,
   isProjectDocumentFileAllowed,
@@ -34,6 +35,13 @@ function fileWithSize(size: number, name = 'contract.pdf') {
 }
 
 describe('project-contract-upload', () => {
+  it.each(PROJECT_PROPOSAL_FILE_FORMATS)('accepts proposal $extension with a consistent server MIME', format => {
+    const candidate = { name: `proposal${format.extension.toUpperCase()}`, type: 'application/octet-stream' } as File;
+    expect(isProjectDocumentFileAllowed('proposal_word_original', candidate)).toBe(true);
+    expect(getProjectDocumentUploadAccept('proposal_word_original')).toContain(format.extension);
+    expect(resolveProjectDocumentMimeType('proposal_word_original', candidate)).toBe(format.mimeType);
+    expect(isProjectDocumentFileAllowed('proposal_word_original', { name: `${candidate.name}.exe` } as File)).toBe(false);
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getStorageInstance.mockReturnValue({ app: 'storage' });
@@ -102,7 +110,7 @@ describe('project-contract-upload', () => {
     expect(isProjectDocumentFileAllowed('proposal_word_original', { name: 'proposal.docx' } as File)).toBe(true);
     expect(isProjectDocumentFileAllowed('proposal_ppt_original', { name: 'proposal.pptx' } as File)).toBe(true);
     expect(isProjectDocumentFileAllowed('rfp_request_evidence', { name: 'request.msg' } as File)).toBe(true);
-    expect(isProjectDocumentFileAllowed('proposal_word_original', { name: 'proposal.pdf' } as File)).toBe(false);
+    expect(isProjectDocumentFileAllowed('proposal_word_original', { name: 'proposal.pdf' } as File)).toBe(true);
     expect(getProjectDocumentUploadAccept('rfp_request_evidence')).toContain('.eml');
     expect(resolveProjectDocumentMimeType('proposal_word_original', { name: 'proposal.docx', type: '' } as File))
       .toBe('application/vnd.openxmlformats-officedocument.wordprocessingml.document');

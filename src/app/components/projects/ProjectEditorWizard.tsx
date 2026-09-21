@@ -1,6 +1,7 @@
+import { PROJECT_PROPOSAL_FILE_FORMAT_LABEL } from '../../platform/project-proposal-file-formats.mjs';
 import { projectSubmissionCompletenessIssues } from '../../platform/project-submission-completeness.mjs';
 import { ProjectSubmissionResponses } from './ProjectSubmissionResponses';
-import { submissionAnnualRate, submissionAmountKnown, submissionAmountTotal, submissionFinancialYears, submissionAmount, submissionPaymentPlan, submissionAdvanceRatio, submissionRate, submissionContractWarning } from '../../platform/project-submission-display';
+import { submissionShowsCheckout, submissionAnnualRate, submissionAmountKnown, submissionAmountTotal, submissionFinancialYears, submissionAmount, submissionPaymentPlan, submissionAdvanceRatio, submissionRate, submissionContractWarning } from '../../platform/project-submission-display';
 import { FinancialYearsTable } from './migration-audit/FinancialYearsTable';
 import { ProjectAnnualFinancialNotice } from './ProjectAnnualFinancialNotice';
 import { ProjectAmountInput } from './ProjectAmountInput';
@@ -276,7 +277,7 @@ const PROJECT_DOCUMENT_LABELS: Record<ProjectRequestDocumentKind, string> = {
   customer_business_registration: '고객사 사업자등록증 PDF',
   quote: '산출내역서(견적서) PDF',
   proposal: '제안서 PDF',
-  proposal_word_original: '제안서 Word 원본',
+  proposal_word_original: '제안서 파일',
   proposal_ppt_original: '제안서 PPT 원본',
   presentation_ppt_original: '발표자료 PPT 원본',
   rfp_request_evidence: 'RFP/요청 메일 증빙',
@@ -290,7 +291,7 @@ const PROJECT_DOCUMENT_BUTTON_LABELS: Record<ProjectRequestDocumentKind, string>
   customer_business_registration: '사업자등록증',
   quote: '산출내역서(견적서)',
   proposal: '제안서',
-  proposal_word_original: '제안서 Word 원본',
+  proposal_word_original: '제안서 파일',
   proposal_ppt_original: '제안서 PPT 원본',
   presentation_ppt_original: '발표자료 PPT 원본',
   rfp_request_evidence: 'RFP/요청 메일 증빙',
@@ -345,7 +346,7 @@ const REGISTRATION_DOCUMENT_SLOTS: RegistrationDocumentSlot[] = [
   },
   {
     number: 4,
-    label: '제안서(워드)',
+    label: '제안서 파일',
     description: '있을 시',
     kinds: ['proposal_word_original'],
   },
@@ -1168,7 +1169,7 @@ export function ProjectEditorWizard({
   const settlementDetailsEnabled = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const requiresSettlementConfirmations = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const periodBasedStatus = deriveProjectStatusFromContractPeriod({ contractStart: draft.contractStart, contractEnd: draft.contractEnd, contractEndUndecided: draft.contractEndUndecided, currentStatus: draft.status, today: new Date().toISOString().slice(0, 10) });
-  const showProjectCheckout = draft.status === 'COMPLETED' || draft.status === 'COMPLETED_PENDING_PAYMENT';
+  const showProjectCheckout = submissionShowsCheckout(draft);
   const effectivePaymentPlan = projectEffectivePaymentPlan(draft) ?? { contract: 0, interim: 0, final: 0 };
   const paymentPlanTotal = effectivePaymentPlan.contract + effectivePaymentPlan.interim + effectivePaymentPlan.final;
   const advanceInterimRatio = draft.contractAmount > 0
@@ -1994,14 +1995,14 @@ export function ProjectEditorWizard({
           ? 'PDF를 올리면 계약서 원문과 검토용 첨부를 저장합니다. 입력값은 자동으로 바꾸지 않습니다.'
           : 'PDF를 올리면 계약명, 계약기간, 계약금액, 계약 대상 후보를 읽어와 빈 항목만 채웁니다.')
       : kind === 'proposal_word_original'
-        ? '원본 DOCX를 올립니다. 파일이 없으면 아래에 미첨부 사유 또는 해당 없음을 적어주세요.'
+        ? '제안서 파일을 올려주세요. 파일이 없으면 아래에서 해당 없음에 체크하거나 미첨부 사유를 적어주세요.'
         : kind === 'proposal_ppt_original' || kind === 'presentation_ppt_original'
           ? '원본 PPTX를 올립니다. 파일이 없으면 아래에 미첨부 사유 또는 해당 없음을 적어주세요.'
           : kind === 'rfp_request_evidence'
             ? 'RFP 또는 요청 메일 원본을 PDF, DOCX, EML, MSG 중 하나로 올려주세요.'
             : 'PDF를 올리면 검토용 첨부로 저장합니다.');
 
-    const uploadButton = (
+    const uploadControl = (
       <>
         <input
           ref={inputRef}
@@ -2031,6 +2032,13 @@ export function ProjectEditorWizard({
         </Button>
       </>
     );
+
+    const uploadButton = kind === 'proposal_word_original' ? (
+      <div className="flex max-w-[340px] flex-col gap-1">
+        {uploadControl}
+        <p className="text-left text-[11px] leading-5 text-slate-500">가능한 형식: {PROJECT_PROPOSAL_FILE_FORMAT_LABEL}</p>
+      </div>
+    ) : uploadControl;
 
     if (options.rowAction) {
       return (
@@ -2417,7 +2425,6 @@ export function ProjectEditorWizard({
             </SelectContent>
           </Select>
         </ProjectFormRow>
-        <ProjectAnnualFinancialNotice years={draft.financialYears} period={draft} />
         {outsideFinancialYears.length > 0 && (
           <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
             <p>계약기간 밖인 {outsideFinancialYears.map((row) => `${row.year}년`).join(', ')} 재무 입력을 보관하고 있습니다. 계약기간을 확인하거나 제외 연도를 정리한 뒤 최종 저장해 주세요.</p>
@@ -2638,6 +2645,8 @@ export function ProjectEditorWizard({
             보였다. 행 컴포넌트를 쓰면서 두 경우 모두 같은 자리에 한 번만 놓는다. */}
       {!canEditProjectStatus(mode) || isAdminMode(mode) ? renderContractTypeSelect() : null}
 
+        <ProjectAnnualFinancialNotice years={draft.financialYears} period={draft} />
+
         {annualTotalsOwnAmounts ? (
           <p className={FORM_HINT_CLASS}>
             {hasMultiYearContract
@@ -2768,6 +2777,7 @@ export function ProjectEditorWizard({
           {renderPaymentFields()}
         </ProjectFormSection>
       ) : null}
+      {renderCheckoutFields()}
       {/*
         정산은 계약 내용과 입금 계획을 다 넣은 뒤에 정리한다. 앞에 두었더니 아직
         아무 값도 없는 상태에서 정산 유형부터 고르게 되어 판단할 근거가 없었다.
@@ -3276,74 +3286,76 @@ export function ProjectEditorWizard({
           />
         </ProjectFormRow>
       ) : null}
-      {showProjectCheckout ? (
-        <ProjectFormSection
-          title="종료사업 체크아웃"
-          description="완료 프로젝트의 입금·잔액·증빙·USB 인계를 확인합니다."
-        >
-          {([
-            ['finalPaymentReceived', '최종 잔금 입금을 확인했습니다.'],
-            ['bankBalanceZero', '프로젝트 계좌 잔액을 0원으로 정리했습니다.'],
-            ['performanceCertificateReceived', '실적증명 원본 5부 이상을 제출했거나 전자 플랫폼 업로드를 완료했습니다.'],
-            ['taxInvoiceEvidenceConfirmed', '발행된 세금계산서가 있어 전체 PDF를 첨부해야 합니다.'],
-            ...(requiresSettlementConfirmations
-              ? [['finalSettlementReportConfirmed', '회계사 최종 정산보고서가 있어 PDF를 첨부해야 합니다.'] as const]
-              : []),
-          ] as const).map(([field, label]) => (
-            <label key={field} className={cn('flex items-center gap-2 text-slate-700', FORM_VALUE_CLASS)}>
-              <Checkbox
-                checked={draft.checkout[field]}
-                onCheckedChange={(checked) => update('checkout', { ...draft.checkout, [field]: checked === true })}
-              />
-              {label}
-            </label>
-          ))}
-          <label className={cn('flex items-center gap-2 text-slate-700', FORM_VALUE_CLASS)}>
-            <Checkbox
-              checked={draft.checkout.performanceCertificateDocumentApplicable === true}
-              onCheckedChange={(checked) => update('checkout', {
-                ...draft.checkout,
-                performanceCertificateDocumentApplicable: checked === true,
-              })}
-            />
-            고객사가 발급한 실적증명 PDF가 있어 첨부해야 합니다.
-          </label>
-          {onProjectDocumentFileUpload ? (
-            <div className="space-y-3 pt-1">
-              {checkoutDocumentKinds.map((kind) => renderProjectDocumentUpload(kind))}
-            </div>
-          ) : null}
-          {requiresSettlementConfirmations ? (
-            <>
-              <label className={cn('flex items-center gap-2 text-slate-700', FORM_VALUE_CLASS)}>
-                <Checkbox
-                  checked={draft.checkout.usbEvidenceSubmitted}
-                  onCheckedChange={(checked) => update('checkout', {
-                    ...draft.checkout,
-                    usbEvidenceSubmitted: checked === true,
-                    evidenceDeletedAfterUsb: checked === true ? draft.checkout.evidenceDeletedAfterUsb : false,
-                  })}
-                />
-                정산 종료 후 모든 정산 자료를 USB에 저장해 재무팀에 제출했습니다.
-              </label>
-              <label className={cn('flex items-center gap-2 text-slate-700', FORM_VALUE_CLASS)}>
-                <Checkbox
-                  checked={draft.checkout.evidenceDeletedAfterUsb}
-                  disabled={!draft.checkout.usbEvidenceSubmitted}
-                  onCheckedChange={(checked) => update('checkout', {
-                    ...draft.checkout,
-                    evidenceDeletedAfterUsb: checked === true,
-                  })}
-                />
-                사용 내역은 유지하고 증빙 파일을 삭제했습니다.
-              </label>
-            </>
-          ) : null}
-        </ProjectFormSection>
-      ) : null}
+
     </div>
     );
   };
+
+  const renderCheckoutFields = () => showProjectCheckout ? (
+    <ProjectFormSection
+      title="종료사업 체크아웃"
+      description="완료 프로젝트의 입금·잔액·증빙·USB 인계를 확인합니다."
+    >
+      {([
+        ['finalPaymentReceived', '최종 잔금 입금을 확인했습니다.'],
+        ['bankBalanceZero', '프로젝트 계좌 잔액을 0원으로 정리했습니다.'],
+        ['performanceCertificateReceived', '실적증명 원본 5부 이상을 제출했거나 전자 플랫폼 업로드를 완료했습니다.'],
+        ['taxInvoiceEvidenceConfirmed', '발행된 세금계산서가 있어 전체 PDF를 첨부해야 합니다.'],
+        ...(requiresSettlementConfirmations
+          ? [['finalSettlementReportConfirmed', '회계사 최종 정산보고서가 있어 PDF를 첨부해야 합니다.'] as const]
+          : []),
+      ] as const).map(([field, label]) => (
+        <label key={field} className={cn('flex items-center gap-2 text-slate-700', FORM_VALUE_CLASS)}>
+          <Checkbox
+            checked={draft.checkout[field]}
+            onCheckedChange={(checked) => update('checkout', { ...draft.checkout, [field]: checked === true })}
+          />
+          {label}
+        </label>
+      ))}
+      <label className={cn('flex items-center gap-2 text-slate-700', FORM_VALUE_CLASS)}>
+        <Checkbox
+          checked={draft.checkout.performanceCertificateDocumentApplicable === true}
+          onCheckedChange={(checked) => update('checkout', {
+            ...draft.checkout,
+            performanceCertificateDocumentApplicable: checked === true,
+          })}
+        />
+        고객사가 발급한 실적증명 PDF가 있어 첨부해야 합니다.
+      </label>
+      {onProjectDocumentFileUpload ? (
+        <div className="space-y-3 pt-1">
+          {checkoutDocumentKinds.map((kind) => renderProjectDocumentUpload(kind))}
+        </div>
+      ) : null}
+      {requiresSettlementConfirmations ? (
+        <>
+          <label className={cn('flex items-center gap-2 text-slate-700', FORM_VALUE_CLASS)}>
+            <Checkbox
+              checked={draft.checkout.usbEvidenceSubmitted}
+              onCheckedChange={(checked) => update('checkout', {
+                ...draft.checkout,
+                usbEvidenceSubmitted: checked === true,
+                evidenceDeletedAfterUsb: checked === true ? draft.checkout.evidenceDeletedAfterUsb : false,
+              })}
+            />
+            정산 종료 후 모든 정산 자료를 USB에 저장해 재무팀에 제출했습니다.
+          </label>
+          <label className={cn('flex items-center gap-2 text-slate-700', FORM_VALUE_CLASS)}>
+            <Checkbox
+              checked={draft.checkout.evidenceDeletedAfterUsb}
+              disabled={!draft.checkout.usbEvidenceSubmitted}
+              onCheckedChange={(checked) => update('checkout', {
+                ...draft.checkout,
+                evidenceDeletedAfterUsb: checked === true,
+              })}
+            />
+            사용 내역은 유지하고 증빙 파일을 삭제했습니다.
+          </label>
+        </>
+      ) : null}
+    </ProjectFormSection>
+  ) : null;
 
   const registrationDocumentReviewItems = [
     { number: 1, label: '계약서', value: draft.contractDocument?.name || '미첨부' },
@@ -3351,7 +3363,7 @@ export function ProjectEditorWizard({
     { number: 3, label: '산출내역서(견적서)', value: draft.quoteDocument?.name || (draft.quoteSubmissionDeferred ? '이후 제출(예외 처리)' : '미첨부') },
     {
       number: 4,
-      label: '제안서(워드)',
+      label: '제안서 파일',
       value: draft.proposalWordOriginalDocument?.name || draft.registrationOptionalDocumentNotes.proposalWordOriginal || '미응답',
     },
     {

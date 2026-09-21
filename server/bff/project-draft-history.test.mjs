@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PROJECT_PROPOSAL_FILE_FORMATS } from '../../src/app/platform/project-proposal-file-formats.mjs';
 import { prepareProjectDraftHistorySave, projectDraftHistoryCollectionPath, readProjectDraftHistory, assertProjectDraftRestoreAttachments } from './project-draft-history.mjs';
 
 function harness(seed = {}) {
@@ -30,6 +31,13 @@ const ref = { path: 'orgs/test/privateEditDrafts/project-person' };
 const draft = (revision, name = '초안') => ({ ownerUid: 'person', createdAt: '2026-09-21T00:00:00Z', draftRevision: revision, payload: { name, totalActualCost: '', nested: { untouched: false } }, attachmentRefs: [{ name: '계약서.hwp', path: 'private/original.hwp' }], updatedAt: '2026-09-21T01:00:00Z' });
 
 describe('private draft history', () => {
+  it.each(PROJECT_PROPOSAL_FILE_FORMATS)('restores proposal $extension metadata without changing the file kind', async format => {
+    const attachment = { documentKind: 'proposal_word_original', path: `owned/proposal${format.extension}`, size: 8, contentType: format.mimeType, attachmentId: 'a' };
+    const source = { attachmentRefs: [attachment], payload: { proposalWordOriginalDocument: attachment } };
+    const before = structuredClone(source);
+    await expect(assertProjectDraftRestoreAttachments({ source, fieldByKind: { proposal_word_original: 'proposalWordOriginalDocument' }, inspect: async () => attachment })).resolves.not.toThrow();
+    expect(source).toEqual(before);
+  });
   it('captures the existing legacy revision and the new revision atomically, preserving raw values', async () => {
     const h = harness(); const before = draft(7); const after = draft(8, '수정');
     const save = await prepareProjectDraftHistorySave({ db: h.db, tx: h.tx, draftRef: ref, before, after });

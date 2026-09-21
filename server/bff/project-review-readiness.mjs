@@ -1,3 +1,5 @@
+import { projectSettlementConsistencyIssue } from '../../src/app/platform/project-settlement-consistency.mjs';
+
 const text = (value) => typeof value === 'string' ? value.trim() : '';
 const object = (value) => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const requiredDocuments = [
@@ -7,6 +9,7 @@ const requiredDocuments = [
 ];
 
 const knownErrors = {
+  project_settlement_basis_conflict: ['정산 유형과 정산 기준을 확인해 주세요', '이 문서에 선택된 정산 유형과 정산 기준이 서로 맞지 않습니다. 어떤 내용이 맞는지 확인한 뒤 승인할 수 있습니다.', '작성자: 프로젝트 수정의 계약/재무 > 정산에서 두 항목을 확인한 뒤 최종 제출해 주세요.\n조직장: 수정된 문서가 제출되면 내용을 확인하고 승인해 주세요.'],
   project_attachments_processing: ['제출 파일 준비가 완료되지 않았습니다', '제출된 첨부파일을 결재 문서에서 사용할 수 있도록 준비하는 단계가 아직 끝나지 않았습니다. 파일을 제출하지 않았다는 뜻은 아닙니다.', '조직장은 잠시 후 문서를 다시 열어 주세요. 계속되면 운영 담당자에게 해당 프로젝트의 첨부파일 준비 상태 확인을 요청해 주세요.'],
   project_attachment_unavailable: ['제출 파일을 확인하지 못했습니다', '저장된 첨부 정보와 실제 파일을 대조하지 못했습니다. 파일 누락, 첨부 정보 불일치 또는 파일 접근 문제인지 추가 확인이 필요합니다.', '조직장은 승인을 보류하고 운영 담당자에게 파일 확인을 요청해 주세요. 재첨부가 필요하다고 확인되면 등록자가 프로젝트 수정에서 해당 파일을 다시 첨부하고 최종 제출해 주세요.'],
   review_version_required: ['최신 결재 문서를 다시 열어 주세요', '현재 열어 둔 문서의 확인 정보가 없어 검토한 내용과 승인할 내용이 같은지 확인할 수 없습니다.', '조직장이 문서를 닫고 다시 열어 제출 내용을 확인한 뒤 승인해 주세요.'],
@@ -58,11 +61,13 @@ export function buildProjectReviewReadiness(request, project) {
   const legacy = payload.registrationRequirementsVersion !== 2;
   const pending = request?.status === 'PENDING';
   const issues = [];
+  const settlementIssue = projectSettlementConsistencyIssue(payload, project);
+  if (settlementIssue) issues.push({ ...settlementIssue, severity: pending ? 'blocking' : 'warning' });
   if (legacy) issues.push({
     code: 'legacy_submission_format', severity: 'warning', field: 'registrationRequirementsVersion',
-    title: '이전 형식으로 제출된 문서입니다',
-    detail: '현재 등록 화면과 기록 항목이 다를 수 있습니다. 이전 형식이라는 이유만으로 승인이 제한되지는 않습니다.',
-    action: '조직장은 아래 미기록 항목과 제출 원문을 함께 확인해 주세요. 필요한 내용은 등록자에게 확인하고, 수정이 필요하면 프로젝트 수정에서 보완 후 최종 제출하도록 요청해 주세요.',
+    title: '등록 양식을 확인해 주세요',
+    detail: '이전 등록 양식이거나 작성 당시 양식을 확인할 수 없는 문서입니다. 제출 당시 내용과 첨부파일을 확인할 수 있으며, 이후 추가된 질문은 답변이 없을 수 있습니다.',
+    action: '아래 확인이 필요한 항목을 살펴봐 주세요. 이전 양식이라는 이유만으로 다시 제출할 필요는 없습니다. 내용 보완이 필요한 경우에만 작성자에게 수정 후 최종 제출을 요청해 주세요.',
   });
   for (const [field, label] of requiredDocuments) {
     if (field === 'quoteDocument' && payload.quoteSubmissionDeferred === true) continue;

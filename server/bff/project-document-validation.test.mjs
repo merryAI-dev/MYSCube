@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { PROJECT_PROPOSAL_FILE_FORMATS } from '../../src/app/platform/project-proposal-file-formats.mjs';
 import {
   missingProjectRegistrationRequiredDocumentKind,
   projectDocumentValidationError,
@@ -9,6 +10,23 @@ const zip = Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00]);
 const msg = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0x00]);
 
 describe('project document validation', () => {
+  it.each(PROJECT_PROPOSAL_FILE_FORMATS)('accepts proposal $extension and rejects mismatched headers or MIME', format => {
+    const buffer = format.signature === 'pdf' ? pdf : format.signature === 'zip' ? zip : msg;
+    const input = { buffer, mimeType: format.mimeType, fileName: `proposal${format.extension.toUpperCase()}`, documentKind: 'proposal_word_original' };
+    expect(projectDocumentValidationError(input)).toBe('');
+    expect(projectDocumentValidationError({ ...input, buffer: Buffer.from('not a document') })).not.toBe('');
+    expect(projectDocumentValidationError({ ...input, mimeType: 'application/octet-stream' })).not.toBe('');
+    expect(projectDocumentValidationError({ ...input, fileName: `${input.fileName}.exe` })).not.toBe('');
+    for (const mimeType of format.aliases || []) expect(projectDocumentValidationError({ ...input, mimeType })).toBe('');
+  });
+  it('keeps other slots restricted and rejects unsupported proposal formats', () => {
+    for (const documentKind of ['contract', 'quote', 'proposal', 'presentation_ppt_original']) {
+      expect(projectDocumentValidationError({ buffer: msg, fileName: 'proposal.hwp', mimeType: 'application/x-hwp', documentKind })).not.toBe('');
+    }
+    for (const fileName of ['proposal.zip', 'proposal.xlsm', 'proposal.docm', 'proposal.html']) {
+      expect(projectDocumentValidationError({ buffer: zip, fileName, mimeType: 'application/zip', documentKind: 'proposal_word_original' })).not.toBe('');
+    }
+  });
   it('requires only slots 1 to 3 and accepts a deferred quote', () => {
     const refs = (kinds) => kinds.map((documentKind) => ({ documentKind }));
 

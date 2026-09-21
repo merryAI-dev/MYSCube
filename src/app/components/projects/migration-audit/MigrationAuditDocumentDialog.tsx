@@ -1,13 +1,14 @@
 import { ProjectReviewReadinessPanel } from './ProjectReviewReadinessPanel';
+import { ProjectSubmissionFormatBadge } from './ProjectSubmissionFormatBadge';
 import type { ProjectReviewReadiness } from '../../../lib/platform-bff-client';
-import { submissionAmount, submissionFinancialYears, submissionAnnualRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
+import { submissionFormatInfo, submissionShowsCheckout, submissionAmount, submissionFinancialYears, submissionAnnualRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
 import { useEffect, useMemo, useState } from 'react';
 import { PROJECT_STATUS_LABELS, INTEREST_REFUND_POLICY_LABELS, type FileAttachment, type ProjectRegistrationOptionalDocumentNotes } from '../../../data/types';
 import type { MigrationAuditConsoleRecord } from '../../../platform/project-migration-console';
 import { getMigrationAuditStatusLabel, hasPendingProjectChangeRequest } from '../../../platform/project-migration-console';
 import { resolveProjectRequestPayload } from '../../../platform/project-change-request';
 import type { ProjectRequestDocumentKind } from '../../../platform/project-contract-upload';
-import { buildMigrationReviewDossier } from '../../../platform/project-migration-review-dossier';
+import { buildMigrationReviewDossier, buildOriginalSubmittedFields } from '../../../platform/project-migration-review-dossier';
 import {
   getManagementPlanningReview,
   getManagementPlanningReviewLabel,
@@ -87,7 +88,7 @@ const REVIEW_DOCUMENT_DEFINITIONS: ReviewDocumentDefinition[] = [
   { kind: 'quote', field: 'quoteDocument', label: '견적서 PDF' },
   { kind: 'proposal', field: 'proposalDocument', label: '제안서 PDF' },
   { kind: 'rfp_request_evidence', field: 'rfpRequestEvidenceDocument', label: 'RFP/요청 메일 증빙' },
-  { kind: 'proposal_word_original', field: 'proposalWordOriginalDocument', label: '제안서 Word 원본' },
+  { kind: 'proposal_word_original', field: 'proposalWordOriginalDocument', label: '제안서 파일' },
   { kind: 'proposal_ppt_original', field: 'proposalPptOriginalDocument', label: '제안서 PPT 원본' },
   { kind: 'presentation_ppt_original', field: 'presentationPptOriginalDocument', label: '발표자료 PPT 원본' },
   { kind: 'performance_certificate', field: 'performanceCertificateDocument', label: '수행확인서' },
@@ -100,7 +101,7 @@ const REVIEW_DOCUMENT_SLOTS: ReviewDocumentSlotDefinition[] = [
   { number: 1, label: '계약서 PDF', kinds: ['contract'] },
   { number: 2, label: '고객사 사업자등록증 PDF', kinds: ['customer_business_registration'] },
   { number: 3, label: '산출내역서(견적서) PDF', kinds: ['quote'] },
-  { number: 4, label: '제안서 Word 원본', kinds: ['proposal_word_original'], noteField: 'proposalWordOriginal' },
+  { number: 4, label: '제안서 파일', kinds: ['proposal_word_original'], noteField: 'proposalWordOriginal' },
   { number: 5, label: '제안서(구글드라이브 링크)', kinds: ['proposal_ppt_original'], noteField: 'proposalPptOriginal' },
   { number: 6, label: '발표자료(구글드라이브 링크)', kinds: ['presentation_ppt_original'], noteField: 'presentationPptOriginal' },
   { number: 7, label: 'RFP/요청 메일 증빙', kinds: ['rfp_request_evidence'], noteField: 'rfpRequestEvidence' },
@@ -247,13 +248,15 @@ export function MigrationAuditDocumentDialog({
 
   const dossier = buildMigrationReviewDossier(record.project, record.request);
   const reviewPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
+  const submittedFormat = record.request ? submissionFormatInfo(resolveProjectRequestPayload(record.request)) : null;
+  const originalFields = buildOriginalSubmittedFields(record.request);
   const totalActualCost = reviewPayload?.totalActualCost;
   const financialYears = submissionFinancialYears(reviewPayload);
   const interestRefundPolicy = reviewPayload?.interestRefundPolicy;
   const registrationNote = reviewPayload?.note;
   const confirmations = reviewPayload?.registrationConfirmations;
   const checkout = reviewPayload?.checkout;
-  const checkoutVisible = reviewPayload?.status === 'COMPLETED' || reviewPayload?.status === 'COMPLETED_PENDING_PAYMENT';
+  const checkoutVisible = submissionShowsCheckout(reviewPayload);
   const quoteDocument = reviewPayload?.quoteDocument;
   const quoteSubmissionDeferred = reviewPayload?.quoteSubmissionDeferred;
   const designatedApproverName = reviewPayload?.executiveApproverName || '';
@@ -313,6 +316,12 @@ export function MigrationAuditDocumentDialog({
         <DialogHeader className="sr-only"><DialogTitle>프로젝트 등록 및 승인서</DialogTitle><DialogDescription>프로젝트 등록 내용을 결재 문서 형식으로 확인합니다.</DialogDescription></DialogHeader>
         <article className="mx-auto w-full max-w-[1020px] border border-slate-400 bg-white px-8 py-9 text-slate-900" data-testid="migration-review-document">
           <ProjectReviewReadinessPanel readiness={readiness} />
+          {submittedFormat && submittedFormat.label !== '현재 등록 양식' ? <section aria-label="제출 양식 안내" className="mb-4 rounded border border-slate-300 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
+            <ProjectSubmissionFormatBadge request={record.request} />
+            <p className="mt-1">{submittedFormat.detail}</p>
+            <p className="mt-1">확인이 필요한 항목을 살펴봐 주세요. 이전 양식으로 작성됐다는 이유만으로 다시 제출할 필요는 없습니다.</p>
+          </section> : null}
+          {!record.request ? <p className="mb-4 rounded border border-slate-300 bg-slate-50 p-3 text-xs text-slate-700">승인을 요청한 문서를 찾을 수 없어 현재 등록된 프로젝트 정보를 보여드립니다. 작성자에게 제출 여부를 확인해 주세요.</p> : null}
           {checkoutVisible ? <p role="status" className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
             이 제출본의 프로젝트 상태는 {PROJECT_STATUS_LABELS[reviewPayload!.status!]}입니다. 이 상태에 따라 종료사업 체크아웃이 표시됩니다. 실제 진행 중인 사업이라면 작성자가 프로젝트 수정의 기본 정보에서 계약기간과 상태를 확인한 뒤 수정 제출해 주세요. 기존 승인 문서는 당시 제출 상태를 유지합니다.
           </p> : null}
@@ -508,7 +517,7 @@ export function MigrationAuditDocumentDialog({
                   ? '제출 원문을 안전하게 불러오는 중입니다.'
                   : selectedPreviewState?.status === 'error'
                     ? (selectedPreviewState.error || '원문을 불러오지 못했습니다. 다시 열기를 시도해 주세요.')
-                    : 'PDF 미리보기가 비어 있으면 새 탭에서 원문을 확인하고, Word·PPT·메일 원본도 새 탭에서 내려받아 대조합니다.'}
+                    : 'PDF 미리보기가 표시되지 않거나 다른 형식의 파일이면 새 탭에서 내려받아 확인해 주세요.'}
                 descriptionClassName={selectedPreviewState?.status === 'error' ? 'text-rose-700' : 'text-slate-600'}
                 className="rounded-none border-t-0 border-slate-400"
                 privateDraftAttachment={!selectedPreviewUrl}
@@ -521,6 +530,17 @@ export function MigrationAuditDocumentDialog({
               </div>
             )}
           </section>
+
+          {record.request ? <details className="mt-6 border border-slate-300 p-4" data-testid="original-submitted-fields">
+            <summary className="cursor-pointer text-sm font-semibold">제출한 내용 모두 보기</summary>
+            <p className="mt-2 text-xs leading-5 text-slate-600">제출 당시 입력한 항목입니다. 이후 임시저장한 수정 내용은 포함되지 않습니다. 첨부파일은 위의 ‘원문 보기’에서 확인해 주세요.</p>
+            {originalFields.length ? <dl className="mt-3 divide-y divide-slate-200">
+              {originalFields.map((field) => <div key={field.key} className="grid gap-2 py-3 text-xs sm:grid-cols-[180px_minmax(0,1fr)]">
+                <dt className="font-medium text-slate-600">{field.label}</dt>
+                <dd className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{field.value === '미입력' ? '제출 당시 입력되지 않은 항목입니다.' : field.value}</dd>
+              </div>)}
+            </dl> : <p className="mt-3 text-xs text-slate-600">제출 내용을 찾을 수 없습니다. 작성자에게 제출 여부를 확인해 주세요.</p>}
+          </details> : null}
 
           {isActionPending && canFinalize ? <footer className="mt-7 flex justify-end gap-2 border-t border-slate-300 pt-4"><Button type="button" variant="outline" className="rounded-none border-slate-500" onClick={onReject} disabled={acting}>반려</Button><Button type="button" className="rounded-none bg-[#174a7c] hover:bg-[#103a63]" onClick={onApprove} disabled={acting || readiness?.issues.some((issue) => issue.severity === 'blocking')}>{isManagementPlanning ? '합의' : '승인'}</Button></footer> : null}
           {isActionPending && !canFinalize ? <p className="mt-7 border-t border-slate-300 pt-4 text-right text-[11px] text-slate-500">{isManagementPlanning ? '경영기획실 담당자만 합의 또는 반려할 수 있습니다.' : '지정된 조직장만 승인 또는 반려할 수 있습니다.'}</p> : null}

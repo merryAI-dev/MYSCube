@@ -147,7 +147,7 @@ export const REQUEST_FIELD_LABELS: Record<string, string> = {
   registeredById: '등록자 ID', registeredByName: '등록자', registeredByEmail: '등록자 이메일', executiveApproverId: '조직장 ID', executiveApproverName: '조직장',
   executiveApproverEmail: '조직장 이메일', managerId: '책임자 ID', managerName: '책임자', teamName: '팀명', teamMembers: '팀원 요약',
   teamMembersDetailed: '팀원·참여율 상세', participantCondition: '참여 조건', note: '등록 메모', contractDocument: '계약서', quoteDocument: '견적서',
-  quoteSubmissionDeferred: '견적서 추후 제출', proposalDocument: '제안서', proposalWordOriginalDocument: '제안서 원본(워드)', proposalPptOriginalDocument: '제안서 원본(PPT)',
+  quoteSubmissionDeferred: '견적서 추후 제출', proposalDocument: '제안서', proposalWordOriginalDocument: '제안서 파일', proposalPptOriginalDocument: '제안서 원본(PPT)',
   presentationPptOriginalDocument: '발표자료 원본(PPT)', rfpRequestEvidenceDocument: 'RFP·요청 근거', customerBusinessRegistrationDocument: '계약 대상 사업자등록증',
   performanceCertificateDocument: '수행실적증명서', taxInvoiceDocument: '세금계산서', finalSettlementReportDocument: '최종 정산 보고서', finalReportDocument: '최종 보고서', contractAnalysis: '계약서 분석',
 };
@@ -166,6 +166,14 @@ function formatSubmittedValue(value: unknown): string {
       : '미입력';
   }
   return String(value);
+}
+
+export function buildOriginalSubmittedFields(request: ProjectRequest | null) {
+  const payload = resolveProjectRequestPayload(request);
+  if (!payload) return [];
+  return Object.entries(payload)
+    .filter(([key]) => key !== 'fundInputMode')
+    .map(([key, value]) => ({ key, label: REQUEST_FIELD_LABELS[key] || key, value: formatSubmittedValue(value) }));
 }
 
 function buildSubmittedFields(request: ProjectRequest | null) {

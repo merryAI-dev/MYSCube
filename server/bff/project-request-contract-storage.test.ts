@@ -1,3 +1,4 @@
+import { PROJECT_PROPOSAL_FILE_FORMATS } from '../../src/app/platform/project-proposal-file-formats.mjs';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createDraftAttachmentCleanupOutboxHandler,
@@ -197,7 +198,7 @@ describe('project-request-contract-storage', () => {
     expect(deleteFile).not.toHaveBeenCalled();
   });
 
-  it('idempotently copies exact draft-prefix attachments into the canonical private prefix', async () => {
+  it.each(PROJECT_PROPOSAL_FILE_FORMATS)('copies proposal $extension unchanged into the canonical private prefix', async format => {
     const copy = vi.fn(async () => undefined);
     const deleteFile = vi.fn(async () => undefined);
     const files = new Map<string, any>();
@@ -213,7 +214,7 @@ describe('project-request-contract-storage', () => {
       bucketName: 'demo-bff-it.firebasestorage.app',
       storage: { bucket: vi.fn(() => bucket) },
     });
-    const sourcePath = 'orgs/tenant-a/project-registration-drafts/draft-a/attachment-a-contract.pdf';
+    const sourcePath = `orgs/tenant-a/project-registration-drafts/draft-a/attachment-a-proposal${format.extension}`;
 
     const relocated = await service.relocateDraftAttachments({
       tenantId: 'tenant-a',
@@ -221,21 +222,23 @@ describe('project-request-contract-storage', () => {
       projectId: 'project-a',
       attachmentRefs: [{
         attachmentId: 'attachment-a',
-        documentKind: 'contract',
+        documentKind: 'proposal_word_original',
         path: sourcePath,
-        name: 'contract.pdf',
+        name: `proposal${format.extension}`,
         size: 7,
-        contentType: 'application/pdf',
+        contentType: format.mimeType,
       }],
     });
 
-    const canonicalPath = 'orgs/tenant-a/project-registration-documents/project-a/attachment-a-contract.pdf';
+    const canonicalPath = `orgs/tenant-a/project-registration-documents/project-a/attachment-a-proposal${format.extension}`;
     expect(copy).toHaveBeenCalledWith(files.get(canonicalPath));
     expect(relocated).toEqual([expect.objectContaining({
       attachmentId: 'attachment-a',
-      documentKind: 'contract',
+      documentKind: 'proposal_word_original',
       path: canonicalPath,
       visibility: 'PRIVATE',
+      name: `proposal${format.extension}`,
+      contentType: format.mimeType,
     })]);
     expect(deleteFile).not.toHaveBeenCalled();
   });
