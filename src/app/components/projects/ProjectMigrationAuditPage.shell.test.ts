@@ -161,7 +161,7 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(slots[4]?.note).toBe('제안서가 PDF로만 작성됨');
     expect(slots[5]?.note).toBe('별도 발표자료 없음');
     expect(slots[6]?.entries.map((entry) => entry.kind)).toEqual(['rfp_request_evidence']);
-    expect(slots.slice(3).every((slot) => slot.optional)).toBe(true);
+    expect(slots.slice(3).every((slot) => typeof slot.submissionState === 'string')).toBe(true);
   });
 
   it('does not revive cleared or inaccessible metadata', () => {
@@ -207,7 +207,8 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(documentSource).toContain('label="등록 메모"');
     expect(documentSource).toContain('산출내역서(견적서)');
     expect(documentSource).toContain('이후 제출 예정');
-    expect(documentSource).toContain('선택 · 미제출');
+    expect(documentSource).not.toContain('선택 · 미제출');
+    expect(documentSource).toContain('기록 없음');
     expect(documentSource).not.toContain('최종 입금 메모');
     // 제출 당시 확인값은 현재 입력 UI 여부와 별개로 보존하여 설명한다.
     expect(documentSource).toContain('등록 확인 사항');

@@ -1,6 +1,6 @@
 import { ProjectReviewReadinessPanel } from './ProjectReviewReadinessPanel';
 import type { ProjectReviewReadiness } from '../../../lib/platform-bff-client';
-import { submissionAmount, submissionRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
+import { submissionAmount, submissionFinancialYears, submissionRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
 import { useEffect, useMemo, useState } from 'react';
 import { PROJECT_STATUS_LABELS, INTEREST_REFUND_POLICY_LABELS, type FileAttachment, type ProjectRegistrationOptionalDocumentNotes } from '../../../data/types';
 import type { MigrationAuditConsoleRecord } from '../../../platform/project-migration-console';
@@ -8,7 +8,6 @@ import { getMigrationAuditStatusLabel, hasPendingProjectChangeRequest } from '..
 import { resolveProjectRequestPayload } from '../../../platform/project-change-request';
 import type { ProjectRequestDocumentKind } from '../../../platform/project-contract-upload';
 import { buildMigrationReviewDossier } from '../../../platform/project-migration-review-dossier';
-import { projectFinancialYearsWithPaymentPlan } from '../../../platform/project-input-policy.mjs';
 import {
   getManagementPlanningReview,
   getManagementPlanningReviewLabel,
@@ -66,7 +65,6 @@ type ReviewDocumentSlotDefinition = {
   number: number;
   label: string;
   kinds: ProjectRequestDocumentKind[];
-  optional?: boolean;
   noteField?: keyof ProjectRegistrationOptionalDocumentNotes;
 };
 
@@ -79,6 +77,8 @@ type ReviewDocumentSlot = ReviewDocumentSlotDefinition & {
   note: string;
   link: string;
   conflict: boolean;
+  submissionState: 'SUBMITTED' | 'NOT_APPLICABLE' | 'DEFERRED' | 'EXPLAINED' | 'EMPTY' | 'UNRECORDED';
+  submissionLabel: string;
 };
 
 const REVIEW_DOCUMENT_DEFINITIONS: ReviewDocumentDefinition[] = [
@@ -100,10 +100,10 @@ const REVIEW_DOCUMENT_SLOTS: ReviewDocumentSlotDefinition[] = [
   { number: 1, label: '계약서 PDF', kinds: ['contract'] },
   { number: 2, label: '고객사 사업자등록증 PDF', kinds: ['customer_business_registration'] },
   { number: 3, label: '산출내역서(견적서) PDF', kinds: ['quote'] },
-  { number: 4, label: '제안서 Word 원본', kinds: ['proposal_word_original'], optional: true, noteField: 'proposalWordOriginal' },
-  { number: 5, label: '제안서(구글드라이브 링크)', kinds: ['proposal_ppt_original'], optional: true, noteField: 'proposalPptOriginal' },
-  { number: 6, label: '발표자료(구글드라이브 링크)', kinds: ['presentation_ppt_original'], optional: true, noteField: 'presentationPptOriginal' },
-  { number: 7, label: 'RFP/요청 메일 증빙', kinds: ['rfp_request_evidence'], optional: true, noteField: 'rfpRequestEvidence' },
+  { number: 4, label: '제안서 Word 원본', kinds: ['proposal_word_original'], noteField: 'proposalWordOriginal' },
+  { number: 5, label: '제안서(구글드라이브 링크)', kinds: ['proposal_ppt_original'], noteField: 'proposalPptOriginal' },
+  { number: 6, label: '발표자료(구글드라이브 링크)', kinds: ['presentation_ppt_original'], noteField: 'presentationPptOriginal' },
+  { number: 7, label: 'RFP/요청 메일 증빙', kinds: ['rfp_request_evidence'], noteField: 'rfpRequestEvidence' },
 ];
 
 function isFileAttachment(value: unknown): value is FileAttachment {
@@ -136,16 +136,32 @@ export function buildMigrationReviewDocumentSlots(record: MigrationAuditConsoleR
       const entry = documentByKind.get(kind);
       return entry ? [entry] : [];
     });
+    const linkField = slot.number === 5 ? 'proposalPptOriginal' : slot.number === 6 ? 'presentationPptOriginal' : null;
+    const link = linkField ? String(confirmations?.[linkField] || '').trim() : '';
+    const note = slot.number === 3 && quoteSubmissionDeferred
+      ? '이후 제출 예정'
+      : slot.noteField ? String(notes[slot.noteField] || '').trim() : '';
+    const explicitAbsence = note.replace(/\s/g, '') === '해당없음';
+    const recorded = REVIEW_DOCUMENT_DEFINITIONS.some((definition) => slot.kinds.includes(definition.kind)
+      && Object.hasOwn(payload || {}, definition.field))
+      || Boolean(linkField && Object.hasOwn(confirmations || {}, linkField));
+    const submissionState: ReviewDocumentSlot['submissionState'] = entries.length || link ? 'SUBMITTED'
+      : explicitAbsence ? 'NOT_APPLICABLE'
+      : slot.number === 3 && quoteSubmissionDeferred ? 'DEFERRED'
+      : note ? 'EXPLAINED'
+      : recorded ? 'EMPTY' : 'UNRECORDED';
+    const labels: Record<ReviewDocumentSlot['submissionState'], string> = {
+      SUBMITTED: '제출됨', NOT_APPLICABLE: '해당 없음', DEFERRED: '이후 제출 예정',
+      EXPLAINED: '미첨부 사유 기록됨', EMPTY: '미입력', UNRECORDED: '기록 없음',
+    };
     return {
       ...slot,
       entries,
-      link: slot.number === 5
-        ? String(confirmations?.proposalPptOriginal || '').trim()
-        : slot.number === 6 ? String(confirmations?.presentationPptOriginal || '').trim() : '',
-      note: slot.number === 3 && quoteSubmissionDeferred
-        ? '이후 제출 예정'
-        : slot.noteField ? String(notes[slot.noteField] || '').trim() : '',
-      conflict: false,
+      link,
+      note,
+      submissionState,
+      submissionLabel: labels[submissionState],
+      conflict: Boolean((entries.length || link) && explicitAbsence),
     };
   });
 }
@@ -232,7 +248,7 @@ export function MigrationAuditDocumentDialog({
   const dossier = buildMigrationReviewDossier(record.project, record.request);
   const reviewPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
   const totalActualCost = reviewPayload?.totalActualCost;
-  const financialYears = projectFinancialYearsWithPaymentPlan(reviewPayload);
+  const financialYears = submissionFinancialYears(reviewPayload);
   const interestRefundPolicy = reviewPayload?.interestRefundPolicy;
   const registrationNote = reviewPayload?.note;
   const confirmations = reviewPayload?.registrationConfirmations;
@@ -297,6 +313,9 @@ export function MigrationAuditDocumentDialog({
         <DialogHeader className="sr-only"><DialogTitle>프로젝트 등록 및 승인서</DialogTitle><DialogDescription>프로젝트 등록 내용을 결재 문서 형식으로 확인합니다.</DialogDescription></DialogHeader>
         <article className="mx-auto w-full max-w-[1020px] border border-slate-400 bg-white px-8 py-9 text-slate-900" data-testid="migration-review-document">
           <ProjectReviewReadinessPanel readiness={readiness} />
+          {checkoutVisible ? <p role="status" className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+            이 제출본의 프로젝트 상태는 {PROJECT_STATUS_LABELS[reviewPayload!.status!]}입니다. 이 상태에 따라 종료사업 체크아웃이 표시됩니다. 실제 진행 중인 사업이라면 작성자가 프로젝트 수정의 기본 정보에서 계약기간과 상태를 확인한 뒤 수정 제출해 주세요. 기존 승인 문서는 당시 제출 상태를 유지합니다.
+          </p> : null}
           {record.request ? <p className="mb-4 rounded border border-blue-200 bg-blue-50 px-3 py-2 text-[12px] text-blue-900">최종 제출한 내용을 기준으로 검토합니다. 제출 후 임시저장한 수정 내용은 이 결재 문서에 포함되지 않습니다.</p> : null}
           <header className="border-b-2 border-slate-700 pb-5">
             <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_410px]">
@@ -406,11 +425,12 @@ export function MigrationAuditDocumentDialog({
           </dl></section>
           <section className="mt-6">
             <h3 className="border-b-2 border-slate-700 pb-2 text-[14px] font-bold">등록 제출서류 7종{documentSlots.length > 7 ? ' 및 추가 제출서류' : ''}</h3>
+            <p className="border-x border-slate-400 px-3 py-2 text-[11px] leading-5 text-slate-600">제출 당시 저장된 응답을 표시합니다. 기록 없음은 항목 자체가 남아 있지 않은 상태이고, 미입력은 항목은 있지만 파일·링크·미첨부 사유가 비어 있는 상태입니다. 과거 문서의 제출 여부는 원문과 함께 확인해 주세요.</p>
             <div className="border border-t-0 border-slate-400" data-testid="migration-review-document-slots">
               <div className="hidden grid-cols-[48px_220px_minmax(0,1fr)_108px] border-b border-slate-400 bg-slate-100 text-[11px] font-semibold text-slate-700 md:grid">
                 <div className="border-r border-slate-400 px-2 py-2 text-center">번호</div>
                 <div className="border-r border-slate-400 px-3 py-2">구분</div>
-                <div className="border-r border-slate-400 px-3 py-2">제출 파일 / 미첨부 사유</div>
+                <div className="border-r border-slate-400 px-3 py-2">제출 상태 / 파일·링크 / 미첨부 사유</div>
                 <div className="px-3 py-2 text-center">원문</div>
               </div>
               {documentSlots.map((slot) => (
@@ -426,6 +446,7 @@ export function MigrationAuditDocumentDialog({
                     {slot.label}
                   </div>
                   <div className="min-w-0 border-b border-slate-300 px-3 py-3 text-[12px] leading-5 text-slate-800 md:border-r md:border-b-0 md:border-slate-400">
+                    <p className={`mb-1 font-semibold ${slot.submissionState === 'SUBMITTED' ? 'text-slate-800' : 'text-slate-600'}`}>{slot.submissionLabel}</p>
                     {slot.entries.length > 0 ? (
                       <div className="space-y-2">
                         {slot.entries.map((entry) => {
@@ -440,23 +461,15 @@ export function MigrationAuditDocumentDialog({
                             </div>
                           );
                         })}
-                        {slot.conflict ? (
-                          <p className="border-t border-amber-300 pt-2 text-[10px] font-semibold text-amber-800">
-                            제출 규칙 불일치 · 제안서와 RFP/요청 증빙이 함께 등록되었습니다. 두 원문을 모두 확인해 주세요.
-                          </p>
-                        ) : null}
                       </div>
-                    ) : slot.link ? null
-                    : slot.note ? (
+                    ) : null}
+                    {slot.conflict ? <p className="mt-2 border-t border-amber-300 pt-2 text-[10px] font-semibold text-amber-800">제출된 원문과 해당 없음 응답이 함께 기록되어 있습니다. 원문과 작성자의 응답을 함께 확인해 주세요.</p> : null}
+                    {slot.note && slot.submissionState !== 'NOT_APPLICABLE' && slot.submissionState !== 'DEFERRED' ? (
                       <p><span className="font-semibold text-slate-600">미첨부 사유</span> · {slot.note}</p>
-                    ) : slot.optional ? (
-                      <p className="text-slate-500">선택 · 미제출</p>
-                    ) : (
-                      <p className="text-rose-700">미제출</p>
-                    )}
+                    ) : null}
                     {slot.link ? <a className="block break-all text-blue-700 underline" href={slot.link} target="_blank" rel="noreferrer">{slot.link}</a> : null}
                   </div>
-                  <div className="flex items-center justify-center px-3 py-3">
+                  <div className="flex flex-wrap items-center justify-center gap-1.5 px-3 py-3">
                     {slot.entries.length > 0 ? (
                       <div className="flex flex-wrap justify-center gap-1.5">
                         {slot.entries.map((entry) => {
@@ -480,9 +493,9 @@ export function MigrationAuditDocumentDialog({
                           );
                         })}
                       </div>
-                    ) : (
-                      <span className="text-[10px] text-slate-400">해당 없음</span>
-                    )}
+                    ) : null}
+                    {slot.link ? <a className="border border-slate-300 px-2.5 py-2 text-[11px] text-blue-700 underline" href={slot.link} target="_blank" rel="noreferrer">링크 열기</a> : null}
+                    {!slot.entries.length && !slot.link ? <span className="text-[10px] text-slate-500">{slot.submissionLabel}</span> : null}
                   </div>
                 </div>
               ))}

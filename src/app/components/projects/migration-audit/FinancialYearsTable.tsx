@@ -9,12 +9,12 @@ type FinancialYearRow = NonNullable<Project['financialYears']>[number];
  * 표 안의 표로 그린다. 입금 예정월은 금액 아래 작은 글씨로 붙인다.
  */
 export function FinancialYearsTable({ years, currency = 'KRW' }: { years?: FinancialYearRow[]; currency?: string }) {
-  const money = (value?: number) => submissionAmount(value, currency);
+  const money = (value?: number, explicit?: boolean) => submissionAmount(value, currency, explicit);
   const rows = Array.isArray(years) ? years : [];
   if (rows.length === 0) return <span className="text-slate-400">-</span>;
-  const paymentCell = (amount?: number, month?: string) => (
+  const paymentCell = (amount?: number, month?: string, explicit?: boolean) => (
     <div className="text-right">
-      <p>{money(amount)}</p>
+      <p>{money(amount, explicit)}</p>
       {month ? <p className="text-[10px] text-slate-500">{month}</p> : null}
     </div>
   );
@@ -45,16 +45,16 @@ export function FinancialYearsTable({ years, currency = 'KRW' }: { years?: Finan
                 <th scope="row" className="whitespace-nowrap border-r border-slate-300 px-2 py-1.5 text-left font-semibold text-slate-900">
                   {row.year}년
                 </th>
-                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.contractAmount)}</td>
-                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.salesVatAmount)}</td>
-                <td className="px-2 py-1.5 text-right">{money(row.totalRevenueAmount)}</td>
-                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.totalActualCost)}</td>
-                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.supportAmount)}</td>
-                <td className="border-r border-slate-300 px-2 py-1.5">{paymentCell(row.paymentPlan?.contract, row.paymentExpectedMonths?.contract)}</td>
-                <td className="border-r border-slate-300 px-2 py-1.5">{paymentCell(row.paymentPlan?.interim, row.paymentExpectedMonths?.interim)}</td>
-                <td className="border-r border-slate-300 px-2 py-1.5">{paymentCell(row.paymentPlan?.final, row.paymentExpectedMonths?.final)}</td>
+                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.contractAmount, row.inputFlags?.contractAmount)}</td>
+                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.salesVatAmount, row.inputFlags?.salesVatAmount)}</td>
+                <td className="px-2 py-1.5 text-right">{money(row.totalRevenueAmount, row.inputFlags?.totalRevenueAmount)}</td>
+                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.totalActualCost, row.inputFlags?.totalActualCost)}</td>
+                <td className="border-r border-slate-300 px-2 py-1.5 text-right">{money(row.supportAmount, row.inputFlags?.supportAmount)}</td>
+                <td className="border-r border-slate-300 px-2 py-1.5">{paymentCell(row.paymentPlan?.contract, row.paymentExpectedMonths?.contract, row.paymentPlanInputFlags?.contract)}</td>
+                <td className="border-r border-slate-300 px-2 py-1.5">{paymentCell(row.paymentPlan?.interim, row.paymentExpectedMonths?.interim, row.paymentPlanInputFlags?.interim)}</td>
+                <td className="border-r border-slate-300 px-2 py-1.5">{paymentCell(row.paymentPlan?.final, row.paymentExpectedMonths?.final, row.paymentPlanInputFlags?.final)}</td>
                 <td className="px-2 py-1.5 text-center">{submissionConfirmation(row.isSettled, '완료', '미완료')}</td>
-                <td className="px-2 py-1.5">{submissionRate(row.totalRevenueAmount, row.contractAmount)}</td>
+                <td className="px-2 py-1.5">{submissionRate(row.totalRevenueAmount, row.contractAmount, row.inputFlags)}</td>
                 <td className="px-2 py-1.5">{submissionConfirmation(row.confirmed)}</td>
               </tr>
               {row.finalPaymentExpectedWeek ? <tr className="border-b border-slate-200"><td colSpan={12} className="px-2 py-1.5 text-[10px] text-slate-600">{row.year}년 잔금 입금 예정 주차 · {row.finalPaymentExpectedWeek}</td></tr> : null}

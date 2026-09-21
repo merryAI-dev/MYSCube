@@ -1,4 +1,4 @@
-import { submissionAmount, submittedParticipationLines, submissionPaymentPlan } from './project-submission-display';
+import { submissionAmount, submissionAmountKnown, submittedParticipationLines, submissionPaymentPlan } from './project-submission-display';
 import {
   ACCOUNT_TYPE_LABELS,
   BASIS_LABELS,
@@ -224,22 +224,24 @@ function formatPaymentPlanSplit(
   contractAmount: number | null | undefined,
   currency?: string,
   months?: Project['paymentExpectedMonths'],
+  flags?: Partial<Record<'contract' | 'interim' | 'final', boolean>>,
+  contractExplicit?: boolean,
 ): string {
   if (!plan) return '-';
   const normalizedContractAmount = Number(contractAmount);
   const entries = [
-    ['선금/계약금', plan.contract, months?.contract],
-    ['중도금', plan.interim, months?.interim],
-    ['잔금', plan.final, months?.final],
+    ['선금/계약금', plan.contract, months?.contract, flags?.contract],
+    ['중도금', plan.interim, months?.interim, flags?.interim],
+    ['잔금', plan.final, months?.final, flags?.final],
   ] as const;
   const label = entries
-    .map(([name, value, month]) => {
-      if (typeof value !== 'number' || !Number.isFinite(value)) return `${name} 미입력${month ? ` · ${month}` : ''}`;
+    .map(([name, value, month, explicit]) => {
+      if (!submissionAmountKnown(value, explicit)) return `${name} ${submissionAmount(value, currency, explicit)}${month ? ` · ${month}` : ''}`;
       const amount = Number(value);
-      const percent = Number.isFinite(normalizedContractAmount) && normalizedContractAmount > 0
+      const percent = submissionAmountKnown(contractAmount, contractExplicit) && normalizedContractAmount > 0
         ? ` (${((amount / normalizedContractAmount) * 100).toFixed(0)}%)`
         : '';
-      return `${name} ${submissionAmount(amount, currency)}${percent}${month ? ` · ${month}` : ''}`;
+      return `${name} ${submissionAmount(amount, currency, explicit)}${percent}${month ? ` · ${month}` : ''}`;
     })
     .join(' · ');
   return label || '-';
@@ -386,6 +388,8 @@ export function buildMigrationReviewDossier(
         submittedValue(request, project.contractAmount, payload?.contractAmount),
         snapshot?.currency,
         submissionPaymentPlan(snapshot).legacy ? snapshot?.paymentExpectedMonths : undefined,
+        submissionPaymentPlan(snapshot).inputFlags,
+        snapshot?.financialInputFlags?.contractAmount,
       ),
       finalPaymentNote: readable(submittedValue(request, project.finalPaymentNote, payload?.finalPaymentNote)),
       totalRevenueAmountLabel: formatStoredProjectAmount(submittedValue(request, project.totalRevenueAmount, payload?.totalRevenueAmount), snapshot?.financialInputFlags?.totalRevenueAmount),

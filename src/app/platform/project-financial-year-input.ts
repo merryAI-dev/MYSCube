@@ -22,8 +22,8 @@ export function updateProjectFinancialYearAmount(
   };
   const next = { ...row, [field]: parseProjectAmountInput(rawValue), inputFlags };
   if (deriveContract && CONTRACT_AMOUNT_ITEM_FIELDS.some((item) => item === field)) {
-    next.contractAmount = deriveContractAmountFromItems(next);
     inputFlags.contractAmount = CONTRACT_AMOUNT_ITEM_FIELDS.every((item) => inputFlags[item] === true);
+    if (inputFlags.contractAmount) next.contractAmount = deriveContractAmountFromItems(next);
   }
   return next;
 }

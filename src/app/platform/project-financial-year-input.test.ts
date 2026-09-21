@@ -17,12 +17,23 @@ const blankYear = (year = 2026): ProjectFinancialYear => ({
 describe('annual project finance input completeness', () => {
   it('does not mark missing components complete when one amount is entered', () => {
     const row = updateProjectFinancialYearAmount(blankYear(), 'totalRevenueAmount', '48,000,000', true);
-    expect(row.contractAmount).toBe(48_000_000);
+    expect(row.contractAmount).toBe(0);
     expect(row.inputFlags).toEqual({
       contractAmount: false, salesVatAmount: false, totalRevenueAmount: true,
       totalActualCost: false, supportAmount: false,
     });
     expect(formatProjectAmountInput(row.totalActualCost, row.inputFlags?.totalActualCost === true)).toBe('');
+  });
+
+  it('preserves a legacy contract while missing components are being completed', () => {
+    const legacy = { ...blankYear(), contractAmount: 120_000_000 };
+    const partial = updateProjectFinancialYearAmount(legacy, 'totalRevenueAmount', '48000000', true);
+    expect(partial.contractAmount).toBe(120_000_000);
+    const withCost = updateProjectFinancialYearAmount(partial, 'totalActualCost', '72000000', true);
+    expect(withCost.contractAmount).toBe(120_000_000);
+    const completed = updateProjectFinancialYearAmount(updateProjectFinancialYearAmount(withCost, 'salesVatAmount', '0', true), 'supportAmount', '0', true);
+    expect(completed.contractAmount).toBe(120_000_000);
+    expect(completed.inputFlags?.contractAmount).toBe(true);
   });
 
   it('accepts explicitly typed zero and preserves its distinction from empty after serialization', () => {

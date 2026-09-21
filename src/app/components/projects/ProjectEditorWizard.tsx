@@ -1,10 +1,10 @@
 import { projectSubmissionCompletenessIssues } from '../../platform/project-submission-completeness.mjs';
 import { ProjectSubmissionResponses } from './ProjectSubmissionResponses';
-import { submissionAmount, submissionPaymentPlan, submissionAdvanceRatio, submissionRate, submissionContractWarning } from '../../platform/project-submission-display';
+import { submissionAmountKnown, submissionAmountTotal, submissionFinancialYears, submissionAmount, submissionPaymentPlan, submissionAdvanceRatio, submissionRate, submissionContractWarning } from '../../platform/project-submission-display';
 import { FinancialYearsTable } from './migration-audit/FinancialYearsTable';
 import { ProjectAmountInput } from './ProjectAmountInput';
 import { aggregateProjectFinancialInputFlags, updateProjectFinancialYearAmount } from '../../platform/project-financial-year-input';
-import { projectEffectivePaymentPlan, projectFinancialYearsWithPaymentPlan, hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings, projectContractEndYear } from '../../platform/project-input-policy.mjs';
+import { projectEffectivePaymentPlan, hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings, projectContractEndYear } from '../../platform/project-input-policy.mjs';
 import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import {
   ArrowLeft,
@@ -571,10 +571,9 @@ function mergeContractAnalysisIntoDraft(
   });
 }
 
-function formatPaymentPlanAmount(amount: number | undefined, contractAmount: number, currency = 'KRW') {
-  if (typeof amount !== 'number' || !Number.isFinite(amount)) return '-';
-  const amountLabel = submissionAmount(amount, currency);
-  if (!Number.isFinite(contractAmount) || contractAmount <= 0) return amountLabel;
+function formatPaymentPlanAmount(amount: number | undefined, contractAmount: number, currency = 'KRW', explicit?: boolean, contractExplicit?: boolean) {
+  const amountLabel = submissionAmount(amount, currency, explicit);
+  if (!submissionAmountKnown(amount, explicit) || !submissionAmountKnown(contractAmount, contractExplicit) || contractAmount <= 0) return amountLabel;
   return `${amountLabel} (${((amount / contractAmount) * 100).toFixed(0)}%)`;
 }
 
@@ -1140,6 +1139,7 @@ export function ProjectEditorWizard({
   };
   const settlementDetailsEnabled = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
   const requiresSettlementConfirmations = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE';
+  const periodBasedStatus = deriveProjectStatusFromContractPeriod({ contractStart: draft.contractStart, contractEnd: draft.contractEnd, contractEndUndecided: draft.contractEndUndecided, currentStatus: draft.status, today: new Date().toISOString().slice(0, 10) });
   const showProjectCheckout = draft.status === 'COMPLETED' || draft.status === 'COMPLETED_PENDING_PAYMENT';
   const effectivePaymentPlan = projectEffectivePaymentPlan(draft) ?? { contract: 0, interim: 0, final: 0 };
   const paymentPlanTotal = effectivePaymentPlan.contract + effectivePaymentPlan.interim + effectivePaymentPlan.final;
@@ -1149,7 +1149,6 @@ export function ProjectEditorWizard({
   const requiresAdvanceInterimReason = paymentPlanTotal > 0
     && advanceInterimRatio !== null
     && advanceInterimRatio < 0.7;
-  const profitRateLabel = formatProfitRatePercentInput(draft.profitRate);
   const teamMembersSummary = formatProjectTeamMembersSummary(draft.teamMembersDetailed, '', '\n');
   const projectTypeOptions = getProjectTypeSelectableOptions(draft.type);
   const contractTypeOptions = getProjectContractTypeSelectableOptions(draft.contractType);
@@ -1788,6 +1787,16 @@ export function ProjectEditorWizard({
 
   const renderBasicStep = () => (
     <ProjectFormSection title="기본 정보">
+      <ProjectFormRow label="프로젝트 진행 상태" hints={['현재 저장된 상태입니다. 상태 수정은 초안에 보관되며 최종 제출 후 조직장 승인으로 반영됩니다.']}>
+        <div className="space-y-2">
+          <p className={FORM_VALUE_CLASS}>{PROJECT_STATUS_LABELS[draft.status]}</p>
+          {periodBasedStatus !== draft.status ? <div className={cn('rounded-lg border border-amber-300 bg-amber-50 p-3', FORM_HINT_CLASS)} role="status">
+            <p>저장된 상태는 {PROJECT_STATUS_LABELS[draft.status]}이지만 계약기간 기준 상태는 {PROJECT_STATUS_LABELS[periodBasedStatus]}입니다. 실제 진행 상황과 계약기간을 확인한 뒤 수정해 주세요.</p>
+            <Button type="button" variant="outline" className="mt-2" onClick={() => update('status', periodBasedStatus)}>계약기간 기준 상태로 수정</Button>
+          </div> : null}
+          {showProjectCheckout ? <p className={FORM_HINT_CLASS}>완료 상태로 저장되어 종료사업 체크아웃이 표시됩니다. 실제 진행 중이면 계약기간과 상태를 먼저 확인해 주세요.</p> : null}
+        </div>
+      </ProjectFormRow>
       <ProjectFormRow label="담당조직(CIC)" required issueLabel="담당조직(CIC)" errors={fieldIssues('담당조직(CIC)')}>
       <Select value={canUseSelectedDepartment ? selectedDepartment : undefined} onValueChange={(value) => update('department', value)}>
         <SelectTrigger className={cn(FIELD_W_SM, FORM_CONTROL_CLASS)}>
@@ -2305,7 +2314,7 @@ export function ProjectEditorWizard({
   const contractAmountIsDerived = annualTotalsOwnAmounts && !hasMultiYearContract;
   /**
    * 자동 계산 이전에 저장된 계약금액이 항목 합계와 어긋나는 경우. 값은 여기서 고치지 않는다.
-   * 사람이 금액을 한 번이라도 고치면 그때 합계로 바뀌므로, 그 전에 차이를 보여준다.
+   * 모든 구성 금액을 확인하기 전에는 기존 계약금액을 유지한다.
    */
   const storedContractAmountConflict = (() => {
     if (!contractAmountIsDerived) return null;
@@ -2365,7 +2374,6 @@ export function ProjectEditorWizard({
     // 저장된 총계와 연도 합계가 어긋나면 이미 submitIssues 가 잡는다. 여기서는 같은 사실을
     // 표 밑에서 보여주기만 하고 판정은 하지 않는다.
     const totalsDrifted = columns.some(([field]) => annualTotal(field) !== draft[field]);
-    const koreanContractTotal = formatKoreanAmountUnit(annualTotal('contractAmount'));
 
     return (
       <div className="space-y-2">
@@ -2415,7 +2423,7 @@ export function ProjectEditorWizard({
                           <span className={cn('font-medium text-slate-900', FORM_NUMERIC_VALUE_CLASS)}>
                             {fmtKRW(row.contractAmount)}
                           </span>
-                          <span className="text-[11px] font-normal leading-4 text-slate-400">{row.inputFlags?.contractAmount === true ? '계산됨' : '구성 금액 입력 필요'}</span>
+                          <span className="text-[11px] font-normal leading-4 text-slate-400">{row.inputFlags?.contractAmount === true && CONTRACT_AMOUNT_ITEM_FIELDS.every(field => row.inputFlags?.[field] === true) && row.contractAmount === deriveContractAmountFromItems(row) ? '계산됨' : '저장된 계약금액 · 구성 금액 확인 필요'}</span>
                         </div>
                       ) : (
                         <ProjectAmountInput
@@ -2430,13 +2438,13 @@ export function ProjectEditorWizard({
                         />
                       )}
                       {row.inputFlags?.[field] !== true && !(field === 'contractAmount' && contractAmountIsDerived) && (
-                        <p className={cn('mt-1 text-amber-700', FORM_HINT_CLASS)}>필수 · 해당 금액이 없으면 0을 입력해 주세요.</p>
+                        <p className={cn('mt-1 text-amber-700', FORM_HINT_CLASS)}>{row[field] !== 0 ? `미확인 저장값 ${submissionAmount(row[field], draft.currency, true)} · 계약서 확인 후 입력해 주세요.` : '필수 · 해당 금액이 없으면 0을 입력해 주세요.'}</p>
                       )}
                     </td>
                     </Fragment>
                   ))}
                   <td className={cn('px-3 py-2 text-right text-slate-600', FORM_NUMERIC_VALUE_CLASS)}>
-                    {`${(row.profitRate * 100).toFixed(2)}%`}
+                    {submissionRate(row.totalRevenueAmount, row.contractAmount, row.inputFlags)}
                   </td>
                 </tr>
               ))}
@@ -2445,12 +2453,12 @@ export function ProjectEditorWizard({
                 {columns.map(([field]) => (
                   <Fragment key={field}>
                     <td className={cn('px-3 py-2.5 text-right font-semibold text-[#0176D3]', FORM_NUMERIC_VALUE_CLASS)}>
-                      {fmtKRW(annualTotal(field))}
+                      {submissionAmountTotal(draft.financialYears.map(row => ({ value: row[field], explicit: row.inputFlags?.[field] })), draft.currency)}
                     </td>
                   </Fragment>
                 ))}
                 <td className={cn('px-3 py-2.5 text-right font-semibold text-slate-900', FORM_NUMERIC_VALUE_CLASS)}>
-                  {profitRateLabel ? `${profitRateLabel}%` : '-'}
+                  {submissionRate(draft.totalRevenueAmount, draft.contractAmount, financialInputFlags)}
                 </td>
               </tr>
             </tbody>
@@ -2459,7 +2467,7 @@ export function ProjectEditorWizard({
         <ul className={cn('space-y-1', FORM_HINT_CLASS)}>
           <li className="flex gap-1.5">
             <span aria-hidden>•</span>
-            <span>계약금액 합계 {koreanContractTotal || '0 원'}</span>
+            <span>계약금액 합계 {submissionAmountTotal(draft.financialYears.map(row => ({ value: row.contractAmount, explicit: row.inputFlags?.contractAmount })), draft.currency)}</span>
           </li>
           {contractAmountIsDerived ? (
             <li className="flex gap-1.5">
@@ -2484,7 +2492,7 @@ export function ProjectEditorWizard({
           <p className={cn('rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-amber-800', FORM_HINT_CLASS)}>
             저장된 계약금액 {fmtKRW(storedContractAmountConflict.stored)}원이 항목 합계
             {' '}{fmtKRW(storedContractAmountConflict.derived)}원과 다릅니다.
-            금액을 한 번 고쳐 넣으면 항목 합계로 바뀌어 저장되니, 어느 쪽이 맞는지 먼저 확인해 주세요.
+            계약서와 대조하여 매출 부가세·수익·실비(원가)·지원금을 모두 확인해 주세요. 네 항목의 입력이 끝나기 전에는 저장된 계약금액을 유지합니다. 차액을 자동으로 원가에 채우지 않습니다.
           </p>
         ) : null}
         {emptyContractYears.length > 0 || totalsDrifted ? (
@@ -2498,7 +2506,7 @@ export function ProjectEditorWizard({
             {totalsDrifted ? (
               <li className="flex gap-1.5">
                 <span aria-hidden>·</span>
-                <span>저장된 총계가 연도 합계와 다릅니다. 금액을 한 번 고쳐 넣으면 합계가 다시 맞춰집니다.</span>
+                <span>저장된 총계가 연도 합계와 다릅니다. 계약서와 연도별 금액을 대조한 뒤 각 항목을 수정해 주세요. 모든 값이 확인되어야 최종 제출할 수 있습니다.</span>
               </li>
             ) : null}
           </ul>
@@ -2514,7 +2522,7 @@ export function ProjectEditorWizard({
           {usesRegistrationV2 ? (
             <ProjectFormSection
               title="등록 제출서류 7종"
-              description="1~2번은 필수, 3번은 첨부 또는 이후 제출로 진행할 수 있으며 4~7번은 선택입니다."
+              description="1~2번은 필수, 3번은 첨부 또는 이후 제출로 진행할 수 있으며 4~7번도 파일·링크 제출 또는 해당 없음 응답이 필요합니다."
               flushBelow
             >
               {renderRegistrationDocumentTable()}
@@ -2672,7 +2680,7 @@ export function ProjectEditorWizard({
         */}
         {annualTotalsOwnAmounts ? null : (
           <ProjectFormRow label="총수익률" note="총수익 / 계약금액">
-            <ProjectComputedValue value={profitRateLabel ? `${profitRateLabel}%` : '-'} />
+            <ProjectComputedValue value={submissionRate(draft.totalRevenueAmount, draft.contractAmount, financialInputFlags)} />
           </ProjectFormRow>
         )}
 
@@ -3116,8 +3124,6 @@ export function ProjectEditorWizard({
       ['final', '잔금', financialYear ? `${financialYear.year}년 잔금 예상 입금 시점` : '잔금 입금 예상월'],
     ] as const;
     const paymentBase = financialYear ? financialYear.contractAmount : draft.contractAmount;
-    const paymentSum = paymentPlan.contract + paymentPlan.interim + paymentPlan.final;
-    const koreanPaymentSum = formatKoreanAmountUnit(paymentSum);
     const advanceRatio = financialYear ? yearAdvanceInterimRatio : advanceInterimRatio;
     const missingMonths = fieldIssues(...paymentRows.map(([, , issueLabel]) => issueLabel));
     return (
@@ -3130,7 +3136,7 @@ export function ProjectEditorWizard({
             <thead>
               <tr className="border-y border-slate-200 bg-slate-50">
                 <th scope="col" className={cn('py-2 pr-3', FORM_LABEL_CLASS)}>구분</th>
-                <th scope="col" className={cn('px-3 py-2 text-right', FORM_LABEL_CLASS)}>금액 (원)</th>
+                <th scope="col" className={cn('px-3 py-2 text-right', FORM_LABEL_CLASS)}>금액 ({draft.currency === 'USD' ? 'USD' : '원'})</th>
                 <th scope="col" className={cn('px-3 py-2 text-right', FORM_LABEL_CLASS)}>계약금액 대비</th>
                 <th scope="col" className={cn('px-3 py-2', FORM_LABEL_CLASS)}>예상 입금 시점</th>
               </tr>
@@ -3149,7 +3155,7 @@ export function ProjectEditorWizard({
                     />
                   </td>
                   <td className={cn('whitespace-nowrap px-3 py-2 text-right text-slate-600', FORM_NUMERIC_VALUE_CLASS)}>
-                    {formatPaymentPlanAmount(paymentPlan[field], paymentBase, draft.currency)}
+                    {formatPaymentPlanAmount(paymentPlan[field], paymentBase, draft.currency, paymentFlags?.[field], financialYear?.inputFlags?.contractAmount ?? financialInputFlags.contractAmount)}
                   </td>
                   <td className="px-3 py-2">
                     <div className="flex items-center gap-1">
@@ -3168,10 +3174,10 @@ export function ProjectEditorWizard({
               <tr className="bg-slate-100">
                 <th scope="row" className={cn('py-2.5 pr-3 text-slate-900', FORM_LABEL_CLASS)}>합계</th>
                 <td className={cn('px-3 py-2.5 text-right font-semibold text-[#0176D3]', FORM_NUMERIC_VALUE_CLASS)}>
-                  {fmtKRW(paymentSum)}
+                  {submissionAmountTotal(paymentRows.map(([field]) => ({ value: paymentPlan[field], explicit: paymentFlags?.[field] })), draft.currency)}
                 </td>
                 <td className={cn('whitespace-nowrap px-3 py-2.5 text-right text-slate-600', FORM_NUMERIC_VALUE_CLASS)}>
-                  {advanceRatio === null ? '-' : `선금+중도금 ${(advanceRatio * 100).toFixed(1)}%`}
+                  {advanceRatio === null || !submissionAmountKnown(paymentPlan.contract, paymentFlags?.contract) || !submissionAmountKnown(paymentPlan.interim, paymentFlags?.interim) || !submissionAmountKnown(paymentBase, financialYear?.inputFlags?.contractAmount ?? financialInputFlags.contractAmount) ? '비율 확인 필요' : `선금+중도금 ${(advanceRatio * 100).toFixed(1)}%`}
                 </td>
                 <td />
               </tr>
@@ -3181,7 +3187,7 @@ export function ProjectEditorWizard({
         <ul className={cn('space-y-1', FORM_HINT_CLASS)}>
           <li className="flex gap-1.5">
             <span aria-hidden>·</span>
-            <span>입금 합계 {koreanPaymentSum || '0 원'}</span>
+            <span>입금 합계 {submissionAmountTotal(paymentRows.map(([field]) => ({ value: paymentPlan[field], explicit: paymentFlags?.[field] })), draft.currency)}</span>
           </li>
         </ul>
         {missingMonths.length > 0 || requiresYearAdvanceInterimReason || (!financialYear && requiresAdvanceInterimReason) ? (
@@ -3404,7 +3410,7 @@ export function ProjectEditorWizard({
                 <ReviewRow
                   label="연도별 재무"
                   stacked
-                  value={<FinancialYearsTable years={projectFinancialYearsWithPaymentPlan(draft)} currency={draft.currency} />}
+                  value={<FinancialYearsTable years={submissionFinancialYears(draft)} currency={draft.currency} />}
                 />
                 <ReviewRow
                   label="등록 제출서류 7종"
@@ -3447,11 +3453,11 @@ export function ProjectEditorWizard({
           <CardHeader className="pb-2"><CardTitle className={FORM_SECTION_CLASS}>계약/재무 입금 계획</CardTitle></CardHeader>
           <CardContent>
             {submissionPaymentPlan(draft).legacy ? <ReviewRow label="입금 계획 범위" value="전체 계약기간 계획(연도별 배분 미기록)" /> : null}
-            <ReviewRow label="선금/계약금" value={formatPaymentPlanAmount(submissionPaymentPlan(draft).plan?.contract, draft.contractAmount, draft.currency)} />
+            <ReviewRow label="선금/계약금" value={formatPaymentPlanAmount(submissionPaymentPlan(draft).plan?.contract, draft.contractAmount, draft.currency, submissionPaymentPlan(draft).inputFlags?.contract, financialInputFlags.contractAmount)} />
             {!hasMultiYearContract || submissionPaymentPlan(draft).legacy ? <ReviewRow label="선금/계약금 예상월" value={draft.paymentExpectedMonths.contract} /> : null}
-            <ReviewRow label="중도금" value={formatPaymentPlanAmount(submissionPaymentPlan(draft).plan?.interim, draft.contractAmount, draft.currency)} />
+            <ReviewRow label="중도금" value={formatPaymentPlanAmount(submissionPaymentPlan(draft).plan?.interim, draft.contractAmount, draft.currency, submissionPaymentPlan(draft).inputFlags?.interim, financialInputFlags.contractAmount)} />
             {!hasMultiYearContract || submissionPaymentPlan(draft).legacy ? <ReviewRow label="중도금 예상월" value={draft.paymentExpectedMonths.interim} /> : null}
-            <ReviewRow label="잔금" value={formatPaymentPlanAmount(submissionPaymentPlan(draft).plan?.final, draft.contractAmount, draft.currency)} />
+            <ReviewRow label="잔금" value={formatPaymentPlanAmount(submissionPaymentPlan(draft).plan?.final, draft.contractAmount, draft.currency, submissionPaymentPlan(draft).inputFlags?.final, financialInputFlags.contractAmount)} />
             {!hasMultiYearContract || submissionPaymentPlan(draft).legacy ? <ReviewRow label="잔금 예상월" value={draft.paymentExpectedMonths.final} /> : null}
             <ReviewRow label="선금+중도금 비율" value={submissionAdvanceRatio(draft)} />
             {requiresAdvanceInterimReason ? <ReviewRow label="70% 미만 사유" value={draft.advanceInterimBelow70Reason} /> : null}

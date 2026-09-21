@@ -414,6 +414,7 @@ describe('buildMigrationReviewDossier', () => {
         ...project,
         contractAmount: 100_000,
         paymentPlan: { contract: 0, interim: 20_000, final: 0 },
+          paymentPlanInputFlags: { contract: true, interim: true, final: true },
       },
       {
         ...request,
@@ -421,6 +422,7 @@ describe('buildMigrationReviewDossier', () => {
           ...request.payload,
           contractAmount: 100_000,
           paymentPlan: { contract: 0, interim: 20_000, final: 0 },
+          paymentPlanInputFlags: { contract: true, interim: true, final: true },
         },
       },
     );
@@ -459,7 +461,7 @@ describe('buildMigrationReviewDossier', () => {
 describe('submitted snapshot isolation', () => {
   it.each(['REGISTRATION', 'CHANGE'] as const)('%s never fills submitted blanks from a later project', (requestKind) => {
     for (const status of ['PENDING', 'APPROVED', 'REJECTED'] as const) {
-      const snapshot = { ...request.payload, name: '제출본', contractAmount: 0,
+      const snapshot = { ...request.payload, name: '제출본', contractAmount: 0, financialInputFlags: { contractAmount: true },
         contractDocument: null, teamMembersDetailed: [], teamMembers: '', staffing: undefined,
         contractAnalysis: null, contractEndUndecided: false };
       const submitted = { ...request, requestKind, status, payload: snapshot,

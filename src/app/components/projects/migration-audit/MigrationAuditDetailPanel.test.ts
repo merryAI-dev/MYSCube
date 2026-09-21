@@ -6,7 +6,7 @@ import type { MigrationAuditConsoleRecord } from '../../../platform/project-migr
 
 describe('submitted finance detail', () => {
   it('renders the actual panel with status, currency and mismatch warning', () => {
-    const project = { id: 'read-only-test', name: '대조', status: 'IN_PROGRESS', currency: 'USD', contractAmount: 120000000, salesVatAmount: 0, totalRevenueAmount: 48000000, totalActualCost: 0, supportAmount: 0 };
+    const project = { id: 'read-only-test', name: '대조', status: 'IN_PROGRESS', currency: 'USD', financialInputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true }, contractAmount: 120000000, salesVatAmount: 0, totalRevenueAmount: 48000000, totalActualCost: 0, supportAmount: 0 };
     const record = { id: project.id, project, request: null, status: 'PENDING', title: project.name } as unknown as MigrationAuditConsoleRecord;
     const before = JSON.stringify(record);
     const html = renderToStaticMarkup(createElement(MigrationAuditDetailPanel, { record, acting: false, onApprove() {}, onReject() {}, onDiscard() {} }));
