@@ -60,13 +60,15 @@ export function ProjectStaffingSection({
   orgId,
   actor,
   staffing,
+  submissionResponses = {},
   onChange,
   disabled = false,
 }: {
   orgId: string;
   actor: (ActorLike & { idToken?: string }) | null;
   staffing: ProjectStaffing;
-  onChange: (next: ProjectStaffing) => void;
+  submissionResponses?: Record<string, 'NOT_APPLICABLE'>;
+  onChange: (next: ProjectStaffing, responses?: Record<string, 'NOT_APPLICABLE'>) => void;
   disabled?: boolean;
 }) {
   const [people, setPeople] = useState<PersonRecord[]>([]);
@@ -253,13 +255,18 @@ export function ProjectStaffingSection({
         </Button>
       </ProjectFormRow>
 
-      <ProjectFormRow label="정산지원" note="해당 시 도담/써니 중 선택">
+      <ProjectFormRow label="정산지원" required issueLabel="staffing.settlementSupport" note="담당자를 선택하거나 해당 없음을 선택해 주세요.">
         <Select
-          value={staffing.settlementSupport || 'NONE'}
-          onValueChange={(value) => patch({ settlementSupport: value === 'NONE' ? '' : value })}
+          value={staffing.settlementSupport || (submissionResponses['staffing.settlementSupport'] === 'NOT_APPLICABLE' ? 'NONE' : '')}
+          onValueChange={(value) => {
+            const responses = { ...submissionResponses };
+            if (value === 'NONE') responses['staffing.settlementSupport'] = 'NOT_APPLICABLE';
+            else delete responses['staffing.settlementSupport'];
+            onChange({ ...staffing, settlementSupport: value === 'NONE' ? '' : value }, responses);
+          }}
           disabled={disabled}
         >
-          <SelectTrigger className={cn(FIELD_W_SM, FORM_CONTROL_CLASS)}><SelectValue placeholder="해당 없음" /></SelectTrigger>
+          <SelectTrigger aria-label="정산지원" className={cn(FIELD_W_SM, FORM_CONTROL_CLASS)}><SelectValue placeholder="정산지원 선택" /></SelectTrigger>
           <SelectContent>
             <SelectItem value="NONE">해당 없음</SelectItem>
             {SETTLEMENT_SUPPORT_CHOICES.map((choice) => (
