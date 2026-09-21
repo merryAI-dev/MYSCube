@@ -67,7 +67,7 @@ export function MigrationAuditRecordList({ records, onOpen, reviewStage = 'execu
                   <td className="px-4 py-3 text-[12px] text-slate-700">{record.cic}</td>
                   <td className="max-w-[330px] px-4 py-3">
                     <p className="truncate text-[13px] font-semibold text-slate-950">{record.title}</p>
-                    <ProjectSubmissionFormatBadge request={record.request} />
+                    <ProjectSubmissionFormatBadge record={record} />
                     <p className="mt-1 truncate text-[11px] text-slate-500">{record.clientOrg || '계약 대상 미지정'}</p>
                   </td>
                   <td className="px-4 py-3 text-[12px] text-slate-700">{record.managerName || '-'}</td>

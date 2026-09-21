@@ -1030,6 +1030,7 @@ export interface ProjectRequest {
   targetProjectId?: string;
   baseProjectVersion?: number;
   requestVersion?: number;
+  registrationAttachmentsPublishedAt?: string;
   targetProjectVersion?: number;
   approvedProjectVersion?: number;
   beforeSnapshot?: ProjectRequestPayload | null;

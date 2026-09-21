@@ -7,6 +7,7 @@ import { buildMigrationReviewDocumentSlots } from './migration-audit/MigrationAu
 const pageSource = readFileSync(resolve(import.meta.dirname, 'ProjectMigrationAuditPage.tsx'), 'utf8');
 const controlBarSource = readFileSync(resolve(import.meta.dirname, 'migration-audit/MigrationAuditControlBar.tsx'), 'utf8');
 const documentSource = readFileSync(resolve(import.meta.dirname, 'migration-audit/MigrationAuditDocumentDialog.tsx'), 'utf8');
+const slotsSource = readFileSync(resolve(import.meta.dirname, '../../platform/project-review-document-slots.ts'), 'utf8');
 const recordListSource = readFileSync(resolve(import.meta.dirname, 'migration-audit/MigrationAuditRecordList.tsx'), 'utf8');
 const previewSource = readFileSync(resolve(import.meta.dirname, 'ContractDocumentPreview.tsx'), 'utf8');
 const financialYearsTableSource = readFileSync(resolve(import.meta.dirname, 'migration-audit/FinancialYearsTable.tsx'), 'utf8');
@@ -89,15 +90,15 @@ describe('ProjectMigrationAuditPage review flow', () => {
 
   it('shows all seven logical submission slots and fetches each stored original through the BFF', () => {
     expect(documentSource).toContain('data-testid="migration-review-document-slots"');
-    expect(documentSource).toContain("number: 1");
-    expect(documentSource).toContain("number: 7");
-    expect(documentSource).toContain("number: 4, label: '제안서 파일'");
-    expect(documentSource).toContain("number: 7, label: 'RFP/요청 메일 증빙'");
-    expect(documentSource).toContain('customerBusinessRegistrationDocument');
-    expect(documentSource).toContain('proposalWordOriginalDocument');
-    expect(documentSource).toContain('proposalPptOriginalDocument');
-    expect(documentSource).toContain('presentationPptOriginalDocument');
-    expect(documentSource).toContain('registrationOptionalDocumentNotes');
+    expect(slotsSource).toContain("number: 1");
+    expect(slotsSource).toContain("number: 7");
+    expect(slotsSource).toContain("number: 4, label: '제안서 파일'");
+    expect(slotsSource).toContain("number: 7, label: 'RFP/요청 메일 증빙'");
+    expect(slotsSource).toContain('customerBusinessRegistrationDocument');
+    expect(slotsSource).toContain('proposalWordOriginalDocument');
+    expect(slotsSource).toContain('proposalPptOriginalDocument');
+    expect(slotsSource).toContain('presentationPptOriginalDocument');
+    expect(slotsSource).toContain('registrationOptionalDocumentNotes');
     expect(pageSource).toContain('usePrivateDraftDocumentPreviews');
     expect(pageSource).toContain('REVIEW_DOCUMENT_FIELDS');
     expect(pageSource).toContain('downloadProjectRequestAttachmentViaBff');

@@ -20,11 +20,11 @@ function record(payload: Record<string, unknown> | null, requestVersion = 99): M
 }
 
 const listCases = [
-  { payload: { registrationRequirementsVersion: 1 }, label: '이전 등록 양식' },
-  { payload: {}, label: '등록 양식 확인 필요' },
-  { payload: { registrationRequirementsVersion: 87 }, label: '등록 양식 확인 필요' },
+  { payload: { registrationRequirementsVersion: 1 }, label: '이전 양식' },
+  { payload: {}, label: '양식 버전 미기록' },
+  { payload: { registrationRequirementsVersion: 87 }, label: '양식 버전 인식 불가' },
   { payload: { registrationRequirementsVersion: 2 }, label: null },
-  { payload: null, label: '제출 문서 확인 필요' },
+  { payload: null, label: '제출 문서 연결 없음' },
 ];
 
 describe('actual approval list format labels', () => {
@@ -33,8 +33,8 @@ describe('actual approval list format labels', () => {
       const input = record(testCase.payload, requestVersion);
       const before = JSON.stringify(input);
       const html = renderToStaticMarkup(createElement(MigrationAuditRecordList, { records: [input], onOpen: vi.fn() }));
-      const labels = ['이전 등록 양식', '등록 양식 확인 필요', '제출 문서 확인 필요'];
-      for (const label of labels) expect(html.includes(label)).toBe(label === testCase.label);
+      const labels = ['이전 양식', '양식 버전 미기록', '양식 버전 인식 불가', '제출 문서 연결 없음'];
+      for (const label of labels) expect(html.includes(`>${label}</span>`)).toBe(label === testCase.label);
       expect(html).not.toContain('현재 등록 양식');
       expect(html).toContain('문서 열기');
       expect(JSON.stringify(input)).toBe(before);
