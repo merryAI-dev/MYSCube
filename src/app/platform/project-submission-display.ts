@@ -1,15 +1,31 @@
-import { hasMultiYearProjectContract, projectEffectivePaymentPlan } from './project-input-policy.mjs';
-import type { ProjectTeamMemberAssignment, ProjectRequestPayload } from '../data/types';
+import { hasMultiYearProjectContract, projectEffectivePaymentPlan, projectFinancialYearsWithPaymentPlan } from './project-input-policy.mjs';
+import type { ProjectTeamMemberAssignment, ProjectRequestPayload, ProjectFinancialYear } from '../data/types';
+
+export function submissionAmountKnown(value: unknown, explicit?: boolean): value is number {
+  return typeof value === 'number' && Number.isFinite(value)
+    && explicit !== false && (explicit === true || value !== 0);
+}
 
 export function submissionAmount(value: unknown, currency = 'KRW', explicit?: boolean): string {
-  if (explicit === false || typeof value !== 'number' || !Number.isFinite(value)) return '미입력';
-  return `${value.toLocaleString('ko-KR')}${currency === 'USD' ? ' USD' : '원'}`;
+  const money = typeof value === 'number' && Number.isFinite(value)
+    ? `${value.toLocaleString('ko-KR')}${currency === 'USD' ? ' USD' : '원'}` : null;
+  if (explicit === false) return money && value !== 0 ? `미확인 (저장값 ${money})` : '미입력';
+  if (!submissionAmountKnown(value, explicit)) return '입력 기록 없음';
+  return money!;
+}
+
+export function submissionAmountTotal(
+  entries: Array<{ value: unknown; explicit?: boolean }>, currency = 'KRW',
+): string {
+  const confirmed = entries.filter((entry) => submissionAmountKnown(entry.value, entry.explicit));
+  const subtotal = confirmed.reduce((sum, entry) => sum + (entry.value as number), 0);
+  if (entries.length && confirmed.length === entries.length) return submissionAmount(subtotal, currency, true);
+  return confirmed.length ? `합계 미완료 (확인된 소계 ${submissionAmount(subtotal, currency, true)})` : '합계 미완료 · 입력 확인 필요';
 }
 
 export function submissionRate(revenue: unknown, contract: unknown, flags?: { totalRevenueAmount?: boolean; contractAmount?: boolean }): string {
-  if (flags?.totalRevenueAmount === false || flags?.contractAmount === false) return '계산 불가';
-  return typeof revenue === 'number' && Number.isFinite(revenue)
-    && typeof contract === 'number' && Number.isFinite(contract) && contract > 0
+  return submissionAmountKnown(revenue, flags?.totalRevenueAmount)
+    && submissionAmountKnown(contract, flags?.contractAmount) && contract > 0
     ? `${(revenue / contract * 100).toFixed(2)}%` : '계산 불가';
 }
 
@@ -28,19 +44,42 @@ export function submittedParticipationLines(members?: ProjectTeamMemberAssignmen
   });
 }
 
-export function submissionPaymentPlan(project: Partial<Pick<ProjectRequestPayload, 'contractStart' | 'contractEnd' | 'contractEndUndecided' | 'paymentPlan'>> & { financialYears?: Array<{ paymentPlan?: ProjectRequestPayload['paymentPlan'] }> } | null | undefined) {
+type ProjectPaymentPlanInputFlags = Partial<Record<'contract' | 'interim' | 'final', boolean>>;
+
+type PaymentDisplaySource = Partial<Pick<ProjectRequestPayload, 'contractStart' | 'contractEnd' | 'contractEndUndecided' | 'contractAmount' | 'financialInputFlags' | 'paymentPlan' | 'paymentPlanInputFlags'>> & {
+  financialYears?: Array<{ paymentPlan?: ProjectRequestPayload['paymentPlan']; paymentPlanInputFlags?: ProjectPaymentPlanInputFlags }>;
+};
+
+export function submissionPaymentPlan(project: PaymentDisplaySource | null | undefined) {
   const rows = project?.financialYears || [];
-  const hasAnnualPlan = rows.some((row: { paymentPlan?: unknown }) => row.paymentPlan != null);
+  const hasAnnualPlan = rows.some((row) => row.paymentPlan != null);
   const legacy = hasMultiYearProjectContract(project || {}) && !hasAnnualPlan && project?.paymentPlan != null;
   if (hasMultiYearProjectContract(project || {}) && !legacy && rows.length > 0) {
-    const total = (field: 'contract' | 'interim' | 'final') => {
-      const values = rows.map((row) => row.paymentPlan?.[field]);
-      return values.every((value) => typeof value === 'number' && Number.isFinite(value))
-        ? values.reduce<number>((sum, value) => sum + (value as number), 0) : undefined;
-    };
-    return { plan: { contract: total('contract'), interim: total('interim'), final: total('final') }, legacy };
+    const total = (field: 'contract' | 'interim' | 'final') => (
+      rows.every((row) => submissionAmountKnown(row.paymentPlan?.[field], row.paymentPlanInputFlags?.[field]))
+        ? rows.reduce((sum, row) => sum + row.paymentPlan![field], 0) : undefined
+    );
+    const plan = { contract: total('contract'), interim: total('interim'), final: total('final') };
+    return { plan, legacy, inputFlags: { contract: plan.contract !== undefined, interim: plan.interim !== undefined, final: plan.final !== undefined } };
   }
-  return { plan: legacy ? project.paymentPlan : projectEffectivePaymentPlan(project), legacy };
+  return { plan: legacy ? project.paymentPlan : projectEffectivePaymentPlan(project), legacy, inputFlags: project?.paymentPlanInputFlags };
+}
+
+type FinancialYearDisplaySource = Partial<Pick<ProjectRequestPayload, 'financialYears' | 'contractStart' | 'contractEnd' | 'contractEndUndecided' | 'financialInputFlags' | 'paymentPlan' | 'paymentPlanInputFlags' | 'paymentExpectedMonths' | 'advanceInterimBelow70Reason'>>;
+
+export function submissionFinancialYears(project: FinancialYearDisplaySource | null | undefined): ProjectFinancialYear[] {
+  const rows = projectFinancialYearsWithPaymentPlan(project) as ProjectFinancialYear[];
+  const start = String(project?.contractStart || '');
+  const end = String(project?.contractEnd || '');
+  const singleYear = /^\d{4}-\d{2}-\d{2}$/.test(start)
+    && (project?.contractEndUndecided || /^\d{4}-\d{2}-\d{2}$/.test(end))
+    && !hasMultiYearProjectContract(project || {}) && rows.length === 1
+    && rows[0].year === Number(start.slice(0, 4));
+  if (!singleYear) return rows;
+  return rows.map((row) => ({
+    ...row,
+    paymentPlanInputFlags: project?.paymentPlan ? project.paymentPlanInputFlags : row.paymentPlanInputFlags,
+  }));
 }
 
 export function submittedConfirmationLines(value?: ProjectRequestPayload['registrationConfirmations']): string {
@@ -54,10 +93,12 @@ export function submittedConfirmationLines(value?: ProjectRequestPayload['regist
 }
 
 export function submissionAdvanceRatio(project: Parameters<typeof submissionPaymentPlan>[0]): string {
-  const plan = submissionPaymentPlan(project).plan;
+  const { plan, inputFlags } = submissionPaymentPlan(project);
   const amount = (project as { contractAmount?: number } | null)?.contractAmount;
   if (!plan || typeof amount !== 'number' || amount <= 0 || !Number.isFinite(amount)
-    || typeof plan.contract !== 'number' || typeof plan.interim !== 'number') return '계산 불가';
+    || !submissionAmountKnown(plan.contract, inputFlags?.contract)
+    || !submissionAmountKnown(plan.interim, inputFlags?.interim)
+    || !submissionAmountKnown(amount, project?.financialInputFlags?.contractAmount)) return '계산 불가';
   return `${((plan.contract + plan.interim) / amount * 100).toFixed(1)}%`;
 }
 
@@ -66,14 +107,12 @@ export function submissionContractWarning(project: Partial<Pick<ProjectRequestPa
     ['contractAmount', '계약금액'], ['salesVatAmount', '매출부가세'],
     ['totalRevenueAmount', '수익'], ['totalActualCost', '실비(원가)'], ['supportAmount', '지원금'],
   ] as const;
-  const missing = fields.filter(([key]) => project?.financialInputFlags?.[key] === false
-    || typeof project?.[key] !== 'number' || !Number.isFinite(project[key])).map(([, label]) => label);
+  const missing = fields.filter(([key]) => !submissionAmountKnown(project?.[key], project?.financialInputFlags?.[key])).map(([, label]) => label);
   if (missing.length) {
-    const knownItems = fields.slice(1).filter(([key]) => project?.financialInputFlags?.[key] !== false
-      && typeof project?.[key] === 'number' && Number.isFinite(project[key]));
+    const knownItems = fields.slice(1).filter(([key]) => submissionAmountKnown(project?.[key], project?.financialInputFlags?.[key]));
     const subtotal = knownItems.reduce((sum, [key]) => sum + (project![key] as number), 0);
-    const amounts = `계약금액 ${submissionAmount(project?.contractAmount, project?.currency, project?.financialInputFlags?.contractAmount)} · 입력된 항목 소계 ${knownItems.length ? submissionAmount(subtotal, project?.currency) : '미입력'}. `;
-    return `${amounts}금액 대조에 필요한 ${missing.join('·')} 금액이 미입력입니다. 작성자와 계약금액 및 항목별 금액을 확인해 주세요.`;
+    const amounts = `계약금액 ${submissionAmount(project?.contractAmount, project?.currency, project?.financialInputFlags?.contractAmount)} · 입력된 항목 소계 ${knownItems.length ? submissionAmount(subtotal, project?.currency, true) : '미입력'}. `;
+    return `${amounts}금액 대조에 필요한 ${missing.join('·')} 금액이 미입력이거나 입력 기록을 확인할 수 없습니다. 작성자와 계약금액 및 항목별 금액을 확인해 주세요.`;
   }
   const amount = project!.contractAmount!;
   const sum = project!.salesVatAmount! + project!.totalRevenueAmount! + project!.totalActualCost! + project!.supportAmount!;

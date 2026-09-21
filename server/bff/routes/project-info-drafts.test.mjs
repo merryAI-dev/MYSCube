@@ -2459,3 +2459,47 @@ it('retains before and after versions when a draft is rebased onto a changed can
   expect(history.items[0].payload.description).toBe('실무자가 작성한 내용');
   expect(history.items[1].payload.name).toBe(opened.body.draft.payload.name);
 });
+
+it('keeps a status correction private until the organization head approves the exact submitted revision', async () => {
+  const h = harness();
+  const projectPath = 'orgs/tenant-a/projects/project-a';
+  const project = h.db.documents.get(projectPath);
+  for (const [key, document] of Object.entries(project)) {
+    if (key.endsWith('Document') && document?.path) project[key] = { ...document, size: VALID_PDF.length, contentType: 'application/pdf' };
+  }
+  Object.assign(project, { status: 'COMPLETED', contractStart: '2026-07-01', contractEnd: '2026-12-31', budgetCurrentYear: 777 });
+  h.db.documents.set(projectPath, project);
+  const original = clone(project);
+  const opened = await openedDraft(h);
+  expect(opened.body.draft.payload.status).toBe('COMPLETED');
+  await h.service.update({ ...h.base, idempotencyKey: 'status-correction-save', expectedDraftRevision: 0,
+    payload: { ...opened.body.draft.payload, status: 'IN_PROGRESS' } });
+  expect(h.db.documents.get(projectPath)).toEqual(original);
+  const reopened = await h.service.get(h.base);
+  expect(reopened.draft.payload.status).toBe('IN_PROGRESS');
+  await h.service.submit({ ...h.base, idempotencyKey: 'status-correction-submit', expectedDraftRevision: 1, expectedVersion: 3 });
+  expect(h.db.documents.get(projectPath)).toEqual(original);
+  const submitted = h.db.documents.get('orgs/tenant-a/project_requests/change-project-a');
+  expect(submitted.beforeSnapshot.status).toBe('COMPLETED');
+  expect(submitted.proposedSnapshot.status).toBe('IN_PROGRESS');
+  expect(submitted.changedFields).toContainEqual(expect.objectContaining({ key: 'status', before: 'COMPLETED', after: 'IN_PROGRESS' }));
+  const app = express();
+  app.use(express.json());
+  app.use((req, _res, next) => {
+    req.context = { tenantId: 'tenant-a', actorId: project.executiveApproverId, actorRole: 'pm', requestId: 'review-status-correction', idempotencyKey: 'review-status-correction' }; next();
+  });
+  h.db.documents.set(`orgs/tenant-a/members/${project.executiveApproverId}`, { uid: project.executiveApproverId, role: 'pm', status: 'ACTIVE' });
+  mountProjectRoutes(app, { db: h.db, now: () => '2026-07-12T00:02:00.000Z',
+    idempotencyService: { begin: async () => ({ mode: 'acquired' }), complete: vi.fn(), fail: vi.fn() },
+    projectRequestContractStorageService: { inspectProjectRegistrationAttachment: async ({ path }) => Object.values(submitted.proposedSnapshot).find((value) => value?.path === path) },
+  });
+  app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.code, message: error.message }));
+  const review = await request(app).get('/api/v1/projects/project-a/review-document?requestId=change-project-a');
+  expect(review.status, JSON.stringify(review.body)).toBe(200);
+  expect(review.body.project.status).toBe('COMPLETED');
+  expect(review.body.request.proposedSnapshot.status).toBe('IN_PROGRESS');
+  const approved = await request(app).post('/api/v1/projects/project-a/executive-review').send({ requestId: 'change-project-a', reviewStatus: 'APPROVED', expectedReviewToken: review.body.reviewToken });
+  expect(approved.status, JSON.stringify(approved.body)).toBe(200);
+  expect(h.db.documents.get(projectPath)).toMatchObject({ status: 'IN_PROGRESS', budgetCurrentYear: 777, contractAmount: original.contractAmount, totalActualCost: original.totalActualCost });
+  expect(h.db.documents.get('orgs/tenant-a/project_requests/change-project-a').approvedSnapshot.status).toBe('IN_PROGRESS');
+});

@@ -1,4 +1,4 @@
-import { submissionAmount, submissionRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
+import { submissionAmount, submissionFinancialYears, submissionRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
 import {
   CheckCircle2,
   FileText,
@@ -22,7 +22,6 @@ import {
   resolveProjectRequestKind,
 } from '../../../platform/project-change-request';
 import { buildMigrationReviewDossier } from '../../../platform/project-migration-review-dossier';
-import { projectFinancialYearsWithPaymentPlan } from '../../../platform/project-input-policy.mjs';
 import { Badge } from '../../ui/badge';
 import { Button } from '../../ui/button';
 import { Card, CardContent } from '../../ui/card';
@@ -207,7 +206,7 @@ export function MigrationAuditDetailPanel({
   });
   const reviewPayload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
   const totalActualCost = reviewPayload?.totalActualCost;
-  const financialYears = projectFinancialYearsWithPaymentPlan(reviewPayload);
+  const financialYears = submissionFinancialYears(reviewPayload);
   const interestRefundPolicy = reviewPayload?.interestRefundPolicy;
   const registrationNote = reviewPayload?.note;
   const quoteDocument = reviewPayload?.quoteDocument;

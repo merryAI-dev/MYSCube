@@ -267,7 +267,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
   it('shows annual profit rates as derived values and keys v2 settlement details to the basis', () => {
     // 연도별 수익률은 입력칸 모양을 벗고 표의 파생값 칸으로 바뀌었다. "자동 계산" 도움말을
     // 연도마다 반복하던 줄은 형태(입력칸 없음)가 대신하므로 지웠다.
-    expect(source).toContain('{`${(row.profitRate * 100).toFixed(2)}%`}');
+    expect(source).toContain('submissionRate(row.totalRevenueAmount, row.contractAmount, row.inputFlags)');
     expect(source).not.toContain('연도별 계약금액과 총수익으로 자동 계산');
     expect(source).not.toContain("updateFinancialYear(\n                      index,\n                      'profitRate'");
     expect(source).toContain("const settlementDetailsEnabled = usesRegistrationV2 ? draft.basis !== 'NONE' : draft.settlementType !== 'NONE'");
@@ -670,7 +670,7 @@ describe('ProjectEditorWizard form skeleton contract', () => {
     // readOnly 입력칸을 흐린 배경으로 위장하던 처리를 없앴다.
     expect(source).not.toContain('bg-muted/40');
     expect(source).not.toContain('총수익 / 계약금액 기준 자동 계산');
-    expect(source).toContain('<ProjectComputedValue value={profitRateLabel');
+    expect(source).toContain('<ProjectComputedValue value={submissionRate');
   });
 
   it('adds a remaining-count badge to the step chips without touching the verdict', () => {
@@ -716,7 +716,7 @@ describe('ProjectEditorWizard form skeleton contract', () => {
     // 자동 계산은 사람이 금액을 고칠 때만 일어난다. 불러오기만으로 값이 바뀌면 사고다.
     expect(source).toContain('const storedContractAmountConflict = ');
     expect(source).toContain('저장된 계약금액');
-    expect(source).toContain('어느 쪽이 맞는지 먼저 확인해 주세요');
+    expect(source).toContain('네 항목의 입력이 끝나기 전에는 저장된 계약금액을 유지합니다');
   });
 
   it('shows a read-only Korean unit beside amounts without touching the stored value', () => {
