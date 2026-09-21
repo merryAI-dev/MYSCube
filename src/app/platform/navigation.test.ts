@@ -230,23 +230,20 @@ describe('resolveLoginSuccessPath', () => {
     expect(resolveLoginSuccessPath('finance', 'portal')).toBe('/portal/project-select');
   });
 
-  it('uses business cards as the mobile default post-login entry', () => {
-    const mobileContext = {
-      userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) Mobile/15E148 Safari/604.1',
-    };
-
-    expect(resolveLoginSuccessPath('admin', undefined, undefined, mobileContext)).toBe('/business-cards');
-    expect(resolveLoginSuccessPath('pm', undefined, '/', mobileContext)).toBe('/business-cards');
-    expect(resolveLoginSuccessPath('viewer', undefined, '/mobile-entry', mobileContext)).toBe('/business-cards');
+  it('uses the regular workspace home for existing mobile app entry links', () => {
+    expect(resolveLoginSuccessPath('admin', undefined, '/mobile-entry')).toBe('/');
+    expect(resolveLoginSuccessPath('admin', 'portal', '/mobile-entry')).toBe('/portal/project-select');
+    expect(resolveLoginSuccessPath('pm', undefined, '/mobile-entry')).toBe('/portal/project-select');
+    expect(resolveLoginSuccessPath('viewer', undefined, '/mobile-entry?source=pwa')).toBe('/portal/project-select');
+    expect(resolveLoginSuccessPath('admin', 'admin', '/business-cards')).toBe('/');
+    expect(resolveLoginSuccessPath('pm', undefined, '/portal/business-cards')).toBe('/portal/project-select');
   });
 
   it('preserves explicit deep links after login when they are role-safe', () => {
     expect(resolveLoginSuccessPath('admin', 'admin', '/users')).toBe('/users');
     expect(resolveLoginSuccessPath('pm', undefined, '/portal/budget')).toBe('/portal/budget');
     expect(resolveLoginSuccessPath('pm', undefined, '/users')).toBe('/portal/project-select');
-    expect(resolveLoginSuccessPath('pm', undefined, '/portal/cashflow', {
-      viewportWidth: 390,
-    })).toBe('/portal/cashflow');
+    expect(resolveLoginSuccessPath('pm', undefined, '/portal/cashflow')).toBe('/portal/cashflow');
   });
 });
 

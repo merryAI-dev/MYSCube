@@ -48,11 +48,10 @@ describe('admin nav access control', () => {
     expect(canAccessAdminPath('viewer', '/management-planning/project-codes')).toBe(false);
   });
 
-  it('allows every signed-in role into the business card capture route', () => {
-    expect(canAccessAdminPath('admin', '/business-cards')).toBe(true);
-    expect(canAccessAdminPath('finance', '/business-cards')).toBe(true);
-    expect(canAccessAdminPath('pm', '/business-cards')).toBe(true);
-    expect(canAccessAdminPath('viewer', '/business-cards')).toBe(true);
+  it('removes the retired business-card navigation permission', () => {
+    for (const role of ['finance', 'pm', 'viewer']) {
+      expect(canShowAdminNavItem(role, '/business-cards')).toBe(false);
+    }
   });
 
   it('restores migration audit as an admin-only menu route', () => {

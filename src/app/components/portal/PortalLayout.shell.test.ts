@@ -20,9 +20,7 @@ describe('PortalLayout shell actions', () => {
     expect(portalLayoutSource).toContain("label: '프로젝트 수정'");
     expect(portalLayoutSource).not.toContain("label: '프로젝트 등록/승인'");
     expect(portalLayoutSource).toContain("to: '/portal/budget'");
-    expect(portalLayoutSource.indexOf("label: '명함 DB'")).toBeGreaterThan(
-      portalLayoutSource.indexOf("label: '프로젝트 등록 요청'"),
-    );
+    expect(portalLayoutSource).not.toContain("label: '명함 DB'");
   });
 
   it('turns the top search into a project switcher', () => {

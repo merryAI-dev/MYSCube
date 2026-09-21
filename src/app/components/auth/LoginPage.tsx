@@ -109,10 +109,6 @@ export function LoginPage() {
         user.role,
         activeWorkspace,
         redirectFrom,
-        {
-          userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
-          viewportWidth: typeof window !== 'undefined' ? window.innerWidth : undefined,
-        },
       );
       const timer = window.setTimeout(() => {
         navigate(target, { replace: true });

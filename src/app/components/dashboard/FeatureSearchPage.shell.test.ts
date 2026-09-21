@@ -9,10 +9,7 @@ const routesSource = readFileSync(resolve(import.meta.dirname, '../../routes.tsx
 describe('FeatureSearchPage shell contract', () => {
   it('makes feature search the full-screen admin landing page with admin and practitioner grouping', () => {
     expect(routesSource).toContain('const FeatureSearchPage');
-    expect(routesSource).toContain('function MobileAwareAdminHome()');
-    expect(routesSource).toContain('shouldUseBusinessCardMobileEntry');
-    expect(routesSource).toContain(': <S C={FeatureSearchPage} />;');
-    expect(routesSource).toContain('{ index: true, element: <MobileAwareAdminHome /> }');
+    expect(routesSource).toContain('{ index: true, element: <S C={FeatureSearchPage} /> }');
     expect(routesSource).toContain("{ path: 'dashboard', element: <S C={DashboardPage} /> }");
     expect(source).toContain('AdminCommandSearch');
     expect(source).toContain('displayName');
