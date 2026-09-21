@@ -208,20 +208,15 @@ jobs:
           release_classification="$(node --input-type=module - "${BFF_DEPLOY_BASE_SHA}" "${DEPLOY_SHA}" "${jvm_deployed_sha}" <<'NODE'
           import {
             changedPathsBetween,
-            classifyCashflowSettlementProductionRelease,
+            classifyCashflowSettlementProductionBaselines,
             isJvmRolloutSupportLiveAt,
           } from './scripts/verify-cashflow-settlement-release-boundary.mjs';
 
           const [aliasBase, head, jvmDeployedSha] = process.argv.slice(2);
           const aliasPaths = changedPathsBetween(aliasBase, head);
-          const changedPaths = jvmDeployedSha
-            ? [
-                ...aliasPaths.filter((path) => !path.startsWith('server/jvm-weekly-api/')),
-                ...changedPathsBetween(jvmDeployedSha, head),
-              ]
-            : aliasPaths;
-          const { releaseMode, bffFrontendCutover } = classifyCashflowSettlementProductionRelease(
-            changedPaths,
+          const { releaseMode, bffFrontendCutover } = classifyCashflowSettlementProductionBaselines(
+            aliasPaths,
+            jvmDeployedSha ? changedPathsBetween(jvmDeployedSha, head) : null,
             {
               rolloutSupportIsLive: isJvmRolloutSupportLiveAt(head),
               alreadyDeployed: aliasBase === head,

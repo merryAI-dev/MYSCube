@@ -8,6 +8,7 @@ import {
   assertCashflowSettlementReleaseBoundary,
   changedPathsBetween,
   classifyCashflowSettlementProductionRelease,
+  classifyCashflowSettlementProductionBaselines,
   classifyCashflowSettlementReleasePaths,
 } from '../scripts/verify-cashflow-settlement-release-boundary.mjs';
 
@@ -291,5 +292,52 @@ describe('cashflow settlement release boundary', () => {
     } finally {
       rmSync(repository, { recursive: true, force: true });
     }
+  });
+});
+
+
+describe('independently deployed production baselines', () => {
+  const ui = 'src/app/components/projects/ProjectEditorWizard.tsx';
+  const bff = 'server/bff/routes/jvm-weekly-api.mjs';
+  const client = 'src/app/lib/platform-bff-client.ts';
+  const jvm = 'server/jvm-weekly-api/src/main/java/example/Settlement.java';
+
+  it('does not replay already deployed BFF changes from an older JVM baseline', () => {
+    expect(classifyCashflowSettlementProductionBaselines([ui], [ui, bff, client]))
+      .toMatchObject({ releaseMode: 'web', jvm: [], bffFrontendCutover: [] });
+  });
+
+  it('keeps the guard for an actual pending BFF cutover', () => {
+    expect(classifyCashflowSettlementProductionBaselines([ui, bff], [ui, bff, client]))
+      .toMatchObject({ releaseMode: 'web', jvm: [], bffFrontendCutover: [bff] });
+  });
+
+  it('requires atomic cutover when both deployed components have pending changes', () => {
+    expect(classifyCashflowSettlementProductionBaselines([ui, bff, jvm], [ui, bff, jvm]))
+      .toMatchObject({ releaseMode: 'atomic_cutover', jvm: [jvm], bffFrontendCutover: [bff] });
+  });
+
+  it('ignores JVM sources already deployed even when the web alias is older', () => {
+    expect(classifyCashflowSettlementProductionBaselines([ui, jvm], []))
+      .toMatchObject({ releaseMode: 'web', jvm: [], bffFrontendCutover: [] });
+  });
+
+  it.each([
+    'server/jvm-weekly-api/src/main/java/example/Settlement.java',
+    'scripts/verify-cashflow-settlement-cycle-projection.mjs',
+    'scripts/verify-cashflow-settlement-candidate.mjs',
+  ])('retains JVM-owned release changes: %s', (path) => {
+    expect(classifyCashflowSettlementProductionBaselines([], [path, bff, client]))
+      .toMatchObject({ releaseMode: 'jvm_only', jvm: [path], bffFrontendCutover: [] });
+  });
+
+  it('uses all alias changes when the JVM deployment baseline is unknown', () => {
+    expect(classifyCashflowSettlementProductionBaselines([bff, jvm], null))
+      .toMatchObject({ releaseMode: 'atomic_cutover', jvm: [jvm], bffFrontendCutover: [bff] });
+  });
+
+  it('preserves the already deployed decision', () => {
+    expect(classifyCashflowSettlementProductionBaselines([], [bff], { alreadyDeployed: true }))
+      .toMatchObject({ releaseMode: 'already_deployed' });
   });
 });
