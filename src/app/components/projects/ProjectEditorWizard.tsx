@@ -1,6 +1,9 @@
+import { projectSubmissionCompletenessIssues } from '../../platform/project-submission-completeness.mjs';
+import { ProjectSubmissionResponses } from './ProjectSubmissionResponses';
 import { submissionAmount, submissionPaymentPlan, submissionAdvanceRatio, submissionRate, submissionContractWarning } from '../../platform/project-submission-display';
 import { FinancialYearsTable } from './migration-audit/FinancialYearsTable';
 import { ProjectAmountInput } from './ProjectAmountInput';
+import { aggregateProjectFinancialInputFlags, updateProjectFinancialYearAmount } from '../../platform/project-financial-year-input';
 import { projectEffectivePaymentPlan, projectFinancialYearsWithPaymentPlan, hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings, projectContractEndYear } from '../../platform/project-input-policy.mjs';
 import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import {
@@ -58,6 +61,7 @@ import { toast } from 'sonner';
 import { useBlocker } from 'react-router';
 import {
   ACCOUNT_TYPE_LABELS,
+  PROJECT_FUND_INPUT_MODE_LABELS,
   INTEREST_REFUND_POLICY_LABELS,
   BASIS_LABELS,
   LABOR_SETTLEMENT_BASIS_LABELS,
@@ -1128,7 +1132,7 @@ export function ProjectEditorWizard({
       const paymentFields = financialYears.length === 1 && !hasMultiYearContract
         ? { paymentPlan: financialYears[0].paymentPlan, paymentExpectedMonths: financialYears[0].paymentExpectedMonths, advanceInterimBelow70Reason: financialYears[0].advanceInterimBelow70Reason }
         : {};
-      return createProjectEditorWizardDraft({ ...previous, ...totals, ...paymentFields, financialYears });
+      return createProjectEditorWizardDraft({ ...previous, ...totals, ...paymentFields, financialYears, financialInputFlags: aggregateProjectFinancialInputFlags(financialYears) });
     });
     setAmountInputs((previous) => Object.fromEntries(Object.entries(previous)
       .filter(([label]) => ![...excluded].some((year) => label.startsWith(`${year}년 `)))));
@@ -1290,16 +1294,10 @@ export function ProjectEditorWizard({
     setDraft((prev) => {
       const financialYears = prev.financialYears.map((row, rowIndex) => {
         if (rowIndex !== index) return row;
-        const next = { ...row, [key]: value };
-        /*
-         * 단년도는 계약금액을 항목 합계로 둔다. 연도가 하나뿐이라 "총 계약금액"과
-         * "그 해의 계약금액"이 같은 값이고, 사람이 둘을 따로 넣을 이유가 없다.
-         * 다년도는 연도마다 계약금액이 따로 있으므로 그대로 입력받는다.
-         */
-        if (!hasMultiYearContract && CONTRACT_AMOUNT_ITEM_FIELDS.includes(key as ContractAmountItemField)) {
-          next.contractAmount = deriveContractAmountFromItems(next);
+        if (key === 'contractAmount' || CONTRACT_AMOUNT_ITEM_FIELDS.includes(key as ContractAmountItemField)) {
+          return updateProjectFinancialYearAmount(row, key as keyof ProjectFinancialInputFlags, String(value), !hasMultiYearContract);
         }
-        return next;
+        return { ...row, [key]: value };
       });
       const total = (field: 'contractAmount' | 'salesVatAmount' | 'totalRevenueAmount' | 'totalActualCost' | 'supportAmount') => (
         financialYears.reduce((sum, row) => sum + row[field], 0)
@@ -1312,13 +1310,7 @@ export function ProjectEditorWizard({
         totalRevenueAmount: total('totalRevenueAmount'),
         totalActualCost: total('totalActualCost'),
         supportAmount: total('supportAmount'),
-        financialInputFlags: {
-          contractAmount: true,
-          salesVatAmount: true,
-          totalRevenueAmount: true,
-          totalActualCost: true,
-          supportAmount: true,
-        },
+        financialInputFlags: aggregateProjectFinancialInputFlags(financialYears),
       });
     });
   };
@@ -1667,6 +1659,7 @@ export function ProjectEditorWizard({
       if (usesRegistrationV2 && (!financialYearsComplete || !annualTotalsMatch)) {
         issues.push({ step: 'financial', label: '계약기간 전체 연도별 재무 확인' });
       }
+      if (settlementDetailsEnabled && !draft.interestRefundPolicy) issues.push({ step: 'financial', label: '이자 반납 여부' });
       if (draft.settlementType === 'NONE') issues.push({ step: 'financial', label: '사업유형' });
       if (settlementDetailsEnabled && draft.settlementSystem === 'OTHER') {
         const customSystem = draft.settlementSystemOther.trim();
@@ -1703,8 +1696,11 @@ export function ProjectEditorWizard({
     if (participationSyncIssue) {
       issues.push({ step: 'team', label: participationSyncIssue });
     }
-    // 정산지원 담당자는 저장을 막지 않는다. 담당이 정해져 있다는 안내일 뿐이고,
-    // 담당자가 바뀌거나 자리를 비운 사이에 프로젝트 등록 자체가 막히면 안 된다.
+    if (usesRegistrationV2) {
+      for (const issue of projectSubmissionCompletenessIssues(draft)) {
+        if (!issues.some(existing => existing.label === issue.label)) issues.push({ step: issue.step, label: issue.message });
+      }
+    }
     return issues;
   }, [amountInputs, departmentOptionSet, draft, hasContractAmountInput, hasMultiYearContract, onProjectDocumentFileUpload, participationSyncIssue, requiresAdvanceInterimReason, requiresParticipationSheetLink, requiresSettlementConfirmations, selectedExecutiveApprover, showProjectCheckout, usesRegistrationV2]);
 
@@ -2195,9 +2191,11 @@ export function ProjectEditorWizard({
             ? draft.registrationConfirmations.proposalPptOriginal
             : draft.registrationConfirmations.presentationPptOriginal;
           const document = draft[PROJECT_DOCUMENT_FIELD[kind]] as FileAttachment | null;
+          const noteKey = ({ 4: 'proposalWordOriginal', 5: 'proposalPptOriginal', 6: 'presentationPptOriginal', 7: 'rfpRequestEvidence' } as const)[slot.number as 4 | 5 | 6 | 7];
+          const note = noteKey ? draft.registrationOptionalDocumentNotes[noteKey] || '' : '';
           const deferred = slot.number === 3 && draft.quoteSubmissionDeferred;
-          const attached = isLinkSlot ? Boolean(String(linkValue || '').trim()) : Boolean(document);
-          const unmet = !attached && !deferred && slot.number <= 3;
+          const attached = Boolean(document) || (isLinkSlot && Boolean(String(linkValue || '').trim()));
+          const unmet = !attached && !deferred && !note.trim();
           const uploadError = documentUploadError[kind];
           const previewState = documentPreviewStates?.[kind];
           const previewError = previewState?.status === 'error'
@@ -2215,7 +2213,7 @@ export function ProjectEditorWizard({
           const statusText = isLinkSlot
             ? null
             : document ? `${document.name} · ${(document.size / 1024 / 1024).toFixed(2)} MB`
-              : deferred ? '이후 제출(예외 처리)' : '미첨부';
+              : deferred ? '이후 제출(예외 처리)' : note.trim() ? `미첨부 사유: ${note}` : '미첨부';
 
           return (
             <div key={slot.number} className="flex gap-3 py-3">
@@ -2225,7 +2223,7 @@ export function ProjectEditorWizard({
                   <span className={cn('tabular-nums text-slate-400', FORM_HINT_CLASS)}>{slot.number}</span>
                   <p className="font-medium text-slate-900">{slot.label}</p>
                   <span className={cn('rounded-full border px-1.5 py-px text-[11px] font-semibold leading-4', requirement.tone)}>
-                    {requirement.label}
+                    {slot.number >= 4 ? '제출 또는 해당 없음 필수' : requirement.label}
                   </span>
                 </div>
                 {slot.description ? <p className={cn('mt-0.5', FORM_HINT_CLASS)}>{slot.description}</p> : null}
@@ -2247,6 +2245,12 @@ export function ProjectEditorWizard({
                     className={cn('mt-1.5', FIELD_W_MD, FORM_CONTROL_CLASS)}
                   />
                 ) : null}
+                {noteKey ? <label className="mt-2 flex items-center gap-2">
+                  <input type="checkbox" aria-label={`${slot.label} 해당 없음`} checked={note.trim().length > 0}
+                    disabled={attached && !note.trim()}
+                    onChange={(event) => update('registrationOptionalDocumentNotes', { ...draft.registrationOptionalDocumentNotes, [noteKey]: event.target.checked ? '해당 없음' : '' })} />
+                  해당 없음{note && note !== '해당 없음' ? ` · 기존 사유: ${note}` : ''}
+                </label> : null}
                 {uploadError ? <p className={cn('mt-1', FORM_ERROR_CLASS)} role="alert">{uploadError}</p> : null}
                 {previewError ? <p className={cn('mt-1', FORM_ERROR_CLASS)} role="alert">{previewError}</p> : null}
                 {contractLocked ? (
@@ -2411,16 +2415,22 @@ export function ProjectEditorWizard({
                           <span className={cn('font-medium text-slate-900', FORM_NUMERIC_VALUE_CLASS)}>
                             {fmtKRW(row.contractAmount)}
                           </span>
-                          <span className="text-[11px] font-normal leading-4 text-slate-400">계산됨</span>
+                          <span className="text-[11px] font-normal leading-4 text-slate-400">{row.inputFlags?.contractAmount === true ? '계산됨' : '구성 금액 입력 필요'}</span>
                         </div>
                       ) : (
                         <ProjectAmountInput
                           {...amountBufferProps(`${row.year}년 ${label}`)}
                           aria-label={`${row.year}년 ${label}`}
-                          value={formatProjectAmountInput(row[field], true)}
-                          onValueChange={(rawValue) => updateFinancialYear(index, field, parseProjectAmountInput(rawValue))}
+                          value={formatProjectAmountInput(row[field], row.inputFlags?.[field] === true)}
+                          aria-required="true"
+                          aria-invalid={row.inputFlags?.[field] !== true}
+                          placeholder="금액 입력 · 없으면 0"
+                          onValueChange={(rawValue) => updateFinancialYear(index, field, rawValue)}
                           className={cn('min-w-[116px]', FORM_NUMERIC_CONTROL_CLASS)}
                         />
+                      )}
+                      {row.inputFlags?.[field] !== true && !(field === 'contractAmount' && contractAmountIsDerived) && (
+                        <p className={cn('mt-1 text-amber-700', FORM_HINT_CLASS)}>필수 · 해당 금액이 없으면 0을 입력해 주세요.</p>
                       )}
                     </td>
                     </Fragment>
@@ -2772,6 +2782,9 @@ export function ProjectEditorWizard({
           </Select>
         </ProjectFormRow>
       )}
+        <ProjectFormRow label="사업비 입력 방식" hints={['현재 적용된 설정입니다. 이 화면에서는 변경하지 않습니다.']}>
+          <span className={FORM_VALUE_CLASS}>{PROJECT_FUND_INPUT_MODE_LABELS[draft.fundInputMode]}</span>
+        </ProjectFormRow>
         {settlementDetailsEnabled ? (
           <>
             <ProjectFormRow label="통장 유형">
@@ -2784,9 +2797,9 @@ export function ProjectEditorWizard({
                 </SelectContent>
               </Select>
             </ProjectFormRow>
-            <ProjectFormRow label="이자 반납 여부">
+            <ProjectFormRow label="이자 반납 여부" required issueLabel="이자 반납 여부" errors={fieldIssues('이자 반납 여부')} hints={['아직 결정되지 않았다면 확인 필요를 선택해 주세요.']}>
               <Select value={draft.interestRefundPolicy || undefined} onValueChange={(value) => update('interestRefundPolicy', value as InterestRefundPolicy)}>
-                <SelectTrigger className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue placeholder="이자 반납 여부 선택" /></SelectTrigger>
+                <SelectTrigger aria-label="이자 반납 여부" aria-required="true" className={cn(FIELD_W_MD, FORM_CONTROL_CLASS)}><SelectValue placeholder="이자 반납 여부 선택" /></SelectTrigger>
                 <SelectContent>
                   {(Object.entries(INTEREST_REFUND_POLICY_LABELS) as [InterestRefundPolicy, string][]).map(([key, value]) => (
                     <SelectItem key={key} value={key}>{value}</SelectItem>
@@ -3069,12 +3082,17 @@ export function ProjectEditorWizard({
 
   const renderPaymentFields = (financialYear?: ProjectFinancialYear, financialYearIndex?: number) => {
     const paymentPlan = financialYear?.paymentPlan || draft.paymentPlan;
-    const updatePaymentPlan = (field: keyof typeof paymentPlan, value: number) => {
-      if (financialYear && financialYearIndex !== undefined) {
-        updateFinancialYear(financialYearIndex, 'paymentPlan', { ...paymentPlan, [field]: value });
-      } else {
-        update('paymentPlan', { ...paymentPlan, [field]: value });
-      }
+    const paymentFlags = financialYear?.paymentPlanInputFlags || draft.paymentPlanInputFlags;
+    const updatePaymentPlan = (field: keyof typeof paymentPlan, rawValue: string) => {
+      const value = parseProjectAmountInput(rawValue);
+      setDraft(prev => {
+        if (financialYear && financialYearIndex !== undefined) {
+          return createProjectEditorWizardDraft({ ...prev, financialYears: prev.financialYears.map((row, index) => index === financialYearIndex
+            ? { ...row, paymentPlan: { ...row.paymentPlan!, [field]: value }, paymentPlanInputFlags: { contract: false, interim: false, final: false, ...row.paymentPlanInputFlags, [field]: rawValue.trim() !== '' } }
+            : row) });
+        }
+        return createProjectEditorWizardDraft({ ...prev, paymentPlan: { ...prev.paymentPlan, [field]: value }, paymentPlanInputFlags: { ...prev.paymentPlanInputFlags, [field]: rawValue.trim() !== '' } });
+      });
     };
     const paymentExpectedMonths = financialYear?.paymentExpectedMonths || draft.paymentExpectedMonths;
     const updatePaymentExpectedMonth = (field: keyof ProjectPaymentExpectedMonths, value: string) => {
@@ -3125,8 +3143,8 @@ export function ProjectEditorWizard({
                     <ProjectAmountInput
                       {...amountBufferProps(`${yearPrefix}${label} 금액`)}
                       aria-label={`${yearPrefix}${label} 금액`}
-                      value={formatProjectAmountInput(paymentPlan[field], true)}
-                      onValueChange={(rawValue) => updatePaymentPlan(field, parseProjectAmountInput(rawValue))}
+                      value={formatProjectAmountInput(paymentPlan[field], paymentFlags?.[field] === true)}
+                      onValueChange={(rawValue) => updatePaymentPlan(field, rawValue)}
                       className={cn('min-w-[130px]', FORM_NUMERIC_CONTROL_CLASS)}
                     />
                   </td>
@@ -3299,19 +3317,19 @@ export function ProjectEditorWizard({
     {
       number: 4,
       label: '제안서(워드)',
-      value: draft.proposalWordOriginalDocument?.name || '미첨부',
+      value: draft.proposalWordOriginalDocument?.name || draft.registrationOptionalDocumentNotes.proposalWordOriginal || '미응답',
     },
     {
       number: 5,
       label: '제안서 PPT 링크(구글드라이브 링크)',
-      value: draft.registrationConfirmations.proposalPptOriginal || draft.proposalPptOriginalDocument?.name || '미입력',
+      value: draft.registrationConfirmations.proposalPptOriginal || draft.proposalPptOriginalDocument?.name || draft.registrationOptionalDocumentNotes.proposalPptOriginal || '미응답',
     },
     {
       number: 6,
       label: '발표자료(구글드라이브 링크)',
-      value: draft.registrationConfirmations.presentationPptOriginal || draft.presentationPptOriginalDocument?.name || '미입력',
+      value: draft.registrationConfirmations.presentationPptOriginal || draft.presentationPptOriginalDocument?.name || draft.registrationOptionalDocumentNotes.presentationPptOriginal || '미응답',
     },
-    { number: 7, label: 'RFP', value: draft.rfpRequestEvidenceDocument?.name || '미첨부' },
+    { number: 7, label: 'RFP', value: draft.rfpRequestEvidenceDocument?.name || draft.registrationOptionalDocumentNotes.rfpRequestEvidence || '미응답' },
   ];
 
   const ReviewRow = ({ label, value, stacked = false }: { label: string; value: ReactNode; stacked?: boolean }) => (
@@ -3332,6 +3350,7 @@ export function ProjectEditorWizard({
 
   const renderReviewStep = () => (
     <div className="space-y-4">
+      {usesRegistrationV2 ? <ProjectSubmissionResponses draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
       <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
         <Card className="shadow-none lg:col-start-1 lg:row-start-1 lg:self-start">
           <CardHeader className="pb-2"><CardTitle className={FORM_SECTION_CLASS}>기본 정보</CardTitle></CardHeader>
@@ -3359,6 +3378,7 @@ export function ProjectEditorWizard({
             <ReviewRow label="기간" value={`${draft.contractStart || '-'} ~ ${draft.contractEndUndecided ? '종료 기간 없음' : draft.contractEnd || '-'}`} />
             {submissionContractWarning(draft) ? <p role="status" className={`mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-amber-900 ${FORM_HINT_CLASS}`}>{submissionContractWarning(draft)}</p> : null}
             <ReviewRow label="통화" value={PROJECT_CURRENCY_LABELS[draft.currency]} />
+            <ReviewRow label="사업비 입력 방식" value={PROJECT_FUND_INPUT_MODE_LABELS[draft.fundInputMode]} />
             <ReviewRow label="계약금액" value={submissionAmount(draft.contractAmount, draft.currency, financialInputFlags.contractAmount)} />
             <ReviewRow label="총매출부가세" value={submissionAmount(draft.salesVatAmount, draft.currency, financialInputFlags.salesVatAmount)} />
             <ReviewRow label="총수익" value={submissionAmount(draft.totalRevenueAmount, draft.currency, financialInputFlags.totalRevenueAmount)} />

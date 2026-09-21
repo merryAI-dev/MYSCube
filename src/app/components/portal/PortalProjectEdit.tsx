@@ -68,6 +68,7 @@ import { resolvePortalProjectResourcePath } from '../../platform/portal-project-
 import { EditLeaseDialogs } from '../editing/EditLeaseDialogs';
 import { useEditLease } from '../editing/useEditLease';
 import { ProjectEditorWizard } from '../projects/ProjectEditorWizard';
+import { ProjectDraftVersionPanel } from '../projects/ProjectDraftVersionPanel';
 import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
 import { Label } from '../ui/label';
@@ -269,6 +270,8 @@ function ProjectInfoEditor({
   const navigate = useNavigate();
   const { orgId } = useFirebase();
   const [record, setRecord] = useState<ProjectInfoDraft | null>(null);
+  const [serverRecord, setServerRecord] = useState<ProjectInfoDraft | null>(null);
+  useEffect(() => { setServerRecord(record); }, [record]);
   const [submitted, setSubmitted] = useState(false);
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
   const [saveSuccessDialogOpen, setSaveSuccessDialogOpen] = useState(false);
@@ -415,6 +418,7 @@ function ProjectInfoEditor({
         stepIndex,
       });
       revisionRef.current = saved.draft.draftRevision;
+      setServerRecord(saved.draft);
     })
   )), [draftClient, enqueueMutation, withOwnership]);
 
@@ -677,6 +681,14 @@ function ProjectInfoEditor({
 
   return (
     <>
+      {serverRecord && <ProjectDraftVersionPanel
+        key={project.id}
+        serverDraft={serverRecord}
+        editorRevision={record?.draftRevision ?? serverRecord.draftRevision}
+        submittedStatus={submitted ? 'SUBMITTED' : requestDoc?.status}
+        submittedVersion={requestDoc?.requestVersion}
+        loadHistory={() => draftClient.history()}
+      />}
       <ProjectEditorWizard
         mode="portal-edit"
         title="프로젝트 수정"

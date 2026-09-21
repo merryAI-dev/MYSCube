@@ -1,7 +1,7 @@
 // Field ownership is shared by submission snapshots and approval projection.
 export const PROJECT_SUBMISSION_FIELDS = [
   'name', 'officialContractName', 'type', 'status', 'phase', 'description', 'clientOrg', 'businessManagementGoogleFolderLink',
-  'participationSheetLink',
+  'participationSheetLink', 'submissionResponses', 'paymentPlanInputFlags',
   'department', 'groupwareName', 'currency', 'contractAmount', 'salesVatAmount',
   'totalRevenueAmount', 'totalActualCost', 'supportAmount', 'financialInputFlags', 'registrationRequirementsVersion',
   'financialYears', 'registrationConfirmations', 'registrationOptionalDocumentNotes', 'checkout', 'contractStart', 'contractEnd', 'contractEndUndecided',

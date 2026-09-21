@@ -1,3 +1,4 @@
+import { prepareProjectDraftHistorySave, readProjectDraftHistory } from '../project-draft-history.mjs';
 import { assertExistingProjectAttachment, isLegacyProjectAttachmentPath } from '../existing-project-attachment.mjs';
 import { randomUUID } from 'node:crypto';
 import {
@@ -754,6 +755,7 @@ export function createProjectInfoDraftService({
             resourceType: RESOURCE_TYPE,
             resourceId: current.projectId,
             draftRevision: 0,
+            historyGeneration: randomUUID(),
             baseCanonicalVersion: Number.isInteger(project.version) && project.version > 0 ? project.version : 1,
             // Frozen copy of the canonical values this draft started from, so a
             // later rebase can tell "the user changed it" from "someone else did".
@@ -886,6 +888,7 @@ export function createProjectInfoDraftService({
             submittedOutboxId: null,
             updatedAt: timestamp,
           });
+          const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef: registrationDraftRef, before: registrationDraft, after: restoredRegistrationDraft });
           await auditChainService.appendManyInTransaction(tx, [
             auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_WITHDRAW', 0, timestamp, {
               fence: current.fence,
@@ -896,6 +899,7 @@ export function createProjectInfoDraftService({
           ]);
           tx.set(registrationRequestRef, withdrawnRegistration);
           tx.set(projectRef, discardedProject);
+          saveHistory();
           tx.set(registrationDraftRef, restoredRegistrationDraft);
           const registrationBody = {
             withdrawn: true,
@@ -947,6 +951,7 @@ export function createProjectInfoDraftService({
           updatedAt: timestamp,
         });
         assertDraftSize(restoredDraft);
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: restoredDraft });
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_WITHDRAW', restoredDraft.draftRevision, timestamp, {
             fence: current.fence,
@@ -955,6 +960,7 @@ export function createProjectInfoDraftService({
           }),
         ]);
         tx.set(requestRef, withdrawnRequest);
+        saveHistory();
         tx.set(draftRef, restoredDraft);
         const body = {
           withdrawn: true,
@@ -1041,6 +1047,7 @@ export function createProjectInfoDraftService({
           updatedAt: timestamp,
         });
         assertDraftSize(nextDraft);
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: nextDraft });
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_REBASE', nextDraft.draftRevision, timestamp, {
             fence: current.fence,
@@ -1052,6 +1059,7 @@ export function createProjectInfoDraftService({
             })),
           }),
         ]);
+        saveHistory();
         tx.set(draftRef, nextDraft);
         const body = {
           rebased: true,
@@ -1071,6 +1079,12 @@ export function createProjectInfoDraftService({
         const { draft } = await ownedDraft(tx, current);
         return { draft: draftContract(draft) };
       });
+    },
+
+    async history(input) {
+      const current = context(input, { ownership: false, idempotency: false });
+      const { draftRef, draft } = await db.runTransaction((tx) => ownedDraft(tx, current));
+      return readProjectDraftHistory({ db, draftRef, draft });
     },
 
     async readAttachment(input) {
@@ -1182,10 +1196,12 @@ export function createProjectInfoDraftService({
           updatedAt: timestamp,
         };
         assertDraftSize(next);
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: next });
         const body = { draft: draftContract(next) };
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_SAVE', revision, timestamp, { fence: current.fence }),
         ]);
+        saveHistory();
         tx.set(draftRef, next);
         completeIdempotency(tx, current, lock, { method, path, status: 200, body }, nowDate);
         return { status: 200, body, replayed: false };
@@ -1323,12 +1339,14 @@ export function createProjectInfoDraftService({
             updatedAt: timestamp,
           };
           assertDraftSize(next);
+          const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: next });
           const body = { draft: draftContract(next), attachment };
           await auditChainService.appendManyInTransaction(tx, [
             auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_ATTACHMENT_ADD', revision, timestamp, {
               fence: current.fence, attachmentId,
             }),
           ]);
+          saveHistory();
           tx.set(draftRef, next);
           completeIdempotency(tx, current, lock, { method, path, status: 200, body }, nowDate);
           const cleanupEvent = attachmentCleanupEvent(
@@ -1460,6 +1478,7 @@ export function createProjectInfoDraftService({
           updatedAt: timestamp,
         };
         assertDraftSize(next);
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: next });
         const body = { draft: draftContract(next) };
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_ATTACHMENT_REMOVE', revision, timestamp, {
@@ -1468,6 +1487,7 @@ export function createProjectInfoDraftService({
             attachmentIds: removedAttachments.map((attachment) => readOptionalText(attachment?.attachmentId)).filter(Boolean),
           }),
         ]);
+        saveHistory();
         tx.set(draftRef, next);
         completeIdempotency(tx, current, lock, { method, path, status: 200, body }, nowDate);
         const cleanupEvent = attachmentCleanupEvent(
@@ -1581,6 +1601,7 @@ export function createProjectInfoDraftService({
           baseCanonicalVersion: actualVersion,
           status: 'SUBMITTED',
           createdAt: draft.createdAt || timestamp,
+          ...(draft.historyGeneration ? { historyGeneration: draft.historyGeneration } : {}),
           updatedAt: timestamp,
           submittedAt: timestamp,
           submittedProjectRequestId: projectRequest.id,
@@ -1616,6 +1637,7 @@ export function createProjectInfoDraftService({
           lease: { state: 'RELEASED', canEdit: false },
           outbox: { id: outboxEvent.id, status: outboxEvent.status || 'PENDING' },
         };
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: { ...draft, ...submittedDraft } });
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_SUBMIT', revision, timestamp, {
             fence: current.fence,
@@ -1628,6 +1650,7 @@ export function createProjectInfoDraftService({
           }),
         ]);
         tx.set(requestRef, submittedProjectRequest);
+        saveHistory();
         tx.set(draftRef, submittedDraft);
         tx.set(refs(current).lease, releasedLease);
         tx.create(outboxRef, outboxEvent);
@@ -1728,6 +1751,14 @@ export function mountProjectInfoDraftRoutes(app, {
     parseWithSchema(projectInfoDraftOpenSchema, req.body);
     sendOutcome(res, await projectInfoDraftService.open({
       ...await routeContext(req, piiProtector), ...routeOwnership(req), projectId: routeProjectId(req),
+    }));
+  }));
+
+  app.get('/api/v1/project-info-drafts/:projectId/history', asyncHandler(async (req, res) => {
+    assertActorRoleAllowed(req, PROJECT_REQUEST_ROUTE_ROLES, 'read project information draft history');
+    res.set('cache-control', 'private, no-store');
+    res.json(await projectInfoDraftService.history({
+      ...await routeContext(req, piiProtector), projectId: routeProjectId(req),
     }));
   }));
 

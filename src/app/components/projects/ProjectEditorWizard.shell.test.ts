@@ -18,8 +18,8 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).toContain('CircleCheck className="h-4 w-4 text-emerald-600"');
     expect(source).toContain("unmet ? 'text-amber-500' : 'text-slate-300'");
     // Stacked cards hid whether a slot was still missing; each row now states it.
-    expect(source).toContain("deferred ? '이후 제출(예외 처리)' : '미첨부'");
-    expect(source).toContain('const unmet = !attached && !deferred && slot.number <= 3');
+    expect(source).toContain("note.trim() ? `미첨부 사유: ${note}` : '미첨부'");
+    expect(source).toContain('const unmet = !attached && !deferred && !note.trim()');
     // Details that only existed inside the old card must survive in the row.
     expect(source).toContain('분석 요약');
     expect(source).toContain('기존 계약서는 관리자 화면에서만 제거할 수 있습니다.');
@@ -261,7 +261,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
     expect(source).toContain("['contract', '선금/계약금'");
     expect(source).toContain("['interim', '중도금'");
     expect(source).toContain("['final', '잔금'");
-    expect(source).toContain('formatProjectAmountInput(paymentPlan[field], true)');
+    expect(source).toContain('formatProjectAmountInput(paymentPlan[field], paymentFlags?.[field] === true)');
   });
 
   it('shows annual profit rates as derived values and keys v2 settlement details to the basis', () => {

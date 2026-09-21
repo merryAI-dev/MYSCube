@@ -1,3 +1,4 @@
+import { parseProjectDraftHistory } from './project-draft-history';
 import type { RequestActor } from '../platform/request-context';
 import { resolveProjectDocumentMimeType } from '../platform/project-contract-upload';
 import {
@@ -193,6 +194,11 @@ export function createProjectRegistrationDraftClient(options: {
       });
       const body = requireObject(response.data, 'draft create');
       return { draft: parseDraft(body.draft), lease: parseLease(body.lease) };
+    },
+
+    async history(draftId: string) {
+      const response = await client.get<unknown>(`${pathFor(draftId)}/history`, { ...request, headers: sessionHeaders });
+      return parseProjectDraftHistory(response.data);
     },
 
     async get(draftId: string) {

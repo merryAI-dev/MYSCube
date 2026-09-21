@@ -56,7 +56,6 @@ import {
 } from '../data/types';
 import {
   createEmptyProjectFinancialInputFlags,
-  normalizeProjectFinancialInputFlagsForAmounts,
 } from './project-contract-amount';
 import { normalizeProjectRevenueFields } from './project-financials';
 import {
@@ -108,6 +107,8 @@ export interface ProjectEditorDraft {
   totalActualCost: number;
   supportAmount: number;
   financialInputFlags: ProjectFinancialInputFlags;
+  paymentPlanInputFlags: Record<'contract' | 'interim' | 'final', boolean>;
+  submissionResponses: Record<string, 'NOT_APPLICABLE'>;
   registrationRequirementsVersion: 1 | 2;
   financialYears: ProjectFinancialYear[];
   registrationConfirmations: ProjectRegistrationConfirmations;
@@ -197,6 +198,8 @@ const DEFAULT_DRAFT: ProjectEditorDraft = {
   totalActualCost: 0,
   supportAmount: 0,
   financialInputFlags: createEmptyProjectFinancialInputFlags(),
+  paymentPlanInputFlags: { contract: false, interim: false, final: false },
+  submissionResponses: {},
   registrationRequirementsVersion: 1,
   financialYears: [],
   registrationConfirmations: {
@@ -307,6 +310,16 @@ function projectFinancialYearProfitRate(contractAmount: number, totalRevenueAmou
   return Math.min(1, totalRevenueAmount / contractAmount);
 }
 
+function draftFinancialInputFlags(flags: unknown, values: unknown): ProjectFinancialInputFlags {
+  return explicitInputFlags(flags, values, ['contractAmount', 'salesVatAmount', 'totalRevenueAmount', 'totalActualCost', 'supportAmount']);
+}
+
+function explicitInputFlags<K extends string>(flags: unknown, values: unknown, keys: K[]): Record<K, boolean> {
+  const f = flags && typeof flags === 'object' ? flags as Record<string, unknown> : {};
+  const v = values && typeof values === 'object' ? values as Record<string, unknown> : {};
+  return Object.fromEntries(keys.map((key) => [key, typeof f[key] === 'boolean' ? f[key] : typeof v[key] === 'number' && Number(v[key]) > 0])) as Record<K, boolean>;
+}
+
 function projectFinancialYears(
   value: unknown,
   contractStart: unknown,
@@ -325,6 +338,8 @@ function projectFinancialYears(
     const totalRevenueAmount = nonNegativeAmount(source.totalRevenueAmount);
     normalized.set(year, {
       year,
+      inputFlags: explicitInputFlags(source.inputFlags, source, ['contractAmount', 'salesVatAmount', 'totalRevenueAmount', 'totalActualCost', 'supportAmount']),
+      paymentPlanInputFlags: explicitInputFlags(source.paymentPlanInputFlags, source.paymentPlan, ['contract', 'interim', 'final']),
       contractAmount,
       salesVatAmount: nonNegativeAmount(source.salesVatAmount),
       totalRevenueAmount,
@@ -348,6 +363,8 @@ function projectFinancialYears(
     const year = startYear + offset;
     return normalized.get(year) || {
       year,
+      inputFlags: createEmptyProjectFinancialInputFlags(),
+      paymentPlanInputFlags: { contract: false, interim: false, final: false },
       contractAmount: offset === 0 && normalized.size === 0 ? nonNegativeAmount(totals.contractAmount) : 0,
       salesVatAmount: offset === 0 && normalized.size === 0 ? nonNegativeAmount(totals.salesVatAmount) : 0,
       totalRevenueAmount: offset === 0 && normalized.size === 0 ? nonNegativeAmount(totals.totalRevenueAmount) : 0,
@@ -387,7 +404,7 @@ function registrationConfirmations(value: unknown): ProjectRegistrationConfirmat
   return {
     laborIncludesFourInsurance: optionalBoolean(source.laborIncludesFourInsurance),
     laborIncludesRetirementPay: optionalBoolean(source.laborIncludesRetirementPay),
-    customerSettlementBasisConfirmed: source.customerSettlementBasisConfirmed === true,
+    customerSettlementBasisConfirmed: optionalBoolean(source.customerSettlementBasisConfirmed),
     modusignContractUsed: optionalBoolean(source.modusignContractUsed),
     originalContractSubmitted: optionalBoolean(source.originalContractSubmitted),
     proposalPptOriginal: text(source.proposalPptOriginal),
@@ -400,6 +417,7 @@ function registrationOptionalDocumentNotes(value: unknown): ProjectRegistrationO
     ? value as Partial<ProjectRegistrationOptionalDocumentNotes>
     : {};
   return {
+    rfpRequestEvidence: text(source.rfpRequestEvidence),
     proposalWordOriginal: text(source.proposalWordOriginal),
     proposalPptOriginal: text(source.proposalPptOriginal),
     presentationPptOriginal: text(source.presentationPptOriginal),
@@ -518,7 +536,7 @@ const REVIEW_CHANGE_FIELDS: Array<{
   { key: 'accountType', label: '통장 유형', before: (project) => ACCOUNT_TYPE_LABELS[normalizeAccountType(project.accountType)] || '-', after: (draft) => ACCOUNT_TYPE_LABELS[normalizeAccountType(draft.accountType)] || '-' },
   { key: 'settlementSystem', label: '정산 시스템', before: (project) => normalizeSettlementSystemCode(project.settlementSystem) === 'OTHER' ? normalizeChangeValue(project.settlementSystemOther) : SETTLEMENT_SYSTEM_LABELS[normalizeSettlementSystemCode(project.settlementSystem)] || '-', after: (draft) => normalizeSettlementSystemCode(draft.settlementSystem) === 'OTHER' ? normalizeChangeValue(draft.settlementSystemOther) : SETTLEMENT_SYSTEM_LABELS[normalizeSettlementSystemCode(draft.settlementSystem)] || '-' },
   { key: 'laborSettlementBasis', label: '인건비 정산 기준', before: (project) => LABOR_SETTLEMENT_BASIS_LABELS[normalizeLaborSettlementBasis(project.laborSettlementBasis)] || '-', after: (draft) => LABOR_SETTLEMENT_BASIS_LABELS[normalizeLaborSettlementBasis(draft.laborSettlementBasis)] || '-' },
-  { key: 'fundInputMode', label: '자금 입력 방식', before: (project) => PROJECT_FUND_INPUT_MODE_LABELS[normalizeProjectFundInputMode(project.fundInputMode)] || '-', after: (draft) => PROJECT_FUND_INPUT_MODE_LABELS[normalizeProjectFundInputMode(draft.fundInputMode)] || '-' },
+  { key: 'fundInputMode', label: '사업비 입력 방식', before: (project) => PROJECT_FUND_INPUT_MODE_LABELS[normalizeProjectFundInputMode(project.fundInputMode)] || '-', after: (draft) => PROJECT_FUND_INPUT_MODE_LABELS[normalizeProjectFundInputMode(draft.fundInputMode)] || '-' },
   { key: 'registeredByName', label: '최종 보고자 (실무책임자)', before: (project) => normalizeChangeValue(project.registeredByName || project.managerName), after: (draft) => normalizeChangeValue(draft.registeredByName || draft.managerName) },
   { key: 'executiveApproverName', label: '최종 결재자 (총괄책임자)', before: (project) => normalizeChangeValue(project.executiveApproverName), after: (draft) => normalizeChangeValue(draft.executiveApproverName) },
   { key: 'teamName', label: '사내기업팀', before: (project) => normalizeChangeValue(project.teamName), after: (draft) => normalizeChangeValue(draft.teamName) },
@@ -565,7 +583,9 @@ export function createProjectEditorDraft(overrides: Partial<ProjectEditorDraft> 
   const draft = {
     ...DEFAULT_DRAFT,
     ...overrides,
-    financialInputFlags: normalizeProjectFinancialInputFlagsForAmounts(
+    submissionResponses: Object.fromEntries(Object.entries(overrides.submissionResponses || {}).filter(([, value]) => value === 'NOT_APPLICABLE')) as Record<string, 'NOT_APPLICABLE'>,
+    paymentPlanInputFlags: explicitInputFlags(overrides.paymentPlanInputFlags, overrides.paymentPlan, ['contract', 'interim', 'final']),
+    financialInputFlags: draftFinancialInputFlags(
       overrides.financialInputFlags ?? DEFAULT_DRAFT.financialInputFlags,
       {
         contractAmount: overrides.contractAmount ?? DEFAULT_DRAFT.contractAmount,
@@ -705,7 +725,9 @@ export function buildProjectEditorDraftFromProject(
     totalRevenueAmount: nonNegativeAmount(normalizedProject.totalRevenueAmount ?? payload?.totalRevenueAmount),
     totalActualCost: nonNegativeAmount(normalizedProject.totalActualCost ?? payload?.totalActualCost),
     supportAmount: nonNegativeAmount(normalizedProject.supportAmount ?? payload?.supportAmount),
-    financialInputFlags: normalizeProjectFinancialInputFlagsForAmounts(
+    submissionResponses: normalizedProject.submissionResponses ?? payload?.submissionResponses,
+    paymentPlanInputFlags: normalizedProject.paymentPlanInputFlags ?? payload?.paymentPlanInputFlags,
+    financialInputFlags: draftFinancialInputFlags(
       normalizedProject.financialInputFlags || payload?.financialInputFlags,
       {
         contractAmount: normalizedProject.contractAmount ?? payload?.contractAmount,
@@ -876,7 +898,9 @@ export function buildProjectRequestPayloadFromDraft(draftInput: ProjectEditorDra
     totalRevenueAmount: nonNegativeAmount(draft.totalRevenueAmount),
     totalActualCost: nonNegativeAmount(draft.totalActualCost),
     supportAmount: nonNegativeAmount(draft.supportAmount),
-    financialInputFlags: normalizeProjectFinancialInputFlagsForAmounts(draft.financialInputFlags, draft),
+    financialInputFlags: draftFinancialInputFlags(draft.financialInputFlags, draft),
+    paymentPlanInputFlags: draft.paymentPlanInputFlags,
+    submissionResponses: draft.submissionResponses,
     registrationRequirementsVersion: draft.registrationRequirementsVersion,
     financialYears: projectFinancialYearsForWrite(draft.financialYears),
     registrationOptionalDocumentNotes: draft.registrationOptionalDocumentNotes,
@@ -986,7 +1010,7 @@ export function buildProjectEditorProjectPatch(
   options: ProjectEditorPatchOptions,
 ): Partial<Project> {
   const draft = createProjectEditorDraft(draftInput);
-  const flags = normalizeProjectFinancialInputFlagsForAmounts(draft.financialInputFlags, draft);
+  const flags = draftFinancialInputFlags(draft.financialInputFlags, draft);
   const teamMembersDetailed = projectTeamMembersForWrite(draft.teamMembersDetailed);
   const reviewChanges = options.baseProject
     ? (buildProjectEditorReviewChanges(options.baseProject, draft) || [])
@@ -1028,6 +1052,8 @@ export function buildProjectEditorProjectPatch(
     supportAmount: nonNegativeAmount(draft.supportAmount),
     salesVatAmount: nonNegativeAmount(draft.salesVatAmount),
     financialInputFlags: flags,
+    paymentPlanInputFlags: draft.paymentPlanInputFlags,
+    submissionResponses: draft.submissionResponses,
     registrationRequirementsVersion: draft.registrationRequirementsVersion,
     financialYears: projectFinancialYearsForWrite(draft.financialYears),
     registrationOptionalDocumentNotes: draft.registrationOptionalDocumentNotes,

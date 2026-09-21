@@ -91,8 +91,8 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(documentSource).toContain('data-testid="migration-review-document-slots"');
     expect(documentSource).toContain("number: 1");
     expect(documentSource).toContain("number: 7");
-    expect(documentSource).toContain("number: 4, label: '제안서 Word 원본 (선택)'");
-    expect(documentSource).toContain("number: 7, label: 'RFP/요청 메일 증빙 (선택)'");
+    expect(documentSource).toContain("number: 4, label: '제안서 Word 원본'");
+    expect(documentSource).toContain("number: 7, label: 'RFP/요청 메일 증빙'");
     expect(documentSource).toContain('customerBusinessRegistrationDocument');
     expect(documentSource).toContain('proposalWordOriginalDocument');
     expect(documentSource).toContain('proposalPptOriginalDocument');

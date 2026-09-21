@@ -31,6 +31,9 @@ const registrationV2RequiredAttachmentKinds = registrationV2AttachmentKinds.slic
 
 function registrationV2Payload(overrides: Record<string, unknown> = {}) {
   return {
+    currency: 'KRW', contractType: '계약서(날인)', accountType: 'OPERATING',
+    paymentPlanInputFlags: { contract: true, interim: true, final: true },
+    submissionResponses: Object.fromEntries(['businessManagementGoogleFolderLink', 'paymentPlanDesc', 'staffing.lead', 'staffing.pm', 'staffing.operators', 'staffing.others', 'staffing.settlementSupport'].map(key => [key, 'NOT_APPLICABLE'])),
     name: '다년도 사업',
     officialContractName: '2026 다년도 사업 운영 계약',
     clientOrg: '발주기관 주식회사',
@@ -52,7 +55,7 @@ function registrationV2Payload(overrides: Record<string, unknown> = {}) {
     contractAmount: 300_000,
     salesVatAmount: 30_000,
     totalRevenueAmount: 120_000,
-    totalActualCost: 75_000,
+    totalActualCost: 140_000,
     supportAmount: 10_000,
     settlementType: 'TYPE1',
     basis: '공급가액',
@@ -86,8 +89,8 @@ function registrationV2Payload(overrides: Record<string, unknown> = {}) {
     },
     registrationRequirementsVersion: 2,
     financialYears: [
-      { year: 2026, contractAmount: 100_000, salesVatAmount: 10_000, totalRevenueAmount: 40_000, totalActualCost: 25_000, supportAmount: 0, profitRate: 0.4, confirmed: true, paymentPlan: { contract: 50_000, interim: 20_000, final: 30_000 }, paymentExpectedMonths: { contract: '2026-02', interim: '2026-06', final: '2026-12' }, finalPaymentExpectedWeek: '26-8-1', advanceInterimBelow70Reason: '연차별 일정', isSettled: true },
-      { year: 2027, contractAmount: 200_000, salesVatAmount: 20_000, totalRevenueAmount: 80_000, totalActualCost: 50_000, supportAmount: 10_000, profitRate: 0.4, confirmed: true, paymentPlan: { contract: 100_000, interim: 40_000, final: 60_000 }, paymentExpectedMonths: { contract: '2027-02', interim: '2027-06', final: '2027-12' }, finalPaymentExpectedWeek: '27-12-4', advanceInterimBelow70Reason: '', isSettled: false },
+      { year: 2026, contractAmount: 100_000, salesVatAmount: 10_000, totalRevenueAmount: 40_000, totalActualCost: 50_000, supportAmount: 0, inputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true }, paymentPlanInputFlags: { contract: true, interim: true, final: true }, profitRate: 0.4, confirmed: true, paymentPlan: { contract: 50_000, interim: 20_000, final: 30_000 }, paymentExpectedMonths: { contract: '2026-02', interim: '2026-06', final: '2026-12' }, finalPaymentExpectedWeek: '26-8-1', advanceInterimBelow70Reason: '연차별 일정', isSettled: true },
+      { year: 2027, contractAmount: 200_000, salesVatAmount: 20_000, totalRevenueAmount: 80_000, totalActualCost: 90_000, supportAmount: 10_000, inputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true }, paymentPlanInputFlags: { contract: true, interim: true, final: true }, profitRate: 0.4, confirmed: true, paymentPlan: { contract: 100_000, interim: 40_000, final: 60_000 }, paymentExpectedMonths: { contract: '2027-02', interim: '2027-06', final: '2027-12' }, finalPaymentExpectedWeek: '27-12-4', advanceInterimBelow70Reason: '', isSettled: false },
     ],
     interestRefundPolicy: 'REFUND',
     finalPaymentExpectedWeek: '27-12-4',
@@ -99,9 +102,10 @@ function registrationV2Payload(overrides: Record<string, unknown> = {}) {
       modusignContractUsed: false,
       originalContractSubmitted: true,
       proposalPptOriginal: 'https://drive.google.com/file/d/proposal/view',
-      presentationPptOriginal: 'http://docs.google.com/presentation/d/presentation/edit',
+      presentationPptOriginal: 'https://docs.google.com/presentation/d/presentation/edit',
     },
     registrationOptionalDocumentNotes: {
+      rfpRequestEvidence: '고객사 제공 자료 없음',
       proposalWordOriginal: '제안서 Word 원본은 고객사 제공 자료가 없어 제출 제외',
       proposalPptOriginal: '제안서 PPT 원본은 고객사 제공 자료가 없어 제출 제외',
       presentationPptOriginal: '발표자료 PPT 원본은 해당 없음',
@@ -235,10 +239,10 @@ describe('project route helpers', () => {
     expect(canonical.projectRequest.payload).toMatchObject({
       registrationRequirementsVersion: 2,
       financialYears: [
-        { year: 2026, confirmed: true, profitRate: 0.4, totalActualCost: 25_000, paymentPlan: { contract: 50_000, interim: 20_000, final: 30_000 }, advanceInterimBelow70Reason: '연차별 일정', isSettled: true },
-        { year: 2027, confirmed: true, profitRate: 0.4, totalActualCost: 50_000, paymentPlan: { contract: 100_000, interim: 40_000, final: 60_000 }, isSettled: false },
+        { year: 2026, confirmed: true, profitRate: 0.4, totalActualCost: 50_000, paymentPlan: { contract: 50_000, interim: 20_000, final: 30_000 }, advanceInterimBelow70Reason: '연차별 일정', isSettled: true },
+        { year: 2027, confirmed: true, profitRate: 0.4, totalActualCost: 90_000, paymentPlan: { contract: 100_000, interim: 40_000, final: 60_000 }, isSettled: false },
       ],
-      totalActualCost: 75_000,
+      totalActualCost: 140_000,
       interestRefundPolicy: 'REFUND',
       quoteSubmissionDeferred: false,
       settlementSystem: 'BOTAEM_E',
@@ -256,7 +260,7 @@ describe('project route helpers', () => {
       modusignContractUsed: false,
       originalContractSubmitted: true,
       proposalPptOriginal: 'https://drive.google.com/file/d/proposal/view',
-      presentationPptOriginal: 'http://docs.google.com/presentation/d/presentation/edit',
+      presentationPptOriginal: 'https://docs.google.com/presentation/d/presentation/edit',
     });
     expect(canonical.project.registrationConfirmations).toMatchObject({ modusignContractUsed: false, originalContractSubmitted: true });
     expect(canonical.projectRequest.payload).not.toHaveProperty('groupwareName');
@@ -290,20 +294,22 @@ describe('project route helpers', () => {
     const link = 'https://drive.google.com/drive/folders/project-management-folder';
     const canonical = registrationV2Canonical(registrationV2Payload({
       businessManagementGoogleFolderLink: link,
+      submissionResponses: { ...registrationV2Payload().submissionResponses, businessManagementGoogleFolderLink: undefined },
     }));
 
     expect(canonical.projectRequest.payload.businessManagementGoogleFolderLink).toBe(link);
     expect(canonical.project.businessManagementGoogleFolderLink).toBe(link);
   });
 
-  it('allows a single-year registration without annual financial rows', () => {
-    const canonical = registrationV2Canonical(registrationV2Payload({
+  it('rejects a single-year registration without annual financial rows', () => {
+    expect(() => registrationV2Canonical(registrationV2Payload({
       contractEnd: '2026-12-31',
       paymentExpectedMonths: { contract: '2026-01', interim: '2026-06', final: '2026-12' },
       financialYears: [],
+    }))).toThrow(expect.objectContaining({
+      statusCode: 422, code: 'project_submission_incomplete',
+      details: { requiredFields: expect.arrayContaining([expect.objectContaining({ field: 'financialYears' })]) },
     }));
-
-    expect(canonical.projectRequest.payload.financialYears).toEqual([]);
   });
 
   it('derives annual profit rates and removes settlement-only values when the v2 settlement basis is none', () => {
@@ -313,10 +319,7 @@ describe('project route helpers', () => {
       accountType: 'DEDICATED',
       settlementSystem: 'BOTAEM_E',
       laborSettlementBasis: 'INCLUDE_ACTUAL_SALARY',
-      financialYears: [
-        { year: 2026, contractAmount: 100_000, salesVatAmount: 10_000, totalRevenueAmount: 40_000, totalActualCost: 25_000, supportAmount: 0, profitRate: 0, confirmed: true },
-        { year: 2027, contractAmount: 200_000, salesVatAmount: 20_000, totalRevenueAmount: 80_000, totalActualCost: 50_000, supportAmount: 10_000, profitRate: 0.9, confirmed: true },
-      ],
+      financialYears: registrationV2Payload().financialYears.map((row, index) => ({ ...row, profitRate: index ? 0.9 : 0 })),
     }));
 
     expect(canonical.projectRequest.payload.financialYears).toEqual([
@@ -1173,7 +1176,7 @@ describe('project route helpers', () => {
 
     expect(patch.registrationConfirmations).toEqual(legacyConfirmations);
     expect(patch).toMatchObject({
-      totalActualCost: 75_000,
+      totalActualCost: 140_000,
       interestRefundPolicy: 'REFUND',
       quoteSubmissionDeferred: false,
       financialYears: [
@@ -1425,7 +1428,7 @@ describe('project route helpers', () => {
     [
       'one contract year is missing',
       registrationV2Payload({ financialYears: [
-        { year: 2026, contractAmount: 300_000, salesVatAmount: 30_000, totalRevenueAmount: 120_000, totalActualCost: 75_000, supportAmount: 10_000, profitRate: 0.4, confirmed: true },
+        { year: 2026, contractAmount: 300_000, salesVatAmount: 30_000, totalRevenueAmount: 120_000, totalActualCost: 140_000, supportAmount: 10_000, profitRate: 0.4, confirmed: true },
       ] }),
       registrationV2AttachmentKinds,
     ],
@@ -1437,7 +1440,7 @@ describe('project route helpers', () => {
     [
       'annual profit rate is outside 0..1',
       registrationV2Payload({ financialYears: [
-        { year: 2026, contractAmount: 100_000, salesVatAmount: 10_000, totalRevenueAmount: 40_000, totalActualCost: 25_000, supportAmount: 0, profitRate: 1.01, confirmed: true },
+        { year: 2026, contractAmount: 100_000, salesVatAmount: 10_000, totalRevenueAmount: 40_000, totalActualCost: 50_000, supportAmount: 0, profitRate: 1.01, confirmed: true },
         { year: 2027, contractAmount: 200_000, salesVatAmount: 20_000, totalRevenueAmount: 80_000, totalActualCost: 50_000, supportAmount: 10_000, profitRate: 0.4, confirmed: true },
       ] }),
       registrationV2AttachmentKinds,
@@ -3377,5 +3380,22 @@ describe('project route helpers', () => {
     expect(inQuerySizes).toContain(30);
     expect(inQuerySizes).toContain(1);
     expect(Math.max(...inQuerySizes)).toBe(30);
+  });
+});
+
+
+describe('interest policy required at new submission only', () => {
+  it.each(['', undefined])('rejects an unselected policy: %s', (interestRefundPolicy) => {
+    expect(() => registrationV2Canonical(registrationV2Payload({ interestRefundPolicy })))
+      .toThrow('이자 반납 여부를 선택');
+  });
+  it.each(['REFUND', 'USE_AS_PROJECT_EXPENSE', 'MYSC_REVENUE', 'REVIEW_LATER'])('accepts %s', (interestRefundPolicy) => {
+    expect(() => registrationV2Canonical(registrationV2Payload({ interestRefundPolicy }))).not.toThrow();
+  });
+  it('does not require a hidden field when settlement does not apply', () => {
+    expect(() => registrationV2Canonical(registrationV2Payload({ basis: 'NONE', interestRefundPolicy: '' }))).not.toThrow();
+  });
+  it('does not apply the new submission requirement to an old approval payload', () => {
+    expect(() => buildProjectPatchFromChangeRequestPayload(registrationV2Payload({ interestRefundPolicy: '' }), {})).not.toThrow();
   });
 });
