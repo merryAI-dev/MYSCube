@@ -2,11 +2,11 @@ import { hasMultiYearProjectContract, projectEffectivePaymentPlan, projectFinanc
 import type { ProjectTeamMemberAssignment, ProjectRequestPayload, ProjectFinancialYear } from '../data/types';
 
 export function submissionFormatInfo(source: { registrationRequirementsVersion?: unknown } | null | undefined) {
-  if (!source) return { label: '제출 내용 확인 필요', detail: '이 문서의 제출 내용을 찾을 수 없습니다. 작성자에게 제출 여부를 확인해 주세요.' };
+  if (!source) return { label: '제출 문서 연결 없음', detail: '이 문서의 제출 내용을 찾을 수 없습니다. 작성자에게 제출 여부를 확인해 주세요.' };
   const version = source.registrationRequirementsVersion;
   if (version === 2) return { label: '현재 등록 양식', detail: '현재 등록 양식으로 제출된 내용입니다.' };
-  if (version === 1) return { label: '이전 등록 양식', detail: '이전 등록 양식으로 제출된 문서입니다. 제출 당시 입력한 내용과 첨부파일을 확인할 수 있습니다. 이후 추가된 질문은 답변이 없을 수 있습니다.' };
-  return { label: '등록 양식 확인 필요', detail: '이 문서가 어떤 등록 양식으로 작성됐는지 확인할 수 없습니다. 제출 당시 입력한 내용과 첨부파일은 아래에서 확인해 주세요.' };
+  if (version === 1) return { label: '이전 양식', detail: '이전 등록 양식으로 제출된 문서입니다. 제출 당시 입력한 내용과 첨부파일을 확인할 수 있습니다. 이후 추가된 질문은 답변이 없을 수 있습니다.' };
+  return { label: version == null ? '양식 버전 미기록' : '양식 버전 인식 불가', detail: '이 문서가 어떤 등록 양식으로 작성됐는지 확인할 수 없습니다. 제출 당시 입력한 내용과 첨부파일은 아래에서 확인해 주세요.' };
 }
 
 export function submissionShowsCheckout(source: { status?: unknown } | null | undefined): boolean {

@@ -1,9 +1,11 @@
+import { buildMigrationReviewDocumentSlots, type ReviewDocumentEntry } from '../../../platform/project-review-document-slots';
+export { buildMigrationReviewDocumentSlots } from '../../../platform/project-review-document-slots';
 import { ProjectReviewReadinessPanel } from './ProjectReviewReadinessPanel';
 import { ProjectSubmissionFormatBadge } from './ProjectSubmissionFormatBadge';
 import type { ProjectReviewReadiness } from '../../../lib/platform-bff-client';
 import { submissionFormatInfo, submissionShowsCheckout, submissionAmount, submissionFinancialYears, submissionAnnualRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
 import { useEffect, useMemo, useState } from 'react';
-import { PROJECT_STATUS_LABELS, INTEREST_REFUND_POLICY_LABELS, type FileAttachment, type ProjectRegistrationOptionalDocumentNotes } from '../../../data/types';
+import { PROJECT_STATUS_LABELS, INTEREST_REFUND_POLICY_LABELS, type FileAttachment } from '../../../data/types';
 import type { MigrationAuditConsoleRecord } from '../../../platform/project-migration-console';
 import { getMigrationAuditStatusLabel, hasPendingProjectChangeRequest } from '../../../platform/project-migration-console';
 import { resolveProjectRequestPayload } from '../../../platform/project-change-request';
@@ -42,130 +44,6 @@ interface MigrationAuditDocumentDialogProps {
   onReject: () => void;
 }
 
-type ReviewDocumentField =
-  | 'contractDocument'
-  | 'customerBusinessRegistrationDocument'
-  | 'quoteDocument'
-  | 'proposalDocument'
-  | 'rfpRequestEvidenceDocument'
-  | 'proposalWordOriginalDocument'
-  | 'proposalPptOriginalDocument'
-  | 'presentationPptOriginalDocument'
-  | 'performanceCertificateDocument'
-  | 'taxInvoiceDocument'
-  | 'finalSettlementReportDocument'
-  | 'finalReportDocument';
-
-type ReviewDocumentDefinition = {
-  kind: ProjectRequestDocumentKind;
-  field: ReviewDocumentField;
-  label: string;
-};
-
-type ReviewDocumentSlotDefinition = {
-  number: number;
-  label: string;
-  kinds: ProjectRequestDocumentKind[];
-  noteField?: keyof ProjectRegistrationOptionalDocumentNotes;
-};
-
-type ReviewDocumentEntry = ReviewDocumentDefinition & {
-  document: FileAttachment;
-};
-
-type ReviewDocumentSlot = ReviewDocumentSlotDefinition & {
-  entries: ReviewDocumentEntry[];
-  note: string;
-  link: string;
-  conflict: boolean;
-  submissionState: 'SUBMITTED' | 'NOT_APPLICABLE' | 'DEFERRED' | 'EXPLAINED' | 'EMPTY' | 'UNRECORDED';
-  submissionLabel: string;
-};
-
-const REVIEW_DOCUMENT_DEFINITIONS: ReviewDocumentDefinition[] = [
-  { kind: 'contract', field: 'contractDocument', label: '계약서 PDF' },
-  { kind: 'customer_business_registration', field: 'customerBusinessRegistrationDocument', label: '고객사 사업자등록증 PDF' },
-  { kind: 'quote', field: 'quoteDocument', label: '견적서 PDF' },
-  { kind: 'proposal', field: 'proposalDocument', label: '제안서 PDF' },
-  { kind: 'rfp_request_evidence', field: 'rfpRequestEvidenceDocument', label: 'RFP/요청 메일 증빙' },
-  { kind: 'proposal_word_original', field: 'proposalWordOriginalDocument', label: '제안서 파일' },
-  { kind: 'proposal_ppt_original', field: 'proposalPptOriginalDocument', label: '제안서 PPT 원본' },
-  { kind: 'presentation_ppt_original', field: 'presentationPptOriginalDocument', label: '발표자료 PPT 원본' },
-  { kind: 'performance_certificate', field: 'performanceCertificateDocument', label: '수행확인서' },
-  { kind: 'tax_invoice', field: 'taxInvoiceDocument', label: '세금계산서' },
-  { kind: 'final_settlement_report', field: 'finalSettlementReportDocument', label: '최종 정산보고서' },
-  { kind: 'final_report', field: 'finalReportDocument', label: '최종 결과보고서' },
-];
-
-const REVIEW_DOCUMENT_SLOTS: ReviewDocumentSlotDefinition[] = [
-  { number: 1, label: '계약서 PDF', kinds: ['contract'] },
-  { number: 2, label: '고객사 사업자등록증 PDF', kinds: ['customer_business_registration'] },
-  { number: 3, label: '산출내역서(견적서) PDF', kinds: ['quote'] },
-  { number: 4, label: '제안서 파일', kinds: ['proposal_word_original'], noteField: 'proposalWordOriginal' },
-  { number: 5, label: '제안서(구글드라이브 링크)', kinds: ['proposal_ppt_original'], noteField: 'proposalPptOriginal' },
-  { number: 6, label: '발표자료(구글드라이브 링크)', kinds: ['presentation_ppt_original'], noteField: 'presentationPptOriginal' },
-  { number: 7, label: 'RFP/요청 메일 증빙', kinds: ['rfp_request_evidence'], noteField: 'rfpRequestEvidence' },
-];
-
-function isFileAttachment(value: unknown): value is FileAttachment {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const attachment = value as Partial<FileAttachment>;
-  return Boolean(String(attachment.path || attachment.downloadURL || '').trim());
-}
-
-export function buildMigrationReviewDocumentSlots(record: MigrationAuditConsoleRecord): ReviewDocumentSlot[] {
-  const payload = record.request ? resolveProjectRequestPayload(record.request) : record.project;
-  const requestNotes = payload?.registrationOptionalDocumentNotes;
-  const notes: Partial<ProjectRegistrationOptionalDocumentNotes> = requestNotes || {};
-  const quoteSubmissionDeferred = payload?.quoteSubmissionDeferred;
-  const confirmations = payload?.registrationConfirmations;
-  const documentByKind = new Map<ProjectRequestDocumentKind, ReviewDocumentEntry>();
-
-  REVIEW_DOCUMENT_DEFINITIONS.forEach((definition) => {
-    const document = payload?.[definition.field];
-    if (!isFileAttachment(document)) return;
-    documentByKind.set(definition.kind, { ...definition, document });
-  });
-
-  const additionalSlots = REVIEW_DOCUMENT_DEFINITIONS
-    .filter((definition) => !REVIEW_DOCUMENT_SLOTS.some((slot) => slot.kinds.includes(definition.kind))
-      && documentByKind.has(definition.kind))
-    .map((definition, index) => ({ number: 8 + index, label: definition.label, kinds: [definition.kind] }));
-
-  return [...REVIEW_DOCUMENT_SLOTS, ...additionalSlots].map((slot: ReviewDocumentSlotDefinition) => {
-    const entries = slot.kinds.flatMap((kind) => {
-      const entry = documentByKind.get(kind);
-      return entry ? [entry] : [];
-    });
-    const linkField = slot.number === 5 ? 'proposalPptOriginal' : slot.number === 6 ? 'presentationPptOriginal' : null;
-    const link = linkField ? String(confirmations?.[linkField] || '').trim() : '';
-    const note = slot.number === 3 && quoteSubmissionDeferred
-      ? '이후 제출 예정'
-      : slot.noteField ? String(notes[slot.noteField] || '').trim() : '';
-    const explicitAbsence = note.replace(/\s/g, '') === '해당없음';
-    const recorded = REVIEW_DOCUMENT_DEFINITIONS.some((definition) => slot.kinds.includes(definition.kind)
-      && Object.hasOwn(payload || {}, definition.field))
-      || Boolean(linkField && Object.hasOwn(confirmations || {}, linkField));
-    const submissionState: ReviewDocumentSlot['submissionState'] = entries.length || link ? 'SUBMITTED'
-      : explicitAbsence ? 'NOT_APPLICABLE'
-      : slot.number === 3 && quoteSubmissionDeferred ? 'DEFERRED'
-      : note ? 'EXPLAINED'
-      : recorded ? 'EMPTY' : 'UNRECORDED';
-    const labels: Record<ReviewDocumentSlot['submissionState'], string> = {
-      SUBMITTED: '제출됨', NOT_APPLICABLE: '해당 없음', DEFERRED: '이후 제출 예정',
-      EXPLAINED: '미첨부 사유 기록됨', EMPTY: '미입력', UNRECORDED: '기록 없음',
-    };
-    return {
-      ...slot,
-      entries,
-      link,
-      note,
-      submissionState,
-      submissionLabel: labels[submissionState],
-      conflict: Boolean((entries.length || link) && explicitAbsence),
-    };
-  });
-}
 
 function formatDateTime(value?: string) {
   if (!value) return '-';
@@ -316,11 +194,11 @@ export function MigrationAuditDocumentDialog({
         <DialogHeader className="sr-only"><DialogTitle>프로젝트 등록 및 승인서</DialogTitle><DialogDescription>프로젝트 등록 내용을 결재 문서 형식으로 확인합니다.</DialogDescription></DialogHeader>
         <article className="mx-auto w-full max-w-[1020px] border border-slate-400 bg-white px-8 py-9 text-slate-900" data-testid="migration-review-document">
           <ProjectReviewReadinessPanel readiness={readiness} />
-          {submittedFormat && submittedFormat.label !== '현재 등록 양식' ? <section aria-label="제출 양식 안내" className="mb-4 rounded border border-slate-300 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
-            <ProjectSubmissionFormatBadge request={record.request} />
-            <p className="mt-1">{submittedFormat.detail}</p>
-            <p className="mt-1">확인이 필요한 항목을 살펴봐 주세요. 이전 양식으로 작성됐다는 이유만으로 다시 제출할 필요는 없습니다.</p>
-          </section> : null}
+          <section aria-label="제출 양식 안내" className="mb-4 rounded border border-slate-300 bg-slate-50 p-3 text-xs leading-5 text-slate-700">
+            <ProjectSubmissionFormatBadge record={record} readiness={readiness} previewStates={documentPreviewStates} detailed />
+            <p className="mt-1">{submittedFormat?.label !== '현재 등록 양식' ? submittedFormat?.detail : null}</p>
+            <p className="mt-1">자료를 열람할 수 있어도 바로 승인할 수 있다는 뜻은 아닙니다. 파일 저장 위치나 제출 정보가 승인 기준과 맞지 않으면 안내된 항목을 수정하거나 다시 첨부한 뒤 최종 제출해 주세요.</p>
+          </section>
           {!record.request ? <p className="mb-4 rounded border border-slate-300 bg-slate-50 p-3 text-xs text-slate-700">승인을 요청한 문서를 찾을 수 없어 현재 등록된 프로젝트 정보를 보여드립니다. 작성자에게 제출 여부를 확인해 주세요.</p> : null}
           {checkoutVisible ? <p role="status" className="mt-3 rounded border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
             이 제출본의 프로젝트 상태는 {PROJECT_STATUS_LABELS[reviewPayload!.status!]}입니다. 이 상태에 따라 종료사업 체크아웃이 표시됩니다. 실제 진행 중인 사업이라면 작성자가 프로젝트 수정의 기본 정보에서 계약기간과 상태를 확인한 뒤 수정 제출해 주세요. 기존 승인 문서는 당시 제출 상태를 유지합니다.

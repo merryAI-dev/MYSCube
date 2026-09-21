@@ -67,7 +67,7 @@ export function buildProjectReviewReadiness(request, project) {
     code: 'legacy_submission_format', severity: 'warning', field: 'registrationRequirementsVersion',
     title: '등록 양식을 확인해 주세요',
     detail: '이전 등록 양식이거나 작성 당시 양식을 확인할 수 없는 문서입니다. 제출 당시 내용과 첨부파일을 확인할 수 있으며, 이후 추가된 질문은 답변이 없을 수 있습니다.',
-    action: '아래 확인이 필요한 항목을 살펴봐 주세요. 이전 양식이라는 이유만으로 다시 제출할 필요는 없습니다. 내용 보완이 필요한 경우에만 작성자에게 수정 후 최종 제출을 요청해 주세요.',
+    action: '아래 확인이 필요한 항목을 살펴봐 주세요. 파일 저장 위치나 제출 정보가 승인 기준과 맞지 않으면 작성자가 해당 항목을 수정하거나 파일을 다시 첨부한 뒤 최종 제출해야 합니다.',
   });
   for (const [field, label] of requiredDocuments) {
     if (field === 'quoteDocument' && payload.quoteSubmissionDeferred === true) continue;
