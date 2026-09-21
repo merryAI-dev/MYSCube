@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { prepareProjectDraftHistorySave, projectDraftHistoryCollectionPath, readProjectDraftHistory } from './project-draft-history.mjs';
+import { prepareProjectDraftHistorySave, projectDraftHistoryCollectionPath, readProjectDraftHistory, assertProjectDraftRestoreAttachments } from './project-draft-history.mjs';
 
 function harness(seed = {}) {
   const store = new Map(Object.entries(seed));
@@ -8,13 +8,14 @@ function harness(seed = {}) {
   const db = {
     doc: (path) => ({ path }),
     collection: (path) => {
-      let direction = 'asc'; let count = 20;
+      let direction = 'asc'; let count = 20; let before;
       const query = {
         orderBy: (field, dir) => { expect(field).toBe('draftRevision'); direction = dir; return query; },
+        startAfter: (value) => { before = value; return query; },
         limit: (limit) => { count = limit; return query; },
         get: async () => ({ docs: [...store.entries()].filter(([key]) => key.startsWith(`${path}/`))
           .map(([, data]) => data).sort((a, b) => (a.draftRevision - b.draftRevision) * (direction === 'asc' ? 1 : -1))
-          .slice(0, count).map((data) => ({ data: () => structuredClone(data) })) }),
+          .filter(data => before === undefined || data.draftRevision < before).slice(0, count).map((data) => ({ data: () => structuredClone(data) })) }),
       };
       return query;
     },
@@ -37,6 +38,7 @@ describe('private draft history', () => {
     const history = await readProjectDraftHistory({ db: h.db, draftRef: ref, draft: after });
     expect(history.items.map((item) => item.draftRevision)).toEqual([8, 7]);
     expect(history.historyAvailableFromRevision).toBe(7);
+    expect(history.items[1].savedById).toBeNull(); expect(history.items[1].savedAt).toBeNull();
     expect(history.items[1].payload.totalActualCost).toBe('');
     expect(history.items[1].attachmentRefs[0].name).toBe('계약서.hwp');
   });
@@ -66,5 +68,15 @@ describe('private draft history', () => {
     const h = harness(Object.fromEntries(Array.from({ length: 30 }, (_, index) => [`${path}/${index + 3}`, draft(index + 3)])));
     const result = await readProjectDraftHistory({ db: h.db, draftRef: ref, draft: draft(32) });
     expect(result.items).toHaveLength(20); expect(result.items[0].draftRevision).toBe(32); expect(result.historyAvailableFromRevision).toBe(3);
+    expect(result.hasMore).toBe(true); expect(result.nextBeforeRevision).toBe(13);
+    const second = await readProjectDraftHistory({ db: h.db, draftRef: ref, draft: draft(32), beforeRevision: result.nextBeforeRevision });
+    expect(second.items.map(item => item.draftRevision)).toEqual([12,11,10,9,8,7,6,5,4,3]);
+    expect(second.hasMore).toBe(false); expect(second.nextBeforeRevision).toBeNull();
+    expect(new Set([...result.items, ...second.items].map(item => item.draftRevision)).size).toBe(30);
   });
+});
+
+it('rejects conflicting payload document metadata even when attachmentRefs are valid', async () => {
+ const ref = {documentKind:'contract',path:'owned/file',size:8,contentType:'application/pdf',attachmentId:'a'};
+ await expect(assertProjectDraftRestoreAttachments({source:{attachmentRefs:[ref],payload:{contractDocument:{...ref,size:99}}},fieldByKind:{contract:'contractDocument'},inspect:async()=>ref})).rejects.toMatchObject({code:'draft_history_attachment_unavailable'});
 });

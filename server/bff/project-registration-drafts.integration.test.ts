@@ -318,6 +318,31 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
   beforeEach(resetData, 60_000);
   afterAll(clearData, 60_000);
 
+  it('restores registration history through HTTP with real Firestore CAS and preserves canonical collections', async () => {
+    const projectsBefore = (await db.collection(`orgs/${tenantId}/projects`).get()).docs.map(doc => ({id:doc.id,...doc.data()}));
+    const requestsBefore = (await db.collection(`orgs/${tenantId}/project_requests`).get()).docs.map(doc => ({id:doc.id,...doc.data()}));
+    const created = await createDraft({key:'history-create',body:{payload:{name:'원본',totalActualCost:0,description:''}}});
+    expect(created.status).toBe(201);
+    const draftId = created.body.draft.draftId;
+    const headers = mutationHeaders(created,'history-save');
+    const saved = await api.patch(`/api/v1/project-registration-drafts/${draftId}`).set(headers).send({expectedDraftRevision:0,payload:{name:'현재 내용'}});
+    expect(saved.status).toBe(200);
+    const history = await api.get(`/api/v1/project-registration-drafts/${draftId}/history`).set(actorHeaders());
+    expect(history.status).toBe(200); expect(history.body.items.map((item:any)=>item.draftRevision)).toEqual([1,0]);
+    nowMs += 1000;
+    const body = {expectedDraftRevision:1,historyGeneration:history.body.historyGeneration,payload:{name:'위조'},savedById:'forged'};
+    const restored = await api.post(`/api/v1/project-registration-drafts/${draftId}/history/0/restore`).set({...headers,'idempotency-key':'history-restore'}).send(body);
+    expect(restored.status).toBe(200);
+    expect(restored.body.draft).toMatchObject({draftRevision:2,payload:{name:'원본',totalActualCost:0,description:''},savedById:'actor-a',savedByName:'actor-a',savedAt:new Date(nowMs).toISOString()});
+    expect((await api.get(`/api/v1/project-registration-drafts/${draftId}`).set(actorHeaders())).body.draft).toEqual(restored.body.draft);
+    const replay = await api.post(`/api/v1/project-registration-drafts/${draftId}/history/0/restore`).set({...headers,'idempotency-key':'history-restore'}).send(body);
+    expect(replay.status).toBe(200); expect(replay.headers['x-idempotency-replayed']).toBe('1');
+    const after = await api.get(`/api/v1/project-registration-drafts/${draftId}/history`).set(actorHeaders());
+    expect(after.body.items.map((item:any)=>item.draftRevision)).toEqual([2,1,0]); expect(after.body.items[2]).toEqual(history.body.items[1]);
+    expect((await db.collection(`orgs/${tenantId}/projects`).get()).docs.map(doc => ({id:doc.id,...doc.data()}))).toEqual(projectsBefore);
+    expect((await db.collection(`orgs/${tenantId}/project_requests`).get()).docs.map(doc => ({id:doc.id,...doc.data()}))).toEqual(requestsBefore);
+  });
+
   it('atomically creates exactly one private draft and lease and replays without extending expiry', async () => {
     const createBody = { payload: { name: 'Private only' }, stepIndex: 1 };
     const first = await createDraft({

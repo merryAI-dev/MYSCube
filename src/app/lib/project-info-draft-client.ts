@@ -221,9 +221,23 @@ export function createProjectInfoDraftClient(options: {
   const request = { tenantId: options.tenantId, actor };
 
   return {
-    async history() {
-      const response = await client.get<unknown>(`${path}/history`, { ...request, headers: { 'x-edit-session-id': sessionId } });
+    async history(beforeRevision?: number) {
+      const suffix = beforeRevision === undefined ? '' : `?beforeRevision=${revision(beforeRevision)}`;
+      const response = await client.get<unknown>(`${path}/history${suffix}`, { ...request, headers: { 'x-edit-session-id': sessionId } });
       return parseProjectDraftHistory(response.data);
+    },
+
+    async restoreHistory(
+      ownership: { leaseId: string; fence: number },
+      input: { revision: number; expectedDraftRevision: number; historyGeneration: string },
+      idempotencyKey: string,
+    ) {
+      const response = await client.post<unknown>(`${path}/history/${revision(input.revision)}/restore`, {
+        ...request,
+        headers: { ...ownershipHeaders(sessionId, ownership), 'Idempotency-Key': idempotencyKey },
+        body: { expectedDraftRevision: revision(input.expectedDraftRevision), historyGeneration: input.historyGeneration },
+      });
+      return parseDraftBody(response.data, projectId);
     },
 
     async get() {

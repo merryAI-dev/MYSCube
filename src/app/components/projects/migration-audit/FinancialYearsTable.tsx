@@ -1,6 +1,7 @@
 import { Fragment } from 'react';
+import { ProjectAnnualFinancialNotice } from '../ProjectAnnualFinancialNotice';
 import { submissionAmount, submissionRate, submissionConfirmation } from '../../../platform/project-submission-display';
-import type { Project } from '../../../data/types';
+import type { Project, ProjectRequestPayload } from '../../../data/types';
 
 type FinancialYearRow = NonNullable<Project['financialYears']>[number];
 
@@ -8,10 +9,10 @@ type FinancialYearRow = NonNullable<Project['financialYears']>[number];
  * 결재 문서의 연도별 계약/재무. 한 줄 문자열로 이으면 다년도 사업은 읽을 수 없어
  * 표 안의 표로 그린다. 입금 예정월은 금액 아래 작은 글씨로 붙인다.
  */
-export function FinancialYearsTable({ years, currency = 'KRW' }: { years?: FinancialYearRow[]; currency?: string }) {
+export function FinancialYearsTable({ years, currency = 'KRW', period }: { years?: FinancialYearRow[]; currency?: string; period?: Partial<Pick<ProjectRequestPayload, 'contractStart' | 'contractEnd' | 'contractEndUndecided'>> }) {
   const money = (value?: number, explicit?: boolean) => submissionAmount(value, currency, explicit);
   const rows = Array.isArray(years) ? years : [];
-  if (rows.length === 0) return <span className="text-slate-400">-</span>;
+  if (rows.length === 0) return <ProjectAnnualFinancialNotice years={rows} period={period} />;
   const paymentCell = (amount?: number, month?: string, explicit?: boolean) => (
     <div className="text-right">
       <p>{money(amount, explicit)}</p>
@@ -20,6 +21,7 @@ export function FinancialYearsTable({ years, currency = 'KRW' }: { years?: Finan
   );
   return (
     <div className="min-w-0">
+      <ProjectAnnualFinancialNotice years={rows} period={period} />
       <p className="mb-1 text-[10px] text-slate-500">표를 좌우로 이동하면 수익률과 재무 확인 상태까지 볼 수 있습니다.</p>
       <div className="overflow-x-auto">
       <table className="w-full min-w-[960px] border-collapse text-[11px] leading-5">

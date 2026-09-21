@@ -201,7 +201,7 @@ describe('ProjectMigrationAuditPage review flow', () => {
     expect(documentSource).not.toContain('최종 입금 재무주차');
     expect(documentSource).not.toContain('row.finalPaymentExpectedWeek');
     // 연도별 계약/재무는 한 줄 문자열 대신 표 안의 표(FinancialYearsTable)로 그린다.
-    expect(documentSource).toContain('<FinancialYearsTable years={financialYears} currency={reviewPayload?.currency} />');
+    expect(documentSource).toContain('<FinancialYearsTable years={financialYears} currency={reviewPayload?.currency} period={reviewPayload || undefined} />');
     expect(financialYearsTableSource).toContain("submissionConfirmation(row.isSettled, '완료', '미완료')");
     expect(financialYearsTableSource).toContain('advanceInterimBelow70Reason');
     expect(documentSource).toContain('label="등록 메모"');

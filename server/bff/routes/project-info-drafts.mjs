@@ -1,4 +1,4 @@
-import { prepareProjectDraftHistorySave, readProjectDraftHistory } from '../project-draft-history.mjs';
+import { prepareProjectDraftHistorySave, readProjectDraftHistory, readProjectDraftRestoreSource, assertProjectDraftRestoreAttachments } from '../project-draft-history.mjs';
 import { assertExistingProjectAttachment, isLegacyProjectAttachmentPath } from '../existing-project-attachment.mjs';
 import { randomUUID } from 'node:crypto';
 import {
@@ -206,6 +206,7 @@ function payloadWithoutAttachment(payload, documentKind, removedAttachments) {
 
 function draftContract(draft = {}) {
   return {
+    savedById: draft.savedById || null, savedByName: draft.savedByName || null, savedAt: draft.savedAt || null,
     projectId: readOptionalText(draft.resourceId),
     resourceType: RESOURCE_TYPE,
     resourceId: readOptionalText(draft.resourceId),
@@ -602,6 +603,7 @@ export function createProjectInfoDraftService({
       leaseId: ownership ? documentId(input?.leaseId, 'leaseId') : undefined,
       fence: ownership ? positiveFence(input?.fence) : undefined,
       actorDisplayName: readOptionalText(input?.actorDisplayName) || '사용자',
+      actorHistoryDisplayName: readOptionalText(input?.actorDisplayName),
       actorEmail: readOptionalText(input?.actorEmail),
       actorEmailEnc: readOptionalText(input?.actorEmailEnc) || undefined,
       requestId: readOptionalText(input?.requestId) || 'project-info-draft-request',
@@ -756,6 +758,7 @@ export function createProjectInfoDraftService({
             resourceId: current.projectId,
             draftRevision: 0,
             historyGeneration: randomUUID(),
+            savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp,
             baseCanonicalVersion: Number.isInteger(project.version) && project.version > 0 ? project.version : 1,
             // Frozen copy of the canonical values this draft started from, so a
             // later rebase can tell "the user changed it" from "someone else did".
@@ -888,7 +891,8 @@ export function createProjectInfoDraftService({
             submittedOutboxId: null,
             updatedAt: timestamp,
           });
-          const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef: registrationDraftRef, before: registrationDraft, after: restoredRegistrationDraft });
+          Object.assign(restoredRegistrationDraft, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+          const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef: registrationDraftRef, before: registrationDraft, after: restoredRegistrationDraft });
           await auditChainService.appendManyInTransaction(tx, [
             auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_WITHDRAW', 0, timestamp, {
               fence: current.fence,
@@ -951,7 +955,8 @@ export function createProjectInfoDraftService({
           updatedAt: timestamp,
         });
         assertDraftSize(restoredDraft);
-        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: restoredDraft });
+        Object.assign(restoredDraft, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef, before: draft, after: restoredDraft });
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_WITHDRAW', restoredDraft.draftRevision, timestamp, {
             fence: current.fence,
@@ -1047,7 +1052,8 @@ export function createProjectInfoDraftService({
           updatedAt: timestamp,
         });
         assertDraftSize(nextDraft);
-        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: nextDraft });
+        Object.assign(nextDraft, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef, before: draft, after: nextDraft });
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_REBASE', nextDraft.draftRevision, timestamp, {
             fence: current.fence,
@@ -1081,10 +1087,54 @@ export function createProjectInfoDraftService({
       });
     },
 
+    async restoreHistory(input) {
+      const current = context(input);
+      const fence = current.fence;
+      const expectedDraftRevision = Number(input?.expectedDraftRevision);
+      const sourceRevision = Number(input?.revision);
+      const historyGeneration = requiredText(input?.historyGeneration, 'historyGeneration');
+      if (!Number.isSafeInteger(expectedDraftRevision) || expectedDraftRevision < 0) throw createHttpError(400, 'expectedDraftRevision is invalid', 'draft_request_invalid');
+      const method = 'POST';
+      const path = `/api/v1/project-info-drafts/${current.projectId}/history/${sourceRevision}/restore`;
+      const fingerprint = buildRequestFingerprint({ method, path, body: { actorId: current.actorId, sessionId: current.sessionId, leaseId: current.leaseId, fence, expectedDraftRevision, historyGeneration } });
+      return db.runTransaction(async (tx) => {
+        const nowDate = clockDate(now); const timestamp = nowDate.toISOString();
+        const { actorRole, draftRef, draft, project } = await ownedDraft(tx, current);
+        const lock = await checkIdempotency(tx, current, fingerprint, nowDate);
+        if (lock.mode === 'replay') return { status: lock.status, body: lock.body, replayed: true };
+        const lockError = idempotencyError(lock); if (lockError) throw lockError;
+        assertActive(draft); await assertLease(tx, current, nowDate);
+        const revision = assertRevision(draft, expectedDraftRevision) + 1;
+        const source = await readProjectDraftRestoreSource({ db, tx, draftRef: draftRef, draft, historyGeneration, sourceRevision });
+        await assertProjectDraftRestoreAttachments({ source, fieldByKind: DOCUMENT_FIELD_BY_KIND, inspect: async (attachment) => {
+            const input = { tenantId: current.tenantId, projectId: current.projectId, path: attachment.path, attachment, existingAttachment: project[DOCUMENT_FIELD_BY_KIND[attachment.documentKind]] };
+            if (isLegacyProjectAttachmentPath(attachment.path, current.tenantId)) {
+              assertExistingProjectAttachment(input);
+              return draftStorageService.inspectExistingProjectAttachment(input);
+            }
+            const privatePrefix = `orgs/${current.tenantId}/project-registration-drafts/${current.draftDocumentId}/`;
+            if (attachment.path.startsWith(privatePrefix)) return draftStorageService.inspectDraftAttachment({ tenantId: current.tenantId, draftId: current.draftDocumentId, path: attachment.path });
+            const stored = await draftStorageService.inspectProjectRegistrationAttachment(input);
+            const published = readOptionalText(project[DOCUMENT_FIELD_BY_KIND[attachment.documentKind]]?.path) === attachment.path;
+            if (!published && attachment.inheritedFromProjectRequest !== true && stored.draftId !== current.draftDocumentId) throw new Error('attachment belongs to another draft');
+            return stored;
+        } });
+        const next = { ...draft, payload: source.payload, attachmentRefs: source.attachmentRefs, stepIndex: source.stepIndex, draftRevision: revision, updatedAt: timestamp };
+        assertDraftSize(next);
+        Object.assign(next, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef: draftRef, before: draft, after: next });
+        const body = { draft: draftContract(next) };
+        await auditChainService.appendManyInTransaction(tx, [auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_RESTORE', revision, timestamp, { fence, sourceRevision, historyGeneration })]);
+        saveHistory(); tx.set(draftRef, next);
+        completeIdempotency(tx, current, lock, { method, path, status: 200, body }, nowDate);
+        return { status: 200, body, replayed: false };
+      });
+    },
+
     async history(input) {
       const current = context(input, { ownership: false, idempotency: false });
       const { draftRef, draft } = await db.runTransaction((tx) => ownedDraft(tx, current));
-      return readProjectDraftHistory({ db, draftRef, draft });
+      return readProjectDraftHistory({ db, draftRef, draft, beforeRevision: input?.beforeRevision });
     },
 
     async readAttachment(input) {
@@ -1196,7 +1246,8 @@ export function createProjectInfoDraftService({
           updatedAt: timestamp,
         };
         assertDraftSize(next);
-        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: next });
+        Object.assign(next, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef, before: draft, after: next });
         const body = { draft: draftContract(next) };
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_SAVE', revision, timestamp, { fence: current.fence }),
@@ -1339,7 +1390,8 @@ export function createProjectInfoDraftService({
             updatedAt: timestamp,
           };
           assertDraftSize(next);
-          const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: next });
+          Object.assign(next, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+          const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef, before: draft, after: next });
           const body = { draft: draftContract(next), attachment };
           await auditChainService.appendManyInTransaction(tx, [
             auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_ATTACHMENT_ADD', revision, timestamp, {
@@ -1478,7 +1530,8 @@ export function createProjectInfoDraftService({
           updatedAt: timestamp,
         };
         assertDraftSize(next);
-        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: next });
+        Object.assign(next, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef, before: draft, after: next });
         const body = { draft: draftContract(next) };
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_ATTACHMENT_REMOVE', revision, timestamp, {
@@ -1637,7 +1690,8 @@ export function createProjectInfoDraftService({
           lease: { state: 'RELEASED', canEdit: false },
           outbox: { id: outboxEvent.id, status: outboxEvent.status || 'PENDING' },
         };
-        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef, before: draft, after: { ...draft, ...submittedDraft } });
+        Object.assign(submittedDraft, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef, before: draft, after: { ...draft, ...submittedDraft } });
         await auditChainService.appendManyInTransaction(tx, [
           auditEntry(current, actorRole, 'PROJECT_INFO_DRAFT_SUBMIT', revision, timestamp, {
             fence: current.fence,
@@ -1754,11 +1808,19 @@ export function mountProjectInfoDraftRoutes(app, {
     }));
   }));
 
+  app.post('/api/v1/project-info-drafts/:projectId/history/:revision/restore', asyncHandler(async (req, res) => {
+    assertActorRoleAllowed(req, PROJECT_REQUEST_ROUTE_ROLES, 'restore project draft history');
+    sendOutcome(res, await projectInfoDraftService.restoreHistory({
+      ...await routeContext(req, piiProtector), ...routeOwnership(req), projectId: routeProjectId(req),
+      revision: req.params?.revision, expectedDraftRevision: req.body?.expectedDraftRevision, historyGeneration: req.body?.historyGeneration,
+    }));
+  }));
+
   app.get('/api/v1/project-info-drafts/:projectId/history', asyncHandler(async (req, res) => {
     assertActorRoleAllowed(req, PROJECT_REQUEST_ROUTE_ROLES, 'read project information draft history');
     res.set('cache-control', 'private, no-store');
     res.json(await projectInfoDraftService.history({
-      ...await routeContext(req, piiProtector), projectId: routeProjectId(req),
+      ...await routeContext(req, piiProtector), projectId: routeProjectId(req), beforeRevision: req.query?.beforeRevision,
     }));
   }));
 

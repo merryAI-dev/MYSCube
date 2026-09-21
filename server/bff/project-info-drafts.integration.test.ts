@@ -209,6 +209,35 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
   beforeEach(reset, 60_000);
   afterAll(reset, 60_000);
 
+  it('restores immutable history through HTTP and real Firestore without changing canonical or approval records', async () => {
+    const projectRef = db.doc(`orgs/${tenantId}/projects/project-a`);
+    const canonicalBefore = (await projectRef.get()).data();
+    const requestsBefore = (await db.collection(`orgs/${tenantId}/project_requests`).get()).docs.map(doc => ({id:doc.id,...doc.data()}));
+    const acquired = await acquire('history-lease');
+    const headers = mutationHeaders(acquired.body, 'history-open');
+    expect((await api.post('/api/v1/project-info-drafts/project-a/open').set(headers).send({})).status).toBe(200);
+    const original = { name:'  보존 원문  ', totalActualCost:0, financialInputFlags:{totalActualCost:true}, description:'' };
+    const first = await api.patch('/api/v1/project-info-drafts/project-a').set({...headers,'idempotency-key':'history-first'}).send({expectedDraftRevision:0,payload:original});
+    expect(first.status).toBe(200);
+    nowMs += 1000;
+    expect((await api.patch('/api/v1/project-info-drafts/project-a').set({...headers,'idempotency-key':'history-second'}).send({expectedDraftRevision:1,payload:{name:'새 내용'}})).status).toBe(200);
+    const history = await api.get('/api/v1/project-info-drafts/project-a/history').set(actorHeaders());
+    expect(history.status).toBe(200); expect(history.body.items.map((item:any)=>item.draftRevision)).toEqual([2,1,0]);
+    nowMs += 1000;
+    const body = {expectedDraftRevision:2,historyGeneration:history.body.historyGeneration,payload:{name:'위조 내용'},savedById:'forged',savedAt:'1900-01-01'};
+    const restored = await api.post('/api/v1/project-info-drafts/project-a/history/1/restore').set({...headers,'idempotency-key':'history-restore'}).send(body);
+    expect(restored.status).toBe(200);
+    expect(restored.body.draft).toMatchObject({draftRevision:3,payload:original,savedById:'actor-a',savedByName:'actor-a',savedAt:new Date(nowMs).toISOString()});
+    const current = await api.get('/api/v1/project-info-drafts/project-a').set(actorHeaders());
+    expect(current.body.draft).toEqual(restored.body.draft);
+    const replay = await api.post('/api/v1/project-info-drafts/project-a/history/1/restore').set({...headers,'idempotency-key':'history-restore'}).send(body);
+    expect(replay.status).toBe(200); expect(replay.headers['x-idempotency-replayed']).toBe('1');
+    const after = await api.get('/api/v1/project-info-drafts/project-a/history').set(actorHeaders());
+    expect(after.body.items.map((item:any)=>item.draftRevision)).toEqual([3,2,1,0]); expect(after.body.items[2]).toEqual(history.body.items[1]);
+    expect((await projectRef.get()).data()).toEqual(canonicalBefore);
+    expect((await db.collection(`orgs/${tenantId}/project_requests`).get()).docs.map(doc => ({id:doc.id,...doc.data()}))).toEqual(requestsBefore);
+  });
+
   it('keeps temporary data owner-only and atomically submits only the final change request', async () => {
     const acquired = await acquire();
     expect(acquired.status).toBe(200);

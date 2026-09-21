@@ -1,7 +1,8 @@
 import { projectSubmissionCompletenessIssues } from '../../platform/project-submission-completeness.mjs';
 import { ProjectSubmissionResponses } from './ProjectSubmissionResponses';
-import { submissionAmountKnown, submissionAmountTotal, submissionFinancialYears, submissionAmount, submissionPaymentPlan, submissionAdvanceRatio, submissionRate, submissionContractWarning } from '../../platform/project-submission-display';
+import { submissionAnnualRate, submissionAmountKnown, submissionAmountTotal, submissionFinancialYears, submissionAmount, submissionPaymentPlan, submissionAdvanceRatio, submissionRate, submissionContractWarning } from '../../platform/project-submission-display';
 import { FinancialYearsTable } from './migration-audit/FinancialYearsTable';
+import { ProjectAnnualFinancialNotice } from './ProjectAnnualFinancialNotice';
 import { ProjectAmountInput } from './ProjectAmountInput';
 import { aggregateProjectFinancialInputFlags, updateProjectFinancialYearAmount } from '../../platform/project-financial-year-input';
 import { projectEffectivePaymentPlan, hasMultiYearProjectContract, projectPaymentIssues, projectParticipationPeriodWarnings, projectContractEndYear } from '../../platform/project-input-policy.mjs';
@@ -28,7 +29,7 @@ import {
   CircleCheck,
   Clock3,
 } from 'lucide-react';
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useImperativeHandle, type Ref, type ChangeEvent, type ReactNode } from 'react';
 import { useAuth } from '../../data/auth-store';
 import { useFirebase } from '../../lib/firebase-context';
 import { PlatformApiError } from '../../platform/api-client';
@@ -200,7 +201,12 @@ export interface ProjectEditorAction {
   disabled?: boolean;
 }
 
+export interface ProjectEditorWizardHandle {
+  withPreservedDraft<T>(operation: () => Promise<T>): Promise<T>;
+}
+
 interface ProjectEditorWizardProps {
+  editorRef?: Ref<ProjectEditorWizardHandle>;
   mode: ProjectEditorMode;
   initialDraft: ProjectEditorDraft;
   initialStepIndex?: number;
@@ -632,6 +638,7 @@ function ProjectComputedValue({ value, numeric = true }: { value: string; numeri
 }
 
 export function ProjectEditorWizard({
+  editorRef,
   mode,
   initialDraft,
   initialStepIndex = 0,
@@ -868,6 +875,7 @@ export function ProjectEditorWizard({
   const persistAutosaveSnapshot = useCallback(async (
     nextDraft: ProjectEditorDraft,
     nextStepIndex: number,
+    forceVersion = false,
   ) => {
     // 재시도 대기 여부는 렌더 시점 값이 아니라 ref 를 즉석에서 본다 - 나가기 직전에
     // 대기 파일을 버린 경우에도 임시저장이 진행돼야 한다.
@@ -895,7 +903,7 @@ export function ProjectEditorWizard({
     try { writeStoredProjectEditorDraft(autosave.key, storedDraft); } catch { /* Remote saving remains available when local storage is full. */ }
     const save = async () => {
       if (submittedRef.current || invalidAmountsRef.current) return false;
-      if (savedSnapshotRef.current === snapshot) return true;
+      if (!forceVersion && savedSnapshotRef.current === snapshot) return true;
       setAutosaveState('saving');
       try {
         await autosave.onSave?.(storedDraft.draft, nextStepIndex);
@@ -922,6 +930,26 @@ export function ProjectEditorWizard({
     saveQueueRef.current = pending;
     return pending;
   }, [autosave?.disabled, autosave?.key, autosave?.onSave, draftKey, readOnly, restoreCandidate, uploadInProgress]);
+
+  useImperativeHandle(editorRef, () => ({
+    async withPreservedDraft<T,>(operation: () => Promise<T>): Promise<T> {
+      if (submitInFlightRef.current || exitInFlightRef.current || readOnly) throw new Error('현재 작업이 끝난 뒤 버전을 불러와 주세요.');
+      if (uploadInProgress || hasPendingRetryFile) throw new Error('첨부파일 처리를 완료한 뒤 버전을 불러와 주세요.');
+      submitInFlightRef.current = true;
+      setSubmitting(true);
+      try {
+        if (!await persistAutosaveSnapshot(draftRef.current, stepIndex, true)) {
+          throw new Error(autosaveErrorRef.current || '현재 입력을 보관하지 못했습니다. 버전을 불러오지 않았으며 입력은 유지됩니다.');
+        }
+        const result = await operation();
+        if (autosave?.key) removeStoredProjectEditorDraft(autosave.key);
+        return result;
+      } finally {
+        submitInFlightRef.current = false;
+        setSubmitting(false);
+      }
+    },
+  }), [autosave?.key, hasPendingRetryFile, persistAutosaveSnapshot, readOnly, stepIndex, uploadInProgress]);
 
   const saveDraftAndRelease = useCallback(async () => {
     if (submitInFlightRef.current) return false;
@@ -1072,7 +1100,7 @@ export function ProjectEditorWizard({
       toast.error('첨부파일 처리를 완료한 뒤 임시저장해 주세요.');
       return;
     }
-    const saved = await persistAutosaveSnapshot(draft, stepIndex);
+    const saved = await persistAutosaveSnapshot(draft, stepIndex, true);
     if (saved) toast.success('임시저장되었습니다.');
     else toast.error(`임시저장에 실패했습니다.${autosaveErrorRef.current ? ` (${autosaveErrorRef.current})` : ' 잠시 후 다시 시도해 주세요.'}`);
   };
@@ -2389,6 +2417,7 @@ export function ProjectEditorWizard({
             </SelectContent>
           </Select>
         </ProjectFormRow>
+        <ProjectAnnualFinancialNotice years={draft.financialYears} period={draft} />
         {outsideFinancialYears.length > 0 && (
           <div role="alert" className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm">
             <p>계약기간 밖인 {outsideFinancialYears.map((row) => `${row.year}년`).join(', ')} 재무 입력을 보관하고 있습니다. 계약기간을 확인하거나 제외 연도를 정리한 뒤 최종 저장해 주세요.</p>
@@ -2458,7 +2487,7 @@ export function ProjectEditorWizard({
                   </Fragment>
                 ))}
                 <td className={cn('px-3 py-2.5 text-right font-semibold text-slate-900', FORM_NUMERIC_VALUE_CLASS)}>
-                  {submissionRate(draft.totalRevenueAmount, draft.contractAmount, financialInputFlags)}
+                  {submissionAnnualRate(draft.financialYears, draft)}
                 </td>
               </tr>
             </tbody>
@@ -2680,7 +2709,7 @@ export function ProjectEditorWizard({
         */}
         {annualTotalsOwnAmounts ? null : (
           <ProjectFormRow label="총수익률" note="총수익 / 계약금액">
-            <ProjectComputedValue value={submissionRate(draft.totalRevenueAmount, draft.contractAmount, financialInputFlags)} />
+            <ProjectComputedValue value={submissionAnnualRate(draft.financialYears, draft)} />
           </ProjectFormRow>
         )}
 
@@ -2790,9 +2819,9 @@ export function ProjectEditorWizard({
           </Select>
         </ProjectFormRow>
       )}
-        <ProjectFormRow label="사업비 입력 방식" hints={['현재 적용된 설정입니다. 이 화면에서는 변경하지 않습니다.']}>
+        {mode !== 'admin' ? <ProjectFormRow label="사업비 입력 방식" hints={['현재 적용된 설정입니다. 이 화면에서는 변경하지 않습니다.']}>
           <span className={FORM_VALUE_CLASS}>{PROJECT_FUND_INPUT_MODE_LABELS[draft.fundInputMode]}</span>
-        </ProjectFormRow>
+        </ProjectFormRow> : null}
         {settlementDetailsEnabled ? (
           <>
             <ProjectFormRow label="통장 유형">
@@ -3384,13 +3413,13 @@ export function ProjectEditorWizard({
             <ReviewRow label="기간" value={`${draft.contractStart || '-'} ~ ${draft.contractEndUndecided ? '종료 기간 없음' : draft.contractEnd || '-'}`} />
             {submissionContractWarning(draft) ? <p role="status" className={`mb-3 rounded border border-amber-300 bg-amber-50 p-3 text-amber-900 ${FORM_HINT_CLASS}`}>{submissionContractWarning(draft)}</p> : null}
             <ReviewRow label="통화" value={PROJECT_CURRENCY_LABELS[draft.currency]} />
-            <ReviewRow label="사업비 입력 방식" value={PROJECT_FUND_INPUT_MODE_LABELS[draft.fundInputMode]} />
+            {mode !== 'admin' ? <ReviewRow label="사업비 입력 방식" value={PROJECT_FUND_INPUT_MODE_LABELS[draft.fundInputMode]} /> : null}
             <ReviewRow label="계약금액" value={submissionAmount(draft.contractAmount, draft.currency, financialInputFlags.contractAmount)} />
             <ReviewRow label="총매출부가세" value={submissionAmount(draft.salesVatAmount, draft.currency, financialInputFlags.salesVatAmount)} />
             <ReviewRow label="총수익" value={submissionAmount(draft.totalRevenueAmount, draft.currency, financialInputFlags.totalRevenueAmount)} />
             <ReviewRow label="총실비(원가)" value={submissionAmount(draft.totalActualCost, draft.currency, financialInputFlags.totalActualCost)} />
             <ReviewRow label="총지원금" value={submissionAmount(draft.supportAmount, draft.currency, financialInputFlags.supportAmount)} />
-            <ReviewRow label="총수익률" value={submissionRate(draft.totalRevenueAmount, draft.contractAmount, financialInputFlags)} />
+            <ReviewRow label="총수익률" value={submissionAnnualRate(draft.financialYears, draft)} />
             <ReviewRow label={usesRegistrationV2 ? '사업유형' : '정산 유형'} value={SETTLEMENT_TYPE_LABELS[draft.settlementType]} />
             {usesRegistrationV2 && hasMultiYearContract ? (
               <ReviewRow label="정산 기준" value={REGISTRATION_V2_BASIS_LABELS[draft.basis as Exclude<Basis, '기타'>]} />
@@ -3410,7 +3439,7 @@ export function ProjectEditorWizard({
                 <ReviewRow
                   label="연도별 재무"
                   stacked
-                  value={<FinancialYearsTable years={submissionFinancialYears(draft)} currency={draft.currency} />}
+                  value={<FinancialYearsTable years={submissionFinancialYears(draft)} currency={draft.currency} period={draft} />}
                 />
                 <ReviewRow
                   label="등록 제출서류 7종"

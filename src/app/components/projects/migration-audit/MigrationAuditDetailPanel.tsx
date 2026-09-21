@@ -1,4 +1,4 @@
-import { submissionAmount, submissionFinancialYears, submissionRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
+import { submissionAmount, submissionFinancialYears, submissionAnnualRate, submittedConfirmationLines, submissionContractWarning } from '../../../platform/project-submission-display';
 import {
   CheckCircle2,
   FileText,
@@ -195,6 +195,9 @@ export function MigrationAuditDetailPanel({
   }
 
   const dossier = buildMigrationReviewDossier(record.project, record.request);
+  const visibleChanges = dossier.changes.filter((change) => change.key !== 'fundInputMode');
+  const visibleSubmittedFields = dossier.submittedFields.filter((field) => field.key !== 'fundInputMode');
+  const missingSubmittedFields = visibleSubmittedFields.filter((field) => field.missing).map((field) => field.label);
   const actionState = describeMigrationAuditActionState(record);
   const isPmPortalProject = isMigrationAuditPmRegistration(record);
   const isChangeRequest = resolveProjectRequestKind(record.request) === 'CHANGE';
@@ -255,11 +258,11 @@ export function MigrationAuditDetailPanel({
         </div>
 
         <div className="flex-1 space-y-6 overflow-y-auto px-6 py-6">
-          {dossier.missingSubmittedFields.length > 0 ? (
+          {missingSubmittedFields.length > 0 ? (
             <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
-              <p className="text-[12px] font-semibold text-rose-900">작성 누락 항목 {dossier.missingSubmittedFields.length}건</p>
+              <p className="text-[12px] font-semibold text-rose-900">작성 누락 항목 {missingSubmittedFields.length}건</p>
               <p className="mt-1 text-[12px] leading-6 text-rose-800">
-                {dossier.missingSubmittedFields.join(' · ')}
+                {missingSubmittedFields.join(' · ')}
               </p>
             </div>
           ) : null}
@@ -280,14 +283,14 @@ export function MigrationAuditDetailPanel({
             />
           </ReviewSection>
 
-          {dossier.changes.length > 0 ? (
+          {visibleChanges.length > 0 ? (
             <ReviewSection
               eyebrow="PM 재제출 시 변경 사항"
               title="이전 | 수정사항"
               description="PM이 다시 제출하면서 바꾼 항목을 이전 값과 나란히 봅니다."
             >
               <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-                {dossier.changes.map((change) => (
+                {visibleChanges.map((change) => (
                   <ChangeRow
                     key={`${change.key}-${change.before}-${change.after}`}
                     changeKey={change.key}
@@ -310,14 +313,13 @@ export function MigrationAuditDetailPanel({
               items={[
                 { label: '제출 당시 프로젝트 상태', value: reviewPayload?.status ? PROJECT_STATUS_LABELS[reviewPayload.status] : '기록 없음' },
                 { label: '사업관리 폴더', value: reviewPayload?.businessManagementGoogleFolderLink || '미입력', wide: true },
-                { label: '총수익률', value: submissionRate(reviewPayload?.totalRevenueAmount, reviewPayload?.contractAmount, reviewPayload?.financialInputFlags) },
+                { label: '총수익률', value: submissionAnnualRate(financialYears, reviewPayload || undefined) },
                 { label: '프로젝트 유형', value: dossier.contract.projectTypeLabel },
                 { label: '계약 기간', value: dossier.contract.periodLabel },
                 { label: '계약서 유형', value: dossier.contract.contractType },
                 { label: '정산 유형', value: dossier.contract.settlementTypeLabel },
                 { label: '정산 기준', value: dossier.contract.basisLabel },
                 { label: '통장 유형', value: dossier.contract.accountTypeLabel },
-                { label: '사업비 입력 방식', value: dossier.contract.fundInputModeLabel },
                 { label: '계약금액', value: dossier.budget.contractAmountLabel },
                 { label: '총매출부가세', value: dossier.budget.salesVatAmountLabel },
                 { label: '총수익', value: dossier.budget.totalRevenueAmountLabel },
@@ -337,7 +339,7 @@ export function MigrationAuditDetailPanel({
             <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
               <p className="text-[11px] font-medium text-slate-500">연도별 계약/재무</p>
               <div className="mt-2">
-                <FinancialYearsTable years={financialYears} currency={reviewPayload?.currency} />
+                <FinancialYearsTable years={financialYears} currency={reviewPayload?.currency} period={reviewPayload || undefined} />
               </div>
             </div>
           </ReviewSection>
@@ -393,7 +395,7 @@ export function MigrationAuditDetailPanel({
             title="등록·수정 작성값 전체"
             description="승인 판단은 아래 요청 문서 원문을 기준으로 합니다. 비어 있는 필드도 누락하지 않고 표시합니다."
           >
-            <ReviewFactGrid items={dossier.submittedFields} />
+            <ReviewFactGrid items={visibleSubmittedFields} />
           </ReviewSection>
 
           <ReviewSection
