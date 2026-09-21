@@ -13,11 +13,9 @@ describe('route lazy loading safety', () => {
   it('registers the mobile PWA entry route separately from the desktop root', () => {
     expect(routesSource).toContain("const MobileEntryPage = lazyRoute(() => import('./components/pwa/MobileEntryPage'), 'MobileEntryPage')");
     expect(routesSource).toContain("{ path: '/mobile-entry', element: <S C={MobileEntryPage} /> }");
-    expect(routesSource).toContain('function MobileAwareAdminHome()');
-    expect(routesSource).toContain('shouldUseBusinessCardMobileEntry');
-    expect(routesSource).toContain('{ index: true, element: <MobileAwareAdminHome /> }');
-    expect(routesSource).toContain('? <S C={BusinessCardLabPage} />');
-    expect(routesSource).not.toContain('<Navigate to={BUSINESS_CARD_MOBILE_ENTRY_PATH} replace />');
+    expect(routesSource).toContain('{ index: true, element: <S C={FeatureSearchPage} /> }');
+    expect(routesSource).not.toContain('shouldUseBusinessCardMobileEntry');
+    expect(routesSource).not.toContain('MobileAwareAdminHome');
   });
 
   it('keeps /portal on the project selection surface without a route-level redirect', () => {

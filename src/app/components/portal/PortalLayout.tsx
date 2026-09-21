@@ -18,7 +18,6 @@ import {
   Bell,
   UserCircle2,
   User,
-  UserRoundCheck,
   type LucideIcon,
 } from 'lucide-react';
 import { PortalProvider, usePortalStore } from '../../data/portal-store';
@@ -121,7 +120,6 @@ const NAV_SECTIONS: PortalNavSection[] = [
       { to: '/portal/edit-project', icon: Pencil, label: '프로젝트 수정' },
       { to: '/portal/project-checkout', icon: ClipboardCheck, label: '종료사업 체크아웃' },
       { to: '/portal/register-project', icon: Plus, label: '프로젝트 등록 요청', accent: true },
-      { to: '/portal/business-cards', icon: UserRoundCheck, label: '명함 DB' },
     ],
   },
 ];

@@ -5,7 +5,6 @@ import { PortalLayout } from './components/portal/PortalLayout';
 import { AdminRouteProviders } from './data/admin-route-providers';
 import { PortalRouteProviders } from './data/portal-route-providers';
 import { loadLazyRouteModule } from './platform/lazy-route';
-import { shouldUseBusinessCardMobileEntry } from './platform/mobile-entry';
 
 function RouteChunkFallback() {
   return (
@@ -91,7 +90,6 @@ const CareerProfilePage = lazyRoute(() => import('./components/portal/CareerProf
 const PortalTrainingPage = lazyRoute(() => import('./components/portal/PortalTrainingPage'), 'PortalTrainingPage');
 const PortalWeeklyExpensePage = lazyRoute(() => import('./components/portal/PortalWeeklyExpensePage'), 'PortalWeeklyExpensePage');
 const GuideChatPage = lazyRoute(() => import('./components/guide-chat/GuideChatPage'), 'GuideChatPage');
-const BusinessCardLabPage = lazyRoute(() => import('./components/business-cards/BusinessCardLabPage'), 'BusinessCardLabPage');
 
 // Suspense wrapper — layouts already provide visual chrome, so a minimal fallback suffices
 function S({ C }: { C: ComponentType }) {
@@ -110,18 +108,6 @@ function PortalRouteShell() {
   return <PortalRouteProviders><PortalLayout /></PortalRouteProviders>;
 }
 
-function MobileAwareAdminHome() {
-  const useBusinessCardEntry = shouldUseBusinessCardMobileEntry({
-    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
-    viewportWidth: typeof window !== 'undefined' ? window.innerWidth : undefined,
-    requestedPath: typeof window !== 'undefined' ? window.location.pathname : '/',
-  });
-
-  return useBusinessCardEntry
-    ? <S C={BusinessCardLabPage} />
-    : <S C={FeatureSearchPage} />;
-}
-
 export const router = createBrowserRouter([
   // ── Login ──
   { path: '/login', element: <S C={LoginPage} /> },
@@ -131,14 +117,15 @@ export const router = createBrowserRouter([
   { path: '/install/ios', element: <S C={PwaInstallPage} /> },
   { path: '/install/android', element: <S C={PwaInstallPage} /> },
   { path: '/mobile-entry', element: <S C={MobileEntryPage} /> },
+  { path: '/business-cards', element: <S C={MobileEntryPage} /> },
+  { path: '/portal/business-cards', element: <S C={MobileEntryPage} /> },
   // ── Admin (관리자) ──
   {
     path: '/',
     element: <AdminRouteShell />,
     children: [
-      { index: true, element: <MobileAwareAdminHome /> },
+      { index: true, element: <S C={FeatureSearchPage} /> },
       { path: 'dashboard', element: <S C={DashboardPage} /> },
-      { path: 'business-cards', element: <S C={BusinessCardLabPage} /> },
       // ── Company Board (전사 게시판) ──
       {
         path: 'board',
@@ -215,7 +202,6 @@ export const router = createBrowserRouter([
       { path: 'training', element: <S C={PortalTrainingPage} /> },
       { path: 'career-profile', element: <S C={CareerProfilePage} /> },
       { path: 'guide-chat', element: <S C={GuideChatPage} /> },
-      { path: 'business-cards', element: <S C={BusinessCardLabPage} /> },
     ],
   },
 ]);

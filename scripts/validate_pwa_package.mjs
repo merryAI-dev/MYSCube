@@ -73,7 +73,7 @@ for (const privatePrefix of ['/api/', '/api/v1/', '/business-card-imports/']) {
   requireText('public/sw.js', privatePrefix, `service worker private cache bypass ${privatePrefix}`);
 }
 
-for (const route of ["'/install'", "'/install/ios'", "'/install/android'", "'/mobile-entry'", "'business-cards'"]) {
+for (const route of ["'/install'", "'/install/ios'", "'/install/android'", "'/mobile-entry'"]) {
   requireText('src/app/routes.tsx', route, `PWA install route ${route}`);
 }
 

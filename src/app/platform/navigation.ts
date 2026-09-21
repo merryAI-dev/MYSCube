@@ -1,10 +1,5 @@
 import { normalizeWorkspaceId, type WorkspaceId } from '../data/member-workspace';
 import { canAccessAdminPath } from './admin-nav';
-import {
-  BUSINESS_CARD_MOBILE_ENTRY_PATH,
-  shouldUseBusinessCardMobileEntry,
-  type MobileEntryContext,
-} from './mobile-entry';
 
 export type HomePath = '/' | '/portal/project-select';
 
@@ -67,6 +62,7 @@ export function normalizeRequestedPath(value: unknown): string {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
   if (!trimmed.startsWith('/')) return '';
+  if (['/mobile-entry', '/business-cards', '/portal/business-cards'].includes(trimmed.split(/[?#]/)[0])) return '/';
   if (trimmed === '/login' || trimmed === '/workspace-select') return '';
   if (trimmed.startsWith('/portal/project-select?')) return '/portal/project-select';
   return trimmed;
@@ -115,15 +111,8 @@ export function resolveLoginSuccessPath(
   role: unknown,
   preferredWorkspace: WorkspaceId | unknown,
   requestedPath?: unknown,
-  mobileEntryContext?: MobileEntryContext,
 ): string {
   const normalizedPath = normalizeRequestedPath(requestedPath);
-  if (shouldUseBusinessCardMobileEntry({
-    ...mobileEntryContext,
-    requestedPath: normalizedPath || '/',
-  })) {
-    return BUSINESS_CARD_MOBILE_ENTRY_PATH;
-  }
   if (!normalizedPath || normalizedPath === '/') return resolveHomePath(role, preferredWorkspace);
   return resolvePortalEntryPath(role, preferredWorkspace, normalizedPath);
 }

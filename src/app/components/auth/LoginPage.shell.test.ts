@@ -10,7 +10,7 @@ describe('LoginPage post-login transition contract', () => {
     expect(source).toContain('POST_LOGIN_TRANSITION_MS');
     expect(source).toContain('PostLoginTransition');
     expect(source).toContain('시작 화면을 준비하고 있습니다');
-    expect(source).toContain('viewportWidth');
+    expect(source).not.toContain('viewportWidth');
     expect(source).toContain('animate-in fade-in-0 zoom-in-95');
     expect(source).not.toContain('if (isAuthenticated && user) return null;');
   });

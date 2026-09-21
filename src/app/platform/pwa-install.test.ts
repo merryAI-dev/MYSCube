@@ -36,9 +36,9 @@ describe('pwa-install', () => {
 
   it('returns platform-specific install copy', () => {
     expect(getPwaInstallTarget('ios').steps.join(' ')).toContain('홈 화면에 추가');
-    expect(getPwaInstallTarget('ios').steps.join(' ')).toContain('명함 DB가 먼저 열립니다');
+    expect(getPwaInstallTarget('ios').steps.join(' ')).toContain('서비스 홈 화면이 열립니다');
     expect(getPwaInstallTarget('android').summary).toContain('TWA');
-    expect(getPwaInstallTarget('desktop').steps.join(' ')).toContain('모바일에서는 명함 DB가 먼저 열리고');
+    expect(getPwaInstallTarget('desktop').steps.join(' ')).toContain('모바일과 데스크톱 모두 서비스 홈 화면');
   });
 
   it('reads standalone display mode', () => {

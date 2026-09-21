@@ -205,8 +205,8 @@ async function main() {
     verifyServiceWorker(baseUrl),
   ]);
 
-  const businessCardsResponse = await verifyHtmlEndpoint(baseUrl, '/business-cards');
-  verifyCameraPolicy(businessCardsResponse);
+  const homeResponse = await verifyHtmlEndpoint(baseUrl, '/');
+  verifyCameraPolicy(homeResponse);
 
   if (failures.length > 0) {
     for (const failure of failures) {

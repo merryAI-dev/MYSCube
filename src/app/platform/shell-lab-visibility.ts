@@ -13,7 +13,6 @@ export const SHELL_LAB_STORAGE_KEY = 'mysc-shell-lab-enabled';
 const SHELL_LAB_CHANGE_EVENT = 'mysc-shell-lab-enabled-change';
 
 export const ADMIN_LAB_ROUTES = [
-  '/business-cards',
   '/board',
   '/evidence',
   '/payroll',
@@ -34,7 +33,6 @@ export const ADMIN_ALWAYS_VISIBLE_SETTINGS_ROUTES = [
 ] as const;
 
 export const PORTAL_LAB_ROUTES = [
-  '/portal/business-cards',
   '/portal/board',
 ] as const;
 

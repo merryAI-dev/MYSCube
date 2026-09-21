@@ -68,7 +68,6 @@ function canonicalizeAdminPath(pathname: string): string | undefined {
     '/koica-personnel',
     '/personnel-changes',
     '/hr-announcements',
-    '/business-cards',
   ];
   for (const p of prefixes) {
     if (pathname === p || pathname.startsWith(p + '/')) return p;

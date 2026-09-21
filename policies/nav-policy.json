@@ -7,7 +7,6 @@
       "/dashboard",
       "/projects",
       "/board",
-      "/business-cards",
       "/cashflow",
       "/management-planning/project-codes",
       "/evidence",
@@ -26,7 +25,6 @@
       "/projects",
       "/projects/new",
       "/board",
-      "/business-cards",
       "/evidence",
       "/expense-management",
       "/approvals",
@@ -38,7 +36,6 @@
       "/dashboard",
       "/projects",
       "/board",
-      "/business-cards",
       "/approvals",
       "/claude-sdk-help",
       "/portal"

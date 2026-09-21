@@ -22,7 +22,6 @@ describe('shell LAB visibility', () => {
 
   it('hides admin LAB routes by default and reveals them when LAB is enabled', () => {
     expect(ADMIN_LAB_ROUTES).toEqual([
-      '/business-cards',
       '/board',
       '/evidence',
       '/payroll',
@@ -66,9 +65,6 @@ describe('shell LAB visibility', () => {
   });
 
   it('hides portal LAB routes by default and reveals them when LAB is enabled', () => {
-    expect(PORTAL_LAB_ROUTES).toEqual(['/portal/business-cards', '/portal/board']);
-    expect(shouldShowShellRoute('/portal/business-cards', 'portal', 'nav', { labEnabled: false })).toBe(false);
-    expect(shouldShowShellRoute('/portal/business-cards', 'portal', 'command', { labEnabled: true })).toBe(true);
     expect(shouldShowShellRoute('/portal/board', 'portal', 'nav', { labEnabled: false })).toBe(false);
     expect(shouldShowShellRoute('/portal/board', 'portal', 'command', { labEnabled: true })).toBe(true);
   });
