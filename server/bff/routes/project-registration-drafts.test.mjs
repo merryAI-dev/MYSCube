@@ -1,3 +1,4 @@
+import { completeProjectSubmissionFixture } from '../../../src/app/platform/project-submission-completeness.fixture.mjs';
 import { createProjectEditorDraft } from '../../../src/app/platform/project-editor';
 import { serializeProjectEditorPrivateDraft } from '../../../src/app/platform/project-editor-draft-persistence';
 import express from 'express';
@@ -46,13 +47,14 @@ function createDb(seed = {}) {
 
   function collection(collectionPath) {
     const prefix = `${collectionPath}/`;
-    const state = { filters: [], limit: Infinity };
+    const state = { filters: [], limit: Infinity, order: null };
     const query = {
       where(field, op, value) {
         if (op !== '==') throw new Error('mock collection only supports ==');
         state.filters.push([field, value]);
         return query;
       },
+      orderBy(field, direction) { state.order = { field, direction }; return query; },
       limit(count) {
         state.limit = count;
         return query;
@@ -62,6 +64,7 @@ function createDb(seed = {}) {
           .filter(([docPath]) => docPath.startsWith(prefix) && !docPath.slice(prefix.length).includes('/'))
           .map(([docPath, value]) => ({ id: docPath.slice(prefix.length), data: () => clone(value) }))
           .filter((docRef) => state.filters.every(([field, value]) => (docRef.data() || {})[field] === value))
+          .sort((a, b) => state.order ? (a.data()[state.order.field] - b.data()[state.order.field]) * (state.order.direction === 'desc' ? -1 : 1) : 0)
           .slice(0, state.limit);
         return { docs };
       },
@@ -205,6 +208,11 @@ function createHarness({
 
 function validRegistrationPayload(overrides = {}) {
   return {
+      submissionResponses: Object.fromEntries(Object.entries(completeProjectSubmissionFixture().submissionResponses).filter(([key]) => key !== 'paymentPlanDesc')),
+      staffing: completeProjectSubmissionFixture().staffing,
+      paymentPlanInputFlags: { contract: true, interim: true, final: true },
+      settlementSystem: 'NONE', laborSettlementBasis: 'INCLUDE_ACTUAL_SALARY', interestRefundPolicy: 'REFUND',
+    interestRefundPolicy: 'REFUND',
     name: 'Private project',
     officialContractName: 'Private project contract',
     type: 'D1',
@@ -218,8 +226,9 @@ function validRegistrationPayload(overrides = {}) {
     contractAmount: 100_000,
     salesVatAmount: 10_000,
     totalRevenueAmount: 40_000,
+    totalActualCost: 50_000,
     supportAmount: 0,
-    financialInputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true },
+    financialInputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true },
     contractStart: '2026-07-01',
     contractEnd: '2026-12-31',
     contractType: '계약서(날인)',
@@ -291,7 +300,7 @@ function validRegistrationV2Payload(overrides = {}) {
     contractAmount: 300_000,
     salesVatAmount: 30_000,
     totalRevenueAmount: 120_000,
-    totalActualCost: 75_000,
+    totalActualCost: 140_000,
     supportAmount: 10_000,
     financialInputFlags: {
       contractAmount: true,
@@ -302,8 +311,8 @@ function validRegistrationV2Payload(overrides = {}) {
     },
     financialYears: [
       // 계약서 대조 확인 체크는 걷어냈다 - confirmed:false 인 채로도 제출이 통과해야 한다.
-      { year: 2026, contractAmount: 100_000, salesVatAmount: 10_000, totalRevenueAmount: 40_000, totalActualCost: 25_000, supportAmount: 0, profitRate: 0.4, confirmed: false },
-      { year: 2027, contractAmount: 200_000, salesVatAmount: 20_000, totalRevenueAmount: 80_000, totalActualCost: 50_000, supportAmount: 10_000, profitRate: 0.4, confirmed: false },
+      { year: 2026, contractAmount: 100_000, salesVatAmount: 10_000, totalRevenueAmount: 40_000, totalActualCost: 50_000, supportAmount: 0, profitRate: 0.4, confirmed: false, inputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true }, paymentPlan: { contract: 50_000, interim: 0, final: 50_000 }, paymentPlanInputFlags: { contract: true, interim: true, final: true }, paymentExpectedMonths: { contract: '2026-07', final: '2026-12' }, advanceInterimBelow70Reason: '계약상 잔금 50%' },
+      { year: 2027, contractAmount: 200_000, salesVatAmount: 20_000, totalRevenueAmount: 80_000, totalActualCost: 90_000, supportAmount: 10_000, profitRate: 0.4, confirmed: false, inputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true }, paymentPlan: { contract: 100_000, interim: 0, final: 100_000 }, paymentPlanInputFlags: { contract: true, interim: true, final: true }, paymentExpectedMonths: { contract: '2027-07', final: '2027-12' }, advanceInterimBelow70Reason: '계약상 잔금 50%' },
     ],
     registrationConfirmations: {
       laborIncludesFourInsurance: true,
@@ -316,7 +325,7 @@ function validRegistrationV2Payload(overrides = {}) {
     registrationOptionalDocumentNotes: {
       proposalWordOriginal: '제안서 Word 원본은 고객사 제공 자료가 없어 제출 제외',
       proposalPptOriginal: '제안서 PPT 원본은 고객사 제공 자료가 없어 제출 제외',
-      presentationPptOriginal: '발표자료 PPT 원본은 해당 없음',
+      presentationPptOriginal: '발표자료 PPT 원본은 해당 없음', rfpRequestEvidence: '',
     },
     paymentExpectedMonths: {
       contract: '2026-07',
@@ -1123,10 +1132,10 @@ describe('project registration draft service', () => {
       contractAmount: offset === 0 ? 100_000 : 0,
       salesVatAmount: offset === 0 ? 10_000 : 0,
       totalRevenueAmount: offset === 0 ? 40_000 : 0,
-      totalActualCost: offset === 0 ? 25_000 : 0,
+      totalActualCost: offset === 0 ? 50_000 : 0,
       supportAmount: 0,
       profitRate: offset === 0 ? 0.4 : 0,
-      confirmed: false,
+      confirmed: false, inputFlags: completeProjectSubmissionFixture().financialInputFlags,
     }));
     const created = await service.create({
       ...base,
@@ -1135,7 +1144,7 @@ describe('project registration draft service', () => {
         contractEnd: '',
         contractEndUndecided: true,
         financialYears: years,
-        contractAmount: 100_000,
+        contractAmount: 100_000, salesVatAmount: 10_000, totalRevenueAmount: 40_000, totalActualCost: 50_000, supportAmount: 0,
       }),
     });
     addRequiredRegistrationAttachments(db, created.body.draft.draftId);
@@ -1187,12 +1196,12 @@ describe('project registration draft service', () => {
     })).rejects.toMatchObject({ code: 'project_registration_invalid' });
   });
 
-  it('allows optional RFP to be omitted when a legacy proposal exists', async () => {
+  it('allows RFP to be omitted only with an explicit non-applicable response', async () => {
     const { db, service, base } = createHarness();
     const created = await service.create({
       ...base,
       idempotencyKey: 'idem-v2-rfp-create',
-      payload: validRegistrationV2Payload(),
+      payload: validRegistrationV2Payload({ registrationOptionalDocumentNotes: { ...validRegistrationV2Payload().registrationOptionalDocumentNotes, rfpRequestEvidence: '해당 없음' } }),
     });
     addRequiredRegistrationAttachments(db, created.body.draft.draftId, [{
       attachmentId: 'proposal',
@@ -1536,39 +1545,18 @@ describe('project registration draft service', () => {
       .toMatchObject({ status: 'ACTIVE', attachmentRefs: [expect.objectContaining({ attachmentId: 'legacy-contract' })] });
   });
 
-  it('preserves current financial flag semantics by inferring positive stored amounts', async () => {
+  it('preserves raw missing flags in draft and rejects final submission instead of inferring amounts', async () => {
     const { db, service, base } = createHarness();
-    const payload = validRegistrationV2Payload({
-      type: 'I1',
-      supportAmount: 0,
-      financialYears: [
-        { year: 2026, contractAmount: 100_000, salesVatAmount: 10_000, totalRevenueAmount: 40_000, totalActualCost: 25_000, supportAmount: 0, profitRate: 0.4, confirmed: true },
-        { year: 2027, contractAmount: 200_000, salesVatAmount: 20_000, totalRevenueAmount: 80_000, totalActualCost: 50_000, supportAmount: 0, profitRate: 0.4, confirmed: true },
-      ],
-    });
+    const payload = validRegistrationV2Payload({ type: 'I1' });
     delete payload.financialInputFlags;
-    const created = await service.create({
-      ...base,
-      idempotencyKey: 'idem-submit-financial-flags-create',
-      payload,
-    });
+    const created = await service.create({ ...base, idempotencyKey: 'flags-create', payload });
     addRequiredRegistrationAttachments(db, created.body.draft.draftId);
-    await service.submit({
-      ...base,
-      idempotencyKey: 'idem-submit-financial-flags',
-      draftId: created.body.draft.draftId,
-      leaseId: created.body.lease.leaseId,
-      fence: created.body.lease.fence,
-      expectedDraftRevision: 0,
-    });
-
-    expect(db.documents.get('orgs/tenant-a/projects/project-1').financialInputFlags).toEqual({
-      contractAmount: true,
-      salesVatAmount: true,
-      totalRevenueAmount: true,
-      totalActualCost: true,
-      supportAmount: false,
-    });
+    await expect(service.submit({ ...base, idempotencyKey: 'flags-submit', draftId: created.body.draft.draftId,
+      leaseId: created.body.lease.leaseId, fence: created.body.lease.fence, expectedDraftRevision: 0,
+    })).rejects.toMatchObject({statusCode:422,code:'project_submission_incomplete'});
+    expect(db.documents.has('orgs/tenant-a/projects/project-1')).toBe(false);
+    const stored=db.documents.get(`orgs/tenant-a/projectRequestDrafts/${created.body.draft.draftId}`);
+    expect(stored.status).toBe('ACTIVE');expect(stored.payload.financialInputFlags).toBeUndefined();
   });
 
   it('rejects a reused PATCH key when two safe payloads differ', async () => {
@@ -1828,6 +1816,10 @@ describe('project registration draft service', () => {
       documentKind: 'contract',
     });
 
+    const history = await service.history({ ...base, draftId: created.body.draft.draftId });
+    expect(history.items.map((item) => item.draftRevision)).toEqual([3, 2, 1, 0]);
+    expect(history.items[0].attachmentRefs).toEqual([]);
+    expect(history.items[2].attachmentRefs[0].path).toBe(uploaded.body.attachment.path);
     expect(removed.body.draft).toMatchObject({
       draftRevision: 3,
       attachmentRefs: [],
@@ -2221,3 +2213,16 @@ describe('project registration draft routes', () => {
     expect(harness.auditChainService.appendManyInTransaction).not.toHaveBeenCalled();
   });
 });
+
+ it('keeps registration draft history across saves without exposing it to another owner', async () => {
+  const {db,service,base}=createHarness();
+  const created=await service.create({...base,idempotencyKey:'history-create',payload:{name:'  first  '}});
+  const owner={...base,draftId:created.body.draft.draftId,leaseId:created.body.lease.leaseId,fence:created.body.lease.fence};
+  await service.update({...owner,idempotencyKey:'history-b',expectedDraftRevision:0,payload:{name:'second'}});
+  const before=structuredClone([...db.documents.entries()]);
+  const history=await service.history(owner);
+  expect(history.items.map(v=>v.draftRevision)).toEqual([1,0]);
+  expect(history.items[1].payload.name).toBe('  first  ');
+  await expect(service.history({...owner,actorId:'actor-other'})).rejects.toMatchObject({statusCode:403});
+  expect([...db.documents.entries()]).toEqual(before);
+ });

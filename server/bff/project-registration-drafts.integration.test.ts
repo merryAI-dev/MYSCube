@@ -1,3 +1,4 @@
+import { completeProjectSubmissionFixture } from '../../src/app/platform/project-submission-completeness.fixture.mjs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { createBffApp } from './app.mjs';
@@ -136,6 +137,10 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
 
   function validPayload(overrides: Record<string, unknown> = {}) {
     return {
+      submissionResponses: completeProjectSubmissionFixture().submissionResponses,
+      staffing: completeProjectSubmissionFixture().staffing,
+      paymentPlanInputFlags: { contract: true, interim: true, final: true },
+      settlementSystem: 'NONE', laborSettlementBasis: 'INCLUDE_ACTUAL_SALARY', interestRefundPolicy: 'REFUND',
       name: 'Stage private project',
       officialContractName: 'Stage contract',
       type: 'D1',
@@ -148,14 +153,16 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
       contractAmount: 100_000,
       salesVatAmount: 10_000,
       totalRevenueAmount: 40_000,
+      totalActualCost: 50_000,
       supportAmount: 0,
-      financialInputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true },
+      financialInputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true },
       registrationRequirementsVersion: 2,
       financialYears: [{
         year: 2026,
         contractAmount: 100_000,
         salesVatAmount: 10_000,
         totalRevenueAmount: 40_000,
+        totalActualCost: 50_000, inputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true },
         supportAmount: 0,
         profitRate: 0.4,
         confirmed: true,
@@ -244,6 +251,7 @@ describeIfEmulator('private project registration drafts (Firestore emulator)', (
   }
 
   async function clearCollection(path: string) {
+    if (path.endsWith('/privateEditDrafts') || path.endsWith('/projectRequestDrafts')) { await db.recursiveDelete(db.collection(path)); return; }
     const snap = await db.collection(path).get();
     if (snap.empty) return;
     const batch = db.batch();

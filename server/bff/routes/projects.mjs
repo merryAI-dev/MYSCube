@@ -1,3 +1,4 @@
+import { projectSubmissionCompletenessIssues } from '../../../src/app/platform/project-submission-completeness.mjs';
 import { buildProjectReviewReadiness, mapProjectReviewReadinessError } from '../project-review-readiness.mjs';
 import { projectReviewVersionToken, assertProjectReviewVersion } from '../project-review-version.mjs';
 import { PROJECT_SUBMISSION_FIELDS, projectSubmissionOwnedPatch } from '../../../src/app/platform/project-submission-fields.mjs';
@@ -1166,6 +1167,8 @@ function normalizeRegistrationFinancialYears(value) {
       supportAmount: registrationAmount(row?.supportAmount),
       profitRate: contractAmount > 0 ? Math.min(1, totalRevenueAmount / contractAmount) : 0,
       confirmed: row?.confirmed === true,
+      ...(row?.inputFlags ? { inputFlags: registrationFinancialInputFlags(row.inputFlags) } : {}),
+      ...(row?.paymentPlanInputFlags ? { paymentPlanInputFlags: normalizePaymentPlanInputFlags(row.paymentPlanInputFlags) } : {}),
       ...(row?.paymentPlan && typeof row.paymentPlan === 'object' && !Array.isArray(row.paymentPlan) ? {
         paymentPlan: {
           contract: registrationAmount(row.paymentPlan.contract),
@@ -1205,7 +1208,7 @@ function normalizeRegistrationConfirmations(value) {
     laborIncludesRetirementPay: typeof source.laborIncludesRetirementPay === 'boolean'
       ? source.laborIncludesRetirementPay
       : null,
-    customerSettlementBasisConfirmed: source.customerSettlementBasisConfirmed === true,
+    customerSettlementBasisConfirmed: typeof source.customerSettlementBasisConfirmed === 'boolean' ? source.customerSettlementBasisConfirmed : null,
     modusignContractUsed: typeof source.modusignContractUsed === 'boolean' ? source.modusignContractUsed : null,
     originalContractSubmitted: typeof source.originalContractSubmitted === 'boolean'
       ? source.originalContractSubmitted
@@ -1221,6 +1224,7 @@ function normalizeRegistrationOptionalDocumentNotes(value) {
     proposalWordOriginal: readOptionalText(source.proposalWordOriginal),
     proposalPptOriginal: readOptionalText(source.proposalPptOriginal),
     presentationPptOriginal: readOptionalText(source.presentationPptOriginal),
+    rfpRequestEvidence: readOptionalText(source.rfpRequestEvidence),
   };
 }
 
@@ -1285,6 +1289,33 @@ function assertProjectCheckoutPayload(payload, attachmentRefs, currentProject) {
   }
   if (settlementApplicable && checkout.finalSettlementReportConfirmed && !hasDocument('finalSettlementReportDocument', 'final_settlement_report')) {
     invalidRegistration('Completed project final settlement report PDF is required when confirmed');
+  }
+}
+
+function normalizePaymentPlanInputFlags(value) {
+  return Object.fromEntries(['contract', 'interim', 'final'].map((field) => [field, value?.[field] === true]));
+}
+
+function normalizeSubmissionResponses(value) {
+  const fields = ['businessManagementGoogleFolderLink', 'paymentPlanDesc', 'staffing.lead', 'staffing.pm', 'staffing.operators', 'staffing.others', 'staffing.settlementSupport'];
+  return Object.fromEntries(fields.filter((field) => value?.[field] === 'NOT_APPLICABLE').map((field) => [field, 'NOT_APPLICABLE']));
+}
+
+function assertSubmissionCompleteness(payload, attachmentRefs) {
+  const documents = Object.fromEntries((Array.isArray(attachmentRefs) ? attachmentRefs : []).flatMap((attachment) => {
+    const field = REGISTRATION_REQUIREMENT_DOCUMENT_FIELDS[attachment?.documentKind];
+    return field && readOptionalText(attachment?.path) ? [[field, attachment]] : [];
+  }));
+  const issues = projectSubmissionCompletenessIssues({ ...payload, ...documents });
+  if (!issues.length) return;
+  const error = createHttpError(422, `최종 제출 전에 ${issues.length}개 항목을 확인해 주세요. ${issues.map((issue) => issue.message).join(' ')}`, 'project_submission_incomplete');
+  error.details = { requiredFields: issues };
+  throw error;
+}
+
+function assertInterestRefundSelectedForSubmission(payload) {
+  if (normalizeBasis(payload.basis) !== 'NONE' && !readOptionalText(payload.interestRefundPolicy)) {
+    invalidRegistration('계약/재무의 이자 반납 여부를 선택해 주세요. 아직 결정되지 않았다면 확인 필요를 선택할 수 있습니다.');
   }
 }
 
@@ -1614,7 +1645,9 @@ export function buildProjectRegistrationCanonicalDocuments({
   if (readOptionalText(payload.settlementType) === 'NONE') {
     invalidRegistration('Project registration settlementType NONE is not available in requirements version 2');
   }
+  assertInterestRefundSelectedForSubmission(payload);
   assertRegistrationV2Requirements(payload, requirementsAttachmentRefs);
+  assertSubmissionCompleteness(payload, requirementsAttachmentRefs);
   const ownerId = readOptionalText(payload.registeredById) || readOptionalText(payload.managerId) || actorId;
   const ownerName = readOptionalText(payload.registeredByName) || readOptionalText(payload.managerName) || actorName;
   const ownerEmail = readOptionalText(payload.registeredByEmail) || (ownerId === actorId ? readOptionalText(actorEmail) : '');
@@ -1653,6 +1686,8 @@ export function buildProjectRegistrationCanonicalDocuments({
       payload.registrationOptionalDocumentNotes,
     ),
     registrationConfirmations: normalizeRegistrationConfirmations(payload.registrationConfirmations),
+    submissionResponses: normalizeSubmissionResponses(payload.submissionResponses),
+    paymentPlanInputFlags: normalizePaymentPlanInputFlags(payload.paymentPlanInputFlags),
     checkout: normalizeProjectCheckout(payload.checkout, settlementDetailsEnabled),
     contractStart: readOptionalText(payload.contractStart),
     contractEnd: readOptionalText(payload.contractEnd),
@@ -1836,6 +1871,8 @@ export function buildProjectRequestPayloadFromProject(project, existingPayload =
     registrationRequirementsVersion: pickValue('registrationRequirementsVersion'),
     financialYears: normalizeRegistrationFinancialYears(pickValue('financialYears')),
     registrationConfirmations: pickValue('registrationConfirmations'),
+    submissionResponses: pickValue('submissionResponses'),
+    paymentPlanInputFlags: pickValue('paymentPlanInputFlags'),
     registrationOptionalDocumentNotes: pickValue('registrationOptionalDocumentNotes'),
     checkout: pickValue('checkout'),
     contractStart: pickText('contractStart'),
@@ -2002,6 +2039,8 @@ function buildProjectPatchFromChangeRequestPayloadInternal(payload = {}, current
     financialInputFlags: payload.financialInputFlags,
     registrationRequirementsVersion: registrationVersion,
     financialYears,
+    ...(Object.hasOwn(payload, 'submissionResponses') ? { submissionResponses: normalizeSubmissionResponses(payload.submissionResponses) } : {}),
+    ...(Object.hasOwn(payload, 'paymentPlanInputFlags') ? { paymentPlanInputFlags: normalizePaymentPlanInputFlags(payload.paymentPlanInputFlags) } : {}),
     ...(Object.hasOwn(payload, 'registrationConfirmations') ? {
       registrationConfirmations: normalizeRegistrationConfirmations(payload.registrationConfirmations),
     } : {}),
@@ -2283,6 +2322,7 @@ export function buildProjectInfoChangeSubmission({
   if (registrationRequirementsVersion(payload.registrationRequirementsVersion) !== 2) {
     invalidRegistration('Project information changes require registration requirements version 2');
   }
+  assertInterestRefundSelectedForSubmission(payload);
   assertTrustedProjectInfoDocumentReferences(
     project,
     payload,
@@ -2294,6 +2334,7 @@ export function buildProjectInfoChangeSubmission({
     trustedRegistrationRequirementAttachments(project, payload, attachmentRefs, trustedStoredDocuments),
     false,
   );
+  assertSubmissionCompleteness(payload, trustedRegistrationRequirementAttachments(project, payload, attachmentRefs, trustedStoredDocuments));
   const beforeSnapshot = projectInfoPayloadWithDocuments(
     buildProjectRequestPayloadFromProject(project, previousRequest?.payload),
     project,

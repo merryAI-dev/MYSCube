@@ -125,16 +125,23 @@ export interface MigrationReviewDossier {
   missingSubmittedFields: string[];
 }
 
-const REQUEST_FIELD_LABELS: Record<string, string> = {
+export const REQUEST_FIELD_LABELS: Record<string, string> = {
   name: '프로젝트명', officialContractName: '공식 계약명', type: '프로젝트 유형', status: '프로젝트 상태', phase: '프로젝트 단계',
   description: '상세 설명', clientOrg: '계약 대상', businessManagementGoogleFolderLink: '사업관리 구글 드라이브',
   participationSheetLink: '참여율 시트 링크', staffing: '실제 투입인력', department: '담당조직',
   currency: '통화', contractAmount: '계약금액', salesVatAmount: '매출부가세', totalRevenueAmount: '총수익',
   totalActualCost: '총실비(원가)', supportAmount: '총지원금', financialInputFlags: '재무 입력 상태', registrationRequirementsVersion: '등록 양식 버전',
+  submissionResponses: '해당 없음으로 확인한 항목', paymentPlanInputFlags: '입금액 입력 확인',
+  'staffing.lead': '총괄책임자', 'staffing.pm': '실무책임자', 'staffing.operators': '운영매니저', 'staffing.others': '기타 역할', 'staffing.settlementSupport': '정산지원',
   financialYears: '연도별 계약·재무', registrationConfirmations: '등록 확인 사항', registrationOptionalDocumentNotes: '선택 증빙 메모', checkout: '종료 확인 사항',
+  contractEndUndecided: '종료 기간 없음', inputFlags: '금액 입력 확인', year: '연도',
+  contract: '선금/계약금', interim: '중도금', final: '잔금', profitRate: '수익률',
+  lead: '총괄책임자', pm: '실무책임자', operators: '운영매니저', others: '기타 역할', settlementSupport: '정산지원',
+  laborIncludesFourInsurance: '인건비 4대보험 포함', laborIncludesRetirementPay: '인건비 퇴직금 포함', customerSettlementBasisConfirmed: '고객사 정산 기준 확인',
+  modusignUsed: '모두싸인 사용', originalContractSubmitted: '계약서 원본 제출', proposalWordOriginal: '제안서 원본', proposalPptOriginal: '제안서 링크', presentationPptOriginal: '발표자료 링크', rfpRequestEvidence: 'RFP·요청 근거',
   contractStart: '계약 시작일', contractEnd: '계약 종료일', contractType: '계약서 유형', settlementType: '정산 유형', basis: '정산 기준',
   accountType: '통장 유형', interestRefundPolicy: '이자 반납 여부', settlementSystem: '정산 시스템', settlementSystemOther: '기타 정산 시스템',
-  laborSettlementBasis: '인건비 정산 기준', fundInputMode: '자금 입력 방식', settlementSheetPolicy: '현금흐름 시트 정책', paymentPlan: '입금 분할',
+  laborSettlementBasis: '인건비 정산 기준', fundInputMode: '사업비 입력 방식', settlementSheetPolicy: '현금흐름 시트 정책', paymentPlan: '입금 분할',
   paymentExpectedMonths: '입금 예정월', finalPaymentExpectedWeek: '잔금 입금 예정 주차', laborTransferPlan: '인건비 이관 계획', advanceInterimBelow70Reason: '선금·중도금 70% 미만 사유',
   paymentPlanDesc: '입금 계획 메모', settlementGuide: '정산 가이드', finalPaymentNote: '잔금 메모', projectPurpose: '프로젝트 목적',
   registeredById: '등록자 ID', registeredByName: '등록자', registeredByEmail: '등록자 이메일', executiveApproverId: '조직장 ID', executiveApproverName: '조직장',
@@ -146,6 +153,7 @@ const REQUEST_FIELD_LABELS: Record<string, string> = {
 };
 
 function formatSubmittedValue(value: unknown): string {
+  if (value === 'NOT_APPLICABLE') return '해당 없음';
   if (value == null || value === '') return '미입력';
   if (typeof value === 'boolean') return value ? '예' : '아니오';
   if (typeof value === 'number') return Number.isFinite(value) ? value.toLocaleString('ko-KR') : '미입력';

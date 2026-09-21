@@ -614,6 +614,8 @@ export interface LedgerTemplate {
 }
 
 export interface ProjectFinancialYear {
+  inputFlags?: ProjectFinancialInputFlags;
+  paymentPlanInputFlags?: Record<'contract' | 'interim' | 'final', boolean>;
   year: number;
   contractAmount: number;
   salesVatAmount: number;
@@ -632,7 +634,7 @@ export interface ProjectFinancialYear {
 export interface ProjectRegistrationConfirmations {
   laborIncludesFourInsurance: boolean | null;
   laborIncludesRetirementPay: boolean | null;
-  customerSettlementBasisConfirmed: boolean;
+  customerSettlementBasisConfirmed: boolean | null;
   modusignContractUsed: boolean | null;
   originalContractSubmitted: boolean | null;
   proposalPptOriginal?: string;
@@ -640,6 +642,7 @@ export interface ProjectRegistrationConfirmations {
 }
 
 export interface ProjectRegistrationOptionalDocumentNotes {
+  rfpRequestEvidence?: string;
   proposalWordOriginal: string;
   proposalPptOriginal: string;
   presentationPptOriginal: string;
@@ -735,6 +738,8 @@ export interface Project {
   supportAmount?: number;
   salesVatAmount?: number;
   financialInputFlags?: ProjectFinancialInputFlags;
+  paymentPlanInputFlags?: Record<'contract' | 'interim' | 'final', boolean>;
+  submissionResponses?: Record<string, 'NOT_APPLICABLE'>;
   registrationRequirementsVersion?: 1 | 2;
   financialYears?: ProjectFinancialYear[];
   registrationConfirmations?: ProjectRegistrationConfirmations;
@@ -958,6 +963,8 @@ export interface ProjectRequestPayload {
   totalActualCost: number;
   supportAmount: number;
   financialInputFlags?: ProjectFinancialInputFlags;
+  paymentPlanInputFlags?: Record<'contract' | 'interim' | 'final', boolean>;
+  submissionResponses?: Record<string, 'NOT_APPLICABLE'>;
   registrationRequirementsVersion?: 1 | 2;
   financialYears?: ProjectFinancialYear[];
   registrationConfirmations?: ProjectRegistrationConfirmations;

@@ -1,3 +1,4 @@
+import { parseProjectDraftHistory } from './project-draft-history';
 import type { RequestActor } from '../platform/request-context';
 import { resolveProjectDocumentMimeType } from '../platform/project-contract-upload';
 import {
@@ -220,6 +221,11 @@ export function createProjectInfoDraftClient(options: {
   const request = { tenantId: options.tenantId, actor };
 
   return {
+    async history() {
+      const response = await client.get<unknown>(`${path}/history`, { ...request, headers: { 'x-edit-session-id': sessionId } });
+      return parseProjectDraftHistory(response.data);
+    },
+
     async get() {
       const response = await client.get<unknown>(path, {
         ...request,

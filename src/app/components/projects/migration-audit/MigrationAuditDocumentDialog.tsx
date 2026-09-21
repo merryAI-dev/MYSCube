@@ -100,10 +100,10 @@ const REVIEW_DOCUMENT_SLOTS: ReviewDocumentSlotDefinition[] = [
   { number: 1, label: '계약서 PDF', kinds: ['contract'] },
   { number: 2, label: '고객사 사업자등록증 PDF', kinds: ['customer_business_registration'] },
   { number: 3, label: '산출내역서(견적서) PDF', kinds: ['quote'] },
-  { number: 4, label: '제안서 Word 원본 (선택)', kinds: ['proposal_word_original'], optional: true, noteField: 'proposalWordOriginal' },
+  { number: 4, label: '제안서 Word 원본', kinds: ['proposal_word_original'], optional: true, noteField: 'proposalWordOriginal' },
   { number: 5, label: '제안서(구글드라이브 링크)', kinds: ['proposal_ppt_original'], optional: true, noteField: 'proposalPptOriginal' },
   { number: 6, label: '발표자료(구글드라이브 링크)', kinds: ['presentation_ppt_original'], optional: true, noteField: 'presentationPptOriginal' },
-  { number: 7, label: 'RFP/요청 메일 증빙 (선택)', kinds: ['rfp_request_evidence'], optional: true },
+  { number: 7, label: 'RFP/요청 메일 증빙', kinds: ['rfp_request_evidence'], optional: true, noteField: 'rfpRequestEvidence' },
 ];
 
 function isFileAttachment(value: unknown): value is FileAttachment {
@@ -357,7 +357,7 @@ export function MigrationAuditDocumentDialog({
             <DocumentCell label="계약금액" value={dossier.budget.contractAmountLabel} className="md:border-r md:border-slate-400" /><DocumentCell label="총매출부가세" value={dossier.budget.salesVatAmountLabel} />
             <DocumentCell label="총수익" value={dossier.budget.totalRevenueAmountLabel} className="md:border-r md:border-slate-400" /><DocumentCell label="총실비(원가)" value={submissionAmount(totalActualCost, reviewPayload?.currency, reviewPayload?.financialInputFlags?.totalActualCost)} />
             <DocumentCell label="총수익률" value={submissionRate(reviewPayload?.totalRevenueAmount, reviewPayload?.contractAmount, reviewPayload?.financialInputFlags)} /><DocumentCell label="총지원금" value={dossier.budget.supportAmountLabel} className="md:border-r md:border-slate-400" /><DocumentCell label="정산 시스템" value={dossier.contract.settlementSystemLabel} />
-            <DocumentCell label="등록 확인 사항" value={submittedConfirmationLines(reviewPayload?.registrationConfirmations)} className="md:col-span-2" /><DocumentCell label="인건비 정산 기준" value={dossier.contract.laborSettlementBasisLabel} className="md:border-r md:border-slate-400" /><DocumentCell label="이자 반납 여부" value={interestRefundPolicy ? INTEREST_REFUND_POLICY_LABELS[interestRefundPolicy] : '-'} />
+            {reviewPayload?.submissionResponses && Object.keys(reviewPayload.submissionResponses).length > 0 ? <DocumentCell label="해당 없음으로 확인한 항목" value={Object.entries(reviewPayload.submissionResponses).filter(([,v]) => v === 'NOT_APPLICABLE').map(([key]) => ({ businessManagementGoogleFolderLink: '사업관리 폴더', paymentPlanDesc: '기타 메모', 'staffing.lead': '총괄책임자', 'staffing.pm': '실무책임자', 'staffing.operators': '운영매니저', 'staffing.others': '기타 역할', 'staffing.settlementSupport': '정산지원' }[key] || key)).join(' · ')} className="md:col-span-2" /> : null}<DocumentCell label="등록 확인 사항" value={submittedConfirmationLines(reviewPayload?.registrationConfirmations)} className="md:col-span-2" /><DocumentCell label="인건비 정산 기준" value={dossier.contract.laborSettlementBasisLabel} className="md:border-r md:border-slate-400" /><DocumentCell label="이자 반납 여부" value={interestRefundPolicy ? INTEREST_REFUND_POLICY_LABELS[interestRefundPolicy] : '-'} />
             <DocumentCell label="선금·중도금·잔금" value={dossier.budget.paymentPlanSplitLabel} className="md:col-span-2" />
             {dossier.budget.finalPaymentExpectedWeek ? <DocumentCell label="잔금 입금 예정 주차" value={dossier.budget.finalPaymentExpectedWeek} className="md:col-span-2" /> : null}
             {dossier.budget.advanceInterimBelow70Reason ? <DocumentCell label="선금·중도금 70% 미만 사유" value={dossier.budget.advanceInterimBelow70Reason} className="md:col-span-2" /> : null}

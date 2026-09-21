@@ -318,7 +318,7 @@ export function MigrationAuditDetailPanel({
                 { label: '정산 유형', value: dossier.contract.settlementTypeLabel },
                 { label: '정산 기준', value: dossier.contract.basisLabel },
                 { label: '통장 유형', value: dossier.contract.accountTypeLabel },
-                { label: '자금 입력 방식', value: dossier.contract.fundInputModeLabel },
+                { label: '사업비 입력 방식', value: dossier.contract.fundInputModeLabel },
                 { label: '계약금액', value: dossier.budget.contractAmountLabel },
                 { label: '총매출부가세', value: dossier.budget.salesVatAmountLabel },
                 { label: '총수익', value: dossier.budget.totalRevenueAmountLabel },

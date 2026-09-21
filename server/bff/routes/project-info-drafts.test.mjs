@@ -1,3 +1,4 @@
+import { completeProjectSubmissionFixture } from '../../../src/app/platform/project-submission-completeness.fixture.mjs';
 import { createProjectEditorDraft } from '../../../src/app/platform/project-editor';
 import { serializeProjectEditorPrivateDraft } from '../../../src/app/platform/project-editor-draft-persistence';
 import express from 'express';
@@ -37,7 +38,7 @@ function createDb(seed = {}) {
   }
   function collection(collectionPath) {
     const prefix = `${collectionPath}/`;
-    const state = { filters: [], limit: Infinity };
+    const state = { filters: [], limit: Infinity, order: null };
     const query = {
       doc(id) { return doc(`${collectionPath}/${id}`); },
       where(field, op, value) {
@@ -45,6 +46,7 @@ function createDb(seed = {}) {
         state.filters.push([field, value]);
         return query;
       },
+      orderBy(field, direction) { state.order = { field, direction }; return query; },
       limit(count) {
         state.limit = count;
         return query;
@@ -54,6 +56,7 @@ function createDb(seed = {}) {
           .filter(([docPath]) => docPath.startsWith(prefix) && !docPath.slice(prefix.length).includes('/'))
           .map(([docPath, value]) => ({ id: docPath.slice(prefix.length), data: () => clone(value) }))
           .filter((docRef) => state.filters.every(([field, value]) => (docRef.data() || {})[field] === value))
+          .sort((a, b) => state.order ? (a.data()[state.order.field] - b.data()[state.order.field]) * (state.order.direction === 'desc' ? -1 : 1) : 0)
           .slice(0, state.limit);
         return { docs };
       },
@@ -87,6 +90,10 @@ function createDb(seed = {}) {
 
 function validPayload(overrides = {}) {
   return {
+      submissionResponses: Object.fromEntries(Object.entries(completeProjectSubmissionFixture().submissionResponses).filter(([key]) => key !== 'paymentPlanDesc')),
+      staffing: completeProjectSubmissionFixture().staffing,
+      paymentPlanInputFlags: { contract: true, interim: true, final: true },
+      settlementSystem: 'NONE', laborSettlementBasis: 'INCLUDE_ACTUAL_SALARY', interestRefundPolicy: 'REFUND',
     name: 'Project A',
     officialContractName: 'Project A contract',
     type: 'D1',
@@ -99,8 +106,9 @@ function validPayload(overrides = {}) {
     contractAmount: 100000,
     salesVatAmount: 10000,
     totalRevenueAmount: 40000,
+    totalActualCost: 50000,
     supportAmount: 0,
-    financialInputFlags: { contractAmount: true },
+    financialInputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true },
     contractStart: '2026-07-01',
     contractEnd: '2026-12-31',
     contractType: '계약서(날인)',
@@ -135,12 +143,14 @@ function validPayload(overrides = {}) {
 
 function validV2Payload(overrides = {}) {
   return validPayload({
+    interestRefundPolicy: 'REFUND',
     registrationRequirementsVersion: 2,
     financialYears: [{
       year: 2026,
       contractAmount: 100000,
       salesVatAmount: 10000,
       totalRevenueAmount: 40000,
+      totalActualCost: 50000, inputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true },
       supportAmount: 0,
       profitRate: 0.4,
       confirmed: true,
@@ -156,8 +166,8 @@ function validV2Payload(overrides = {}) {
     },
     registrationOptionalDocumentNotes: {
       proposalWordOriginal: '고객사 미제공',
-      proposalPptOriginal: '해당 없음',
-      presentationPptOriginal: '해당 없음',
+      proposalPptOriginal: '',
+      presentationPptOriginal: '',
     },
     teamMembersDetailed: [
       {
@@ -271,6 +281,20 @@ async function openedDraft(h, key = 'open-a') {
 }
 
 describe('project information private drafts', () => {
+  it('preserves an unselected interest policy in a private draft but blocks final submission', async () => {
+    const h = harness();
+    await openedDraft(h);
+    await h.service.update({ ...h.base, idempotencyKey: 'save-interest-empty', expectedDraftRevision: 0,
+      payload: validV2Payload({ interestRefundPolicy: '' }) });
+    const before = await h.service.get(h.base);
+    expect(before.draft.payload.interestRefundPolicy).toBe('');
+    await expect(h.service.submit({ ...h.base, idempotencyKey: 'submit-interest-empty', expectedDraftRevision: 1,
+      expectedVersion: 3 })).rejects.toMatchObject({ statusCode: 422, code: 'project_registration_invalid',
+      message: expect.stringContaining('이자 반납 여부') });
+    const after = await h.service.get(h.base);
+    expect(after.draft.payload).toEqual(before.draft.payload);
+  });
+
   it.each(['PENDING', 'REJECTED'])('retains a server-stored final report when reopening a %s request', async (status) => {
     const h = harness();
     const report = { path: 'orgs/tenant-a/project-registration-documents/project-a/final-report.pdf', name: '결과보고서.pdf' };
@@ -418,6 +442,10 @@ describe('project information private drafts', () => {
       documentKind: 'contract',
     });
 
+    const reopenedHistory = await h.service.history(h.base);
+    expect(reopenedHistory.items.map((item) => item.draftRevision)).toEqual([1, 0]);
+    expect(reopenedHistory.items[0].attachmentRefs).toEqual([]);
+    expect(reopenedHistory.items[1].attachmentRefs).toHaveLength(1);
     expect(removed.body.draft).toMatchObject({
       draftRevision: 1,
       attachmentRefs: [],
@@ -956,6 +984,10 @@ describe('project information private drafts', () => {
     expect(draft).toMatchObject({ status: 'SUBMITTED', draftRevision: 3, submittedProjectRequestId: 'change-project-a' });
     expect(draft).not.toHaveProperty('payload');
     expect(draft).not.toHaveProperty('attachmentRefs');
+    const history = await h.service.history(h.base);
+    expect(history.items.map((item) => item.draftRevision)).toEqual([3, 2, 1, 0]);
+    expect(history.items[0].payload.name).toBe('Submitted name');
+    expect(history.items[0].attachmentRefs[0].path).toBe(uploaded.body.attachment.path);
     expect(storedLease).toMatchObject({ state: 'RELEASED', releaseReason: 'FINAL_SUBMIT' });
     expect(h.db.documents.get('outbox/outbox-a')).toMatchObject({
       eventType: 'project.info.submitted',
@@ -991,6 +1023,7 @@ describe('project information private drafts', () => {
     await h.service.update({
       ...h.base, idempotencyKey: 'save-staffing', expectedDraftRevision: 0,
       payload: validV2Payload({
+        submissionResponses: { businessManagementGoogleFolderLink: 'NOT_APPLICABLE' },
         settlementSystem: 'OTHER',
         settlementSystemOther: '자체 정산 시트',
         staffing: {
@@ -999,7 +1032,6 @@ describe('project information private drafts', () => {
           operators: [{ personId: 'person-op', name: '이운영', nickname: '오퍼' }],
           others: [
             { role: '멘토', slot: { personId: 'person-mentor', name: '박하늘', nickname: '하늘' } },
-            { role: '', slot: { personId: 'person-drop', name: '역할없음', nickname: '' } },
           ],
           settlementSupport: '도담',
         },
@@ -1014,7 +1046,6 @@ describe('project information private drafts', () => {
       lead: { personId: 'person-lead' },
       pm: { personId: 'person-pm' },
       operators: [{ personId: 'person-op' }],
-      // 역할명이 빈 줄은 저장되지 않는다.
       others: [{ role: '멘토', slot: { personId: 'person-mentor' } }],
       settlementSupport: '도담',
     });
@@ -1476,6 +1507,7 @@ describe('project information private drafts', () => {
           contentType: 'application/pdf',
         },
         rfpRequestEvidenceDocument: null,
+        registrationOptionalDocumentNotes: { ...validV2Payload().registrationOptionalDocumentNotes, rfpRequestEvidence: '해당 없음' },
         performanceCertificateDocument: canonicalPerformanceCertificate,
       }),
     });
@@ -1491,6 +1523,7 @@ describe('project information private drafts', () => {
           contentType: 'application/pdf',
         },
         rfpRequestEvidenceDocument: null,
+        registrationOptionalDocumentNotes: { ...validV2Payload().registrationOptionalDocumentNotes, rfpRequestEvidence: '해당 없음' },
         status: 'COMPLETED',
         checkout: {
           finalPaymentReceived: true,
@@ -1555,6 +1588,7 @@ describe('project information private drafts', () => {
           path: 'orgs/tenant-a/project-registration-documents/project-a/proposal.pdf',
         },
         rfpRequestEvidenceDocument: null,
+        registrationOptionalDocumentNotes: { ...validV2Payload().registrationOptionalDocumentNotes, rfpRequestEvidence: '해당 없음' },
         performanceCertificateDocument: canonicalPerformanceCertificate,
       }),
     });
@@ -1568,6 +1602,7 @@ describe('project information private drafts', () => {
           path: 'orgs/tenant-a/project-registration-documents/project-a/proposal.pdf',
         },
         rfpRequestEvidenceDocument: null,
+        registrationOptionalDocumentNotes: { ...validV2Payload().registrationOptionalDocumentNotes, rfpRequestEvidence: '해당 없음' },
         status: 'COMPLETED',
         checkout: {
           finalPaymentReceived: true,
@@ -1804,6 +1839,10 @@ describe('project information private drafts', () => {
       documentKind: 'contract',
     });
 
+    const history = await h.service.history(h.base);
+    expect(history.items.map((item) => item.draftRevision)).toEqual([3, 2, 1, 0]);
+    expect(history.items[0].attachmentRefs).toEqual([]);
+    expect(history.items[2].attachmentRefs[0].path).toBe(uploaded.body.attachment.path);
     expect(removed.body.draft).toMatchObject({
       draftRevision: 3,
       attachmentRefs: [],
@@ -1956,6 +1995,7 @@ describe('project information private drafts', () => {
           path: 'orgs/tenant-a/project-registration-documents/project-a/proposal.pdf',
         },
         rfpRequestEvidenceDocument: null,
+        registrationOptionalDocumentNotes: { ...validV2Payload().registrationOptionalDocumentNotes, rfpRequestEvidence: '해당 없음' },
       }),
     });
     await openedDraft(h);
@@ -2003,6 +2043,7 @@ describe('project information private drafts', () => {
         path: 'orgs/tenant-a/project-registration-documents/project-a/proposal.pdf',
       },
       rfpRequestEvidenceDocument: null,
+        registrationOptionalDocumentNotes: { ...validV2Payload().registrationOptionalDocumentNotes, rfpRequestEvidence: '해당 없음' },
     });
     const previousPayload = validV2Payload({
       proposalDocument: null,
@@ -2372,4 +2413,49 @@ describe('project information private drafts', () => {
     await expect(h.service.withdraw({ ...h.base, idempotencyKey: 'withdraw-none' }))
       .rejects.toMatchObject({ statusCode: 409, code: 'request_not_withdrawable' });
   });
+});
+
+ it('keeps immutable private draft history and denies another owner without writes', async () => {
+  const h=harness();await openedDraft(h);
+  await h.service.update({...h.base,idempotencyKey:'history-a',expectedDraftRevision:0,payload:{name:'  first  ',note:'A'}});
+  await h.service.update({...h.base,idempotencyKey:'history-b',expectedDraftRevision:1,payload:{name:'second',note:'B'}});
+  const before=structuredClone([...h.db.documents.entries()]);
+  const history=await h.service.history(h.base);
+  expect(history.items.map(v=>v.draftRevision)).toEqual([2,1,0]);
+  expect(history.items[1].payload).toEqual({name:'  first  ',note:'A'});
+  await expect(h.service.history({...h.base,actorId:'actor-admin'})).rejects.toMatchObject({statusCode:404});
+  expect([...h.db.documents.entries()]).toEqual(before);
+ });
+
+it('persists explicit non-applicable answers and false confirmations in the exact submitted snapshot', async () => {
+ const h=harness();await openedDraft(h);
+ const payload=validV2Payload({
+  registrationConfirmations:{...validV2Payload().registrationConfirmations,laborIncludesFourInsurance:false,laborIncludesRetirementPay:false,customerSettlementBasisConfirmed:false},
+  proposalWordOriginalDocument:null,proposalPptOriginalDocument:null,presentationPptOriginalDocument:null,rfpRequestEvidenceDocument:null,
+  registrationOptionalDocumentNotes:completeProjectSubmissionFixture().registrationOptionalDocumentNotes,
+ });
+ await h.service.update({...h.base,idempotencyKey:'absence-save',expectedDraftRevision:0,payload});
+ const reopened=await h.service.get(h.base);expect(reopened.draft.payload.submissionResponses).toEqual(payload.submissionResponses);
+ await h.service.submit({...h.base,idempotencyKey:'absence-submit',expectedDraftRevision:1,expectedVersion:3});
+ const submitted=h.db.documents.get('orgs/tenant-a/project_requests/change-project-a').proposedSnapshot;
+ expect(submitted.submissionResponses).toEqual(payload.submissionResponses);
+ expect(submitted.registrationOptionalDocumentNotes).toEqual(payload.registrationOptionalDocumentNotes);
+ expect(submitted.registrationConfirmations.laborIncludesFourInsurance).toBe(false);
+ expect(submitted.proposalWordOriginalDocument).toBeNull();
+});
+
+
+it('retains before and after versions when a draft is rebased onto a changed canonical project', async () => {
+  const h = harness();
+  const opened = await openedDraft(h);
+  await h.service.update({ ...h.base, idempotencyKey: 'history-rebase-save', expectedDraftRevision: 0,
+    payload: { ...opened.body.draft.payload, description: '실무자가 작성한 내용' } });
+  const projectPath = 'orgs/tenant-a/projects/project-a';
+  h.db.documents.set(projectPath, { ...h.db.documents.get(projectPath), name: '원장에서 수정된 이름', version: 4 });
+  await h.service.rebase({ ...h.base, idempotencyKey: 'history-rebase-commit', expectedDraftRevision: 1, resolutions: {} });
+  const history = await h.service.history(h.base);
+  expect(history.items.map((item) => item.draftRevision)).toEqual([2, 1, 0]);
+  expect(history.items[0].payload.name).toBe('원장에서 수정된 이름');
+  expect(history.items[0].payload.description).toBe('실무자가 작성한 내용');
+  expect(history.items[1].payload.name).toBe(opened.body.draft.payload.name);
 });

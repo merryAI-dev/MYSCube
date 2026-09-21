@@ -1,3 +1,4 @@
+import { completeProjectSubmissionFixture } from '../../src/app/platform/project-submission-completeness.fixture.mjs';
 import { createProjectEditorDraft, buildProjectRequestPayloadFromDraft } from '../../src/app/platform/project-editor';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
@@ -79,16 +80,21 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
 
   function validPayload(overrides: Record<string, unknown> = {}) {
     return {
+      submissionResponses: Object.fromEntries(Object.entries(completeProjectSubmissionFixture().submissionResponses).filter(([key]) => key !== 'paymentPlanDesc')),
+      staffing: completeProjectSubmissionFixture().staffing,
+      paymentPlanInputFlags: { contract: true, interim: true, final: true },
+      settlementSystem: 'NONE', laborSettlementBasis: 'INCLUDE_ACTUAL_SALARY', interestRefundPolicy: 'REFUND',
       name: 'Project A', officialContractName: 'Project A contract', type: 'D1',
       status: 'IN_PROGRESS', phase: 'CONFIRMED', description: 'Before', clientOrg: 'Client',
       department: 'AXR', currency: 'KRW', contractAmount: 100000, salesVatAmount: 10000,
-      totalRevenueAmount: 40000, supportAmount: 0, financialInputFlags: { contractAmount: true },
+      totalRevenueAmount: 40000, totalActualCost: 50000, supportAmount: 0, financialInputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true },
       registrationRequirementsVersion: 2,
       financialYears: [{
         year: 2026,
         contractAmount: 100000,
         salesVatAmount: 10000,
         totalRevenueAmount: 40000,
+        totalActualCost: 50000, inputFlags: { contractAmount: true, salesVatAmount: true, totalRevenueAmount: true, totalActualCost: true, supportAmount: true },
         supportAmount: 0,
         profitRate: 0.4,
         confirmed: true,
@@ -103,7 +109,7 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
       registrationOptionalDocumentNotes: {
         proposalWordOriginal: '고객사 미제공',
         proposalPptOriginal: '해당 없음',
-        presentationPptOriginal: '해당 없음',
+        presentationPptOriginal: '해당 없음', rfpRequestEvidence: '해당 없음',
       },
       contractStart: '2026-07-01', contractEnd: '2026-12-31', contractType: '계약서(날인)',
       settlementType: 'TYPE1', basis: '공급가액', accountType: 'OPERATING', fundInputMode: 'BANK_UPLOAD',
@@ -146,6 +152,7 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
   }
 
   async function clearCollection(path: string) {
+    if (path.endsWith('/privateEditDrafts') || path.endsWith('/projectRequestDrafts')) { await db.recursiveDelete(db.collection(path)); return; }
     const snap = await db.collection(path).get();
     if (snap.empty) return;
     const batch = db.batch();
@@ -244,12 +251,13 @@ describeIfEmulator('project information private drafts (Firestore emulator)', ()
     const opened = await api.post('/api/v1/project-info-drafts/project-a/open').set(headers).send({});
     expect(opened.status).toBe(200);
     const payload = validPayload({
-      contractStart: '2026-05-14', contractEnd: '2027-11-30', totalActualCost: 0,
+      contractStart: '2026-05-14', contractEnd: '2027-11-30', totalActualCost: 50000,
       participationSheetLink: 'https://docs.google.com/spreadsheets/d/policy-fixture/edit',
       paymentExpectedMonths: { contract: '', interim: '', final: '' },
       financialYears: [2026, 2027].map((year) => ({
         year, contractAmount: 50000, salesVatAmount: 5000, totalRevenueAmount: 20000,
-        totalActualCost: 0, supportAmount: 0, profitRate: 0.4,
+        totalActualCost: 25000, supportAmount: 0, profitRate: 0.4,
+        inputFlags: completeProjectSubmissionFixture().financialInputFlags, paymentPlanInputFlags: { contract: true, interim: true, final: true },
         paymentPlan: { contract: 50000, interim: 0, final: 0 },
         paymentExpectedMonths: { contract: `${year}-07`, interim: '', final: '' },
       })),

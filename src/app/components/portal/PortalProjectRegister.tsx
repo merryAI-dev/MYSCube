@@ -30,6 +30,7 @@ import type { ProjectRequestDocumentKind } from '../../platform/project-contract
 import { EditLeaseDialogs } from '../editing/EditLeaseDialogs';
 import { useEditLease } from '../editing/useEditLease';
 import { ProjectEditorWizard } from '../projects/ProjectEditorWizard';
+import { ProjectDraftVersionPanel } from '../projects/ProjectDraftVersionPanel';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -94,6 +95,8 @@ function RegistrationEditor({
   const roster = usePersonRoster();
   const { options: departmentOptions } = useProjectDepartmentSettings();
   const [record, setRecord] = useState(initialRecord);
+  const [serverRecord, setServerRecord] = useState(initialRecord);
+  useEffect(() => { setServerRecord(record); }, [record]);
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
   const [aliasInput, setAliasInput] = useState(String(initialRecord.alias || ''));
@@ -156,6 +159,7 @@ function RegistrationEditor({
         stepIndex,
       });
       revisionRef.current = saved.draft.draftRevision;
+      setServerRecord(saved.draft);
     })
   )), [draftClient, enqueueMutation, record.draftId, withOwnership]);
 
@@ -306,6 +310,12 @@ function RegistrationEditor({
 
   return (
     <>
+      <ProjectDraftVersionPanel
+        serverDraft={serverRecord}
+        editorRevision={record.draftRevision}
+        submittedStatus={submitted ? 'SUBMITTED' : record.status === 'SUBMITTED' ? 'SUBMITTED' : null}
+        loadHistory={() => draftClient.history(record.draftId)}
+      />
       <ProjectEditorWizard
         mode="portal-register"
         title="프로젝트 등록"
