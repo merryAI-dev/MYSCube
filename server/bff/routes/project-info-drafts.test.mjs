@@ -47,6 +47,7 @@ function createDb(seed = {}) {
         return query;
       },
       orderBy(field, direction) { state.order = { field, direction }; return query; },
+      startAfter(value) { state.beforeRevision = value; return query; },
       limit(count) {
         state.limit = count;
         return query;
@@ -57,6 +58,7 @@ function createDb(seed = {}) {
           .map(([docPath, value]) => ({ id: docPath.slice(prefix.length), data: () => clone(value) }))
           .filter((docRef) => state.filters.every(([field, value]) => (docRef.data() || {})[field] === value))
           .sort((a, b) => state.order ? (a.data()[state.order.field] - b.data()[state.order.field]) * (state.order.direction === 'desc' ? -1 : 1) : 0)
+          .filter(docRef => state.beforeRevision === undefined || docRef.data().draftRevision < state.beforeRevision)
           .slice(0, state.limit);
         return { docs };
       },
@@ -687,6 +689,7 @@ describe('project information private drafts', () => {
     const opened = await openedDraft(h, 'open-existing-active-draft');
 
     expect(opened.body.draft).toEqual({
+      savedById: null, savedByName: null, savedAt: null,
       projectId: 'project-a',
       resourceType: 'project-info',
       resourceId: 'project-a',
@@ -2502,4 +2505,34 @@ it('keeps a status correction private until the organization head approves the e
   expect(approved.status, JSON.stringify(approved.body)).toBe(200);
   expect(h.db.documents.get(projectPath)).toMatchObject({ status: 'IN_PROGRESS', budgetCurrentYear: 777, contractAmount: original.contractAmount, totalActualCost: original.totalActualCost });
   expect(h.db.documents.get('orgs/tenant-a/project_requests/change-project-a').approvedSnapshot.status).toBe('IN_PROGRESS');
+});
+
+it('restores only server history as a new revision, attributes actor, and rejects stale/generation/owner requests without writes', async () => {
+ const h=harness(); await openedDraft(h);
+ await h.service.update({...h.base,idempotencyKey:'restore-a',expectedDraftRevision:0,payload:{name:'  original  ',financialInputFlags:{totalActualCost:true},totalActualCost:0}});
+ await h.service.update({...h.base,idempotencyKey:'restore-b',expectedDraftRevision:1,payload:{name:'latest'}});
+ const history=await h.service.history(h.base);
+ expect(history.items[0]).toMatchObject({savedById:'actor-a',savedByName:'Actor A',savedAt:expect.any(String)});
+ const input={...h.base,idempotencyKey:'restore-do',expectedDraftRevision:2,revision:1,historyGeneration:history.historyGeneration,payload:{name:'forged'},savedById:'forged'};
+ const restored=await h.service.restoreHistory(input);
+ expect(restored.body.draft).toMatchObject({draftRevision:3,payload:{name:'  original  ',totalActualCost:0}});
+ const after=await h.service.history(h.base);
+ expect(after.items.map(v=>v.draftRevision)).toEqual([3,2,1,0]);
+ expect(after.items[2]).toEqual(history.items[1]);
+ expect((await h.service.restoreHistory(input)).replayed).toBe(true);
+ const before=structuredClone([...h.db.documents.entries()]);
+ for(const override of [{historyGeneration:'another'},{expectedDraftRevision:2},{actorId:'actor-admin'},{fence:999}]) {
+  await expect(h.service.restoreHistory({...input,expectedDraftRevision:3,idempotencyKey:JSON.stringify(override),...override})).rejects.toBeDefined();
+  expect([...h.db.documents.entries()]).toEqual(before);
+ }
+});
+
+it('does not restore a historical payload file when Storage reports it deleted', async () => {
+ const inspectProjectRegistrationAttachment=vi.fn(async()=>{throw new Error('404');});
+ const h=harness({storageService:{inspectProjectRegistrationAttachment}}); await openedDraft(h);
+ await h.service.update({...h.base,idempotencyKey:'missing-file-a',expectedDraftRevision:0,payload:{name:'old',contractDocument:{path:'orgs/tenant-a/project-registration-documents/project-a/file.pdf',size:8,contentType:'application/pdf'}}});
+ await h.service.update({...h.base,idempotencyKey:'missing-file-b',expectedDraftRevision:1,payload:{name:'current'}});
+ const history=await h.service.history(h.base); const before=structuredClone([...h.db.documents.entries()]);
+ await expect(h.service.restoreHistory({...h.base,idempotencyKey:'missing-file-restore',expectedDraftRevision:2,revision:1,historyGeneration:history.historyGeneration})).rejects.toMatchObject({code:'draft_history_attachment_unavailable'});
+ expect(inspectProjectRegistrationAttachment).toHaveBeenCalledOnce(); expect([...h.db.documents.entries()]).toEqual(before);
 });

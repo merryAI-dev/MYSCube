@@ -1,3 +1,4 @@
+import type { ProjectDraftHistoryItem } from '../../lib/project-draft-history';
 import { serializeProjectEditorPrivateDraft } from '../../platform/project-editor-draft-persistence';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -29,7 +30,7 @@ import {
 import type { ProjectRequestDocumentKind } from '../../platform/project-contract-upload';
 import { EditLeaseDialogs } from '../editing/EditLeaseDialogs';
 import { useEditLease } from '../editing/useEditLease';
-import { ProjectEditorWizard } from '../projects/ProjectEditorWizard';
+import { ProjectEditorWizard, type ProjectEditorWizardHandle } from '../projects/ProjectEditorWizard';
 import { ProjectDraftVersionPanel } from '../projects/ProjectDraftVersionPanel';
 import {
   AlertDialog,
@@ -96,6 +97,10 @@ function RegistrationEditor({
   const { options: departmentOptions } = useProjectDepartmentSettings();
   const [record, setRecord] = useState(initialRecord);
   const [serverRecord, setServerRecord] = useState(initialRecord);
+  const editorRef = useRef<ProjectEditorWizardHandle>(null);
+  const [restoredVersionKey, setRestoredVersionKey] = useState(0);
+  const restoreContextRef = useRef(0);
+  useEffect(() => () => { restoreContextRef.current += 1; }, [record.draftId]);
   useEffect(() => { setServerRecord(record); }, [record]);
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
@@ -162,6 +167,23 @@ function RegistrationEditor({
       setServerRecord(saved.draft);
     })
   )), [draftClient, enqueueMutation, record.draftId, withOwnership]);
+
+  const restoreDraftVersion = async (item: ProjectDraftHistoryItem, historyGeneration: string) => {
+    if (!editorRef.current) throw new Error('작성 화면을 준비 중입니다. 잠시 후 다시 시도해 주세요.');
+    const context = restoreContextRef.current;
+    const restored = await editorRef.current.withPreservedDraft(() => enqueueMutation(() => withOwnership((ownership) =>
+      draftClient.restoreHistory(record.draftId, ownership, {
+        revision: item.draftRevision,
+        expectedDraftRevision: revisionRef.current,
+        historyGeneration,
+      }, crypto.randomUUID()),
+    )));
+    if (context !== restoreContextRef.current) return;
+    revisionRef.current = restored.draft.draftRevision;
+    setRecord(restored.draft);
+    setServerRecord(restored.draft);
+    setRestoredVersionKey((value) => value + 1);
+  };
 
   const uploadDocument = useCallback((kind: ProjectRequestDocumentKind, file: File) => enqueueMutation(() => (
     withOwnership(async (ownership) => {
@@ -314,9 +336,13 @@ function RegistrationEditor({
         serverDraft={serverRecord}
         editorRevision={record.draftRevision}
         submittedStatus={submitted ? 'SUBMITTED' : record.status === 'SUBMITTED' ? 'SUBMITTED' : null}
-        loadHistory={() => draftClient.history(record.draftId)}
+        loadHistory={(before) => draftClient.history(record.draftId, before)}
+        onRestore={restoreDraftVersion}
+        canRestore={lease.canEdit && !submitted && record.status === 'ACTIVE' && !busyActionId}
       />
       <ProjectEditorWizard
+        key={restoredVersionKey}
+        editorRef={editorRef}
         mode="portal-register"
         title="프로젝트 등록"
         description="임시저장 내용은 본인에게만 보이며, 최종 저장 후 최종 결재자 (총괄책임자)의 조직장 검토 화면에 표시됩니다."

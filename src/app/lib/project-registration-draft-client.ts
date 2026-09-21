@@ -196,9 +196,24 @@ export function createProjectRegistrationDraftClient(options: {
       return { draft: parseDraft(body.draft), lease: parseLease(body.lease) };
     },
 
-    async history(draftId: string) {
-      const response = await client.get<unknown>(`${pathFor(draftId)}/history`, { ...request, headers: sessionHeaders });
+    async history(draftId: string, beforeRevision?: number) {
+      const suffix = beforeRevision === undefined ? '' : `?beforeRevision=${revision(beforeRevision)}`;
+      const response = await client.get<unknown>(`${pathFor(draftId)}/history${suffix}`, { ...request, headers: sessionHeaders });
       return parseProjectDraftHistory(response.data);
+    },
+
+    async restoreHistory(
+      draftId: string,
+      ownership: { leaseId: string; fence: number },
+      input: { revision: number; expectedDraftRevision: number; historyGeneration: string },
+      idempotencyKey: string,
+    ) {
+      const response = await client.post<unknown>(`${pathFor(draftId)}/history/${revision(input.revision)}/restore`, {
+        ...request,
+        headers: { ...ownershipHeaders(sessionId, ownership), 'Idempotency-Key': idempotencyKey },
+        body: { expectedDraftRevision: revision(input.expectedDraftRevision), historyGeneration: input.historyGeneration },
+      });
+      return parseDraftBody(response.data);
     },
 
     async get(draftId: string) {

@@ -159,3 +159,21 @@ describe('project registration draft client', () => {
     expect(api.patch).not.toHaveBeenCalled();
   });
 });
+
+
+ it('loads older history and restores only a server revision with lease and CAS protection', async () => {
+   const { api, client } = harness();
+   vi.mocked(api.get).mockResolvedValueOnce({ data: { items: [], historyAvailableFromRevision: 0, historyGeneration: 'generation-a', hasMore: false, nextBeforeRevision: null } } as never);
+   const history = await client.history('draft-a', 20);
+   expect(history.historyGeneration).toBe('generation-a');
+   expect(api.get).toHaveBeenCalledWith('/api/v1/project-registration-drafts/draft-a/history?beforeRevision=20', expect.any(Object));
+   vi.mocked(api.post).mockReset().mockResolvedValueOnce({ data: { draft: { ...DRAFT, draftRevision: 31 } } } as never);
+   const restored = await client.restoreHistory('draft-a', { leaseId: 'lease-a', fence: 3 }, { revision: 12, expectedDraftRevision: 30, historyGeneration: 'generation-a' }, 'restore-a');
+   expect(restored.draft.draftRevision).toBe(31);
+   expect(api.post).toHaveBeenCalledWith('/api/v1/project-registration-drafts/draft-a/history/12/restore', expect.objectContaining({
+     body: { expectedDraftRevision: 30, historyGeneration: 'generation-a' },
+     headers: expect.objectContaining({ 'x-edit-lease-id': 'lease-a', 'x-edit-fence': '3', 'Idempotency-Key': 'restore-a' }),
+   }));
+   vi.mocked(api.post).mockRejectedValueOnce(new Error('draft_version_conflict'));
+   await expect(client.restoreHistory('draft-a', { leaseId: 'lease-a', fence: 3 }, { revision: 12, expectedDraftRevision: 30, historyGeneration: 'generation-a' }, 'restore-b')).rejects.toThrow('draft_version_conflict');
+ });

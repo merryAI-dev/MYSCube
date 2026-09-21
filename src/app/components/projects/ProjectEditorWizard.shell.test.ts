@@ -670,7 +670,7 @@ describe('ProjectEditorWizard form skeleton contract', () => {
     // readOnly 입력칸을 흐린 배경으로 위장하던 처리를 없앴다.
     expect(source).not.toContain('bg-muted/40');
     expect(source).not.toContain('총수익 / 계약금액 기준 자동 계산');
-    expect(source).toContain('<ProjectComputedValue value={submissionRate');
+    expect(source).toContain('<ProjectComputedValue value={submissionAnnualRate(draft.financialYears, draft)}');
   });
 
   it('adds a remaining-count badge to the step chips without touching the verdict', () => {

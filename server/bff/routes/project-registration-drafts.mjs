@@ -1,4 +1,4 @@
-import { prepareProjectDraftHistorySave, readProjectDraftHistory } from '../project-draft-history.mjs';
+import { prepareProjectDraftHistorySave, readProjectDraftHistory, readProjectDraftRestoreSource, assertProjectDraftRestoreAttachments } from '../project-draft-history.mjs';
 import { randomUUID } from 'node:crypto';
 import {
   PROJECT_REQUEST_ROUTE_ROLES,
@@ -172,6 +172,7 @@ function relocationAttachmentRefs(draft, current) {
 
 function draftContract(draft = {}) {
   return {
+    savedById: draft.savedById || null, savedByName: draft.savedByName || null, savedAt: draft.savedAt || null,
     draftId: readOptionalText(draft.resourceId),
     resourceType: RESOURCE_TYPE,
     resourceId: readOptionalText(draft.resourceId),
@@ -441,6 +442,7 @@ export function createProjectRegistrationDraftService({
       actorId,
       draftId,
       actorDisplayName: readOptionalText(input?.actorDisplayName) || '사용자',
+      actorHistoryDisplayName: readOptionalText(input?.actorDisplayName),
       actorEmail: readOptionalText(input?.actorEmail),
       actorEmailEnc: readOptionalText(input?.actorEmailEnc) || undefined,
       requestId: readOptionalText(input?.requestId) || 'project-registration-draft-request',
@@ -586,6 +588,7 @@ export function createProjectRegistrationDraftService({
           resourceId: current.draftId,
           draftRevision: 0,
           historyGeneration: randomUUID(),
+            savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp,
           payload: adoptedPayload && typeof adoptedPayload === 'object' && !Array.isArray(adoptedPayload)
             ? adoptedPayload
             : payload,
@@ -657,10 +660,44 @@ export function createProjectRegistrationDraftService({
       });
     },
 
+    async restoreHistory(input) {
+      const current = context(input);
+      const leaseId = documentId(input?.leaseId, 'leaseId'); const fence = positiveFence(input?.fence);
+      const expectedDraftRevision = Number(input?.expectedDraftRevision);
+      const sourceRevision = Number(input?.revision);
+      const historyGeneration = requiredText(input?.historyGeneration, 'historyGeneration');
+      if (!Number.isSafeInteger(expectedDraftRevision) || expectedDraftRevision < 0) throw createHttpError(400, 'expectedDraftRevision is invalid', 'draft_request_invalid');
+      const method = 'POST';
+      const path = `/api/v1/project-registration-drafts/${current.draftId}/history/${sourceRevision}/restore`;
+      const fingerprint = buildRequestFingerprint({ method, path, body: { actorId: current.actorId, sessionId: current.sessionId, leaseId: leaseId, fence, expectedDraftRevision, historyGeneration } });
+      return db.runTransaction(async (tx) => {
+        const nowDate = clockDate(now); const timestamp = nowDate.toISOString();
+        const { actorRole, ref, draft } = await ownedDraft(tx, current);
+        const lock = await checkIdempotency(tx, current, fingerprint, nowDate);
+        if (lock.mode === 'replay') return { status: lock.status, body: lock.body, replayed: true };
+        const lockError = idempotencyError(lock); if (lockError) throw lockError;
+        assertActive(draft); await assertOwnedInTransaction({ tx, leaseRef: leaseRef(current), tenantId: current.tenantId, resourceType: RESOURCE_TYPE, resourceId: current.draftId, actorId: current.actorId, sessionId: current.sessionId, leaseId, fence, serverNow: nowDate });
+        const revision = assertRevision(draft, expectedDraftRevision) + 1;
+        const source = await readProjectDraftRestoreSource({ db, tx, draftRef: ref, draft, historyGeneration, sourceRevision });
+        await assertProjectDraftRestoreAttachments({ source, fieldByKind: DOCUMENT_FIELD_BY_KIND, inspect: async (attachment) => {
+            return draftStorageService.inspectDraftAttachment({ tenantId: current.tenantId, draftId: current.draftId, path: attachment.path });
+        } });
+        const next = { ...draft, payload: source.payload, attachmentRefs: source.attachmentRefs, stepIndex: source.stepIndex, draftRevision: revision, updatedAt: timestamp };
+        assertDraftSize(next);
+        Object.assign(next, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef: ref, before: draft, after: next });
+        const body = { draft: draftContract(next) };
+        await auditChainService.appendManyInTransaction(tx, [draftAudit(current, actorRole, 'PROJECT_REGISTRATION_DRAFT_RESTORE', revision, timestamp, { fence, sourceRevision, historyGeneration })]);
+        saveHistory(); tx.set(ref, next);
+        completeIdempotency(tx, current, lock, { method, path, status: 200, body }, nowDate);
+        return { status: 200, body, replayed: false };
+      });
+    },
+
     async history(input) {
       const current = context(input, { sessionRequired: false, idempotencyRequired: false });
       const { ref, draft } = await db.runTransaction((tx) => ownedDraft(tx, current));
-      return readProjectDraftHistory({ db, draftRef: ref, draft });
+      return readProjectDraftHistory({ db, draftRef: ref, draft, beforeRevision: input?.beforeRevision });
     },
 
     /** 내가 임시저장한 진행 중 등록 초안 목록. 이어서 작성할 초안을 고르는 용도라 요약만 준다. */
@@ -829,7 +866,8 @@ export function createProjectRegistrationDraftService({
           updatedAt: timestamp,
         };
         assertDraftSize(next);
-        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef: ref, before: draft, after: next });
+        Object.assign(next, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef: ref, before: draft, after: next });
         const body = { draft: draftContract(next) };
         await auditChainService.appendManyInTransaction(tx, [
           draftAudit(current, actorRole, 'PROJECT_REGISTRATION_DRAFT_SAVE', revision, timestamp, { fence }),
@@ -982,7 +1020,8 @@ export function createProjectRegistrationDraftService({
           lease: { state: 'RELEASED', canEdit: false },
           outbox: { id: outboxEvent.id, status: outboxEvent.status || 'PENDING' },
         };
-        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef: ref, before: draft, after: { ...draft, ...submittedDraft } });
+        Object.assign(submittedDraft, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef: ref, before: draft, after: { ...draft, ...submittedDraft } });
         await auditChainService.appendManyInTransaction(tx, [
           draftAudit(current, actorRole, 'PROJECT_REGISTRATION_SUBMIT', nextRevision, timestamp, {
             fence,
@@ -1206,7 +1245,8 @@ export function createProjectRegistrationDraftService({
             updatedAt: timestamp,
           };
           assertDraftSize(next);
-          const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef: ref, before: draft, after: next });
+          Object.assign(next, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+          const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef: ref, before: draft, after: next });
           const body = { draft: draftContract(next), attachment };
           await auditChainService.appendManyInTransaction(tx, [
             draftAudit(current, actorRole, 'PROJECT_REGISTRATION_DRAFT_ATTACHMENT_ADD', revision, timestamp, {
@@ -1365,7 +1405,8 @@ export function createProjectRegistrationDraftService({
           updatedAt: timestamp,
         };
         assertDraftSize(next);
-        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, draftRef: ref, before: draft, after: next });
+        Object.assign(next, { savedById: current.actorId, savedByName: current.actorHistoryDisplayName || null, savedAt: timestamp });
+        const saveHistory = await prepareProjectDraftHistorySave({ db, tx, actor: current, draftRef: ref, before: draft, after: next });
         const body = { draft: draftContract(next) };
         await auditChainService.appendManyInTransaction(tx, [
           draftAudit(current, actorRole, 'PROJECT_REGISTRATION_DRAFT_ATTACHMENT_REMOVE', revision, timestamp, {
@@ -1544,11 +1585,19 @@ export function mountProjectRegistrationDraftRoutes(app, {
     }));
   }));
 
+  app.post('/api/v1/project-registration-drafts/:draftId/history/:revision/restore', asyncHandler(async (req, res) => {
+    assertActorRoleAllowed(req, PROJECT_REQUEST_ROUTE_ROLES, 'restore project draft history');
+    sendOutcome(res, await projectRegistrationDraftService.restoreHistory({
+      ...await routeContext(req, piiProtector), ...routeOwnership(req), draftId: routeDraftId(req),
+      revision: req.params?.revision, expectedDraftRevision: req.body?.expectedDraftRevision, historyGeneration: req.body?.historyGeneration,
+    }));
+  }));
+
   app.get('/api/v1/project-registration-drafts/:draftId/history', asyncHandler(async (req, res) => {
     assertActorRoleAllowed(req, PROJECT_REQUEST_ROUTE_ROLES, 'read project registration draft history');
     res.set('cache-control', 'private, no-store');
     res.json(await projectRegistrationDraftService.history({
-      ...await routeContext(req, piiProtector), draftId: routeDraftId(req),
+      ...await routeContext(req, piiProtector), draftId: routeDraftId(req), beforeRevision: req.query?.beforeRevision,
     }));
   }));
 

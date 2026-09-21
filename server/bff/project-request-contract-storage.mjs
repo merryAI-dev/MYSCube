@@ -259,6 +259,14 @@ export function createProjectRequestContractStorageService(options = {}) {
       await bucket.file(path).delete({ ignoreNotFound: true });
     },
 
+    async inspectDraftAttachment(input) {
+      const prefix = draftAttachmentPrefix(input?.tenantId, input?.draftId);
+      const { path } = objectNameWithinPrefix(input?.path, prefix, 'draft attachment path is outside its draft prefix');
+      const [metadata] = await bucket.file(path).getMetadata();
+      if (readOptionalText(metadata?.metadata?.draftId) !== input.draftId) throw new Error('draft attachment owner mismatch');
+      return { path, size: Number(metadata.size), contentType: metadata.contentType, attachmentId: readOptionalText(metadata?.metadata?.attachmentId) };
+    },
+
     async downloadDraftAttachment(input) {
       const prefix = draftAttachmentPrefix(input?.tenantId, input?.draftId);
       const { path } = objectNameWithinPrefix(

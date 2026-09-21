@@ -55,6 +55,7 @@ function createDb(seed = {}) {
         return query;
       },
       orderBy(field, direction) { state.order = { field, direction }; return query; },
+      startAfter(value) { state.beforeRevision = value; return query; },
       limit(count) {
         state.limit = count;
         return query;
@@ -65,6 +66,7 @@ function createDb(seed = {}) {
           .map(([docPath, value]) => ({ id: docPath.slice(prefix.length), data: () => clone(value) }))
           .filter((docRef) => state.filters.every(([field, value]) => (docRef.data() || {})[field] === value))
           .sort((a, b) => state.order ? (a.data()[state.order.field] - b.data()[state.order.field]) * (state.order.direction === 'desc' ? -1 : 1) : 0)
+          .filter(docRef => state.beforeRevision === undefined || docRef.data().draftRevision < state.beforeRevision)
           .slice(0, state.limit);
         return { docs };
       },
@@ -2226,3 +2228,49 @@ describe('project registration draft routes', () => {
   await expect(service.history({...owner,actorId:'actor-other'})).rejects.toMatchObject({statusCode:403});
   expect([...db.documents.entries()]).toEqual(before);
  });
+
+it('restores registration history with CAS and immutable revisions, retaining explicit empty/zero values', async () => {
+ const {db,service,base}=createHarness();
+ const created=await service.create({...base,idempotencyKey:'restore-create',payload:{name:'original',totalActualCost:0,note:''}});
+ const owner={...base,draftId:created.body.draft.draftId,leaseId:created.body.lease.leaseId,fence:created.body.lease.fence};
+ await service.update({...owner,idempotencyKey:'restore-save',expectedDraftRevision:0,payload:{name:'current'}});
+ const history=await service.history(owner);
+ const input={...owner,idempotencyKey:'restore-commit',expectedDraftRevision:1,revision:0,historyGeneration:history.historyGeneration};
+ const result=await service.restoreHistory(input);
+ expect(result.body.draft).toMatchObject({draftRevision:2,payload:{name:'original',totalActualCost:0,note:''}});
+ expect((await service.restoreHistory(input)).replayed).toBe(true);
+ const after=await service.history(owner); expect(after.items.map(v=>v.draftRevision)).toEqual([2,1,0]); expect(after.items[2]).toEqual(history.items[1]);
+ const before=structuredClone([...db.documents.entries()]);
+ for(const override of [{historyGeneration:'other'},{expectedDraftRevision:1},{actorId:'actor-other'},{fence:999}]) {
+  await expect(service.restoreHistory({...input,expectedDraftRevision:2,idempotencyKey:JSON.stringify(override),...override})).rejects.toBeDefined(); expect([...db.documents.entries()]).toEqual(before);
+ }
+});
+
+it('requires a live owned file even when history has only a payload document reference', async () => {
+ const inspectDraftAttachment=vi.fn(async()=>{throw new Error('404');});
+ const {db,service,base}=createHarness({storageService:{inspectDraftAttachment}});
+ const created=await service.create({...base,idempotencyKey:'file-restore-create',payload:{name:'original'}});
+ const owner={...base,draftId:created.body.draft.draftId,leaseId:created.body.lease.leaseId,fence:created.body.lease.fence};
+ await service.update({...owner,idempotencyKey:'file-restore-save-a',expectedDraftRevision:0,payload:{contractDocument:{path:`orgs/tenant-a/project-registration-drafts/${owner.draftId}/old.pdf`,size:8,contentType:'application/pdf'}}});
+ await service.update({...owner,idempotencyKey:'file-restore-save-b',expectedDraftRevision:1,payload:{name:'current'}});
+ const history=await service.history(owner); const before=structuredClone([...db.documents.entries()]);
+ await expect(service.restoreHistory({...owner,idempotencyKey:'file-restore-commit',expectedDraftRevision:2,revision:1,historyGeneration:history.historyGeneration})).rejects.toMatchObject({code:'draft_history_attachment_unavailable'});
+ expect(inspectDraftAttachment).toHaveBeenCalledOnce(); expect([...db.documents.entries()]).toEqual(before);
+});
+
+it('restores a still-present owned historical attachment and records authenticated metadata in the draft ACK', async () => {
+ const metadata={path:'',size:8,contentType:'application/pdf',attachmentId:'file-a'};
+ const inspectDraftAttachment=vi.fn(async()=>metadata);
+ const {service,base}=createHarness({storageService:{inspectDraftAttachment}});
+ const created=await service.create({...base,idempotencyKey:'live-file-create',payload:{name:'original'}});
+ const owner={...base,draftId:created.body.draft.draftId,leaseId:created.body.lease.leaseId,fence:created.body.lease.fence};
+ metadata.path=`orgs/tenant-a/project-registration-drafts/${owner.draftId}/file-a.pdf`;
+ await service.update({...owner,idempotencyKey:'live-file-a',expectedDraftRevision:0,payload:{contractDocument:metadata}});
+ await service.update({...owner,idempotencyKey:'live-file-b',expectedDraftRevision:1,payload:{name:'current'}});
+ const history=await service.history(owner);
+ const restored=await service.restoreHistory({...owner,idempotencyKey:'live-file-restore',expectedDraftRevision:2,revision:1,historyGeneration:history.historyGeneration});
+ expect(restored.body.draft.payload.contractDocument.path).toBe(metadata.path);
+ expect(restored.body.draft.savedById).toBe(base.actorId);
+ expect(restored.body.draft.savedAt).toBe(restored.body.draft.updatedAt);
+ expect((await service.get(owner)).draft.savedAt).toBe(restored.body.draft.savedAt);
+});

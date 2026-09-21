@@ -396,3 +396,16 @@ describe('existing project attachment compatibility security boundary', () => {
     expect(f.file).not.toHaveBeenCalled();
   });
 });
+
+it('inspects a restorable private file with strict draft ownership and no download or write', async () => {
+ const getMetadata=vi.fn(async()=>[{size:'8',contentType:'application/pdf',metadata:{draftId:'draft-a',attachmentId:'file-a'}}]);
+ const download=vi.fn(),save=vi.fn(),deleteFile=vi.fn();
+ const file=vi.fn(()=>({getMetadata,download,save,delete:deleteFile}));
+ const service=createProjectRequestContractStorageService({projectId:'demo',bucketName:'demo.appspot.com',storage:{bucket:()=>({file})}});
+ const path='orgs/tenant-a/project-registration-drafts/draft-a/file-a.pdf';
+ await expect(service.inspectDraftAttachment({tenantId:'tenant-a',draftId:'draft-a',path})).resolves.toMatchObject({path,size:8,attachmentId:'file-a'});
+ await expect(service.inspectDraftAttachment({tenantId:'tenant-a',draftId:'draft-b',path})).rejects.toThrow();
+ getMetadata.mockResolvedValueOnce([{size:'8',contentType:'application/pdf',metadata:{draftId:'draft-b',attachmentId:'file-a'}}]);
+ await expect(service.inspectDraftAttachment({tenantId:'tenant-a',draftId:'draft-a',path})).rejects.toThrow('owner mismatch');
+ expect(download).not.toHaveBeenCalled();expect(save).not.toHaveBeenCalled();expect(deleteFile).not.toHaveBeenCalled();
+});

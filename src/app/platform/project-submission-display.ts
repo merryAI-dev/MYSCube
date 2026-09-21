@@ -1,14 +1,16 @@
-import { hasMultiYearProjectContract, projectEffectivePaymentPlan, projectFinancialYearsWithPaymentPlan } from './project-input-policy.mjs';
+import { hasMultiYearProjectContract, projectEffectivePaymentPlan, projectFinancialYearsWithPaymentPlan, projectContractEndYear } from './project-input-policy.mjs';
 import type { ProjectTeamMemberAssignment, ProjectRequestPayload, ProjectFinancialYear } from '../data/types';
 
 export function submissionAmountKnown(value: unknown, explicit?: boolean): value is number {
   return typeof value === 'number' && Number.isFinite(value)
+    && value >= 0
     && explicit !== false && (explicit === true || value !== 0);
 }
 
 export function submissionAmount(value: unknown, currency = 'KRW', explicit?: boolean): string {
   const money = typeof value === 'number' && Number.isFinite(value)
     ? `${value.toLocaleString('ko-KR')}${currency === 'USD' ? ' USD' : '원'}` : null;
+  if (typeof value === 'number' && value < 0 && money) return `금액 확인 필요 (저장값 ${money})`;
   if (explicit === false) return money && value !== 0 ? `미확인 (저장값 ${money})` : '미입력';
   if (!submissionAmountKnown(value, explicit)) return '입력 기록 없음';
   return money!;
@@ -27,6 +29,42 @@ export function submissionRate(revenue: unknown, contract: unknown, flags?: { to
   return submissionAmountKnown(revenue, flags?.totalRevenueAmount)
     && submissionAmountKnown(contract, flags?.contractAmount) && contract > 0
     ? `${(revenue / contract * 100).toFixed(2)}%` : '계산 불가';
+}
+
+const ANNUAL_FINANCIAL_LABELS = [
+  ['contractAmount', '계약금액'], ['salesVatAmount', '매출 부가세'], ['totalRevenueAmount', '수익'],
+  ['totalActualCost', '실비(원가)'], ['supportAmount', '지원금'],
+] as const;
+
+type FinancialPeriod = Partial<Pick<ProjectRequestPayload, 'contractStart' | 'contractEnd' | 'contractEndUndecided'>>;
+
+function missingAnnualYears(rows: ProjectFinancialYear[], period?: FinancialPeriod): number[] {
+  if (!period) return [];
+  const start = Number(String(period.contractStart || '').slice(0, 4));
+  const end = projectContractEndYear(period);
+  if (!Number.isSafeInteger(start) || start < 2000 || !Number.isSafeInteger(end) || end < start || end - start > 100) return [];
+  return Array.from({ length: end - start + 1 }, (_, offset) => start + offset).filter((year) => !rows.some((row) => row.year === year));
+}
+
+export function submissionAnnualFinancialNeeds(rows: ProjectFinancialYear[] | undefined, period?: FinancialPeriod) {
+  const savedRows = rows || [];
+  const requiredRows = [...savedRows, ...missingAnnualYears(savedRows, period).map((year) => ({ year } as ProjectFinancialYear))];
+  return requiredRows.sort((a, b) => a.year - b.year).flatMap((row) => {
+    const fields = ANNUAL_FINANCIAL_LABELS.filter(([field]) => !submissionAmountKnown(row[field], row.inputFlags?.[field]));
+    return fields.length ? [{
+      year: row.year,
+      fields: fields.map(([field]) => field),
+      message: `${row.year}년 ${fields.map(([, label]) => label).join(', ')} 입력 확인이 필요합니다. 해당 금액이 없으면 0원을 직접 입력해 주세요.`,
+    }] : [];
+  });
+}
+
+export function submissionAnnualRate(rows: ProjectFinancialYear[] | undefined, period?: FinancialPeriod): string {
+  if (!rows?.length || missingAnnualYears(rows, period).length || rows.some((row) => !submissionAmountKnown(row.contractAmount, row.inputFlags?.contractAmount)
+    || !submissionAmountKnown(row.totalRevenueAmount, row.inputFlags?.totalRevenueAmount))) return '계산 불가 · 연도별 계약금액·수익 확인 필요';
+  const contract = rows.reduce((sum, row) => sum + row.contractAmount, 0);
+  const revenue = rows.reduce((sum, row) => sum + row.totalRevenueAmount, 0);
+  return submissionRate(revenue, contract, { contractAmount: true, totalRevenueAmount: true });
 }
 
 export function submissionConfirmation(value: unknown, yes = '확인', no = '미확인'): string {

@@ -1,3 +1,4 @@
+import type { ProjectDraftHistoryItem } from '../../lib/project-draft-history';
 import { serializeProjectEditorPrivateDraft } from '../../platform/project-editor-draft-persistence';
 import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -67,7 +68,7 @@ import type { ProjectRequestDocumentKind } from '../../platform/project-contract
 import { resolvePortalProjectResourcePath } from '../../platform/portal-project-selection';
 import { EditLeaseDialogs } from '../editing/EditLeaseDialogs';
 import { useEditLease } from '../editing/useEditLease';
-import { ProjectEditorWizard } from '../projects/ProjectEditorWizard';
+import { ProjectEditorWizard, type ProjectEditorWizardHandle } from '../projects/ProjectEditorWizard';
 import { ProjectDraftVersionPanel } from '../projects/ProjectDraftVersionPanel';
 import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
@@ -271,6 +272,10 @@ function ProjectInfoEditor({
   const { orgId } = useFirebase();
   const [record, setRecord] = useState<ProjectInfoDraft | null>(null);
   const [serverRecord, setServerRecord] = useState<ProjectInfoDraft | null>(null);
+  const editorRef = useRef<ProjectEditorWizardHandle>(null);
+  const [restoredVersionKey, setRestoredVersionKey] = useState(0);
+  const restoreContextRef = useRef(0);
+  useEffect(() => () => { restoreContextRef.current += 1; }, [project.id]);
   useEffect(() => { setServerRecord(record); }, [record]);
   const [submitted, setSubmitted] = useState(false);
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
@@ -421,6 +426,23 @@ function ProjectInfoEditor({
       setServerRecord(saved.draft);
     })
   )), [draftClient, enqueueMutation, withOwnership]);
+
+  const restoreDraftVersion = async (item: ProjectDraftHistoryItem, historyGeneration: string) => {
+    if (!editorRef.current) throw new Error('작성 화면을 준비 중입니다. 잠시 후 다시 시도해 주세요.');
+    const context = restoreContextRef.current;
+    const restored = await editorRef.current.withPreservedDraft(() => enqueueMutation(() => withOwnership((ownership) =>
+      draftClient.restoreHistory(ownership, {
+        revision: item.draftRevision,
+        expectedDraftRevision: revisionRef.current,
+        historyGeneration,
+      }, crypto.randomUUID()),
+    )));
+    if (context !== restoreContextRef.current) return;
+    revisionRef.current = restored.draft.draftRevision;
+    setRecord(restored.draft);
+    setServerRecord(restored.draft);
+    setRestoredVersionKey((value) => value + 1);
+  };
 
   const uploadDocument = useCallback((kind: ProjectRequestDocumentKind, file: File) => enqueueMutation(() => (
     withOwnership(async (ownership) => {
@@ -687,9 +709,13 @@ function ProjectInfoEditor({
         editorRevision={record?.draftRevision ?? serverRecord.draftRevision}
         submittedStatus={submitted ? 'SUBMITTED' : requestDoc?.status}
         submittedVersion={requestDoc?.requestVersion}
-        loadHistory={() => draftClient.history()}
+        loadHistory={(before) => draftClient.history(before)}
+        onRestore={restoreDraftVersion}
+        canRestore={editorCanEdit && !submitted && !busyActionId}
       />}
       <ProjectEditorWizard
+        key={restoredVersionKey}
+        editorRef={editorRef}
         mode="portal-edit"
         title="프로젝트 수정"
         description="임시저장 내용은 본인에게만 보이며, 최종 저장 후 승인 대기열에 표시됩니다."
