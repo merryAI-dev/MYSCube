@@ -1,6 +1,6 @@
 import { PROJECT_PROPOSAL_FILE_FORMAT_LABEL } from '../../platform/project-proposal-file-formats.mjs';
 import { projectSubmissionCompletenessIssues } from '../../platform/project-submission-completeness.mjs';
-import { ProjectSubmissionResponses } from './ProjectSubmissionResponses';
+import { ProjectAbsenceChoice, ProjectRegistrationConfirmations, ProjectSubmissionResponses } from './ProjectSubmissionResponses';
 import { submissionShowsCheckout, submissionAnnualRate, submissionAmountKnown, submissionAmountTotal, submissionFinancialYears, submissionAmount, submissionPaymentPlan, submissionAdvanceRatio, submissionRate, submissionContractWarning } from '../../platform/project-submission-display';
 import { FinancialYearsTable } from './migration-audit/FinancialYearsTable';
 import { ProjectAnnualFinancialNotice } from './ProjectAnnualFinancialNotice';
@@ -1262,6 +1262,18 @@ export function ProjectEditorWizard({
     setDraft((prev) => createProjectEditorWizardDraft({ ...prev, [key]: value }));
   };
 
+  const updateOptionalText = (field: 'businessManagementGoogleFolderLink' | 'paymentPlanDesc', value: string) => {
+    setDraft(prev => {
+      const submissionResponses = { ...prev.submissionResponses };
+      if (value.trim()) delete submissionResponses[field];
+      return createProjectEditorWizardDraft({ ...prev, [field]: value, submissionResponses });
+    });
+  };
+
+  const renderAbsenceChoice = (field: 'businessManagementGoogleFolderLink' | 'paymentPlanDesc', label: string) => usesRegistrationV2 ? (
+    <ProjectAbsenceChoice draft={draft} field={field} label={label} onChange={patch => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} />
+  ) : null;
+
   const updateSettlementSystem = (value: string) => {
     setDraft((prev) => createProjectEditorWizardDraft({
       ...prev,
@@ -1899,15 +1911,19 @@ export function ProjectEditorWizard({
 
       <ProjectFormRow
         label="사업관리 구글폴더링크"
+        issueLabel="businessManagementGoogleFolderLink"
         hints={['사업관리용 Google Drive 폴더 링크를 입력해 주세요.']}
       >
+        <div className="flex flex-wrap items-center gap-3">
         <Input
           type="url"
           value={draft.businessManagementGoogleFolderLink}
-          onChange={(event) => update('businessManagementGoogleFolderLink', event.target.value)}
+          onChange={(event) => updateOptionalText('businessManagementGoogleFolderLink', event.target.value)}
           placeholder="https://drive.google.com/drive/folders/..."
-          className={FORM_CONTROL_CLASS}
+          className={cn('min-w-0 flex-1 basis-60', FORM_CONTROL_CLASS)}
         />
+        {renderAbsenceChoice('businessManagementGoogleFolderLink', '사업관리 폴더')}
+        </div>
       </ProjectFormRow>
 
 
@@ -1950,7 +1966,6 @@ export function ProjectEditorWizard({
         />
       </ProjectFormRow>
     </ProjectFormSection>
-    {usesRegistrationV2 ? <ProjectSubmissionResponses step="basic" draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
     </div>
   );
 
@@ -2556,7 +2571,6 @@ export function ProjectEditorWizard({
 
   const renderFinancialStep = () => (
     <div className={FORM_SECTION_STACK_CLASS}>
-      {usesRegistrationV2 ? <ProjectSubmissionResponses step="financial" draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
       {onContractFileUpload || onProjectDocumentFileUpload ? (
         <div>
           {usesRegistrationV2 ? (
@@ -2746,8 +2760,11 @@ export function ProjectEditorWizard({
               {renderPaymentFields(row, index)}
             </ProjectFormSection>
           ))}
-          <ProjectFormRow label="기타 메모">
-            <Textarea value={draft.paymentPlanDesc} onChange={(event) => update('paymentPlanDesc', event.target.value)} className={cn('min-h-[92px]', FORM_VALUE_CLASS)} />
+          <ProjectFormRow label="기타 메모" issueLabel="paymentPlanDesc">
+            <div className="flex flex-wrap items-start gap-3">
+            <Textarea value={draft.paymentPlanDesc} onChange={(event) => updateOptionalText('paymentPlanDesc', event.target.value)} className={cn('min-h-[92px] min-w-0 flex-1 basis-60', FORM_VALUE_CLASS)} />
+            {renderAbsenceChoice('paymentPlanDesc', '기타 메모')}
+            </div>
           </ProjectFormRow>
         </>
       ) : null}
@@ -2909,6 +2926,7 @@ export function ProjectEditorWizard({
             정산 기준이 정산없음이면 통장·정산 시스템 입력이 필요하지 않습니다.
           </p>
         ) : null}
+        {usesRegistrationV2 ? <ProjectRegistrationConfirmations draft={draft} onChange={patch => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
       </ProjectFormSection>
     </div>
   );
@@ -2928,7 +2946,6 @@ export function ProjectEditorWizard({
           return createProjectEditorWizardDraft({ ...prev, staffing: next, submissionResponses });
         })}
       />
-      {usesRegistrationV2 ? <ProjectSubmissionResponses step="team" draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
       <ProjectFormSection title="담당자와 결재자">
         <ProjectFormRow
           label="최종 보고자 (실무책임자)"
@@ -3289,13 +3306,16 @@ export function ProjectEditorWizard({
         </ProjectFormRow>
       ) : null}
       {!financialYear ? (
-        <ProjectFormRow label="기타 메모">
+        <ProjectFormRow label="기타 메모" issueLabel="paymentPlanDesc">
+          <div className="flex flex-wrap items-start gap-3">
           <Textarea
             value={draft.paymentPlanDesc}
-            onChange={(event) => update('paymentPlanDesc', event.target.value)}
+            onChange={(event) => updateOptionalText('paymentPlanDesc', event.target.value)}
             placeholder="예: 검수 완료 후 세금계산서 발행, 발행일로부터 14일 이내 입금"
-            className={cn('min-h-[92px]', FORM_VALUE_CLASS)}
+            className={cn('min-h-[92px] min-w-0 flex-1 basis-60', FORM_VALUE_CLASS)}
           />
+          {renderAbsenceChoice('paymentPlanDesc', '기타 메모')}
+          </div>
         </ProjectFormRow>
       ) : null}
 
@@ -3409,7 +3429,7 @@ export function ProjectEditorWizard({
 
   const renderReviewStep = () => (
     <div className="space-y-4">
-      {usesRegistrationV2 ? <ProjectSubmissionResponses step="review" draft={draft} onChange={(patch) => setDraft(prev => createProjectEditorWizardDraft({ ...prev, ...patch }))} /> : null}
+      {usesRegistrationV2 ? <ProjectSubmissionResponses draft={draft} /> : null}
       <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
         <Card className="shadow-none lg:col-start-1 lg:row-start-1 lg:self-start">
           <CardHeader className="pb-2"><CardTitle className={FORM_SECTION_CLASS}>기본 정보</CardTitle></CardHeader>

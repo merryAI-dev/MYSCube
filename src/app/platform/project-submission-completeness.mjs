@@ -6,6 +6,7 @@ const amount = (value) => Number.isSafeInteger(value) && value >= 0;
 const moneyLabels = { contractAmount: '계약금액', salesVatAmount: '매출 부가세', totalRevenueAmount: '수익', totalActualCost: '실비(원가)', supportAmount: '지원금' };
 const paymentLabels = { contract: '선금/계약금', interim: '중도금', final: '잔금' };
 const systemCodes = ['E_NARA_DOUM', 'IRIS', 'RCMS', 'EZBARO', 'E_HIJO', 'EDUFINE', 'HAPPYEUM', 'AGRIX', 'BOTAEM_E', 'SMTECH', 'KOCCA_PMS', 'NIPA', 'ACCOUNTANT', 'PRIVATE', 'OTHER', 'NONE'];
+export const PROJECT_REQUIRED_STAFFING_FIELDS = ['staffing.lead', 'staffing.pm', 'staffing.operators'];
 const date = (value) => {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const parsed = new Date(`${value}T00:00:00.000Z`);
@@ -116,8 +117,8 @@ export function projectSubmissionCompletenessIssues(input) {
     ['others', Array.isArray(staffing.others) && staffing.others.length > 0, '기타 인력'],
     ['settlementSupport', text(staffing.settlementSupport), '정산지원'],
   ]) if (hasValue && absent(`staffing.${key}`)) add(`staffing.${key}`, label, 'team', `${label} 입력 내용과 해당 없음 선택이 함께 있습니다. 입력을 유지하려면 해당 없음 선택을 해제해 주세요.`);
-  for (const [key, label] of [['lead', '실제 투입 총괄책임자'], ['pm', '실제 투입 실무책임자']]) if (!person(staffing[key]) && !absent(`staffing.${key}`)) add(`staffing.${key}`, label, 'team');
-  if (!(Array.isArray(staffing.operators) && staffing.operators.length > 0 && staffing.operators.every(person)) && !absent('staffing.operators')) add('staffing.operators', '실제 투입 운영매니저', 'team');
+  for (const [key, label] of [['lead', '실제 투입 총괄책임자'], ['pm', '실제 투입 실무책임자']]) if (!person(staffing[key])) add(`staffing.${key}`, label, 'team', `${label}는 필수 항목입니다. 담당자를 선택해 주세요.`);
+  if (!(Array.isArray(staffing.operators) && staffing.operators.length > 0 && staffing.operators.every(person))) add('staffing.operators', '실제 투입 운영매니저', 'team', '운영매니저는 1명 이상 필수입니다. 담당자를 선택해 주세요.');
   if (!text(staffing.settlementSupport) && !absent('staffing.settlementSupport')) add('staffing.settlementSupport', '정산지원', 'team');
   const others = Array.isArray(staffing.others) ? staffing.others : [];
   if (!others.length && !absent('staffing.others')) add('staffing.others', '기타 인력', 'team');

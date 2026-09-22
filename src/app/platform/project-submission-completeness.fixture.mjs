@@ -11,11 +11,16 @@ export function completeProjectSubmissionFixture(overrides = {}) {
     registeredById: 'person-pm', registeredByName: '검증 실무자', executiveApproverId: 'person-lead', executiveApproverName: '검증 조직장',
     ...financial, financialInputFlags: flags, financialYears: [{ year: 2026, ...financial, inputFlags: flags, profitRate: 0.2, confirmed: false }],
     paymentPlan, paymentPlanInputFlags, paymentExpectedMonths: { contract: '2026-01' },
-    submissionResponses: Object.fromEntries(['businessManagementGoogleFolderLink', 'paymentPlanDesc', 'staffing.lead', 'staffing.pm', 'staffing.operators', 'staffing.others', 'staffing.settlementSupport'].map((key) => [key, 'NOT_APPLICABLE'])),
+    submissionResponses: Object.fromEntries(['businessManagementGoogleFolderLink', 'paymentPlanDesc', 'staffing.others', 'staffing.settlementSupport'].map((key) => [key, 'NOT_APPLICABLE'])),
     registrationConfirmations: { laborIncludesFourInsurance: false, laborIncludesRetirementPay: false, customerSettlementBasisConfirmed: false, modusignContractUsed: true },
     registrationOptionalDocumentNotes: { proposalWordOriginal: '해당 없음', proposalPptOriginal: '해당 없음', presentationPptOriginal: '해당 없음', rfpRequestEvidence: '해당 없음' },
     contractDocument: { path: 'test/contract.pdf' }, customerBusinessRegistrationDocument: { path: 'test/business.pdf' }, quoteDocument: { path: 'test/quote.pdf' },
-    teamMembersDetailed: [], staffing: { lead: null, pm: null, operators: [], others: [], settlementSupport: '' },
+    teamMembersDetailed: [], staffing: {
+      lead: { personId: 'person-lead', name: '검증 조직장' },
+      pm: { personId: 'person-pm', name: '검증 실무자' },
+      operators: [{ personId: 'person-operator', name: '검증 운영매니저' }],
+      others: [], settlementSupport: '',
+    },
     ...overrides,
   };
 }

@@ -52,14 +52,30 @@ describe('shared final submission completeness', () => {
     expect(issues(complete({ proposalWordOriginalDocument: { path: 'file.docx' } })).some((issue) => issue.field === 'proposalWordOriginalDocument')).toBe(true);
   });
   it('requires staffing decisions and rejects partially filled extra rows', () => {
-    const payload = complete({ submissionResponses: {} });
+    const payload = complete({
+      submissionResponses: {},
+      staffing: { lead: null, pm: null, operators: [], others: [], settlementSupport: '' },
+    });
     expect(issues(payload).filter((issue) => issue.field.startsWith('staffing.'))).toHaveLength(5);
     payload.staffing.others = [{ role: '멘토', slot: null }];
     expect(issues(payload).some((issue) => issue.field === 'staffing.others.0.slot')).toBe(true);
   });
+  it('requires lead, PM and an operator even when an old draft marked them not applicable', () => {
+    const payload = complete({
+      staffing: { lead: null, pm: null, operators: [], others: [], settlementSupport: '' },
+      submissionResponses: {
+        ...complete().submissionResponses,
+        'staffing.lead': 'NOT_APPLICABLE',
+        'staffing.pm': 'NOT_APPLICABLE',
+        'staffing.operators': 'NOT_APPLICABLE',
+      },
+    });
+    expect(issues(payload).filter((issue) => ['staffing.lead', 'staffing.pm', 'staffing.operators'].includes(issue.field)))
+      .toHaveLength(3);
+  });
   it('rejects an absence marker that contradicts supplied content', () => {
     const payload = complete({ paymentPlanDesc: '계획 있음' });
-    payload.staffing.lead = { personId: 'person', name: '담당자' };
+    payload.submissionResponses['staffing.lead'] = 'NOT_APPLICABLE';
     expect(issues(payload).some((issue) => issue.field === 'paymentPlanDesc')).toBe(true);
     expect(issues(payload).some((issue) => issue.field === 'staffing.lead')).toBe(true);
   });

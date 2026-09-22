@@ -80,7 +80,7 @@ export function ProjectStaffingSection({
     let cancelled = false;
     fetchPersonsViaBff({ tenantId: orgId, actor })
       .then((result) => { if (!cancelled) { setPeople(result.items); setLoadError(''); } })
-      .catch(() => { if (!cancelled) setLoadError('인력 명부를 불러오지 못했습니다. 저장은 가능하고, 지정만 나중에 하면 됩니다.'); });
+      .catch(() => { if (!cancelled) setLoadError('인력 명부를 불러오지 못했습니다. 작성 내용은 임시저장할 수 있습니다. 최종 제출 전에 명부를 다시 불러와 담당자를 선택해 주세요.'); });
     return () => { cancelled = true; };
   }, [enabled, orgId, actor]);
 
@@ -105,7 +105,7 @@ export function ProjectStaffingSection({
       searchText: `${person.nickname || ''} ${person.name || ''}`.toLocaleLowerCase('ko-KR'),
     }));
     return [
-      { uid: UNASSIGNED, name: '', nickname: '', email: '', label: '미정 (비워두기)', searchText: '미정' },
+      { uid: UNASSIGNED, name: '', nickname: '', email: '', label: '선택 해제 (임시저장만 가능)', searchText: '선택 해제 미정' },
       ...rows,
     ];
   }, [people]);
@@ -139,7 +139,7 @@ export function ProjectStaffingSection({
       className={cn(widthClass, FORM_CONTROL_CLASS)}
       options={options}
       value={slot?.personId || ''}
-      placeholder="인력 명부에서 선택 (미정 가능)"
+      placeholder="담당자 선택"
       emptyLabel={loadError || '인력 명부를 불러오는 중입니다'}
       disabled={disabled || !enabled}
       onChange={(personId) => apply(toSlot(people, personId))}
@@ -149,14 +149,14 @@ export function ProjectStaffingSection({
   return (
     <ProjectFormSection
       title="실제 투입인력"
-      description="참여율 시트와 별개로, 이 사업의 책임 역할을 인력 명부 기준으로 지정합니다. 미정인 자리는 비워둘 수 있습니다."
+      description="총괄책임자·실무책임자와 운영매니저 1명 이상을 선택해 주세요. 아직 정하지 않았다면 임시저장한 뒤 이어서 작성할 수 있습니다."
     >
       {loadError ? <p className="text-[11px] text-amber-700">{loadError}</p> : null}
 
-      <ProjectFormRow label="총괄책임자" note="사업 최종 책임자">
+      <ProjectFormRow label="총괄책임자" required issueLabel="staffing.lead" note="필수 · 사업 최종 책임자">
         {picker(staffing.lead, (slot) => patch({ lead: slot }))}
       </ProjectFormRow>
-      <ProjectFormRow label="실무책임자" note="실무 책임자 (PM)">
+      <ProjectFormRow label="실무책임자" required issueLabel="staffing.pm" note="필수 · 실무 책임자 (PM)">
         {picker(staffing.pm, (slot) => patch({ pm: slot }))}
       </ProjectFormRow>
 
@@ -164,9 +164,11 @@ export function ProjectStaffingSection({
         <ProjectFormRow
           key={`operator-${index}`}
           label={`운영매니저 ${index + 1}`}
-          note={index === 0 ? '운영 매니저 (1인 이상)' : '추가 운영 매니저'}
+          required={index === 0}
+          issueLabel={index === 0 ? 'staffing.operators' : undefined}
+          note={index === 0 ? '필수 · 1명 이상 선택' : '추가 운영매니저'}
         >
-          <div className="flex items-center gap-2">
+          <div className={cn('flex items-center gap-2', FIELD_W_MD)}>
             <div className="min-w-0 flex-1">
               {picker(slot, (next) => {
                 const filled = [...staffing.operators];
@@ -178,11 +180,12 @@ export function ProjectStaffingSection({
                   setEmptyOperatorSlots((count) => Math.max(0, count - 1));
                 }
                 patch({ operators: filled });
-              })}
+              }, 'w-full')}
             </div>
             {operatorSlots.length > 1 ? (
               <Button
-                type="button" variant="outline" size="sm" className="h-9 px-2"
+                type="button" variant="outline" size="sm" className="h-9 shrink-0 px-2"
+                aria-label={`운영매니저 ${index + 1} 삭제`}
                 disabled={disabled}
                 onClick={() => {
                   if (index < staffing.operators.length) {
@@ -195,18 +198,15 @@ export function ProjectStaffingSection({
                 <X className="h-3.5 w-3.5" />
               </Button>
             ) : null}
+            {index === operatorSlots.length - 1 ? (
+              <Button type="button" variant="outline" size="sm" className="h-9 shrink-0 gap-1 px-2" disabled={disabled}
+                aria-label="운영매니저 추가" title="운영매니저 추가" onClick={() => setEmptyOperatorSlots((count) => count + 1)}>
+                <Plus className="h-3.5 w-3.5" /><span className="hidden sm:inline">추가</span>
+              </Button>
+            ) : null}
           </div>
         </ProjectFormRow>
       ))}
-      <ProjectFormRow label="" note="">
-        <Button
-          type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs"
-          disabled={disabled}
-          onClick={() => setEmptyOperatorSlots((count) => count + 1)}
-        >
-          <Plus className="h-3.5 w-3.5" /> 운영매니저 추가
-        </Button>
-      </ProjectFormRow>
 
       {/*
         기타 역할. 고정 역할로 담기지 않는 자리(멘토·강사 등)를 역할명과 함께 적는다.
@@ -243,9 +243,11 @@ export function ProjectStaffingSection({
         </ProjectFormRow>
       ))}
       <ProjectFormRow
-        label={staffing.others.length ? '' : '기타'}
+        label={staffing.others.length ? '' : '기타 인력'}
+        issueLabel="staffing.others"
         note={staffing.others.length ? '' : '실제 수행할 역할 기재 (멘토, 강사 등)'}
       >
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <Button
           type="button" variant="outline" size="sm" className="h-8 gap-1.5 text-xs"
           disabled={disabled || staffing.others.length >= PROJECT_STAFFING_OTHERS_MAX}
@@ -253,6 +255,17 @@ export function ProjectStaffingSection({
         >
           <Plus className="h-3.5 w-3.5" /> 기타 역할 추가
         </Button>
+        {staffing.others.length === 0 ? <label className="flex items-center gap-2 text-[13px]">
+          <input type="checkbox" aria-label="기타 인력 해당 없음" disabled={disabled}
+            checked={submissionResponses['staffing.others'] === 'NOT_APPLICABLE'}
+            onChange={(event) => {
+              const responses = { ...submissionResponses };
+              if (event.target.checked) responses['staffing.others'] = 'NOT_APPLICABLE';
+              else delete responses['staffing.others'];
+              onChange(staffing, responses);
+            }} /> 해당 없음
+        </label> : null}
+        </div>
       </ProjectFormRow>
 
       <ProjectFormRow label="정산지원" required issueLabel="staffing.settlementSupport" note="담당자를 선택하거나 해당 없음을 선택해 주세요.">

@@ -5,3 +5,4 @@ export interface ProjectSubmissionCompletenessIssue {
   message: string;
 }
 export function projectSubmissionCompletenessIssues(payload: unknown): ProjectSubmissionCompletenessIssue[];
+export const PROJECT_REQUIRED_STAFFING_FIELDS: readonly string[];
