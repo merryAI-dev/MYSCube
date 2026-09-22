@@ -523,6 +523,8 @@ jobs:
           SETTLEMENT_AGENT_WORKER_SECRET: ${{ secrets.SETTLEMENT_AGENT_WORKER_SECRET }}
           SETTLEMENT_HERMES_URL: ${{ vars.SETTLEMENT_HERMES_URL }}
           SETTLEMENT_AGENT_ENABLED: 'true'
+          PRODUCT_WORKBENCH_READS_ENABLED: ${{ vars.PRODUCT_WORKBENCH_READS_ENABLED || 'false' }}
+          PRODUCT_WORKBENCH_AI_ENABLED: ${{ vars.PRODUCT_WORKBENCH_AI_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           commit_sha="$(git rev-parse HEAD)"
@@ -645,7 +647,11 @@ jobs:
           SETTLEMENT_CANARY_EXPECTED_ACTIONS: ${{ vars.SETTLEMENT_CANARY_EXPECTED_ACTIONS_LIVE }}
           SETTLEMENT_CANARY_TENANT_ID: mysc
           SETTLEMENT_CANARY_CANONICAL_ORIGIN: https://myscube.myscguard.app
-        run: node scripts/verify-cashflow-settlement-candidate.mjs
+          PRODUCT_WORKBENCH_AI_ENABLED: ${{ vars.PRODUCT_WORKBENCH_AI_ENABLED || 'false' }}
+          PRODUCT_WORKBENCH_READS_ENABLED: ${{ vars.PRODUCT_WORKBENCH_READS_ENABLED || 'false' }}
+        run: |
+          node scripts/verify-cashflow-settlement-candidate.mjs
+          node scripts/verify-workbench-isolation.mjs
 
       - name: Capture current canonical alias
         id: previous_alias

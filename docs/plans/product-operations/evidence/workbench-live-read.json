@@ -1,0 +1,35 @@
+{
+  "verifiedAt": "2026-09-22T09:21:18.822Z",
+  "productionReadOnly": true,
+  "productionWrites": 0,
+  "actualLogsRead": 100,
+  "truncated": true,
+  "logsWithClientRelease": 0,
+  "selectedCorrelation": "NOT_ESTABLISHED",
+  "selectedCodeStatus": "missing_revision",
+  "selectedUnknowns": [
+    "요청 번호는 호출자가 지정할 수 있습니다. 계정·업무·시각까지 일치해도 인과관계 확정은 아닙니다.",
+    "코드 위치 일치만으로 근본 원인을 확정하지 않습니다.",
+    "실패 요청의 코드 버전을 확인하지 못했습니다. 오류 수집 서버 버전이나 최신 main으로 대신하지 않았습니다.",
+    "Vercel·Cloud Run 전체 서버 로그는 이 조회에 연결되지 않았습니다. 서버 스택·외부 서비스 응답까지 확인한 진단이 아닙니다."
+  ],
+  "githubIndependentRead": {
+    "status": "available",
+    "sha": "a61b75f13abc131c890f7d6952baf8cab20f1bc4",
+    "paths": [
+      {
+        "path": "server/bff/routes/project-registration-drafts.mjs",
+        "status": "available",
+        "blobSha": "6816a95847dd31318fbb32a299979160a7e92ba6",
+        "url": "https://github.com/merryAI-dev/MYSCube/blob/a61b75f13abc131c890f7d6952baf8cab20f1bc4/server/bff/routes/project-registration-drafts.mjs"
+      },
+      {
+        "path": "server/bff/routes/project-info-drafts.mjs",
+        "status": "available",
+        "blobSha": "45515bc6e5503344e9539f755b87d3d3def9c17d",
+        "url": "https://github.com/merryAI-dev/MYSCube/blob/a61b75f13abc131c890f7d6952baf8cab20f1bc4/server/bff/routes/project-info-drafts.mjs"
+      }
+    ]
+  },
+  "note": "별도 GitHub 조회의 SHA는 로컬 HEAD입니다. 운영 오류의 실패 버전으로 연결하지 않았습니다."
+}

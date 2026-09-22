@@ -316,6 +316,8 @@ export const projectSheetSourceUploadSchema = z.object({
 }).strict();
 
 export const clientErrorIngestSchema = z.object({
+  environment: z.string().trim().max(100).optional(),
+  release: z.string().trim().max(200).optional(),
   eventType: z.enum(['exception', 'message']).optional(),
   message: NON_EMPTY_STRING.max(4000),
   name: z.string().trim().max(200).optional(),

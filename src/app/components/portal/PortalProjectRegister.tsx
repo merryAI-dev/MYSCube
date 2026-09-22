@@ -1,4 +1,5 @@
 import type { ProjectDraftHistoryItem } from '../../lib/project-draft-history';
+import { recordProjectValidationBlock } from '../../lib/product-operations-client';
 import { serializeProjectEditorPrivateDraft } from '../../platform/project-editor-draft-persistence';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -156,12 +157,13 @@ function RegistrationEditor({
     }
   }, [lease.checkBeforeSave, lease.checkStatus]);
 
-  const persistDraft = useCallback((draft: ProjectEditorDraft, stepIndex: number) => enqueueMutation(() => (
+  const persistDraft = useCallback((draft: ProjectEditorDraft, stepIndex: number, saveMode?: 'manual' | 'automatic') => enqueueMutation(() => (
     withOwnership(async (ownership) => {
       const saved = await draftClient.save(record.draftId, ownership, {
         expectedDraftRevision: revisionRef.current,
         payload: serializeProjectEditorPrivateDraft(draft),
         stepIndex,
+        saveMode,
       });
       revisionRef.current = saved.draft.draftRevision;
       setServerRecord(saved.draft);
@@ -357,6 +359,7 @@ function RegistrationEditor({
         topSlot={topSlot}
         readOnly={!lease.canEdit}
         autosave={autosave}
+        onValidationBlocked={() => recordProjectValidationBlock({ tenantId: orgId, actor }, 'registration.submit')}
         actions={[{ id: 'submit', label: '최종 저장', icon: Send }]}
         busyActionId={busyActionId}
         documentPreviewUrls={documentPreviewUrls}

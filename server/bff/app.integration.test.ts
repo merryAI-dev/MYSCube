@@ -359,6 +359,8 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
         route: '/portal/project-settings',
         href: 'https://inner-platform.vercel.app/portal/project-settings',
         clientRequestId: 'ui_req_001',
+        environment: 'preview',
+        release: 'client-build-123',
         tags: {
           action: 'projects_listen',
         },
@@ -379,7 +381,41 @@ describeIfEmulator('BFF integration (Firestore emulator)', () => {
       source: 'portal_store',
       message: 'Portal projects listen failed',
       clientRequestId: 'ui_req_001',
+      environment: 'preview',
+      release: 'client-build-123',
+      ingestEnvironment: 'local',
     });
+  });
+
+  it('accepts old client error payloads without release metadata', async () => {
+    const response = await api.post('/api/v1/client-errors')
+      .set({ ...defaultHeaders, 'idempotency-key': 'idem-client-error-legacy' })
+      .send({ message: 'Old client', source: 'application' });
+    expect(response.status).toBe(200);
+    const stored = await db.doc(`orgs/${tenantId}/client_error_events/${response.body.id}`).get();
+    expect(stored.data()?.ingestEnvironment).toBe('local');
+    expect(stored.data()?.release).toBeUndefined();
+  });
+
+  it('correlates the generated response ID, persisted error and request log', async () => {
+    const logs = vi.spyOn(console, 'log');
+    try {
+      const response = await api.post('/api/v1/client-errors')
+        .set({ ...defaultHeaders, 'idempotency-key': 'idem-client-error-correlation' })
+        .send({ message: 'Correlation check', source: 'application' });
+      expect(response.status).toBe(200);
+      const stored = await db.doc(`orgs/${tenantId}/client_error_events/${response.body.id}`).get();
+      const requestId = response.headers['x-request-id'];
+      expect(stored.data()?.requestId).toBe(requestId);
+      expect(logs.mock.calls.some(([entry]) => {
+        try {
+          const parsed = JSON.parse(String(entry));
+          return parsed.message === 'bff.request' && parsed.requestId === requestId;
+        } catch { return false; }
+      })).toBe(true);
+    } finally {
+      logs.mockRestore();
+    }
   });
 
   it('delivers project registration Slack notifications for stored project requests', async () => {

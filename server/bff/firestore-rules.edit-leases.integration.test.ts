@@ -24,6 +24,10 @@ const describeIfEmulator = emulatorHost ? describe : describe.skip;
 const projectId = 'demo-bff-firestore-rules-it';
 const tenantId = 'firestore-rules-private-edit-it';
 const protectedCollections = [
+  'reliability_operations',
+  'reliability_daily',
+  'reliability_incidents',
+  'personal_work_pages',
   'editLeases',
   'idempotency_keys',
   'weekly_api_idempotency',
@@ -192,6 +196,16 @@ describeIfEmulator('BFF-only Firestore collection rules (Firestore emulator)', (
       });
     }
   }
+
+  it('denies nested personal page versions, model metadata and internal incident history', async () => {
+    for (const actor of actors) {
+      const db = testEnv.authenticatedContext(actor.uid, { email: `${actor.uid}@mysc.co.kr` }).firestore();
+      for (const path of ['personal_work_pages/owner/pages/page/versions/1', 'personal_work_pages/owner/agent_runs/run', 'reliability_incidents/incident/history/1']) {
+        await assertFails(getDoc(doc(db, `orgs/${tenantId}/${path}`)));
+        await assertFails(setDoc(doc(db, `orgs/${tenantId}/${path}`), { value: 'not-allowed' }));
+      }
+    }
+  });
 
   for (const collection of canonicalRootCollections) {
     for (const actor of actors.filter(({ role }) => role !== 'viewer')) {

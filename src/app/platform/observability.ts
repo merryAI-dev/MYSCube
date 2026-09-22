@@ -20,6 +20,11 @@ const errorCaptureMarker = Symbol.for('mysc.observability.captured');
 const ACTIVE_TENANT_STORAGE_KEY = 'MYSC_ACTIVE_TENANT';
 const DEFAULT_INTERNAL_API_BASE_URL = 'http://127.0.0.1:8787';
 const INTERNAL_CLIENT_ERROR_PATH = '/api/v1/client-errors';
+const internalTransportHealth = { attempted: 0, pending: 0, accepted: 0, failed: 0, skipped: 0, lastFailureAt: null as string | null };
+
+export function getInternalTelemetryHealth() {
+  return { ...internalTransportHealth };
+}
 const globalState = globalThis as typeof globalThis & {
   __MYSC_OBSERVABILITY__?: {
     sentryEnabled: boolean;
@@ -212,6 +217,8 @@ function buildInternalErrorPayload(params: {
     tags: normalizeTags(params.options?.tags),
     extra: normalizeExtra(params.options?.extra),
     occurredAt: new Date().toISOString(),
+    environment: truncateText(readEnvString(import.meta.env.VITE_SENTRY_ENVIRONMENT), 100),
+    release: truncateText(readEnvString(import.meta.env.VITE_SENTRY_RELEASE), 200),
   };
 }
 
@@ -219,10 +226,16 @@ async function sendInternalClientError(
   payload: ReturnType<typeof buildInternalErrorPayload>,
   env: Record<string, unknown> = import.meta.env,
 ): Promise<void> {
-  if (typeof fetch !== 'function') return;
+  if (typeof fetch !== 'function') {
+    internalTransportHealth.skipped += 1;
+    return;
+  }
 
   const tenantId = resolveObservabilityTenantId();
-  if (!tenantId) return;
+  if (!tenantId) {
+    internalTransportHealth.skipped += 1;
+    return;
+  }
 
   const state = globalState.__MYSC_OBSERVABILITY__;
   const actor = {
@@ -240,15 +253,27 @@ async function sendInternalClientError(
     },
   });
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  internalTransportHealth.attempted += 1;
+  internalTransportHealth.pending += 1;
   try {
-    await fetch(buildInternalClientErrorUrl(env), {
+    const response = await fetch(buildInternalClientErrorUrl(env), {
       method: 'POST',
       headers,
       body: JSON.stringify(payload),
       keepalive: true,
+      signal: controller.signal,
     });
+    if (!response.ok) throw new Error('Telemetry was not accepted');
+    internalTransportHealth.accepted += 1;
   } catch {
     // Internal telemetry must never cascade into the user flow.
+    internalTransportHealth.failed += 1;
+    internalTransportHealth.lastFailureAt = new Date().toISOString();
+  } finally {
+    clearTimeout(timeout);
+    internalTransportHealth.pending -= 1;
   }
 }
 

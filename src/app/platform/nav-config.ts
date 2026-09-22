@@ -44,6 +44,11 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'AXR',
     items: [
+      { to: '/axr/product-operations', icon: BarChart3, label: '서비스 운영 현황' },
+      { to: '/axr/qa-evidence', icon: LayoutDashboard, label: '로그·GitHub QA' },
+      { to: '/work-pages', icon: LayoutDashboard, label: '내 업무 페이지' },
+      { to: '/cashflow-assistant', icon: BarChart3, label: '현금흐름 조회·진단' },
+      { to: '/service-guidance', icon: ListChecks, label: '서비스 이용 안내' },
       { to: '/axr/cashflow-period-policy', icon: CalendarRange, label: '현금흐름 기간·마감 정책' },
       { to: '/users', icon: UserCog, label: '권한 관리' },
       { to: '/settings?tab=members', icon: UserCog, label: '멤버DB' },

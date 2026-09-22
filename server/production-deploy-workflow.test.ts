@@ -32,6 +32,16 @@ describe('production deployment decisions', () => {
     expect(deployment.args).toContain('SETTLEMENT_AGENT_WORKER_SECRET=worker-key');
     expect(deployment.args.some((arg: string) => arg.startsWith('GEMINI_API_KEY='))).toBe(false);
   });
+  it.each([false, true])('isolates Workbench activation with settlement enabled=%s', (settlement) => {
+    for (const workbench of [false, true]) for (const maintenance of [false, true]) {
+      const deployment = buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance,
+        env: { ...env, SETTLEMENT_AGENT_ENABLED: String(settlement), PRODUCT_WORKBENCH_AI_ENABLED: String(workbench), SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key' } });
+      expect(deployment.args).toContain(`PRODUCT_WORKBENCH_AI_ENABLED=${workbench && !maintenance}`);
+      expect(deployment.args).toContain(`SETTLEMENT_AGENT_ENABLED=${settlement && !maintenance}`);
+      expect(deployment.args.includes('SETTLEMENT_AGENT_GEMINI_API_KEY=agent-key')).toBe(settlement || workbench);
+      expect(deployment.args.includes('SLACK_SIGNING_SECRET=signature')).toBe(settlement);
+    }
+  });
   it('keeps the reviewed active September request in the read-only cutover inventory', () => {
     const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
     const inventoryStep = workflow.split('- name: Verify settlement-cycle cutover inventory')[1].split('- name: Deploy to Vercel production')[0];

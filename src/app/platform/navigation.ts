@@ -157,5 +157,6 @@ const PORTAL_STANDALONE_ENTRY_PATHS = [
 ] as const;
 
 export function isPortalStandaloneEntryPath(pathname: string): boolean {
+  if (['/portal/work-pages', '/portal/cashflow-assistant', '/portal/service-guidance'].includes(pathname)) return true;
   return PORTAL_STANDALONE_ENTRY_PATHS.some((path) => matchesPathPrefix(pathname, path));
 }

@@ -63,9 +63,13 @@ export function buildVercelProductionDeployArgs({
     ['PROJECT_REGISTRATION_SLACK_CHANNEL_ID', ''],
   ]) pair(args, '--env', name, value);
   pair(args, '--env', 'SETTLEMENT_AGENT_ENABLED', env.SETTLEMENT_AGENT_ENABLED === 'true' && !maintenance ? 'true' : 'false');
+  pair(args, '--env', 'PRODUCT_WORKBENCH_READS_ENABLED', env.PRODUCT_WORKBENCH_READS_ENABLED === 'true' && !maintenance ? 'true' : 'false');
+  pair(args, '--env', 'PRODUCT_WORKBENCH_AI_ENABLED', env.PRODUCT_WORKBENCH_AI_ENABLED === 'true' && !maintenance ? 'true' : 'false');
+  if (env.SETTLEMENT_AGENT_ENABLED === 'true' || env.PRODUCT_WORKBENCH_AI_ENABLED === 'true') {
+    pair(args, '--env', 'SETTLEMENT_AGENT_GEMINI_API_KEY', required(env, 'SETTLEMENT_AGENT_GEMINI_API_KEY'));
+  }
   if (env.SETTLEMENT_AGENT_ENABLED === 'true') {
     pair(args, '--env', 'SLACK_SIGNING_SECRET', required(env, 'SLACK_SIGNING_SECRET'));
-    pair(args, '--env', 'SETTLEMENT_AGENT_GEMINI_API_KEY', required(env, 'SETTLEMENT_AGENT_GEMINI_API_KEY'));
     pair(args, '--env', 'SETTLEMENT_AGENT_WORKER_SECRET', required(env, 'SETTLEMENT_AGENT_WORKER_SECRET'));
     pair(args, '--env', 'SETTLEMENT_HERMES_URL', env.SETTLEMENT_HERMES_URL || '');
   }

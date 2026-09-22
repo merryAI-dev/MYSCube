@@ -247,12 +247,13 @@ interface ProjectEditorWizardProps {
   autosave?: {
     key: string;
     disabled?: boolean;
-    onSave?: (draft: ProjectEditorDraft, stepIndex: number) => void | Promise<void>;
+    onSave?: (draft: ProjectEditorDraft, stepIndex: number, saveMode?: 'manual' | 'automatic') => void | Promise<void>;
     onDiscard?: () => void | Promise<void>;
   };
   onCancel?: () => void | Promise<void>;
   onLeave?: () => void | Promise<void>;
   onSubmit: (draft: ProjectEditorDraft, actionId: string) => void | Promise<void>;
+  onValidationBlocked?: () => void;
 }
 
 const PROJECT_EDITOR_AUTOSAVE_SCHEMA_VERSION = 1;
@@ -670,6 +671,7 @@ export function ProjectEditorWizard({
   onCancel,
   onLeave,
   onSubmit,
+  onValidationBlocked,
 }: ProjectEditorWizardProps) {
   const { user } = useAuth();
   const { orgId } = useFirebase();
@@ -877,6 +879,7 @@ export function ProjectEditorWizard({
     nextDraft: ProjectEditorDraft,
     nextStepIndex: number,
     forceVersion = false,
+    saveMode: 'manual' | 'automatic' = forceVersion ? 'manual' : 'automatic',
   ) => {
     // 재시도 대기 여부는 렌더 시점 값이 아니라 ref 를 즉석에서 본다 - 나가기 직전에
     // 대기 파일을 버린 경우에도 임시저장이 진행돼야 한다.
@@ -907,7 +910,7 @@ export function ProjectEditorWizard({
       if (!forceVersion && savedSnapshotRef.current === snapshot) return true;
       setAutosaveState('saving');
       try {
-        await autosave.onSave?.(storedDraft.draft, nextStepIndex);
+        await autosave.onSave?.(storedDraft.draft, nextStepIndex, saveMode);
         lastPersistedFingerprintRef.current = JSON.stringify(storedDraft.draft);
         savedSnapshotRef.current = snapshot;
         try {
@@ -965,7 +968,7 @@ export function ProjectEditorWizard({
       toast.info('업로드에 실패했던 첨부파일은 저장되지 않았습니다. 다음에 다시 첨부해 주세요.');
     }
     if ((hasUnsavedInput || invalidAmountsRef.current) && autosave?.key && !autosave.disabled && !readOnly) {
-      if (!await persistAutosaveSnapshot(draft, stepIndex)) {
+      if (!await persistAutosaveSnapshot(draft, stepIndex, false, 'manual')) {
         toast.error(`임시저장에 실패해 수정 세션을 종료하지 않았습니다.${autosaveErrorRef.current ? ` (${autosaveErrorRef.current})` : ''}`);
         return false;
       }
@@ -1115,7 +1118,7 @@ export function ProjectEditorWizard({
     submitInFlightRef.current = true;
     setSubmitting(true);
     try {
-      if (autosave?.key && !await persistAutosaveSnapshot(draft, stepIndex)) {
+      if (autosave?.key && !await persistAutosaveSnapshot(draft, stepIndex, false, 'manual')) {
         throw new Error(`최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다. ${autosaveErrorRef.current}`);
       }
       await onSubmit(createProjectEditorDraft(draft), actionId);
@@ -3952,6 +3955,7 @@ export function ProjectEditorWizard({
                     disabled={readOnly || submitting || !!busyActionId || action.disabled}
                     onClick={() => {
                       if (submitBlocked) {
+                        onValidationBlocked?.();
                         setSubmitBlockedNotice(true);
                         return;
                       }

@@ -60,6 +60,11 @@ const CashflowPeriodPolicyPage = lazyRoute(() => import('./components/cashflow/C
 const ProjectCashflowSheetPage = lazyRoute(() => import('./components/cashflow/ProjectCashflowSheetPage'), 'ProjectCashflowSheetPage');
 const EvidenceQueuePage = lazyRoute(() => import('./components/evidence/EvidenceQueuePage'), 'EvidenceQueuePage');
 const AuditLogPage = lazyRoute(() => import('./components/audit/AuditLogPage'), 'AuditLogPage');
+const QaEvidencePage = lazyRoute(() => import('./components/product-operations/QaEvidencePage'), 'QaEvidencePage');
+const ProductOperationsPage = lazyRoute(() => import('./components/product-operations/ProductOperationsPage'), 'ProductOperationsPage');
+const PersonalWorkPages = lazyRoute(() => import('./components/product-operations/PersonalWorkPages'), 'PersonalWorkPages');
+const CashflowAssistantPage = lazyRoute(() => import('./components/product-operations/CashflowAssistantPage'), 'CashflowAssistantPage');
+const ServiceGuidance = lazyRoute(() => import('./components/product-operations/ServiceGuidance'), 'ServiceGuidance');
 const SettingsPage = lazyRoute(() => import('./components/settings/SettingsPage'), 'SettingsPage');
 const ParticipationPage = lazyRoute(() => import('./components/participation/ParticipationPage'), 'ParticipationPage');
 const PeopleDirectoryPage = lazyRoute(() => import('./components/people/PeopleDirectoryPage'), 'PeopleDirectoryPage');
@@ -162,6 +167,11 @@ export const router = createBrowserRouter([
       { path: 'hr-announcements', element: <S C={AdminHrAnnouncementPage} /> },
       { path: 'training', element: <S C={TrainingManagePage} /> },
       { path: 'audit', element: <S C={AuditLogPage} /> },
+      { path: 'axr/qa-evidence', element: <S C={QaEvidencePage} /> },
+      { path: 'axr/product-operations', element: <S C={ProductOperationsPage} /> },
+      { path: 'work-pages', element: <S C={PersonalWorkPages} /> },
+      { path: 'cashflow-assistant', element: <S C={CashflowAssistantPage} /> },
+      { path: 'service-guidance', element: <S C={ServiceGuidance} /> },
       { path: 'settings', element: <S C={SettingsPage} /> },
       { path: '*', element: <S C={NotFoundPage} /> },
     ],
@@ -172,6 +182,9 @@ export const router = createBrowserRouter([
     element: <PortalRouteShell />,
     children: [
       { index: true, element: <S C={PortalProjectSelectPage} /> },
+      { path: 'work-pages', element: <S C={PersonalWorkPages} /> },
+      { path: 'cashflow-assistant', element: <S C={CashflowAssistantPage} /> },
+      { path: 'service-guidance', element: <S C={ServiceGuidance} /> },
       // ── Company Board (전사 게시판) ──
       {
         path: 'board',
