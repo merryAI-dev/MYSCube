@@ -259,11 +259,11 @@ export function createProjectInfoDraftClient(options: {
 
     async save(
       ownership: { leaseId: string; fence: number },
-      input: { expectedDraftRevision: number; payload: Record<string, unknown>; stepIndex?: number },
+      input: { expectedDraftRevision: number; payload: Record<string, unknown>; stepIndex?: number; saveMode?: 'manual' | 'automatic' },
     ) {
       const response = await client.patch<unknown>(path, {
         ...request,
-        headers: ownershipHeaders(sessionId, ownership),
+        headers: { ...ownershipHeaders(sessionId, ownership), 'x-operation-mode': input.saveMode || 'unknown' },
         body: {
           expectedDraftRevision: revision(input.expectedDraftRevision),
           payload: input.payload,

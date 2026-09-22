@@ -570,7 +570,7 @@ describe('ProjectEditorWizard dropdown contract', () => {
   it('never double-submits or final-submits after the latest private draft save fails', () => {
     expect(source).toContain('if (submitInFlightRef.current) return');
     expect(source).toContain('최신 입력을 임시저장하지 못해 최종 저장을 중단했습니다.');
-    expect(source.indexOf('persistAutosaveSnapshot(draft, stepIndex)')).toBeLessThan(source.indexOf('await onSubmit(createProjectEditorDraft(draft), actionId)'));
+    expect(source.indexOf("persistAutosaveSnapshot(draft, stepIndex, false, 'manual')")).toBeLessThan(source.indexOf('await onSubmit(createProjectEditorDraft(draft), actionId)'));
   });
 
   it('never saves or submits a stale snapshot while an attachment mutation is in flight', () => {
@@ -742,7 +742,7 @@ describe('ProjectEditorWizard safe exit contract', () => {
     expect(source).toContain('저장하지 않고 종료');
     expect(source).toContain('임시저장 후 종료');
     expect(source).not.toContain('window.confirm');
-    expect(source).toContain('await persistAutosaveSnapshot(draft, stepIndex)');
+    expect(source).toContain("await persistAutosaveSnapshot(draft, stepIndex, false, 'manual')");
     expect(source).toContain('await onLeave?.();');
   });
 });

@@ -36,6 +36,8 @@ export function canShowAdminNavItem(role: unknown, to: string): boolean {
 }
 
 function canonicalizeAdminPath(pathname: string): string | undefined {
+  if (pathname === '/axr/qa-evidence' || pathname.startsWith('/axr/qa-evidence/')) return '/axr/qa-evidence';
+  if (pathname === '/axr/product-operations' || pathname.startsWith('/axr/product-operations/')) return '/axr/product-operations';
   if (pathname === '/') return '/';
   if (pathname === '/dashboard') return '/dashboard';
 

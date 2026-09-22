@@ -1,0 +1,8 @@
+{
+  "verifiedAt": "2026-09-22T10:13:30.595931+00:00",
+  "previousRuleset": "projects/inner-platform-live-20260316/rulesets/e4738452-37e4-4ed9-8b25-4a04fe21736e",
+  "activeRuleset": "projects/inner-platform-live-20260316/rulesets/f8d8ad3e-e8b0-493e-aea5-cad43c0cc37e",
+  "exactSourceVerified": true,
+  "sha256": "5016c95389c02a9c2a53f22ca57f4cb6da319611c8f1606ccf576179695d46f1",
+  "businessRecordsChanged": 0
+}

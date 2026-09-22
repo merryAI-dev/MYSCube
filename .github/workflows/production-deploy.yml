@@ -523,6 +523,8 @@ jobs:
           SETTLEMENT_AGENT_WORKER_SECRET: ${{ secrets.SETTLEMENT_AGENT_WORKER_SECRET }}
           SETTLEMENT_HERMES_URL: ${{ vars.SETTLEMENT_HERMES_URL }}
           SETTLEMENT_AGENT_ENABLED: 'true'
+          PRODUCT_WORKBENCH_READS_ENABLED: ${{ vars.PRODUCT_WORKBENCH_READS_ENABLED || 'false' }}
+          PRODUCT_WORKBENCH_AI_ENABLED: ${{ vars.PRODUCT_WORKBENCH_AI_ENABLED || 'false' }}
         run: |
           set -euo pipefail
           commit_sha="$(git rev-parse HEAD)"
@@ -627,26 +629,6 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: node scripts/check-settlement-runtime.mjs
 
-      - name: Verify authenticated settlement reads before alias
-        if: steps.release_mode.outputs.settlement_cutover == 'true'
-        env:
-          SETTLEMENT_CANARY_BASE_URL: ${{ steps.vercel_deploy.outputs.deployment_url }}
-          SETTLEMENT_CANARY_FIREBASE_WEB_API_KEY: ${{ vars.FIREBASE_WEB_API_KEY_LIVE }}
-          SETTLEMENT_CANARY_FIREBASE_REFRESH_TOKEN: ${{ secrets.FIREBASE_SETTLEMENT_READ_CANARY_REFRESH_TOKEN_LIVE }}
-          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-          SETTLEMENT_CANARY_ACTOR_UID: ${{ vars.SETTLEMENT_READ_CANARY_ACTOR_UID_LIVE }}
-          SETTLEMENT_CANARY_PROJECT_ID: ${{ vars.JVM_SETTLEMENT_CANARY_PROJECT_ID_LIVE }}
-          SETTLEMENT_CANARY_CYCLE_YEAR_MONTH: ${{ vars.JVM_SETTLEMENT_CANARY_CYCLE_YEAR_MONTH_LIVE }}
-          SETTLEMENT_CANARY_EXPECTED_REQUEST_ID: ${{ vars.SETTLEMENT_CANARY_EXPECTED_REQUEST_ID_LIVE }}
-          SETTLEMENT_CANARY_EXPECTED_STATUS: ${{ vars.SETTLEMENT_CANARY_EXPECTED_STATUS_LIVE }}
-          SETTLEMENT_CANARY_EXPECTED_WORKFLOW_REVISION: ${{ vars.SETTLEMENT_CANARY_EXPECTED_WORKFLOW_REVISION_LIVE }}
-          SETTLEMENT_CANARY_EXPECTED_EVIDENCE_REVISION: ${{ vars.SETTLEMENT_CANARY_EXPECTED_EVIDENCE_REVISION_LIVE }}
-          SETTLEMENT_CANARY_EXPECTED_TARGET_YEAR_MONTH: ${{ vars.SETTLEMENT_CANARY_EXPECTED_TARGET_YEAR_MONTH_LIVE }}
-          SETTLEMENT_CANARY_EXPECTED_ACTIONS: ${{ vars.SETTLEMENT_CANARY_EXPECTED_ACTIONS_LIVE }}
-          SETTLEMENT_CANARY_TENANT_ID: mysc
-          SETTLEMENT_CANARY_CANONICAL_ORIGIN: https://myscube.myscguard.app
-        run: node scripts/verify-cashflow-settlement-candidate.mjs
-
       - name: Capture current canonical alias
         id: previous_alias
         if: steps.release_mode.outputs.release_mode == 'web' && needs.preflight.outputs.promote == 'true'
@@ -675,6 +657,31 @@ jobs:
             echo "deployment_id=${deployment_id}"
             echo "commit_sha=${commit_sha}"
           } >> "${GITHUB_OUTPUT}"
+
+      - name: Verify authenticated settlement reads before alias
+        if: steps.release_mode.outputs.settlement_cutover == 'true'
+        env:
+          SETTLEMENT_CANARY_BASE_URL: ${{ steps.vercel_deploy.outputs.deployment_url }}
+          WORKBENCH_BASELINE_HOST: ${{ steps.previous_alias.outputs.deployment_host }}
+          SETTLEMENT_CANARY_FIREBASE_WEB_API_KEY: ${{ vars.FIREBASE_WEB_API_KEY_LIVE }}
+          SETTLEMENT_CANARY_FIREBASE_REFRESH_TOKEN: ${{ secrets.FIREBASE_SETTLEMENT_READ_CANARY_REFRESH_TOKEN_LIVE }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          SETTLEMENT_CANARY_ACTOR_UID: ${{ vars.SETTLEMENT_READ_CANARY_ACTOR_UID_LIVE }}
+          SETTLEMENT_CANARY_PROJECT_ID: ${{ vars.JVM_SETTLEMENT_CANARY_PROJECT_ID_LIVE }}
+          SETTLEMENT_CANARY_CYCLE_YEAR_MONTH: ${{ vars.JVM_SETTLEMENT_CANARY_CYCLE_YEAR_MONTH_LIVE }}
+          SETTLEMENT_CANARY_EXPECTED_REQUEST_ID: ${{ vars.SETTLEMENT_CANARY_EXPECTED_REQUEST_ID_LIVE }}
+          SETTLEMENT_CANARY_EXPECTED_STATUS: ${{ vars.SETTLEMENT_CANARY_EXPECTED_STATUS_LIVE }}
+          SETTLEMENT_CANARY_EXPECTED_WORKFLOW_REVISION: ${{ vars.SETTLEMENT_CANARY_EXPECTED_WORKFLOW_REVISION_LIVE }}
+          SETTLEMENT_CANARY_EXPECTED_EVIDENCE_REVISION: ${{ vars.SETTLEMENT_CANARY_EXPECTED_EVIDENCE_REVISION_LIVE }}
+          SETTLEMENT_CANARY_EXPECTED_TARGET_YEAR_MONTH: ${{ vars.SETTLEMENT_CANARY_EXPECTED_TARGET_YEAR_MONTH_LIVE }}
+          SETTLEMENT_CANARY_EXPECTED_ACTIONS: ${{ vars.SETTLEMENT_CANARY_EXPECTED_ACTIONS_LIVE }}
+          SETTLEMENT_CANARY_TENANT_ID: mysc
+          SETTLEMENT_CANARY_CANONICAL_ORIGIN: https://myscube.myscguard.app
+          PRODUCT_WORKBENCH_AI_ENABLED: ${{ vars.PRODUCT_WORKBENCH_AI_ENABLED || 'false' }}
+          PRODUCT_WORKBENCH_READS_ENABLED: ${{ vars.PRODUCT_WORKBENCH_READS_ENABLED || 'false' }}
+        run: |
+          node scripts/verify-cashflow-settlement-candidate.mjs
+          node scripts/verify-workbench-isolation.mjs
 
       - name: Promote canonical production alias
         id: alias_promotion

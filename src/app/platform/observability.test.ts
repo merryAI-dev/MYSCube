@@ -51,6 +51,7 @@ describe('observability', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     delete (globalThis as any).fetch;
     delete (globalThis as any).localStorage;
     delete (globalThis as any).window;
@@ -150,5 +151,50 @@ describe('observability', () => {
 
     const [url] = (globalThis.fetch as any).mock.calls[0];
     expect(url).toBe('https://inner-platform.vercel.app/api/v1/client-errors');
+  });
+
+  it('records failed ingestion without recursively reporting or throwing into the business flow', async () => {
+    const mod = await import('./observability');
+    (globalThis.fetch as any).mockResolvedValue({ ok: false, status: 429 });
+    expect(() => mod.captureException(new Error('original failure'))).not.toThrow();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mod.getInternalTelemetryHealth()).toMatchObject({ attempted: 1, failed: 1, pending: 0, accepted: 0 });
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    (globalThis.fetch as any).mockRejectedValue(new TypeError('offline'));
+    mod.captureException(new Error('second failure'));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(mod.getInternalTelemetryHealth().failed).toBe(2);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds only the telemetry request and clears pending state after timeout', async () => {
+    vi.useFakeTimers();
+    const mod = await import('./observability');
+    const businessController = new AbortController();
+    (globalThis.fetch as any).mockImplementation((_url: string, init: RequestInit) => new Promise((_resolve, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new Error('timeout')));
+    }));
+    mod.captureException(new Error('original failure'));
+    expect(mod.getInternalTelemetryHealth().pending).toBe(1);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mod.getInternalTelemetryHealth()).toMatchObject({ failed: 1, pending: 0 });
+    expect(businessController.signal.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('includes explicitly configured client release and distinguishes skipped delivery', async () => {
+    vi.stubEnv('VITE_SENTRY_ENVIRONMENT', 'production');
+    vi.stubEnv('VITE_SENTRY_RELEASE', 'release-123');
+    const mod = await import('./observability');
+    mod.captureException(new Error('failure'));
+    await Promise.resolve();
+    expect(JSON.parse((globalThis.fetch as any).mock.calls[0][1].body)).toMatchObject({ environment: 'production', release: 'release-123' });
+    expect(mod.getInternalTelemetryHealth().accepted).toBe(1);
+    (globalThis.localStorage.getItem as any).mockReturnValue(null);
+    mod.captureException(new Error('anonymous failure'));
+    expect(mod.getInternalTelemetryHealth().skipped).toBe(1);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
   });
 });

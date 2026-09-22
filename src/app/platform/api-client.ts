@@ -4,6 +4,8 @@ import {
   type RequestActor,
 } from './request-context';
 import { captureException } from './observability';
+import { classifyProjectOperation, OPERATION_KEYS, type OperationKey } from '../../../shared/product-operations.mjs';
+import { enqueueOperationObservation } from './operation-observations';
 import { recordDevtoolsLog, toDevtoolsError, toSafeDiagnosticCode } from './devtools-transaction-log';
 
 const DEFAULT_RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
@@ -313,6 +315,18 @@ export class PlatformApiClient {
     };
 
     const headers = buildStandardHeaders(headerInput);
+    const classifiedOperation = classifyProjectOperation(method, path);
+    const operationKey = classifiedOperation && OPERATION_KEYS.includes(classifiedOperation as OperationKey) ? classifiedOperation as OperationKey : null;
+    let operationId: string | null = null;
+    try { operationId = operationKey ? (headers.get('x-operation-id') || globalThis.crypto?.randomUUID?.() || null) : null; } catch { /* Keep the business request available if browser instrumentation is unavailable. */ }
+    const observationContext = { tenantId: options.tenantId, actor: options.actor, baseUrl: this.baseUrl, fetchImpl: this.fetchImpl };
+    const requestedMode = headers.get('x-operation-mode');
+    const mode = requestedMode === 'automatic' || requestedMode === 'manual' ? requestedMode : operationKey?.endsWith('.save') ? 'unknown' : 'manual';
+    if (operationId && operationKey) {
+      headers.set('x-operation-id', operationId);
+      headers.set('x-operation-mode', mode);
+      enqueueOperationObservation(observationContext, { operationId, operationKey, mode, phase: 'started' });
+    }
     const actorIdToken = options.actor.idToken;
     const hasAuthorizationHeader = headers.has('authorization');
     const tokenClaims = actorIdToken ? parseJwtClaims(actorIdToken) : undefined;
@@ -482,6 +496,7 @@ export class PlatformApiClient {
         });
 
         if (!shouldRetry) {
+          if (operationId && operationKey) enqueueOperationObservation(observationContext, { operationId, operationKey, mode, phase: 'unknown' });
           recordDevtoolsLog({
             kind: 'bff_request',
             phase: 'error',

@@ -1,4 +1,5 @@
 import type { ProjectDraftHistoryItem } from '../../lib/project-draft-history';
+import { recordProjectValidationBlock } from '../../lib/product-operations-client';
 import { serializeProjectEditorPrivateDraft } from '../../platform/project-editor-draft-persistence';
 import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -414,13 +415,14 @@ function ProjectInfoEditor({
     }
   }, [draftClient, lease.acquire, releaseLeaseAfterDraftOpenFailure]);
 
-  const persistDraft = useCallback((draft: ProjectEditorDraft, stepIndex: number) => enqueueMutation(() => (
+  const persistDraft = useCallback((draft: ProjectEditorDraft, stepIndex: number, saveMode?: 'manual' | 'automatic') => enqueueMutation(() => (
     withOwnership(async (ownership) => {
       if (!recordLoadedRef.current) throw new Error('수정 임시저장이 준비되지 않았습니다.');
       const saved = await draftClient.save(ownership, {
         expectedDraftRevision: revisionRef.current,
         payload: serializeProjectEditorPrivateDraft(draft),
         stepIndex,
+        saveMode,
       });
       revisionRef.current = saved.draft.draftRevision;
       setServerRecord(saved.draft);
@@ -735,6 +737,7 @@ function ProjectInfoEditor({
         canRemoveProjectDocuments
         onRemoveProjectDocument={removeDocument}
         autosave={record && !submitted ? { key: autosaveKey, disabled: !editorCanEdit, onSave: persistDraft } : undefined}
+        onValidationBlocked={() => recordProjectValidationBlock({ tenantId: orgId, actor }, 'project-change.submit')}
         actions={submitted ? [] : (
           canResubmit
             ? [{ id: 'resubmit', label: '수정 후 다시 제출', icon: SendHorizontal, variant: 'secondary' as const }]

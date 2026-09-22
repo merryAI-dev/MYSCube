@@ -89,6 +89,7 @@ service cloud.firestore {
     function isCatchallExcludedCollection(collection) {
       return isBffOnlyCollection(collection)
         || collection in ['members']
+        || collection in ['reliability_operations', 'reliability_daily', 'reliability_incidents', 'personal_work_pages']
         || collection in ['projectRequestDrafts']
         || collection in ['privateEditDrafts']
         || collection in ['careerProfiles']
