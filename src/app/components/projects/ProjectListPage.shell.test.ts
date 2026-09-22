@@ -49,17 +49,20 @@ describe('ProjectListPage shell contract', () => {
     expect(source.indexOf('data-testid="projects-tab-in-progress"')).toBeLessThan(
       source.indexOf('data-testid="projects-tab-completed"'),
     );
-    expect(source).not.toContain('data-testid="projects-tab-trash"');
+    expect(source).toContain('data-testid="projects-tab-trash"');
+    expect(source.indexOf('data-testid="projects-tab-completed"')).toBeLessThan(
+      source.indexOf('data-testid="projects-tab-trash"'),
+    );
     expect(source).not.toContain('data-testid="projects-tab-confirmed"');
   });
 
-  it('visually groups lifecycle tabs as a connected navy three-stage control', () => {
-    expect(source).toContain('grid-cols-3');
+  it('visually groups lifecycle tabs as a connected navy four-stage control', () => {
+    expect(source).toContain('grid-cols-4');
     expect(source).toContain('bg-[#0f2747]');
     expect(source).toContain('data-[state=active]:bg-[#174a7c]');
     expect(source).toContain('data-[state=active]:text-white');
     expect(source).toContain('rounded-t-none');
-    expect(source).toContain('h-11 w-full grid-cols-3 items-center');
+    expect(source).toContain('h-11 w-full grid-cols-4 items-center');
     expect(source).not.toContain('rounded-full border border-current text-[10px] font-semibold">1</span>');
   });
 
