@@ -4,7 +4,6 @@ import { describe, expect, it } from 'vitest';
 
 const editorSource = readFileSync(resolve(import.meta.dirname, 'ProjectEditorWizard.tsx'), 'utf8');
 const portalSource = readFileSync(resolve(import.meta.dirname, '../portal/PortalProjectEdit.tsx'), 'utf8');
-const listSource = readFileSync(resolve(import.meta.dirname, 'ProjectListPage.tsx'), 'utf8');
 
 describe('Project Check out integration shell', () => {
   it('opens the persisted portal editor checkout and keeps trusted document kinds', () => {
@@ -27,13 +26,9 @@ describe('Project Check out integration shell', () => {
     expect(editorSource).toContain('showCheckoutEntry && showProjectCheckout');
   });
 
-  it('shows canonical checkout and applicable upload state in integrated management', () => {
-    expect(listSource).toContain('data-testid={`project-checkout-state-${p.id}`}');
-    expect(listSource).toContain('p.checkout?.finalPaymentReceived');
-    expect(listSource).toContain('p.performanceCertificateDocument?.path');
-    expect(listSource).toContain('p.taxInvoiceDocument?.path');
-    expect(listSource).toContain('p.finalSettlementReportDocument?.path');
-    expect(listSource).toContain("project.registrationRequirementsVersion === 2");
-    expect(listSource).toContain("project.basis !== 'NONE'");
+  it('keeps checkout information in the project editor rather than the management list', () => {
+    expect(editorSource).toContain('showProjectCheckout');
+    expect(editorSource).toContain('performanceCertificateDocumentApplicable');
+    expect(editorSource).toContain('finalSettlementReportDocument');
   });
 });

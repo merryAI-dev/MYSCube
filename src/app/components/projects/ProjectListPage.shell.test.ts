@@ -56,6 +56,14 @@ describe('ProjectListPage shell contract', () => {
     expect(source).not.toContain('data-testid="projects-tab-confirmed"');
   });
 
+  it('provides a confirmed trash action directly from active project rows', () => {
+    expect(source).toContain('프로젝트를 휴지통으로 이동하시겠습니까?');
+    expect(source).toContain("await trashProject(project.id, '프로젝트 통합 관리에서 휴지통 이동')");
+    expect(source).toContain('휴지통 이동');
+    expect(source).toContain("activeTab !== 'trash'");
+    expect(source).toContain("activeTab === 'contract-pending'");
+  });
+
   it('visually groups lifecycle tabs as a connected navy four-stage control', () => {
     expect(source).toContain('grid-cols-4');
     expect(source).toContain('bg-[#0f2747]');
@@ -110,11 +118,9 @@ describe('ProjectListPage shell contract', () => {
     expect(source).not.toContain("p.phase === 'PROSPECT'");
   });
 
-  it('expands project context inline instead of navigating away from the list', () => {
-    expect(source).toContain('expandedProjectId');
-    expect(source).toContain('프로젝트 목적');
-    expect(source).toContain('주요 내용');
-    expect(source).toContain('normalizeProjectDepartment(p.department)');
+  it('keeps the project list as a list without expandable or detail-navigation rows', () => {
+    expect(source).not.toContain('expandedProjectId');
+    expect(source).not.toContain('project-checkout-state-${p.id}');
     expect(source).not.toContain('onClick={() => navigate(`/projects/${p.id}`)}');
   });
 
