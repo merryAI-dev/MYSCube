@@ -1,8 +1,8 @@
-import { Fragment, useState, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Search, ArrowUpDown, ArrowRight,
-  FolderKanban, RotateCcw, ChevronDown, ChevronUp, Trash2,
+  FolderKanban, RotateCcw, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent } from '../ui/card';
@@ -17,6 +17,11 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from '../ui/table';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs';
+import {
+  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
+  AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
+  AlertDialogTrigger,
+} from '../ui/alert-dialog';
 import { useAppStore } from '../../data/store';
 import {
   PROJECT_STATUS_LABELS,
@@ -49,18 +54,6 @@ function formatChartAmount(amount: number) {
   return fmtFull(amount);
 }
 
-function isSettlementProject(project: Project) {
-  return project.registrationRequirementsVersion === 2
-    ? project.basis !== 'NONE'
-    : normalizeSettlementType(project.settlementType) !== 'NONE';
-}
-
-function checkoutBadge(done: boolean) {
-  return done
-    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-    : 'border-slate-200 bg-slate-50 text-slate-500';
-}
-
 export function projectCheckoutFileStatus(applicable: boolean, uploaded: boolean) {
   return uploaded ? '첨부 완료' : applicable ? '미첨부' : '해당 없음';
 }
@@ -69,7 +62,7 @@ type SortKey = 'name' | 'contractAmount' | 'totalRevenueAmount' | 'status';
 type SortDir = 'asc' | 'desc';
 
 export function ProjectListPage() {
-  const { allProjects, restoreProject, currentUser } = useAppStore();
+  const { allProjects, restoreProject, trashProject } = useAppStore();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
@@ -78,7 +71,6 @@ export function ProjectListPage() {
   const [sortKey, setSortKey] = useState<SortKey>('contractAmount');
   const [sortDir, setSortDir] = useState<SortDir>('desc');
   const [activeTab, setActiveTab] = useState<string>('contract-pending');
-  const [expandedProjectId, setExpandedProjectId] = useState<string | null>(null);
   const projectIds = useMemo(() => allProjects.map((project) => project.id).filter(Boolean), [allProjects]);
   const pendingProjectChangeMap = usePendingProjectChangeRequests(projectIds);
 
@@ -153,6 +145,15 @@ export function ProjectListPage() {
       toast.success(`휴지통에서 복구됨: ${project.name}`);
     } catch (error) {
       toast.error(resolveApiErrorMessage(error, '프로젝트 복구에 실패했습니다.'));
+    }
+  };
+
+  const handleTrash = async (project: Project) => {
+    try {
+      await trashProject(project.id, '프로젝트 통합 관리에서 휴지통 이동');
+      toast.success(`휴지통으로 이동됨: ${project.name}`);
+    } catch (error) {
+      toast.error(resolveApiErrorMessage(error, '프로젝트 휴지통 이동에 실패했습니다.'));
     }
   };
 
@@ -249,7 +250,7 @@ export function ProjectListPage() {
                     <TableHead className="min-w-[90px] text-center">액션</TableHead>
                   </>
                 )}
-                {activeTab === 'contract-pending' && (
+                {activeTab !== 'trash' && (
                   <TableHead className="min-w-[60px] text-center">액션</TableHead>
                 )}
               </TableRow>
@@ -258,27 +259,16 @@ export function ProjectListPage() {
               {list.map(p => {
                 const totalRevenueAmount = normalizeProjectRevenueFields(p, 'totalRevenueAmount').totalRevenueAmount;
                 return (
-                <Fragment key={p.id}>
                 <TableRow
                   key={p.id}
                   data-testid={activeTab === 'trash' ? `project-trash-row-${p.id}` : `project-list-row-${p.id}`}
-                  className={`cursor-pointer hover:bg-accent/50 ${expandedProjectId === p.id ? 'bg-slate-50' : ''}`}
-                  aria-expanded={expandedProjectId === p.id}
-                  tabIndex={0}
-                  onClick={() => setExpandedProjectId((current) => current === p.id ? null : p.id)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault();
-                      setExpandedProjectId((current) => current === p.id ? null : p.id);
-                    }
-                  }}
+                  className="hover:bg-accent/50"
                 >
                   <TableCell className="text-[11px] text-muted-foreground whitespace-nowrap">
                     {normalizeProjectDepartment(p.department) || '-'}
                   </TableCell>
                   <TableCell style={{ fontWeight: 500 }} className="max-w-[220px] truncate text-sm">
                     <span className="inline-flex max-w-full items-center gap-1.5">
-                      {expandedProjectId === p.id ? <ChevronUp className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />}
                       <span className="truncate">{p.name}</span>
                       {pendingProjectChangeMap.has(p.id) ? (
                         <span className="shrink-0 rounded-full border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">
@@ -320,104 +310,60 @@ export function ProjectListPage() {
                       </TableCell>
                       <TableCell className="text-center" onClick={e => e.stopPropagation()}>
                         <Button
-                          variant="outline"
-                          size="sm"
-                          className="h-6 text-[10px] gap-0.5 px-1.5"
-                          onClick={() => void handleRestore(p)}
-                        >
-                          복구 <RotateCcw className="w-3 h-3" />
-                        </Button>
+                            variant="outline"
+                            size="sm"
+                            className="h-6 text-[10px] gap-0.5 px-1.5"
+                            onClick={() => void handleRestore(p)}
+                          >
+                            복구 <RotateCcw className="w-3 h-3" />
+                          </Button>
                       </TableCell>
                     </>
                   )}
-                  {activeTab === 'contract-pending' && (
+                  {activeTab !== 'trash' && (
                     <TableCell className="text-center" onClick={e => e.stopPropagation()}>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-6 text-[10px] gap-0.5 px-1.5"
-                        onClick={() => navigate(`/projects/${p.id}/edit?phase=CONFIRMED`)}
-                      >
-                        확정 <ArrowRight className="w-3 h-3" />
-                      </Button>
+                      <div className="flex justify-center gap-1">
+                        {activeTab === 'contract-pending' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-6 text-[10px] gap-0.5 px-1.5"
+                            onClick={() => navigate(`/projects/${p.id}/edit?phase=CONFIRMED`)}
+                          >
+                            확정 <ArrowRight className="w-3 h-3" />
+                          </Button>
+                        )}
+                        <AlertDialog>
+                          <AlertDialogTrigger asChild>
+                            <Button variant="outline" size="sm" className="h-6 gap-0.5 border-red-200 px-1.5 text-[10px] text-red-700 hover:bg-red-50 hover:text-red-800">
+                              휴지통 <Trash2 className="w-3 h-3" />
+                            </Button>
+                          </AlertDialogTrigger>
+                          <AlertDialogContent>
+                            <AlertDialogHeader>
+                              <AlertDialogTitle>프로젝트를 휴지통으로 이동하시겠습니까?</AlertDialogTitle>
+                              <AlertDialogDescription>
+                                &quot;{p.name}&quot;은(는) 활성 목록에서 숨겨집니다. 완전 삭제되지 않으며 휴지통 탭에서 복구할 수 있습니다.
+                              </AlertDialogDescription>
+                            </AlertDialogHeader>
+                            <AlertDialogFooter>
+                              <AlertDialogCancel>취소</AlertDialogCancel>
+                              <AlertDialogAction onClick={() => void handleTrash(p)}>
+                                휴지통 이동
+                              </AlertDialogAction>
+                            </AlertDialogFooter>
+                          </AlertDialogContent>
+                        </AlertDialog>
+                      </div>
                     </TableCell>
                   )}
                 </TableRow>
-                {expandedProjectId === p.id ? (
-                  <TableRow key={`${p.id}-details`} className="bg-slate-50/80 hover:bg-slate-50/80">
-                    <TableCell colSpan={activeTab === 'trash' ? 11 : activeTab === 'contract-pending' ? 10 : 9} className="px-4 py-3">
-                      <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 text-xs md:grid-cols-3">
-                        <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">프로젝트 목적</p>
-                          <p className="mt-1 whitespace-pre-line leading-5 text-slate-700">{p.projectPurpose || '등록된 목적이 없습니다.'}</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">주요 내용</p>
-                          <p className="mt-1 whitespace-pre-line leading-5 text-slate-700">{p.description || '등록된 주요 내용이 없습니다.'}</p>
-                        </div>
-                        <div>
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">기본 정보</p>
-                          <dl className="mt-1 space-y-1 text-slate-700">
-                            <div className="flex justify-between gap-3"><dt className="text-slate-500">공식 계약명</dt><dd className="text-right">{p.officialContractName || '-'}</dd></div>
-                            <div className="flex justify-between gap-3"><dt className="text-slate-500">프로젝트 유형</dt><dd className="text-right">{p.type || '-'}</dd></div>
-                            <div className="flex justify-between gap-3"><dt className="text-slate-500">담당조직(CIC)</dt><dd className="text-right">{normalizeProjectDepartment(p.department) || '-'}</dd></div>
-                          </dl>
-                        </div>
-                        <div className="border-t border-slate-200 pt-3 md:col-span-3" data-testid={`project-checkout-state-${p.id}`}>
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">Project Check out</p>
-                          {!['COMPLETED', 'COMPLETED_PENDING_PAYMENT'].includes(p.status) ? (
-                            <p className="mt-2 text-slate-500">프로젝트 종료 단계에서 확인합니다.</p>
-                          ) : (
-                            <div className="mt-2 grid gap-4 lg:grid-cols-2">
-                              <div>
-                                <p className="font-semibold text-slate-700">체크리스트</p>
-                                <div className="mt-2 flex flex-wrap gap-1.5">
-                                  {([
-                                    ['최종 잔금', p.checkout?.finalPaymentReceived === true],
-                                    ['계좌 잔액 0원', p.checkout?.bankBalanceZero === true],
-                                    ['실적증명 제출', p.checkout?.performanceCertificateReceived === true],
-                                    ...(isSettlementProject(p) ? [
-                                      ['정산 자료 USB·재무팀 제출', p.checkout?.usbEvidenceSubmitted === true],
-                                      ['사용 내역 유지·증빙 삭제', p.checkout?.evidenceDeletedAfterUsb === true],
-                                    ] as const : []),
-                                  ] satisfies Array<readonly [string, boolean]>).map(([label, done]) => (
-                                    <span key={label} className={`rounded-full border px-2 py-1 ${checkoutBadge(done)}`}>
-                                      {label} · {done ? '완료' : '미완료'}
-                                    </span>
-                                  ))}
-                                </div>
-                              </div>
-                              <div>
-                                <p className="font-semibold text-slate-700">적용 증빙 PDF</p>
-                                <dl className="mt-2 space-y-1.5">
-                                  {([
-                                    ['고객 실적증명', p.checkout?.performanceCertificateDocumentApplicable === true || Boolean(p.performanceCertificateDocument?.path), Boolean(p.performanceCertificateDocument?.path)],
-                                    ['발행 세금계산서 전체', p.checkout?.taxInvoiceEvidenceConfirmed === true, Boolean(p.taxInvoiceDocument?.path)],
-                                    ['회계사 최종 정산보고서', isSettlementProject(p) && p.checkout?.finalSettlementReportConfirmed === true, Boolean(p.finalSettlementReportDocument?.path)],
-                                  ] satisfies Array<readonly [string, boolean, boolean]>).map(([label, applicable, uploaded]) => (
-                                    <div key={String(label)} className="flex justify-between gap-3 text-slate-700">
-                                      <dt>{label}</dt>
-                                      <dd className={uploaded ? 'font-semibold text-emerald-700' : applicable ? 'font-semibold text-red-700' : 'text-slate-500'}>
-                                        {projectCheckoutFileStatus(applicable, uploaded)}
-                                      </dd>
-                                    </div>
-                                  ))}
-                                </dl>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ) : null}
-                </Fragment>
                 );
               })}
 
               {list.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={activeTab === 'trash' ? 11 : activeTab === 'contract-pending' ? 10 : 9} className="text-center py-12 text-muted-foreground">
+                  <TableCell colSpan={activeTab === 'trash' ? 11 : 10} className="text-center py-12 text-muted-foreground">
                     {search || statusFilter !== 'ALL' || settlementFilter !== 'ALL' || deptFilter !== 'ALL'
                       ? '검색 조건에 맞는 프로젝트가 없습니다'
                       : activeTab === 'trash'
