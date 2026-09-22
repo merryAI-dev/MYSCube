@@ -38,6 +38,6 @@ for (const baseline of evidence) {
 }
 const newRead = await concurrent;
 const expectedReadStatus = env.PRODUCT_WORKBENCH_READS_ENABLED === 'true' ? 200 : 503;
-if (newRead.status !== expectedReadStatus || (expectedReadStatus === 503 && newRead.body?.error !== 'workbench_reads_disabled')) throw new Error(`Workbench read failed: ${newRead.status}`);
+if (newRead.status !== expectedReadStatus || (expectedReadStatus === 503 && newRead.body?.error !== 'workbench_reads_disabled')) throw new Error(`Workbench read failed: ${newRead.status} code=${/^[a-z0-9_]+$/.test(newRead.body?.error || '') ? newRead.body.error : 'unknown'}`);
 console.log(JSON.stringify({ verifiedAt: new Date().toISOString(), businessWrites: 0, evidence,
   newRead: { status: newRead.status, ms: newRead.ms }, canaryActorModelEnabled: capabilities.body.modelEnabled, note: 'Bounded smoke, not peak load proof. AI provider verified separately using synthetic evidence.' }));
