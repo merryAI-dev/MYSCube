@@ -3,6 +3,8 @@ import { mintFirebaseCanaryIdToken } from './verify-cashflow-settlement-candidat
 const env = process.env;
 const candidate = new URL(env.SETTLEMENT_CANARY_BASE_URL).origin;
 const canonical = 'https://myscube.myscguard.app';
+const baselineOrigin = env.WORKBENCH_BASELINE_HOST ? `https://${env.WORKBENCH_BASELINE_HOST}` : canonical;
+if (baselineOrigin !== canonical && !/^https:\/\/[a-zA-Z0-9-]+\.vercel\.app$/.test(baselineOrigin)) throw new Error('Invalid verified baseline deployment host.');
 const token = await mintFirebaseCanaryIdToken({ firebaseWebApiKey: env.SETTLEMENT_CANARY_FIREBASE_WEB_API_KEY,
   firebaseRefreshToken: env.SETTLEMENT_CANARY_FIREBASE_REFRESH_TOKEN, actorUid: env.SETTLEMENT_CANARY_ACTOR_UID });
 const read = async (origin, path) => {
@@ -16,7 +18,7 @@ const read = async (origin, path) => {
 const paths = ['/api/v1/health', '/api/v1/projects?limit=1', '/api/v1/project-registration-drafts', '/api/v1/project-requests/assigned-to-me'];
 const evidence = [];
 for (const path of paths) {
-  const before = await read(canonical, path);
+  const before = await read(baselineOrigin, path);
   const after = await read(candidate, path);
   const valid = (result) => path === '/api/v1/health' ? result.body?.ok === true && result.body?.authMode === 'firebase_required' : path === '/api/v1/project-registration-drafts' ? Array.isArray(result.body?.drafts) : Array.isArray(result.body?.items);
   if (before.status !== 200 || after.status !== 200 || !valid(before) || !valid(after)) throw new Error(`Existing read canary failed: ${path} baseline=${before.status} candidate=${after.status}`);
