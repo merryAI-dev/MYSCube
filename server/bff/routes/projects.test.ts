@@ -33,7 +33,7 @@ function registrationV2Payload(overrides: Record<string, unknown> = {}) {
   return {
     currency: 'KRW', contractType: '계약서(날인)', accountType: 'OPERATING',
     paymentPlanInputFlags: { contract: true, interim: true, final: true },
-    submissionResponses: Object.fromEntries(['businessManagementGoogleFolderLink', 'paymentPlanDesc', 'staffing.lead', 'staffing.pm', 'staffing.operators', 'staffing.others', 'staffing.settlementSupport'].map(key => [key, 'NOT_APPLICABLE'])),
+    submissionResponses: Object.fromEntries(['businessManagementGoogleFolderLink', 'paymentPlanDesc', 'staffing.others', 'staffing.settlementSupport'].map(key => [key, 'NOT_APPLICABLE'])),
     name: '다년도 사업',
     officialContractName: '2026 다년도 사업 운영 계약',
     clientOrg: '발주기관 주식회사',
@@ -49,6 +49,12 @@ function registrationV2Payload(overrides: Record<string, unknown> = {}) {
     executiveApproverEmail: 'head-a@mysc.co.kr',
     managerId: 'pm-a',
     managerName: 'PM A',
+    staffing: {
+      lead: { personId: 'head-a', name: '조직장 A' },
+      pm: { personId: 'pm-a', name: 'PM A' },
+      operators: [{ personId: 'operator-a', name: '운영매니저 A' }],
+      others: [], settlementSupport: '',
+    },
     contractStart: '2026-01-01',
     contractEnd: '2027-12-31',
     participationSheetLink: 'https://docs.google.com/spreadsheets/d/default-participation-sheet/edit',

@@ -1,4 +1,5 @@
 import { assertProjectSubmissionFields } from './project-submission-fields.mjs';
+import { PROJECT_REQUIRED_STAFFING_FIELDS } from './project-submission-completeness.mjs';
 import { hasMultiYearProjectContract, projectContractEndYear } from './project-input-policy.mjs';
 import type {
   AccountType,
@@ -583,7 +584,7 @@ export function createProjectEditorDraft(overrides: Partial<ProjectEditorDraft> 
   const draft = {
     ...DEFAULT_DRAFT,
     ...overrides,
-    submissionResponses: Object.fromEntries(Object.entries(overrides.submissionResponses || {}).filter(([, value]) => value === 'NOT_APPLICABLE')) as Record<string, 'NOT_APPLICABLE'>,
+    submissionResponses: Object.fromEntries(Object.entries(overrides.submissionResponses || {}).filter(([field, value]) => value === 'NOT_APPLICABLE' && !PROJECT_REQUIRED_STAFFING_FIELDS.includes(field))) as Record<string, 'NOT_APPLICABLE'>,
     paymentPlanInputFlags: explicitInputFlags(overrides.paymentPlanInputFlags, overrides.paymentPlan, ['contract', 'interim', 'final']),
     financialInputFlags: draftFinancialInputFlags(
       overrides.financialInputFlags ?? DEFAULT_DRAFT.financialInputFlags,

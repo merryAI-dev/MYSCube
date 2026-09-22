@@ -28,6 +28,22 @@ describe('required completeness on real final submission builders', () => {
     expect(error.details.requiredFields.map((issue) => issue.field)).toContain('totalActualCost');
     expect(error.details.requiredFields.map((issue) => issue.field)).toContain('financialYears.2026.totalActualCost');
   });
+  it('rejects final submission with missing required people despite stale absence markers', () => {
+    const payload = complete({
+      staffing: { lead: null, pm: null, operators: [], others: [], settlementSupport: '' },
+      submissionResponses: {
+        ...complete().submissionResponses,
+        'staffing.lead': 'NOT_APPLICABLE',
+        'staffing.pm': 'NOT_APPLICABLE',
+        'staffing.operators': 'NOT_APPLICABLE',
+      },
+    });
+    const error = failure(() => register(payload));
+    expect(error.code).toBe('project_submission_incomplete');
+    expect(error.details.requiredFields.map((issue) => issue.field)).toEqual(expect.arrayContaining([
+      'staffing.lead', 'staffing.pm', 'staffing.operators',
+    ]));
+  });
   it('rejects missing required files on CHANGE final submission and leaves the original untouched', () => {
     const canonical = register();
     const before = JSON.stringify(canonical);

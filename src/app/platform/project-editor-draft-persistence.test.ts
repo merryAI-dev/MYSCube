@@ -29,6 +29,48 @@ describe('private draft persistence', () => {
     expect(projectSubmissionCompletenessIssues(contradictory).some(issue => issue.field === 'staffing.settlementSupport')).toBe(true);
   });
 
+  it('keeps incomplete legacy drafts savable but requires real people at final submission', () => {
+    const draft = createProjectEditorDraft({ registrationRequirementsVersion: 2 });
+    const oldStoredDraft = {
+      ...serializeProjectEditorPrivateDraft(draft),
+      submissionResponses: {
+        'staffing.lead': 'NOT_APPLICABLE',
+        'staffing.pm': 'NOT_APPLICABLE',
+        'staffing.operators': 'NOT_APPLICABLE',
+        'staffing.others': 'NOT_APPLICABLE',
+      } as const,
+    };
+    const original = JSON.stringify(oldStoredDraft);
+    const reopened = createProjectEditorDraft(oldStoredDraft);
+    expect(JSON.stringify(oldStoredDraft)).toBe(original);
+    const required = ['staffing.lead', 'staffing.pm', 'staffing.operators'];
+    expect(required.every(field => reopened.submissionResponses[field] === undefined)).toBe(true);
+    expect(reopened.submissionResponses['staffing.others']).toBe('NOT_APPLICABLE');
+    expect(projectSubmissionCompletenessIssues(reopened).filter(issue => required.includes(issue.field)))
+      .toHaveLength(3);
+    expect(() => serializeProjectEditorPrivateDraft(reopened)).not.toThrow();
+
+    const completed = createProjectEditorDraft({
+      ...reopened,
+      staffing: {
+        ...reopened.staffing,
+        lead: { personId: 'person-lead', name: '검증 조직장', nickname: '' },
+        pm: { personId: 'person-pm', name: '검증 실무자', nickname: '' },
+        operators: [{ personId: 'person-operator', name: '검증 운영매니저', nickname: '' }],
+      },
+    });
+    const submitted = buildProjectRequestPayloadFromDraft(completed);
+    expect(projectSubmissionCompletenessIssues(submitted).filter(issue => required.includes(issue.field)))
+      .toEqual([]);
+
+    const oldStoredWithPeople = { ...oldStoredDraft, staffing: completed.staffing };
+    const hydrated = createProjectEditorDraft(oldStoredWithPeople);
+    expect(required.every(field => hydrated.submissionResponses[field] === undefined)).toBe(true);
+    expect(projectSubmissionCompletenessIssues(hydrated).filter(issue => required.includes(issue.field)))
+      .toEqual([]);
+    expect(oldStoredWithPeople.submissionResponses['staffing.lead']).toBe('NOT_APPLICABLE');
+  });
+
   it('retains editor text and explicit clears on reopen while final submission still normalizes', () => {
     const draft = createProjectEditorDraft({
       name: '  project  ', note: '  first line\nsecond line  ', finalPaymentNote: '  pending  ',
