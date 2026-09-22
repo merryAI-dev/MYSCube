@@ -2,7 +2,7 @@ import { Fragment, useState, useMemo } from 'react';
 import { useNavigate } from 'react-router';
 import {
   Search, ArrowUpDown, ArrowRight,
-  FolderKanban, RotateCcw, ChevronDown, ChevronUp,
+  FolderKanban, RotateCcw, ChevronDown, ChevronUp, Trash2,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Card, CardContent } from '../ui/card';
@@ -520,7 +520,7 @@ export function ProjectListPage() {
       >
         <TabsList
           aria-label="프로젝트 진행 단계"
-          className="grid h-11 w-full grid-cols-3 items-center overflow-hidden rounded-lg border border-slate-300 bg-[#0f2747] p-0 shadow-sm"
+          className="grid h-11 w-full grid-cols-4 items-center overflow-hidden rounded-lg border border-slate-300 bg-[#0f2747] p-0 shadow-sm"
         >
           <TabsTrigger
             value="contract-pending"
@@ -544,12 +544,23 @@ export function ProjectListPage() {
           </TabsTrigger>
           <TabsTrigger
             value="completed"
-            className="h-full items-center justify-center gap-1.5 rounded-none px-2 py-0 leading-none text-slate-200 data-[state=active]:bg-[#174a7c] data-[state=active]:text-white data-[state=active]:shadow-[inset_0_-3px_0_#ffffff] sm:gap-2 sm:px-4"
+            className="h-full items-center justify-center gap-1.5 rounded-none border-r border-white/15 px-2 py-0 leading-none text-slate-200 data-[state=active]:bg-[#174a7c] data-[state=active]:text-white data-[state=active]:shadow-[inset_0_-3px_0_#ffffff] sm:gap-2 sm:px-4"
             data-testid="projects-tab-completed"
           >
             <span className="font-semibold">종료</span>
             <Badge variant="secondary" className="ml-0.5 border-white/20 bg-white/10 px-1.5 py-0 text-[10px] leading-none text-current sm:ml-1">
               {completedProjects.length}
+            </Badge>
+          </TabsTrigger>
+          <TabsTrigger
+            value="trash"
+            className="h-full items-center justify-center gap-1 rounded-none px-2 py-0 leading-none text-slate-200 data-[state=active]:bg-[#174a7c] data-[state=active]:text-white data-[state=active]:shadow-[inset_0_-3px_0_#ffffff] sm:gap-1.5 sm:px-4"
+            data-testid="projects-tab-trash"
+          >
+            <Trash2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="font-semibold">휴지통</span>
+            <Badge variant="secondary" className="ml-0.5 border-white/20 bg-white/10 px-1.5 py-0 text-[10px] leading-none text-current sm:ml-1">
+              {trashedProjects.length}
             </Badge>
           </TabsTrigger>
         </TabsList>
