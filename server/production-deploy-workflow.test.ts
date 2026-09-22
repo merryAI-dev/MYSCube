@@ -42,6 +42,14 @@ describe('production deployment decisions', () => {
       expect(deployment.args.includes('SLACK_SIGNING_SECRET=signature')).toBe(settlement);
     }
   });
+  it('requires Workbench isolation on every web release before alias promotion', () => {
+    const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
+    const gate = workflow.split('- name: Verify Workbench isolation before alias')[1].split('- name: Promote canonical production alias')[0];
+    expect(gate).toContain("if: steps.release_mode.outputs.release_mode == 'web'");
+    expect(gate).not.toContain('settlement_cutover');
+    expect(gate).toContain('node scripts/verify-workbench-isolation.mjs');
+    expect(gate).toContain('steps.previous_alias.outputs.deployment_host');
+  });
   it('keeps the reviewed active September request in the read-only cutover inventory', () => {
     const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
     const inventoryStep = workflow.split('- name: Verify settlement-cycle cutover inventory')[1].split('- name: Deploy to Vercel production')[0];
