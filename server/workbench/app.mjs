@@ -73,7 +73,8 @@ export function createWorkbenchApp(options) {
   mountQaEvidenceRoutes(app, { ...common, readCode: options.readCode });
   mountInsightCashflowReport(app, { ...common, readSnapshot });
   mountCashflowEvidenceRoutes(app, { ...common, readSnapshot });
-  mountWorkbenchAssistantRoutes(app, { ...common, env, readSnapshot, completionFactory: options.workbenchCompletionFactory });
+  mountWorkbenchAssistantRoutes(app, { ...common, env, readSnapshot, completionFactory: options.workbenchCompletionFactory,
+    modelConfiguration: { enabled: env.WORKBENCH_AI_ENABLED === 'true', apiKey: env.WORKBENCH_GEMINI_API_KEY } });
   mountReliabilityRoutes(app, { ...common, service: createReliabilityService({ db, now, environment: 'isolated' }) });
   app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.code || 'workbench_failed', message: error.expose ? error.message : '분석 도구 요청을 처리하지 못했습니다.' }));
   return app;
