@@ -89,13 +89,12 @@ export async function answerQaQuestion({ complete, reviewComplete, query, contex
   return { ...result, evidence, generated: true, review: '실제 로그·코드 근거를 사용한 답변입니다. 후보와 확정 사실을 구분하고 기록의 누락 범위를 확인해 주세요.' };
 }
 
-export function mountWorkbenchAssistantRoutes(app, { db, now, env, readSnapshot, asyncHandler, idempotencyService, completionFactory = createGeminiCompletion, modelConfiguration }) {
+export function mountWorkbenchAssistantRoutes(app, { db, now, env, readSnapshot, asyncHandler, idempotencyService, completionFactory = createGeminiCompletion, modelConfiguration, qaQuery = createQaEvidenceService({ db, now }) }) {
   const model = modelConfiguration === undefined
     ? { enabled: env.PRODUCT_WORKBENCH_AI_ENABLED === 'true', apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY }
     : modelConfiguration;
   const apiKey = typeof model?.apiKey === 'string' ? model.apiKey.trim() : '';
   const enabled = model?.enabled === true && Boolean(apiKey);
-  const qaQuery = createQaEvidenceService({ db, now });
   const query = createCashflowEvidenceQuery({ db, now, readSnapshot, release: env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA });
   app.get('/api/v1/workbench-assistant/capabilities', asyncHandler(async (req, res) => res.json({
     modelEnabled: enabled && req.context.actorRole === 'admin', manualPages: true, evidenceQuery: true,

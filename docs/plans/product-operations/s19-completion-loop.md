@@ -58,8 +58,8 @@
 
 ## 증거
 
-- 최종 통합 검증: Workbench Vitest **460/460, 56개 파일**, 독립 TypeScript·Vite 빌드 통과. 생성 모델은 fixture를 사용하며 Firestore 에뮬레이터·HTTP·DuckDB·브라우저의 실제 저장과 읽기를 검증한다.
-- 최종 브라우저 검증: Playwright **34/34**, 41.5초. 저장·복원·지속 대화·API 등록·권한 회수·후보 화면 교체·응답 유실 후 복구를 실제 브라우저에서 확인했다. 원격 화면 UI의 HTTP fixture 검증과 실제 Docker 격리 검증은 별도 증거다. Studio 테스트는 이전 iframe 존재를 새 요청의 완료로 오인하는 경쟁 조건을 수정한 뒤 전체를 다시 통과했다.
+- 최종 통합 검증: Workbench Vitest **491/491, 60개 파일**, 독립 TypeScript·Vite 빌드 통과. 생성 모델은 fixture를 사용하며 Firestore 에뮬레이터·HTTP·DuckDB·브라우저의 실제 저장과 읽기를 검증한다.
+- 최종 브라우저 검증: Playwright **38/38**, 44.4초. 저장·복원·지속 대화·API 등록·권한 회수·후보 화면 교체·응답 유실 후 복구를 실제 브라우저에서 확인했다. 원격 화면 UI의 HTTP fixture 검증과 실제 Docker 격리 검증은 별도 증거다. Studio 테스트는 이전 iframe 존재를 새 요청의 완료로 오인하는 경쟁 조건을 수정한 뒤 전체를 다시 통과했다.
 - 실제 Git 저장 전달 증거: [합성 React 원문 PR817](https://github.com/merryAI-dev/MYSCube/pull/817).
 - 실제 Linux 격리 증거 수집용 [Draft PR818](https://github.com/merryAI-dev/MYSCube/pull/818). 플랫폼 전체 배포 PR이 아니며 머지하지 않는다. 최신 커밋과 일치하는 강화 probe 결과만 판정에 사용한다.
 - 실제 Linux 검증 [run 35863959611](https://github.com/merryAI-dev/MYSCube/actions/runs/35863959611), 커밋 `a7aabfa5`, PASS. [전체 증거 JSON](evidence/2026-09-23-runtime-isolation.json)에 원시 TCP/DNS 차단과 도달 가능한 대조군, 공격 실행 중 별도 세션 응답, 강제 종료·만료 정리·재시작 차단을 기록했다. 첫 화면 1,081ms/다음 세션 1,025ms는 각 1회이며 운영 SLO가 아니다. 무한 반복·메모리 압박·API 폭주 중 별도 세션 응답 최대치는 각각 21/28/28ms였다. 메모리 제한 설정은 확인했으나 커널 OOM은 관측하지 않았다. 만료 정리 검증은 테스트 시계를 이동한 실제 Docker 삭제이며 운영 타이머 설치 증거가 아니다.
@@ -81,7 +81,7 @@
 - 공유 assistant는 명시적 모델 설정을 주입받는다. 설정 생략 시 기존 호출 계약을 유지하되, 독립 앱의 비활성·빈 설정은 기존 키로 대체하지 않는다. HTTP·Firestore 11/11과 독립 QA를 통과했다.
 - 실행·저장·모델 자원 경계는 분리하지만 모노레포의 일부 빌드 의존성은 루트 패키지를 공유한다. 설치 의존성까지 완전 분리됐다고 주장하지 않는다.
 
-전체 구현 전달: [Draft PR819](https://github.com/merryAI-dev/MYSCube/pull/819), 커밋 `7389b310`. 운영 연결 전 검토용이며 병합하지 않았다. [Workbench CI](https://github.com/merryAI-dev/MYSCube/actions/runs/35865339832)와 [기존 서비스 CI](https://github.com/merryAI-dev/MYSCube/actions/runs/35865339681)는 이 커밋을 대상으로 별도 확인한다.
+전체 구현 전달: [Draft PR819](https://github.com/merryAI-dev/MYSCube/pull/819), 과거 사본 집계 보완 커밋 `2e6c165a`. 운영 연결 전 검토용이며 병합하지 않았다. [Workbench CI](https://github.com/merryAI-dev/MYSCube/actions/runs/35867630101)와 [기존 서비스 CI](https://github.com/merryAI-dev/MYSCube/actions/runs/35867630023)는 이 커밋에서 모두 통과했다.
 
 
 ## 실제 사본 → 운영 기록 보완
@@ -95,3 +95,5 @@
 - 이 비율은 전체 서비스 오류율이나 오류 감소율이 아니다. 독립 Workbench에 업무 관측값을 직접 제출하는 경로도 410으로 차단해 사본 통계에 임의 기록을 섞지 않는다.
 
 합성 원본 업무 2건·화면 오류 1건 → 사본 → 실제 HTTP → 브라우저에서 2건/1건/50% 표시와 권한 회수 후 제거를 확인했다. 이 수치는 운영 성과가 아닌 테스트 데이터다. 실제 운영의 새 HTTP 요청 로그 수집·분모 공급과 전체 오류율/감소 추이는 아직 완료하지 않았다. 승인된 로그 원본·내보내기 경로와 읽기 권한을 확정한 뒤 연결·검증해야 한다.
+
+후속 [S20](s20-offline-http-evidence.md)은 운영자가 내보낸 HTTP 응답 기록의 독립 가져오기·조회·GitHub 코드 후보 연결을 추가한다. 이 경로도 자동 수집이나 전체 서비스 오류율 검증으로 보고하지 않는다.

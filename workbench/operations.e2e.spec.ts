@@ -107,3 +107,69 @@ test('unverified empty or malformed responses do not become zero failures', asyn
   await expect(page.getByTestId('operations-error')).toBeVisible();
   await expect(page.getByTestId('operations-attempt-count')).toHaveCount(0);
 });
+
+const httpFixture = () => ({
+  status: 'imported_sample', measurementScope: 'http_response_log', completeness: 'not_guaranteed', provenance: 'operator_export_unverified',
+  rate: null as number | null, overallRate: null, counts: { total: 3, status2xx: 1, status4xx: 1, status5xx: 1, other: 0 },
+  rows: [
+    { day: '2026-09-22', environment: 'live', operationKey: 'registration.submit' as string | null, counts: { total: 2, status2xx: 1, status4xx: 1, status5xx: 0, other: 0 } },
+    { day: '2026-09-23', environment: 'preview', operationKey: null, counts: { total: 1, status2xx: 0, status4xx: 0, status5xx: 1, other: 0 } },
+  ], invalidRecords: 0, truncated: false, lastImportedAt: '2026-09-23T02:30:00.000Z' as string | null, note: '운영자가 내보낸 로그에서 확인한 응답 완료 기록입니다.',
+});
+
+test('imported HTTP response logs remain separate from logical operations with no percentages or upload UI', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.route(endpoint, (route) => route.fulfill({ json: { ...fixture(), httpRequests: httpFixture() } }));
+  await open(page);
+  await expect(page.getByTestId('operations-attempt-count')).toHaveText('8');
+  await expect(page.getByTestId('operations-http-count')).toHaveText('3건 · 가져온 일부');
+  const http = page.getByRole('region', { name: '가져온 HTTP 응답 로그', exact: true });
+  await expect(http).toContainText('원본 진위는 확인되지 않았습니다');
+  await expect(http).toContainText('실시간 수집은 연결되지 않았습니다');
+  await expect(http).toContainText('응답을 완료하지 못한 요청');
+  await expect(http).toContainText('HTTP 응답 정상(2xx)은 업무 저장이나 후속 처리가 완료됐다는 뜻이 아닙니다');
+  await expect(http).not.toContainText('%');
+  const table = http.getByRole('region', { name: 'HTTP 응답 로그 표', exact: true });
+  await expect(table.getByRole('row')).toHaveCount(3);
+  await expect(table).toContainText('프로젝트 등록 제출');
+  await expect(table).toContainText('업무 분류 없음');
+  await http.getByLabel('응답 로그 환경').selectOption('preview');
+  await expect(table.getByRole('row')).toHaveCount(2);
+  await expect(table).not.toContainText('프로젝트 등록 제출');
+  await expect(page.locator('input[type=file]')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('partial imported logs disclose omitted records and disappear after permission revocation', async ({ page }) => {
+  let calls = 0;
+  await page.route(endpoint, (route) => {
+    const http = { ...httpFixture(), status: 'partial', invalidRecords: 3, truncated: true, lastImportedAt: null };
+    return ++calls === 1 ? route.fulfill({ json: { ...fixture(), httpRequests: http } })
+      : route.fulfill({ status: 403, json: { error: 'workbench_permissions_stale', message: 'Internal message' } });
+  });
+  await open(page);
+  const http = page.getByRole('region', { name: '가져온 HTTP 응답 로그', exact: true });
+  await expect(http).toContainText('가져온 로그 중 일부만 확인');
+  await expect(http).toContainText('HTTP 로그 3건은 집계에서 제외');
+  await expect(http).toContainText('조회 한도로 일부 HTTP 로그만 표시');
+  await expect(http).not.toContainText('%');
+  await page.getByRole('button', { name: '운영 기록 다시 조회' }).click();
+  await expect(page.getByTestId('operations-error')).toContainText('조회 권한');
+  await expect(page.getByTestId('operations-http-count')).toHaveCount(0);
+  await expect(http).toHaveCount(0);
+});
+
+test('no imported records does not mean zero service requests and a forged HTTP rate is rejected', async ({ page }) => {
+  let calls = 0;
+  await page.route(endpoint, (route) => {
+    const http = httpFixture(); http.counts = { total: 0, status2xx: 0, status4xx: 0, status5xx: 0, other: 0 }; http.rows = [];
+    if (++calls > 1) http.rate = 0;
+    return route.fulfill({ json: { ...fixture(), httpRequests: http } });
+  });
+  await open(page);
+  await expect(page.getByTestId('operations-http-count')).toHaveText('기록 없음 · 전체 미확인');
+  await expect(page.getByRole('region', { name: '가져온 HTTP 응답 로그', exact: true })).toContainText('전체 요청이 0건이었다는 뜻은 아닙니다');
+  await page.getByRole('button', { name: '운영 기록 다시 조회' }).click();
+  await expect(page.getByTestId('operations-error')).toBeVisible();
+  await expect(page.getByTestId('operations-http-count')).toHaveCount(0);
+});

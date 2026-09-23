@@ -6,12 +6,12 @@ import { createCashflowEvidenceQuery } from '../bff/cashflow-evidence-query.mjs'
 import { createInsightCashflowReport } from '../bff/insight-cashflow-report.mjs';
 import { createHttpError } from '../bff/bff-utils.mjs';
 import { createHash } from 'node:crypto';
+import { createHttpLogEvidence } from './http-log-evidence.mjs';
 
 export function createIsolatedWorkbenchCore({ env, db, now = () => new Date().toISOString(), readCode }) {
   const runtime = resolveWorkbenchRuntime(env);
   if (db.projectId !== runtime.projectId) throw new Error('Workbench store does not match its isolated project.');
   const readSnapshot = createWorkbenchSnapshotReader({ db, now: () => Date.parse(now()) });
-  const qa = createQaEvidenceService({ db, now, readCode });
   const evidence = createCashflowEvidenceQuery({ db, now, readSnapshot });
   const authorize = async (context) => {
     if (![context.actorId, context.tenantId].every((id) => typeof id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(id))) throw createHttpError(403, '로그인 정보를 확인해 주세요.', 'workbench_identity_invalid');
@@ -33,8 +33,10 @@ export function createIsolatedWorkbenchCore({ env, db, now = () => new Date().to
     await authorize(context);
     return result;
   };
+  const httpLogs = createHttpLogEvidence({ db, env, now, authorize });
+  const qa = createQaEvidenceService({ db, now, readCode, readHttpEvidence: httpLogs.findRequest });
   return {
-    runtime, authorize,
+    runtime, authorize, httpLogs,
     pages: createPersonalWorkPageService({ db, now }),
     qa: guarded(qa), evidence: guarded(evidence),
     report: guarded(createInsightCashflowReport({ db, now, readSnapshot })),

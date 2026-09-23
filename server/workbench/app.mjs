@@ -71,14 +71,14 @@ export function createWorkbenchApp(options) {
   mountConversations(app, { ...common, env, core, analytics, completionFactory: options.conversationCompletionFactory, deadlineMs: options.conversationDeadlineMs });
   const readSnapshot = createWorkbenchSnapshotReader({ db, now: () => Date.parse(now()) });
   mountPersonalWorkPageRoutes(app, common);
-  mountQaEvidenceRoutes(app, { ...common, readCode: options.readCode });
+  mountQaEvidenceRoutes(app, { ...common, query: core.qa });
   mountInsightCashflowReport(app, { ...common, readSnapshot });
   mountCashflowEvidenceRoutes(app, { ...common, readSnapshot });
   mountWorkbenchAssistantRoutes(app, { ...common, env, readSnapshot, completionFactory: options.workbenchCompletionFactory,
-    modelConfiguration: { enabled: env.WORKBENCH_AI_ENABLED === 'true', apiKey: env.WORKBENCH_GEMINI_API_KEY } });
+    modelConfiguration: { enabled: env.WORKBENCH_AI_ENABLED === 'true', apiKey: env.WORKBENCH_GEMINI_API_KEY }, qaQuery: core.qa });
   mountReliabilityRoutes(app, { ...common, service: {
     ...createReliabilityService({ db, now, environment: 'isolated' }),
-    summary: createCopiedLogSummary({ db, env, now, authorize: core.authorize }),
+    summary: createCopiedLogSummary({ db, env, now, authorize: core.authorize, readHttpSummary: core.httpLogs.summary }),
     observeClient: async () => { throw createHttpError(410, '운영 기록은 승인된 원본의 읽기 전용 사본으로 확인합니다.', 'workbench_observation_readonly'); },
   } });
   app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.code || 'workbench_failed', message: error.expose ? error.message : '분석 도구 요청을 처리하지 못했습니다.' }));

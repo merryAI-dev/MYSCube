@@ -1,14 +1,15 @@
 {
-  "recordedAt": "2026-09-23T13:29:53.801575+00:00",
+  "recordedAt": "2026-09-23T13:52:46.836366+00:00",
   "baseCommit": "e56543ccc675e72963a16d8f6bdec4a38cbd1d21",
   "includesUncommittedWorkingTree": true,
   "vitest": {
-    "passed": 460,
-    "files": 56
+    "passed": 491,
+    "files": 60,
+    "durationSeconds": 13.95
   },
   "playwright": {
-    "passed": 34,
-    "durationSeconds": 41.5
+    "passed": 38,
+    "durationSeconds": 44.4
   },
   "typecheck": "PASS",
   "frontendBuild": "PASS",
@@ -18,16 +19,16 @@
   "productionDeployed": false,
   "logs": {
     "vitest": {
-      "localPath": "/tmp/myscube-workbench-final-vitest.log",
-      "sha256": "290afa013519689c87c94a21fb7ff1bf553dcbc439ac27b8b9faabf8166e3408"
+      "localPath": "/tmp/myscube-workbench-http-final-vitest.log",
+      "sha256": "026312d8aecb62314db6d96a6db54955a91a164bab3fca45f5b6ac2b460d5535"
     },
     "playwright": {
-      "localPath": "/tmp/myscube-workbench-final-playwright.log",
-      "sha256": "a2d7dd3f7fd401ca1c2b676a05d0271d2e7d0624e362c9198141b732c718dfc9"
+      "localPath": "/tmp/myscube-workbench-http-final-playwright.log",
+      "sha256": "ce57ac25a6556533b4caf0d2213506c893c44c6a4a7a675e12f803aca8e63f5b"
     },
     "build": {
-      "localPath": "/tmp/myscube-workbench-final-build.log",
-      "sha256": "54939c8a27c2e9398423d4952252f399bbbee5213f882328245093841f91349e"
+      "localPath": "/tmp/myscube-workbench-http-final-build.log",
+      "sha256": "642e8e3acc788c8f38c133779c723036a25789554a419fd055c456bbf2be3f8b"
     }
   },
   "sourceManifest": [
@@ -56,8 +57,12 @@
       "sha256": "22ac9717ed622061de09375a94b456ea982fac93bd8f140c0bb17d241ddaefa8"
     },
     {
+      "file": "server/bff/qa-evidence.mjs",
+      "sha256": "f9c7fbde203f22ac70541b829ec31410977ac03d2d0e5c52b5b686653d8e2df0"
+    },
+    {
       "file": "server/bff/workbench-assistant.mjs",
-      "sha256": "08e6c4ab87133dee9fa34acc701ab483694864ceb34d016a25570c341fdde881"
+      "sha256": "95e5716491377c3207d994fb4aaaf1041e0a1349b7afc8948fad77e1ec6d87d8"
     },
     {
       "file": "server/production-deploy-workflow.test.ts",
@@ -101,7 +106,7 @@
     },
     {
       "file": "server/workbench/app.mjs",
-      "sha256": "dfa5155ba16e11a5d2d66ad01cc69206f64452d85e816ff8b24931c7c1a5eb8e"
+      "sha256": "b20610fa70347976c591025fa99ccc9ed4ad427fc5891411ad741a104bb10dfa"
     },
     {
       "file": "server/workbench/capability-executor.mjs",
@@ -169,7 +174,7 @@
     },
     {
       "file": "server/workbench/copied-log-summary.mjs",
-      "sha256": "f9301c2d2e30ccdd47cef6784e52e8ded1ed97d32e8150889090f8ec211623c2"
+      "sha256": "7683cb0fcc68dfca9e454fca83a2625b338cf77fa954133200fddbc9b3bb195d"
     },
     {
       "file": "server/workbench/copied-log-summary.qa.integration.test.ts",
@@ -197,7 +202,7 @@
     },
     {
       "file": "server/workbench/core.mjs",
-      "sha256": "68808e91762616a369ab418ad5de0d578151e4e5a8d2a2be26f4ae6d95223cda"
+      "sha256": "17cbb054a087f488ce01beb42c0f1ad52e151e3f9374430aa3288d4b25f9d0a6"
     },
     {
       "file": "server/workbench/decision-policy.mjs",
@@ -318,6 +323,38 @@
     {
       "file": "server/workbench/html-tailwind.test.mjs",
       "sha256": "59f329887ee4a5bb2d533e8c61b0c2c497a009b01c8c4ad3d633ae1b73c7f151"
+    },
+    {
+      "file": "server/workbench/http-log-evidence.mjs",
+      "sha256": "48b3a633b0e5aa0de6941ea8724725eea5565587a49a71f9607d2e17e7b05c06"
+    },
+    {
+      "file": "server/workbench/http-log-evidence.qa.integration.test.ts",
+      "sha256": "b1b8369ed2404a4942ce000d08bf4756dac63128af4817214506fdf3aa97ffb3"
+    },
+    {
+      "file": "server/workbench/http-log-import-cli.mjs",
+      "sha256": "be68edc516b4b22283605ecd207ec7d668ce09a86344e6ced5209add3e1c92bc"
+    },
+    {
+      "file": "server/workbench/http-log-import-cli.test.ts",
+      "sha256": "5dc152b2e3698efcd23e843f20df5eb5fa14569dbe4cdfdd9efdabb0fa1a4d91"
+    },
+    {
+      "file": "server/workbench/http-log-import.integration.test.ts",
+      "sha256": "ef3867d0a2250903616693e945d28b42a292c73bb2c1abf402cdea1a1473230d"
+    },
+    {
+      "file": "server/workbench/http-log-import.md",
+      "sha256": "a767b32bf9ab75df636cb1a92d7ad0431bf39e07488cec1c2c3ac94e61c508e7"
+    },
+    {
+      "file": "server/workbench/http-log-import.mjs",
+      "sha256": "a271d79e35aeba9c019b4d4a58752c1285ac60214bf0d3871ebd46c34d96dcf9"
+    },
+    {
+      "file": "server/workbench/http-log-import.qa.integration.test.ts",
+      "sha256": "9c89c3df227b34db516274f0b6f39a24fca45cdce3af187535902dc848d25462"
     },
     {
       "file": "server/workbench/isolated-capabilities.integration.test.ts",
@@ -581,7 +618,7 @@
     },
     {
       "file": "workbench/OperationsPanel.tsx",
-      "sha256": "f760c1048b7f588cb0234895faf3edfe5212b06e020b4448da3b60f6eb7a31b1"
+      "sha256": "30e9237b05b9458aa65b0cb3a527ae064182992b7a748d390bbf1f84e9106814"
     },
     {
       "file": "workbench/ReactConversationPanel.tsx",
@@ -633,11 +670,11 @@
     },
     {
       "file": "workbench/operations-http.e2e.spec.ts",
-      "sha256": "ca6f6e2e37b38611b1f13d0557d5752710c0858fce4449250e1cd9d14ec24c61"
+      "sha256": "cd850dfcc572331b946a3a417abcf7377854d655d4cf3cf6ae477380067972d8"
     },
     {
       "file": "workbench/operations.e2e.spec.ts",
-      "sha256": "fb01cb4802bc22d34dca77b2e27a64d90c0898273f564f4f8c4909ddc842a6a8"
+      "sha256": "c35071dd8936f3bf50a160daab28c760dcdd7d76712e121cdbb74d82f088ebd4"
     },
     {
       "file": "workbench/playwright.config.mjs",
@@ -709,8 +746,27 @@
   "fullImplementationPR": "https://github.com/merryAI-dev/MYSCube/pull/819",
   "operationalMetrics": {
     "historicalCopiedLogSummary": "PASS: two synthetic DBs, real HTTP, actual browser",
-    "newHttpRequestCollection": "not_connected_or_implemented",
+    "offlineHttpImport": "PASS: synthetic Vercel envelopes, actual BFF finish payload, atomic isolated emulator store, real HTTP summary and browser",
+    "independentHttpQA": {
+      "passed": 16
+    },
+    "newHttpRequestCollection": "automatic_source_export_not_connected; bounded_offline_import_implemented",
     "currentServiceErrorRate": null,
     "errorReductionClaim": null
+  },
+  "sharedQaRegression": {
+    "legacyIntegrationPassed": 4,
+    "unitPassed": 11,
+    "logHashes": {
+      "/tmp/myscube-qa-legacy-integration.log": "4b8666820daeb9fc16ceed779d34b567afcb4c671fbc1cd2397a74855905ec7f",
+      "/tmp/myscube-qa-shared-unit.log": "466e318113634733db41b8c1f60973bd26d0773d2eee2d9cdbc728c8f2c021b9"
+    }
+  },
+  "previousFullCI": {
+    "sha": "2e6c165aae22e8dd2dadf4a18331c99b316e67db",
+    "workbench": "https://github.com/merryAI-dev/MYSCube/actions/runs/35867630101",
+    "main": "https://github.com/merryAI-dev/MYSCube/actions/runs/35867630023",
+    "conclusion": "success",
+    "note": "This predecessor passed; the S20 working-tree additions are validated locally and require their own PR CI."
   }
 }

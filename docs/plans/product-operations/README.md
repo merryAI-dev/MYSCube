@@ -61,3 +61,4 @@ S7~S11은 당시 구현 기록이며 S13 이후의 실제 HTML 생성 범위와 
 
 - [S18 — React 실행·사용자 API 등록·자동 Git PR](s18-react-api-git-studio.md): 실제 React/사본 API/동일 저장소 Draft PR 검증, 운영 실행 격리 제한과 미연결 항목.
 - [S19 — 구현·독립 QA·보완 루프](s19-completion-loop.md): 대화·저장 복구·외부 API·사본/Sheets 공급·실제 Docker 격리 검증, 운영 연결에 필요한 범위.
+- [S20 — 내보낸 HTTP 응답 기록과 코드 근거](s20-offline-http-evidence.md): 원자적 가져오기·독립 집계·실패 당시 코드 후보 대조. 자동 수집과 전체 오류율은 별도 운영 과제.

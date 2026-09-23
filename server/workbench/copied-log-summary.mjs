@@ -37,7 +37,7 @@ function supply(marker, expectedSource, instant, truncated, invalidRecords) {
     : '사본이 없거나 복사가 진행 중·중단되었거나 확인할 수 없는 기록이 있습니다. 비율을 계산하지 않습니다.' };
 }
 
-export function createCopiedLogSummary({ db, env, now = () => new Date().toISOString(), authorize, maxRecords = 5000 }) {
+export function createCopiedLogSummary({ db, env, now = () => new Date().toISOString(), authorize, maxRecords = 5000, readHttpSummary }) {
   return async (context, days = 7) => {
     if (context.actorRole !== 'admin') throw createHttpError(403, '운영 관리자만 과거 운영 기록을 확인할 수 있습니다.', 'reliability_admin_required');
     if (![7, 14, 28].includes(days)) throw createHttpError(400, '조회 기간은 7·14·28일 중 선택해 주세요.', 'invalid_reliability_period');
@@ -89,6 +89,7 @@ export function createCopiedLogSummary({ db, env, now = () => new Date().toISOSt
       clientErrors: { count: errorCollection.status === 'snapshot_ready' ? clientCount : null, observedCount: clientCount, invalidRecords: invalidErrors, truncated: errorTruncated, collection: errorCollection },
       httpRequests: { status: 'not_collected', rate: null, note: '현재 HTTP 전체 요청 기록은 연결되지 않았습니다. 화면 오류 건수나 과거 업무 기록으로 요청 분모·오류율을 대신 계산하지 않습니다.' },
     };
+    if (readHttpSummary) result.httpRequests = await readHttpSummary(context, { from, to, queriedAt });
     await authorize(context);
     return result;
   };

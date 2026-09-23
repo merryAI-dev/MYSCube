@@ -3,6 +3,7 @@ import { Firestore } from '@google-cloud/firestore';
 import { createWorkbenchApp } from '../server/workbench/app.mjs';
 import { createReliabilityService } from '../server/bff/reliability-service.mjs';
 import { copyLogPage } from '../server/workbench/copy-feed.mjs';
+import { importHttpLogExport } from '../server/workbench/http-log-import.mjs';
 
 const tenantId = 'operations-browser', actorId = 'admin-a', root = `orgs/${tenantId}`;
 const now = () => '2026-09-23T12:00:00.000Z';
@@ -10,6 +11,7 @@ const env = {
   WORKBENCH_PROJECT_ID: 'demo-operations-browser', PRODUCTION_PROJECT_ID: 'demo-operations-original',
   WORKBENCH_MODEL_PROJECT_ID: 'demo-operations-model', PRODUCTION_MODEL_PROJECT_ID: 'demo-operations-original-model',
   WORKBENCH_COPY_SOURCE_PROJECT_ID: 'demo-operations-original', WORKBENCH_COPY_ENABLED: 'true', WORKBENCH_TENANT_ID: tenantId,
+  WORKBENCH_HTTP_LOG_SOURCE_PROJECT_ID: 'synthetic-vercel-project', WORKBENCH_HTTP_LOG_IMPORT_ENABLED: 'true',
   WORKBENCH_AUTH_MODE: 'emulator',
 };
 let db: Firestore, source: Firestore, server: any, base: string;
@@ -63,4 +65,48 @@ test('real historical copy → HTTP summary → browser stays read-only and clea
   await expect(page.getByTestId('operations-attempt-count')).toHaveCount(0);
   await expect(page.getByRole('region', { name: '과거 업무 기록 표' })).toHaveCount(0);
   expect((await db.collection(`${root}/reliability_operations`).get()).size).toBe(2);
+});
+
+test('native synthetic Vercel export → isolated import → HTTP summary shows response counts without a service error rate', async ({ page }, testInfo) => {
+  await db.doc(`${root}/members/${actorId}`).update({ status: 'ACTIVE' });
+  const input = { schemaVersion: 1, sourceSystem: 'vercel', sourceProjectId: env.WORKBENCH_HTTP_LOG_SOURCE_PROJECT_ID,
+    tenantId, exportedAt: now(), period: { from: '2026-09-22T00:00:00.000Z', to: now() }, coverage: 'partial',
+    entries: [200, 400, 500].map((statusCode) => ({ id: `synthetic-response-${statusCode}`, deploymentId: 'dpl_synthetic_browser',
+      source: 'lambda', host: 'fixture.invalid', timestamp: Date.parse('2026-09-22T15:00:00.000Z'),
+      projectId: env.WORKBENCH_HTTP_LOG_SOURCE_PROJECT_ID, level: 'info', type: 'stdout', environment: 'production',
+      message: JSON.stringify({ message: 'bff.request', service: 'mysc-bff', method: 'POST', path: '/api/v1/project-registration-drafts/synthetic-draft/submit',
+        statusCode, latencyMs: 12, tenantId, requestId: `synthetic-request-${statusCode}`, actorId }) })),
+  };
+  await importHttpLogExport({ db, env, input, now });
+  expect((await db.collection(`${root}/workbench_http_requests`).get()).size).toBe(3);
+  await page.route('**/api/**', async (route) => {
+    const request = route.request(), url = new URL(request.url());
+    const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...request.headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId } });
+    await route.fulfill({ response });
+  });
+  const received = page.waitForResponse((response) => response.url().endsWith('/product-operations/summary?days=7'));
+  await page.goto('/?mode=operations');
+  const response = await received; expect(response.status()).toBe(200);
+  expect((await response.json()).httpRequests).toMatchObject({ status: 'imported_sample', measurementScope: 'http_response_log', provenance: 'operator_export_unverified',
+    rate: null, overallRate: null, counts: { total: 3, status2xx: 1, status4xx: 1, status5xx: 1, other: 0 } });
+  await expect(page.getByTestId('operations-attempt-count')).toHaveText('2');
+  await expect(page.getByTestId('operations-http-count')).toHaveText('3건 · 가져온 일부');
+  const http = page.getByRole('region', { name: '가져온 HTTP 응답 로그', exact: true });
+  await expect(http).toContainText('원본 진위는 확인되지 않았습니다');
+  await expect(http).toContainText('실시간 수집은 연결되지 않았습니다');
+  await expect(http).not.toContainText('%');
+  await expect(http.getByRole('region', { name: 'HTTP 응답 로그 표' })).toContainText('2026-09-23');
+  await expect(http.getByRole('region', { name: 'HTTP 응답 로그 표' })).toContainText('프로젝트 등록 제출');
+  await page.setViewportSize({ width: 1380, height: 1100 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('http-response-logs-desktop.png'), fullPage: true });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  const table = http.getByRole('region', { name: 'HTTP 응답 로그 표' });
+  expect(await table.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(true);
+  await table.evaluate((element) => { element.scrollLeft = element.scrollWidth; });
+  expect(await table.evaluate((element) => element.scrollLeft > 0)).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('http-response-logs-mobile.png'), fullPage: true });
+  expect((await db.collection(`${root}/workbench_http_requests`).get()).size).toBe(3);
+  expect((await db.collection(`${root}/workbench_http_imports`).get()).size).toBe(1);
 });
