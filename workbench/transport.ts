@@ -61,7 +61,8 @@ export function createWorkbenchTransport(options: Options) {
       return results;
     },
     async request(path: string, method = 'GET', body?: unknown) {
-      if (!/^\/(?:html-work-pages|workbench-conversations|react-work-pages|workbench-apis)(?:\/|$)/.test(path)) throw new Error('지원하지 않는 제작 공간 요청입니다.');
+      const operationsRead = method === 'GET' && /^\/product-operations\/summary(?:\?days=(?:7|14|28))?$/.test(path);
+      if (!operationsRead && !/^\/(?:html-work-pages|workbench-conversations|react-work-pages|workbench-apis)(?:\/|$)/.test(path)) throw new Error('지원하지 않는 제작 공간 요청입니다.');
       const actor = options.actor();
       let pending: PendingWrite | undefined;
       let uncertain = false;

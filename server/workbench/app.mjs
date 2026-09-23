@@ -19,6 +19,7 @@ import { mountRequestRecovery } from './request-recovery.mjs';
 import { workbenchOperationScopeMiddleware } from './operation-scopes.mjs';
 import { mountRemotePreview } from './remote-preview-routes.mjs';
 import { createRemoteRuntimeBroker } from './remote-runtime/broker.mjs';
+import { createCopiedLogSummary } from './copied-log-summary.mjs';
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 function createMutatingRoute(service, fn, { validateReplay } = {}) {
@@ -75,7 +76,11 @@ export function createWorkbenchApp(options) {
   mountCashflowEvidenceRoutes(app, { ...common, readSnapshot });
   mountWorkbenchAssistantRoutes(app, { ...common, env, readSnapshot, completionFactory: options.workbenchCompletionFactory,
     modelConfiguration: { enabled: env.WORKBENCH_AI_ENABLED === 'true', apiKey: env.WORKBENCH_GEMINI_API_KEY } });
-  mountReliabilityRoutes(app, { ...common, service: createReliabilityService({ db, now, environment: 'isolated' }) });
+  mountReliabilityRoutes(app, { ...common, service: {
+    ...createReliabilityService({ db, now, environment: 'isolated' }),
+    summary: createCopiedLogSummary({ db, env, now, authorize: core.authorize }),
+    observeClient: async () => { throw createHttpError(410, '운영 기록은 승인된 원본의 읽기 전용 사본으로 확인합니다.', 'workbench_observation_readonly'); },
+  } });
   app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.code || 'workbench_failed', message: error.expose ? error.message : '분석 도구 요청을 처리하지 못했습니다.' }));
   return app;
 }

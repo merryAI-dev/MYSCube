@@ -44,7 +44,7 @@ suite('Independent permission and sanitized log feed', () => {
     await source.doc(`${root}/client_error_events/one`).set(raw);
     expect(await copyLogPage({ source, db, env, kind: 'client_error_events', now })).toEqual({ count: 1, hasMore: false });
     const copy = (await db.doc(`${root}/client_error_events/one`).get()).data();
-    expect(copy?.extra).toEqual({ code: 'draft_conflict', status: 409 }); expect(JSON.stringify(copy)).not.toMatch(/private|secret-token/);
+    expect(copy?.extra).toEqual({ code: 'draft_conflict', status: 409, codeAmbiguous: false, statusAmbiguous: false, codeCandidates: [], statusCandidates: [] }); expect(JSON.stringify(copy)).not.toMatch(/private|secret-token/);
     expect(await copyLogPage({ source, db, env, kind: 'client_error_events', now })).toEqual({ count: 0, hasMore: false });
     expect((await source.doc(`${root}/client_error_events/one`).get()).data()).toEqual(raw);
   });

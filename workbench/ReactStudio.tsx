@@ -109,7 +109,7 @@ export function ReactStudio() {
   const runtimeAvailable = Boolean(capabilities?.remoteRuntime || capabilities?.runtimeUrl);
   return <div className="studio react-studio">
     <header className="studio-header"><div className="brand"><span className="eyebrow">MYSCube · AXR STUDIO</span><h1>React 업무 화면 제작</h1><p>요청에서 실행 가능한 화면으로. 저장한 소스와 검토할 PR을 함께 관리합니다.</p></div>
-      <div className="header-actions"><a className="quiet" href="/">HTML 제작 공간</a><span role="status" className="save-state">{busy ? '처리 중…' : dirty ? '저장하지 않은 변경' : saved ? `저장됨 · 버전 ${saved.version}` : '새 화면'}</span>
+      <div className="header-actions"><a className="quiet" href="/?mode=operations" target="_blank" rel="noopener noreferrer">운영 기록 ↗</a><a className="quiet" href="/">HTML 제작 공간</a><span role="status" className="save-state">{busy ? '처리 중…' : dirty ? '저장하지 않은 변경' : saved ? `저장됨 · 버전 ${saved.version}` : '새 화면'}</span>
         <button disabled={busy || remotePreparing || !runtimeAvailable} className="quiet" onClick={applyPreview}>React 미리보기 적용</button><button disabled={busy} onClick={save}>React 저장·PR 생성</button></div>
     </header>
     {!runtimeAvailable && <p className="notice">별도 React 실행 공간 연결 전입니다. 소스 편집·컴파일·저장은 사용할 수 있습니다.</p>}

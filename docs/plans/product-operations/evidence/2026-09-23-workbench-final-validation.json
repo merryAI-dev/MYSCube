@@ -1,14 +1,14 @@
 {
-  "recordedAt": "2026-09-23T13:08:26.344972+00:00",
+  "recordedAt": "2026-09-23T13:29:53.801575+00:00",
   "baseCommit": "e56543ccc675e72963a16d8f6bdec4a38cbd1d21",
   "includesUncommittedWorkingTree": true,
   "vitest": {
-    "passed": 435,
-    "files": 54
+    "passed": 460,
+    "files": 56
   },
   "playwright": {
-    "passed": 26,
-    "durationSeconds": 40.6
+    "passed": 34,
+    "durationSeconds": 41.5
   },
   "typecheck": "PASS",
   "frontendBuild": "PASS",
@@ -19,15 +19,15 @@
   "logs": {
     "vitest": {
       "localPath": "/tmp/myscube-workbench-final-vitest.log",
-      "sha256": "2a43df202555411fd3285fdd9ebb4c387ee61f5fe9c92aa74ffa8fb54a17f558"
+      "sha256": "290afa013519689c87c94a21fb7ff1bf553dcbc439ac27b8b9faabf8166e3408"
     },
     "playwright": {
       "localPath": "/tmp/myscube-workbench-final-playwright.log",
-      "sha256": "311eba9b6cbb761e3c9e2d619eb35a71fd22cd20ea4949dc55783a7a6f45c35b"
+      "sha256": "a2d7dd3f7fd401ca1c2b676a05d0271d2e7d0624e362c9198141b732c718dfc9"
     },
     "build": {
       "localPath": "/tmp/myscube-workbench-final-build.log",
-      "sha256": "7f7846c5eddd0e39d38dd34365bf06c5d363174220277327726d68031da9474a"
+      "sha256": "54939c8a27c2e9398423d4952252f399bbbee5213f882328245093841f91349e"
     }
   },
   "sourceManifest": [
@@ -101,7 +101,7 @@
     },
     {
       "file": "server/workbench/app.mjs",
-      "sha256": "7268464ed1f1624410e0213159c1d8b39f851e82df8b3fcb57ddcffd0b4cb14f"
+      "sha256": "dfa5155ba16e11a5d2d66ad01cc69206f64452d85e816ff8b24931c7c1a5eb8e"
     },
     {
       "file": "server/workbench/capability-executor.mjs",
@@ -168,12 +168,24 @@
       "sha256": "3ead04fc184c5c0e42fa31fb242ffcd4b10a95e60b3a6b08d72414bdbbcdccc4"
     },
     {
+      "file": "server/workbench/copied-log-summary.mjs",
+      "sha256": "f9301c2d2e30ccdd47cef6784e52e8ded1ed97d32e8150889090f8ec211623c2"
+    },
+    {
+      "file": "server/workbench/copied-log-summary.qa.integration.test.ts",
+      "sha256": "882b57513580f64cc72400eac3a51d1556f27dc21eb50d169c517488338699af"
+    },
+    {
+      "file": "server/workbench/copy-feed-schema.integration.test.ts",
+      "sha256": "671addf4c91a29c8105c2fbc1e6fd52fd0b66dffdb3b20bb7b4866cfe5e9e3f0"
+    },
+    {
       "file": "server/workbench/copy-feed.integration.test.ts",
-      "sha256": "2f85eee9d289b8079e80ab21a49fc3cff8dc47716da234983cf2868c595b8207"
+      "sha256": "9b5d60d9b1b625ab22dcb335e183be65ce3ff456b7cbebca7b009e80726348f3"
     },
     {
       "file": "server/workbench/copy-feed.mjs",
-      "sha256": "fda717f45e6ee9140b4fe015a0af9f139a7e240bdcddf943e6e1c7a620610d06"
+      "sha256": "4791f4dcac3c4e7863e1d302a33c181c3111a435e09afe9c701d668506cd4dcd"
     },
     {
       "file": "server/workbench/copy-feed.qa.integration.test.ts",
@@ -529,7 +541,7 @@
     },
     {
       "file": "server/workbench/transport.qa.test.ts",
-      "sha256": "862fba9138b4b9e6169ab1b5c449cb0208ba38549776732ff9cb7db61f051920"
+      "sha256": "f4252122d460beb54f45cbecc8a94f9f28e41c257ff4067e58c5daa502acd540"
     },
     {
       "file": "server/workbench/transport.test.ts",
@@ -568,6 +580,10 @@
       "sha256": "6e4b534d95585531e9c4a98874e44666b6adab57032bb6417c5d191a218c3ee4"
     },
     {
+      "file": "workbench/OperationsPanel.tsx",
+      "sha256": "f760c1048b7f588cb0234895faf3edfe5212b06e020b4448da3b60f6eb7a31b1"
+    },
+    {
       "file": "workbench/ReactConversationPanel.tsx",
       "sha256": "9266cbe850507bc1bac02588fb7b0a5e6867d93980a9f093040788ecac6d9bff"
     },
@@ -577,7 +593,7 @@
     },
     {
       "file": "workbench/ReactStudio.tsx",
-      "sha256": "faa22f6542d84e4518be43df2861144f98a7662865ccf0d581c2fd3f384fe225"
+      "sha256": "3e551be5d6bf853da674330295ae9bd42a0a26f1736dbb4d18180108f9fcdb37"
     },
     {
       "file": "workbench/RecoveryPanel.tsx",
@@ -613,7 +629,15 @@
     },
     {
       "file": "workbench/main.tsx",
-      "sha256": "1a2381d136e267d1b682e446e611fb7edd06563a196ea29d52672c69970efa84"
+      "sha256": "0ee6b330790d91f0bf5ad4813e4492837a835ded0b61979c1c048032332f2f7d"
+    },
+    {
+      "file": "workbench/operations-http.e2e.spec.ts",
+      "sha256": "ca6f6e2e37b38611b1f13d0557d5752710c0858fce4449250e1cd9d14ec24c61"
+    },
+    {
+      "file": "workbench/operations.e2e.spec.ts",
+      "sha256": "fb01cb4802bc22d34dca77b2e27a64d90c0898273f564f4f8c4909ddc842a6a8"
     },
     {
       "file": "workbench/playwright.config.mjs",
@@ -641,7 +665,7 @@
     },
     {
       "file": "workbench/studio.css",
-      "sha256": "6a271fa277ecb6ec95d87ab29b46d17e0675ceef23c52a8893b9cc03d7837c46"
+      "sha256": "706bca9e06cd65802fc62810ea8f31a054a30ee52c1dade3333893a31c971805"
     },
     {
       "file": "workbench/studio.e2e.spec.ts",
@@ -649,7 +673,7 @@
     },
     {
       "file": "workbench/transport.ts",
-      "sha256": "89d466d04e158c45b612b30dc66a92ab2292da92cce377536a6838a3eda87e31"
+      "sha256": "13da03704c40a0b46ad62073f8967217ab445b6773fb925c4a4a6ba7df1a7b22"
     },
     {
       "file": "workbench/tsconfig.json",
@@ -681,5 +705,12 @@
     "build": "PASS",
     "testLogSha256": "2e21d9adbc4ba593a8c54ce0db2ad65b4f8b07d79cbebb5af056ec0677e57368",
     "buildLogSha256": "afc9315673a8d0b73501ec9883e059ff052760e4c9c660c2af39e464c295ef2f"
+  },
+  "fullImplementationPR": "https://github.com/merryAI-dev/MYSCube/pull/819",
+  "operationalMetrics": {
+    "historicalCopiedLogSummary": "PASS: two synthetic DBs, real HTTP, actual browser",
+    "newHttpRequestCollection": "not_connected_or_implemented",
+    "currentServiceErrorRate": null,
+    "errorReductionClaim": null
   }
 }

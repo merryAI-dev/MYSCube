@@ -24,3 +24,15 @@ it('retains an uncertain prior write key when a retry is rejected by authenticat
   expect(keys[0]).toBe(keys[1]);
   expect(transport.pending()).toHaveLength(1);
 });
+
+it('allows only the bounded read-only operations summary through the shared transport', async () => {
+  const sent: string[] = [];
+  const transport = createWorkbenchTransport({ actor: () => 'actor-a', token: async () => 'fixture-token',
+    fetchImpl: async (url) => { sent.push(String(url)); return new Response('{}', { status: 200 }); } });
+  await transport.request('/product-operations/summary?days=28');
+  for (const [path, method] of [
+    ['/product-operations/summary?days=365', 'GET'], ['/product-operations/summary?days=7&tenant=other', 'GET'],
+    ['/product-operations/summary', 'POST'], ['/product-operations/observations', 'POST'],
+  ]) await expect(transport.request(path, method)).rejects.toThrow('지원하지 않는');
+  expect(sent).toEqual(['/api/v1/product-operations/summary?days=28']);
+});

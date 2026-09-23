@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import * as z from 'zod/v4';
 import { resolveWorkbenchRuntime } from './runtime-config.mjs';
 import { createHttpError } from '../bff/bff-utils.mjs';
+import { OPERATION_KEYS, OPERATION_MODES, OUTCOMES } from '../bff/reliability-model.mjs';
 
 const id = z.string().regex(/^[a-zA-Z0-9_-]{1,128}$/);
 const dataset = z.string().regex(/^[a-z][a-z0-9_]{0,62}$/);
@@ -54,13 +55,44 @@ export async function readPermissionCopy({ source, env, now = () => new Date().t
 }
 
 const safeId = (value) => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,150}$/.test(value) ? value : null;
-const safeDate = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value)) ? value : null;
+const safeDate = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(value)
+  && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0, 19) === value.slice(0, 19) ? value : null;
 const safeCode = (value) => typeof value === 'string' && /^[a-zA-Z0-9_.-]{1,100}$/.test(value) ? value : null;
 const sha = (value) => typeof value === 'string' && /^[a-f0-9]{40}$/.test(value) ? value : null;
-export function sanitizeCopiedLog(kind, row) {
-  if (kind === 'client_error_events') return { actorId: safeId(row.actorId), createdAt: safeDate(row.createdAt), occurredAt: safeDate(row.occurredAt), clientRequestId: safeId(row.clientRequestId), requestId: safeId(row.requestId), release: sha(row.release), ingestRelease: sha(row.ingestRelease), name: safeCode(row.name), extra: { code: safeCode(row.extra?.code), status: Number.isInteger(row.extra?.status) ? row.extra.status : null } };
-  if (kind === 'reliability_operations') return { actorId: safeId(row.actorId), requestId: safeId(row.requestId), operationKey: safeCode(row.operationKey), outcome: safeCode(row.outcome), errorCode: safeCode(row.errorCode), releaseSha: sha(row.releaseSha), updatedAt: safeDate(row.updatedAt), serverObserved: row.serverObserved === true };
-  throw new Error('Unsupported log copy kind.');
+const safeDay = (value) => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value ? value : null;
+const safeBoolean = value => typeof value === 'boolean' ? value : null;
+const safeStatus = value => Number.isInteger(value) && (value === 0 || value >= 100 && value <= 599) ? value : null;
+const safeOperationId = value => typeof value === 'string' && z.string().uuid().safeParse(value).success ? value : null;
+const enumValue = (value, choices) => choices.includes(value) ? value : null;
+export const LOG_COPY_SCHEMA_VERSION = 2;
+export function sanitizeCopiedLog(kind, input) {
+  const row = input && typeof input === 'object' ? input : {};
+  const invalidFields = [], ambiguousFields = [];
+  const checked = (name, value, sanitize) => { const result = sanitize(value); if (value != null && result === null) invalidFields.push(name); return result; };
+  const alias = (name, first, second, sanitize) => {
+    const left = checked(`extra.${name}`, first, sanitize), right = checked(`extra.${name === 'code' ? 'errorCode' : 'statusCode'}`, second, sanitize);
+    const presentLeft = first != null, presentRight = second != null;
+    const ambiguous = presentLeft && presentRight && (left === null || right === null || left !== right);
+    if (ambiguous) ambiguousFields.push(`extra.${name}`);
+    return { value: ambiguous ? null : left ?? right, ambiguous, candidates: ambiguous ? [...new Set([left, right].filter(value => value !== null))] : [] };
+  };
+  let value;
+  if (kind === 'client_error_events') {
+    const code = alias('code', row.extra?.code, row.extra?.errorCode, safeCode), status = alias('status', row.extra?.status, row.extra?.statusCode, safeStatus);
+    value = { actorId: checked('actorId', row.actorId, safeId), createdAt: checked('createdAt', row.createdAt, safeDate), occurredAt: checked('occurredAt', row.occurredAt, safeDate), clientRequestId: checked('clientRequestId', row.clientRequestId, safeId), requestId: checked('requestId', row.requestId, safeId), release: checked('release', row.release, sha), ingestRelease: checked('ingestRelease', row.ingestRelease, sha), name: checked('name', row.name, safeCode),
+      extra: { code: code.value, status: status.value, codeAmbiguous: code.ambiguous, statusAmbiguous: status.ambiguous, codeCandidates: code.candidates, statusCandidates: status.candidates } };
+  } else if (kind === 'reliability_operations') {
+    const createdAt = checked('createdAt', row.createdAt, safeDate); let day = checked('day', row.day, safeDay);
+    if (day && createdAt && day !== new Date(Date.parse(createdAt) + 9 * 3600000).toISOString().slice(0, 10)) { day = null; invalidFields.push('day'); }
+    value = { operationId: checked('operationId', row.operationId, safeOperationId), actorId: checked('actorId', row.actorId, safeId), requestId: checked('requestId', row.requestId, safeId),
+      operationKey: checked('operationKey', row.operationKey, value => enumValue(value, OPERATION_KEYS)), mode: checked('mode', row.mode, value => enumValue(value, OPERATION_MODES)),
+      environment: checked('environment', row.environment, value => enumValue(value, ['local', 'preview', 'live', 'isolated', 'unknown'])),
+      day, createdAt, metricVersion: checked('metricVersion', row.metricVersion, value => Number.isSafeInteger(value) && value >= 1 && value <= 1000 ? value : null),
+      outcome: checked('outcome', row.outcome, value => enumValue(value, OUTCOMES)), errorCode: checked('errorCode', row.errorCode, safeCode), releaseSha: checked('releaseSha', row.releaseSha, sha), updatedAt: checked('updatedAt', row.updatedAt, safeDate),
+      serverObserved: checked('serverObserved', row.serverObserved, safeBoolean), clientStarted: checked('clientStarted', row.clientStarted, safeBoolean),
+      followup: checked('followup', row.followup, value => enumValue(value, ['not_applicable', 'unconfirmed', 'confirmed', 'unknown'])) };
+  } else throw new Error('Unsupported log copy kind.');
+  return { ...value, copySchemaVersion: LOG_COPY_SCHEMA_VERSION, copyValidation: { invalidFields, ambiguousFields } };
 }
 
 export async function copyLogPage({ source, db, env, kind, now = () => new Date().toISOString() }) {
@@ -91,13 +123,14 @@ export async function copyLogPage({ source, db, env, kind, now = () => new Date(
     let count = 0;
     for (const target of stored) {
       const doc = documents.get(target.id), value = target.data();
-      if (value?.copySourceUpdatedAt?.isEqual(doc.updateTime)) continue;
+      if (value?.copySchemaVersion > LOG_COPY_SCHEMA_VERSION) continue;
+      if (value?.copySourceUpdatedAt?.isEqual(doc.updateTime) && value.copySchemaVersion === LOG_COPY_SCHEMA_VERSION) continue;
       if (value?.copySourceUpdatedAt && compareRevision(value.copySourceUpdatedAt, doc.updateTime) > 0) continue;
       tx.set(target.ref, { ...sanitizeCopiedLog(kind, doc.data()), copySourceUpdatedAt: doc.updateTime }); count++;
     }
     const last = page.docs.at(-1), historicalLast = historical.docs.at(-1);
     const hasMore = page.size === 100 || historical.size === 100;
-    tx.set(marker, { sourceProjectId: source.projectId, capturedAt: now(), copiedThisPage: count, hasMore,
+    tx.set(marker, { sourceProjectId: source.projectId, capturedAt: now(), copiedThisPage: count, hasMore, copySchemaVersion: LOG_COPY_SCHEMA_VERSION,
       generation: (previous?.generation || 0) + 1,
       cursor: last ? { at: last.data()[field], id: last.id } : previous?.cursor || null,
       sweepCursor: historical.size === 100 ? historicalLast.id : null,
