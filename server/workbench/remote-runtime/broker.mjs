@@ -13,16 +13,46 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
   if (typeof authorize !== 'function' || typeof callApi !== 'function') throw new Error('Remote renderer requires explicit authorization and API routing');
   const cap = Object.fromEntries(Object.entries(REMOTE_LIMITS).map(([key, value]) => [key, Number.isFinite(limits[key]) && limits[key] > 0 ? Math.min(value, limits[key]) : value]));
   const sessions = new Map();
+  const release = (session) => {
+    sessions.delete(session.id);
+    const previous = sessions.get(session.previousSessionId);
+    if (previous?.candidateId === session.id) previous.candidateId = null;
+  };
+  const removeContainer = (session) => {
+    if (session.removing || !sessions.has(session.id)) return;
+    session.removing = true; session.cleanupAttempts++;
+    let removal, settled = false;
+    const finish = (success) => {
+      if (settled) return; settled = true; clearTimeout(timer); session.removing = false;
+      if (success) { release(session); return; }
+      session.cleanupFailed = true;
+      if (session.cleanupAttempts < 3) {
+        session.cleanupRetry = setTimeout(() => removeContainer(session), 100); session.cleanupRetry.unref();
+      }
+    };
+    const timer = setTimeout(() => { removal?.kill('SIGKILL'); finish(false); }, 3000); timer.unref();
+    try {
+      removal = spawnDocker(['rm', '-f', session.container]);
+      removal.once('error', () => finish(false)); removal.once('close', code => finish(code === 0));
+      removal.stdout?.resume(); removal.stderr?.resume();
+    } catch { finish(false); }
+  };
   const clean = (session, reason = fail('미리보기 실행이 종료되었습니다.', 'remote_session_closed', 410)) => {
-    if (session.closed) return; session.closed = true; clearTimeout(session.ttl); sessions.delete(session.id);
-    const previous = sessions.get(session.previousSessionId); if (previous?.candidateId === session.id) previous.candidateId = null;
+    if (session.closed) return; session.closed = true; clearTimeout(session.ttl); clearInterval(session.authPoll);
     for (const request of session.pending.values()) { clearTimeout(request.timer); request.reject(reason); } session.pending.clear();
     for (const controller of session.apiControllers.values()) controller.abort(); session.apiControllers.clear();
     session.process.stdin.destroy(); session.process.kill('SIGKILL');
-    const removal = spawnDocker(['rm', '-f', session.container]);
-    const timer = setTimeout(() => removal.kill('SIGKILL'), 3000); timer.unref();
-    removal.once('error', () => clearTimeout(timer)); removal.once('close', () => clearTimeout(timer));
-    removal.stdout?.resume(); removal.stderr?.resume();
+    session.cleanupAttempts = 0; removeContainer(session);
+  };
+  const sameOwner = (session, context) => session.context.tenantId === context?.tenantId && session.context.actorId === context?.actorId;
+  const pollAuthorization = async (session) => {
+    if (session.closed || session.authPolling) return; session.authPolling = true;
+    let timer;
+    try {
+      await Promise.race([authorize(session.context), new Promise((_resolve, reject) => { timer = setTimeout(() => reject(fail('미리보기 권한 확인 시간이 지났습니다.', 'remote_auth_timeout', 504)), 10000); timer.unref(); })]);
+      if (scopeKey(session.context) !== session.scope) throw fail('조회 권한이 변경되었습니다.', 'remote_scope_changed', 403);
+    } catch { clean(session, fail('미리보기 조회 권한을 확인하지 못했습니다.', 'remote_scope_changed', 403)); }
+    finally { clearTimeout(timer); session.authPolling = false; }
   };
   const send = (session, message) => {
     if (session.closed) throw fail('미리보기 실행이 종료되었습니다.', 'remote_session_closed', 410);
@@ -41,8 +71,14 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
     });
   };
   const withOwner = async (context, id) => {
-    await authorize(context); const session = sessions.get(id);
-    if (!session || session.scope !== scopeKey(context) || session.closed || session.expiresAt <= now()) throw fail('현재 계정에서 열 수 없거나 만료된 미리보기입니다.', 'remote_session_not_found', 404);
+    const session = sessions.get(id);
+    try { await authorize(context); }
+    catch (error) { if (session && sameOwner(session, context)) clean(session); throw error; }
+    let scope;
+    try { scope = scopeKey(context); }
+    catch (error) { if (session && sameOwner(session, context)) clean(session); throw error; }
+    if (session && sameOwner(session, context) && session.scope !== scope) clean(session);
+    if (!session || session.scope !== scope || session.closed || session.expiresAt <= now()) throw fail('현재 계정에서 열 수 없거나 만료된 미리보기입니다.', 'remote_session_not_found', 404);
     return session;
   };
   const bridge = async (session, message) => {
@@ -110,6 +146,7 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
       const session = { id, container, process, scope, previousSessionId: previous?.id, context: { ...context, analyticsScope: structuredClone(context.analyticsScope), ...(context.remoteEvidence ? { remoteEvidence: context.remoteEvidence } : {}) }, sourceHash: input.sourceHash, viewport, bindings: input.apiBindings.map(item => ({ id: item.id, version: item.version })), expiresAt: now() + cap.ttlMs,
         pending: new Map(), apiControllers: new Map(), seenApi: new Set(), buffer: '', bytes: 0, apiCalls: 0, commands: 0, sequence: 0, closed: false };
       sessions.set(id, session); if (previous) previous.candidateId = id; session.ttl = setTimeout(() => clean(session), cap.ttlMs); session.ttl.unref();
+      session.authPoll = setInterval(() => { void pollAuthorization(session); }, 30000); session.authPoll.unref();
       process.once('error', () => clean(session, fail('독립 실행 공간을 시작하지 못했습니다.', 'remote_unavailable')));
       process.once('close', () => clean(session, fail('실행 공간이 종료되었거나 자원 한도를 넘었습니다.', 'remote_exited')));
       process.stdin.on('error', () => clean(session, fail('실행 공간에 요청을 전달하지 못했습니다.', 'remote_pipe_closed')));
@@ -130,6 +167,14 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
     async event(context, id, value) { const session = await withOwner(context, id); const event = checkEvent(value, session.viewport); const frame = await request(session, 'event', { event }); await withOwner(context, id); return frame; },
     async close(context, id) { const session = await withOwner(context, id); clean(session); return { closed: true }; },
     closeAll() { for (const session of sessions.values()) clean(session); },
-    get activeSessions() { return sessions.size; },
+    revokeOwner(context) { for (const session of sessions.values()) if (sameOwner(session, context)) clean(session); },
+    reapCleanup() {
+      for (const session of sessions.values()) if (session.closed && !session.removing && session.cleanupAttempts >= 3) {
+        session.cleanupAttempts = 0; session.cleanupFailed = false; removeContainer(session);
+      }
+    },
+    get cleanupStatus() { return [...sessions.values()].filter(session => session.closed).map(session => ({ sessionId: session.id, attempts: session.cleanupAttempts, failed: Boolean(session.cleanupFailed), pending: session.removing || session.cleanupAttempts < 3 })); },
+    get reservedSessions() { return sessions.size; },
+    get activeSessions() { return [...sessions.values()].filter(session => !session.closed).length; },
   };
 }
