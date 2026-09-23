@@ -1,0 +1,35 @@
+name: AXR Runtime Isolation QA
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/workbench/**'
+      - '.github/workflows/axr-runtime-isolation-qa.yml'
+permissions:
+  contents: read
+concurrency:
+  group: axr-runtime-proof-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: docker build -f server/workbench/remote-runtime/Dockerfile -t myscube-axr-renderer:1.58.2-v1 .
+      - name: Verify synthetic attacks with real Docker
+        env:
+          REQUIRE_REMOTE_DOCKER_QA: 'true'
+          REMOTE_DOCKER_QA_REPORT: remote-runtime-isolation.json
+        run: node server/workbench/remote-runtime/docker-qa.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remote-runtime-isolation
+          path: remote-runtime-isolation.json
+          if-no-files-found: warn
