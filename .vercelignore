@@ -12,3 +12,6 @@ test-results
 playwright-report
 tmp
 .venv-security
+server/workbench
+workbench
+dist-workbench

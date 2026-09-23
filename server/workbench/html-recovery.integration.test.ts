@@ -1,0 +1,67 @@
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createHash, randomUUID } from 'node:crypto';
+import { Firestore } from '@google-cloud/firestore';
+import request from 'supertest';
+import { createIsolatedWorkbenchCore } from './core.mjs';
+import { createHtmlPageService } from './html-pages.mjs';
+import { createWorkbenchApp } from './app.mjs';
+import { resolveHtmlBindings } from './html-bindings.mjs';
+
+const suite = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
+suite('HTML atomic save and evidence-aware lost-response recovery', () => {
+  const db = new Firestore({ projectId: 'demo-html-recovery' }), tenantId = 'html-recovery', root = `orgs/${tenantId}`;
+  const now = () => '2026-09-23T12:00:00.000Z';
+  const env = { WORKBENCH_PROJECT_ID: db.projectId, PRODUCTION_PROJECT_ID: 'demo-business-other', WORKBENCH_MODEL_PROJECT_ID: 'demo-html-recovery-model', PRODUCTION_MODEL_PROJECT_ID: 'demo-other-model' };
+  const core = createIsolatedWorkbenchCore({ db, env, now }), pages = createHtmlPageService({ db, now, authorize: core.authorize });
+  const context = (idempotencyKey: string, actorId = 'A') => ({ tenantId, actorId, actorRole: 'admin', idempotencyKey });
+  const source = (name = '첫 원문') => ({ title: name, html: `<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body><main><h1>${name}</h1></main></body></html>` });
+  const input = (name = '첫 원문', expectedVersion = 0) => ({ expectedVersion, source: source(name), referenceIds: [] });
+  const headers = (key = randomUUID(), actorId = 'A') => ({ 'x-tenant-id': tenantId, 'x-actor-id': actorId, 'idempotency-key': key });
+  beforeEach(async () => { await db.recursiveDelete(db.doc(root)); for (const id of ['A', 'B']) await db.doc(`${root}/members/${id}`).set({ role: 'admin', status: 'ACTIVE', permissionsCapturedAt: now(), analyticsDatasetIds: ['weekly_submission'], analyticsScopeRevision: 'v1' }); });
+  afterAll(async () => { await db.recursiveDelete(db.doc(root)); await db.terminate(); });
+  it('replays create/edit/restore as their exact immutable revisions without overwriting a later head', async () => {
+    const first = await pages.save(context('create'), null, input()); expect(await pages.save(context('create'), null, input())).toEqual(first);
+    const second = await pages.save(context('edit'), first.id, input('두 번째', 1));
+    expect(await pages.save(context('edit'), first.id, input('두 번째', 1))).toEqual(second);
+    expect(await pages.save(context('create'), null, input())).toEqual(first);
+    await expect(pages.save(context('create'), null, input('다른 내용'))).rejects.toMatchObject({ code: 'html_operation_conflict' });
+    const third = await pages.restore(context('restore'), first.id, { expectedVersion: 2, version: 1 });
+    expect(await pages.restore(context('restore'), first.id, { expectedVersion: 2, version: 1 })).toEqual(third);
+    expect(third.previewHash).toBe(first.previewHash); expect(third.css).toBe(first.css);
+    expect((await pages.get(context('read'), first.id)).version).toBe(3);
+    expect((await pages.list(context('list'))).items).toHaveLength(1); expect((await pages.history(context('history'), first.id)).items).toHaveLength(3);
+    expect(await pages.mutationResult(context('create'))).toEqual(first);
+    await expect(pages.mutationResult(context('create', 'B'))).rejects.toMatchObject({ code: 'html_operation_forbidden' });
+    await db.doc(`${root}/members/A`).update({ analyticsScopeRevision: 'v2' });
+    await expect(pages.mutationResult(context('create'))).rejects.toMatchObject({ code: 'html_operation_forbidden' });
+  });
+  it('recovers an atomic commit without a transport receipt then repeats HTTP save as the same page and version', async () => {
+    const key = randomUUID(), ctx: any = context('temporary'); await core.authorize(ctx); ctx.idempotencyKey = createHash('sha256').update(`${key}:${ctx.analyticsScope.fingerprint}`).digest('hex');
+    const committed = await pages.save(ctx, null, input());
+    const app = createWorkbenchApp({ db, env, now, authMode: 'headers' });
+    const recovered = await request(app).get(`/api/v1/workbench-requests/${key}`).query({ path: '/html-work-pages', method: 'POST' }).set(headers());
+    expect(recovered.status).toBe(200); expect(recovered.body).toMatchObject({ state: 'completed', kind: 'html-page', body: { id: committed.id, version: 1 } });
+    const repeated = await request(app).post('/api/v1/html-work-pages').set(headers(key)).send(input()); expect(repeated.status).toBe(201); expect(repeated.body).toEqual(committed);
+    expect((await pages.list(context('list'))).items).toHaveLength(1); expect((await pages.history(context('history'), committed.id)).items).toHaveLength(1);
+  });
+  it('revalidates bound evidence on cached HTTP replay and recovery, refusing stale data even with an unchanged permission fingerprint', async () => {
+    const evidenceId = randomUUID(), evidence = { evidenceId, columns: [{ name: 'amount', type: 'number' }], rows: [{ amount: 0 }], metadata: { asOf: now(), completeness: 'complete' } };
+    const template = { title: '근거 원문', html: '<!doctype html><html><head><meta name="viewport" content="width=device-width"></head><body><section data-binding="actual"></section></body></html>' };
+    const bindings = { actual: { evidenceId, kind: 'table' } }, resolved = resolveHtmlBindings({ ...template, bindings }, [evidence]);
+    const analytics = { evidence: vi.fn().mockResolvedValue(evidence) };
+    const app = createWorkbenchApp({ db, env, now, authMode: 'headers', analytics });
+    const key = randomUUID(), body = { expectedVersion: 0, source: resolved.source, referenceIds: [], dataBinding: { template, bindings } };
+    const save = () => request(app).post('/api/v1/html-work-pages').set(headers(key)).send(body);
+    const first = await save(); expect(first.status).toBe(201); const calls = analytics.evidence.mock.calls.length;
+    const replayed = await save(); expect(replayed.status).toBe(201); expect(replayed.headers['x-idempotency-replayed']).toBe('1'); expect(analytics.evidence.mock.calls.length).toBeGreaterThan(calls);
+    expect(replayed.body.dataBinding.evidenceIds).toEqual([evidenceId]); expect(replayed.body.source.html).toContain('<td>0</td>');
+    analytics.evidence.mockRejectedValue(Object.assign(new Error('근거 조회 권한이 없습니다.'), { statusCode: 403, code: 'fixture_evidence_forbidden', expose: true }));
+    expect((await save()).status).toBe(403);
+    const recovered = await request(app).get(`/api/v1/workbench-requests/${key}`).query({ path: '/html-work-pages', method: 'POST' }).set(headers());
+    expect(recovered.status).toBe(403); expect(recovered.body.body).toBeUndefined();
+    await db.doc(`${root}/members/A`).update({ analyticsScopeRevision: 'v2' });
+    const changedScope = await request(app).get(`/api/v1/workbench-requests/${key}`).query({ path: '/html-work-pages', method: 'POST' }).set(headers());
+    expect(changedScope.status).toBe(200); expect(changedScope.body.state).toBe('scope_changed'); expect(changedScope.body.body).toBeUndefined();
+    expect((await save()).body.error).toBe('workbench_operation_scope_changed');
+  });
+});

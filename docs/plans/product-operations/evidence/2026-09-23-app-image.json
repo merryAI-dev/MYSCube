@@ -1,0 +1,29 @@
+{
+  "run": "https://github.com/merryAI-dev/MYSCube/actions/runs/35863959611/job/107190754201",
+  "commit": "a7aabfa5ca7052dbc4023502bf52eb299e50aa0c",
+  "checks": {
+    "status": "PASS",
+    "platform": "linux",
+    "architecture": "x64",
+    "checks": [
+      "server-health",
+      "built-auth-and-assets",
+      "unauthorized-api",
+      "react-packages",
+      "tsx-tailwind-compiler",
+      "native-duckdb",
+      "graceful-server-exit"
+    ],
+    "productionReads": 0
+  },
+  "imageExecution": {
+    "network": "none",
+    "readOnly": true,
+    "memoryBytes": 1073741824,
+    "cpus": 2,
+    "syntheticIdentity": true
+  },
+  "systemdVerification": "syntax and declared executable prerequisite in disposable CI runner; units not installed",
+  "logSha256": "bb0712d4c8c320cc4737b04db5940991c2f2958aa79c848205cef017aa875f2a",
+  "productionDeployed": false
+}

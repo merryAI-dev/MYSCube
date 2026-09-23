@@ -1,0 +1,124 @@
+name: Workbench Deploy
+
+on:
+  workflow_run:
+    workflows: [Workbench CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+  actions: read
+
+concurrency:
+  group: isolated-workbench-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == 'main' && vars.WORKBENCH_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment: isolated-workbench
+    timeout-minutes: 20
+    env:
+      WORKBENCH_SERVICE: ${{ vars.WORKBENCH_SERVICE }}
+      WORKBENCH_PROJECT_ID: ${{ vars.WORKBENCH_PROJECT_ID }}
+      WORKBENCH_MODEL_PROJECT_ID: ${{ vars.WORKBENCH_MODEL_PROJECT_ID }}
+      PRODUCTION_PROJECT_ID: ${{ vars.PRODUCTION_PROJECT_ID }}
+      PRODUCTION_MODEL_PROJECT_ID: ${{ vars.PRODUCTION_MODEL_PROJECT_ID }}
+      WORKBENCH_AUTH_PROJECT_ID: ${{ vars.WORKBENCH_AUTH_PROJECT_ID }}
+      WORKBENCH_AUTH_API_KEY: ${{ vars.WORKBENCH_AUTH_API_KEY }}
+      WORKBENCH_AUTH_DOMAIN: ${{ vars.WORKBENCH_AUTH_DOMAIN }}
+      WORKBENCH_REGION: ${{ vars.WORKBENCH_REGION }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Verify approved independent target and current main
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+          WORKBENCH_PROJECT: ${{ vars.WORKBENCH_PROJECT_ID }}
+          MODEL_PROJECT: ${{ vars.WORKBENCH_MODEL_PROJECT_ID }}
+          PRODUCTION_PROJECT: ${{ vars.PRODUCTION_PROJECT_ID }}
+          PRODUCTION_MODEL_PROJECT: ${{ vars.PRODUCTION_MODEL_PROJECT_ID }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          CURRENT_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$CURRENT_SHA" != "$EXPECTED_SHA" ]; then
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          test -n "$WORKBENCH_PROJECT"
+          test -n "$MODEL_PROJECT"
+          test -n "$PRODUCTION_PROJECT"
+          test -n "$PRODUCTION_MODEL_PROJECT"
+          test "$WORKBENCH_PROJECT" != "$PRODUCTION_PROJECT"
+          test "$WORKBENCH_PROJECT" != "$PRODUCTION_MODEL_PROJECT"
+          test "$MODEL_PROJECT" != "$PRODUCTION_PROJECT"
+          test "$MODEL_PROJECT" != "$PRODUCTION_MODEL_PROJECT"
+          echo 'current=true' >> "$GITHUB_OUTPUT"
+      - uses: google-github-actions/auth@v3
+        if: steps.target.outputs.current == 'true'
+        with:
+          workload_identity_provider: ${{ vars.WORKBENCH_WIF_PROVIDER }}
+          service_account: ${{ vars.WORKBENCH_DEPLOY_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+        if: steps.target.outputs.current == 'true'
+      - uses: actions/setup-node@v5
+        if: steps.target.outputs.current == 'true'
+        with:
+          node-version-file: .nvmrc
+      - name: Validate existing runtime and frontend authentication before building
+        if: steps.target.outputs.current == 'true'
+        run: |
+          umask 077
+          CONFIG_FILE=$(mktemp)
+          trap 'rm -f "$CONFIG_FILE"' EXIT
+          gcloud run services describe "$WORKBENCH_SERVICE" --project "$WORKBENCH_PROJECT_ID" --region "$WORKBENCH_REGION" --format=json > "$CONFIG_FILE"
+          node server/workbench/deployment/validate-candidate.mjs "$CONFIG_FILE"
+      - name: Build immutable independent image
+        if: steps.target.outputs.current == 'true'
+        env:
+          PROJECT: ${{ vars.WORKBENCH_PROJECT_ID }}
+          REGION: ${{ vars.WORKBENCH_REGION }}
+          AUTH_PROJECT: ${{ vars.WORKBENCH_AUTH_PROJECT_ID }}
+          AUTH_KEY: ${{ vars.WORKBENCH_AUTH_API_KEY }}
+          AUTH_DOMAIN: ${{ vars.WORKBENCH_AUTH_DOMAIN }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
+          docker build -f server/workbench/Dockerfile --build-arg "VITE_WORKBENCH_AUTH_PROJECT_ID=$AUTH_PROJECT" --build-arg "VITE_WORKBENCH_AUTH_API_KEY=$AUTH_KEY" --build-arg "VITE_WORKBENCH_AUTH_DOMAIN=$AUTH_DOMAIN" -t "$REGION-docker.pkg.dev/$PROJECT/workbench/app:$SHA" .
+          docker push "$REGION-docker.pkg.dev/$PROJECT/workbench/app:$SHA"
+      - name: Recheck existing settings after the image build
+        id: candidate
+        if: steps.target.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          CURRENT_SHA=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+          if [ "$CURRENT_SHA" != "$EXPECTED_SHA" ]; then
+            echo 'current=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          umask 077
+          CONFIG_FILE=$(mktemp)
+          trap 'rm -f "$CONFIG_FILE"' EXIT
+          gcloud run services describe "$WORKBENCH_SERVICE" --project "$WORKBENCH_PROJECT_ID" --region "$WORKBENCH_REGION" --format=json > "$CONFIG_FILE"
+          node server/workbench/deployment/validate-candidate.mjs "$CONFIG_FILE"
+          echo 'current=true' >> "$GITHUB_OUTPUT"
+      - name: Prepare candidate without production traffic
+        if: steps.candidate.outputs.current == 'true'
+        env:
+          PROJECT: ${{ vars.WORKBENCH_PROJECT_ID }}
+          REGION: ${{ vars.WORKBENCH_REGION }}
+          SERVICE: ${{ vars.WORKBENCH_SERVICE }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          test "$SERVICE" = 'myscube-axr-workbench'
+          gcloud run deploy "$SERVICE" --project "$PROJECT" --region "$REGION" --image "$REGION-docker.pkg.dev/$PROJECT/workbench/app:$SHA" --no-traffic --tag "sha-${SHA:0:12}" --quiet
+      - name: Record candidate only
+        if: steps.candidate.outputs.current == 'true'
+        run: echo 'Candidate built. Live traffic promotion requires the isolated environment acceptance checks; this workflow does not activate React or promote an unverified candidate.' >> "$GITHUB_STEP_SUMMARY"

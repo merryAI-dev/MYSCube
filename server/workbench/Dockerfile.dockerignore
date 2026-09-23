@@ -1,0 +1,10 @@
+.git
+**/node_modules
+.env
+.env.*
+.vercel
+**/*.log
+tmp
+dist
+dist-workbench
+test-results

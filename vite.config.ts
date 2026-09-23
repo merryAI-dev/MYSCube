@@ -1,4 +1,3 @@
-import { workbenchPreviewPlugin } from './scripts/workbench-preview-plugin.mjs'
 import { defineConfig, loadEnv } from 'vite'
 import path from 'path'
 import tailwindcss from '@tailwindcss/vite'
@@ -64,7 +63,7 @@ export default defineConfig(({ mode }) => {
       'import.meta.env.VITE_SENTRY_RELEASE': JSON.stringify(env.VITE_SENTRY_RELEASE || env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA || ''),
       'import.meta.env.VITE_SENTRY_ENVIRONMENT': JSON.stringify(env.VITE_SENTRY_ENVIRONMENT || env.VERCEL_ENV || 'unknown'),
     },
-    plugins: [workbenchPreviewPlugin(),
+    plugins: [
       // The React and Tailwind plugins are both required for Make, even if
       // Tailwind is not being actively used – do not remove them
       react(),

@@ -110,7 +110,7 @@ describe('project registration draft client', () => {
       'x-edit-fence': '3',
     };
     expect(api.patch).toHaveBeenCalledWith('/api/v1/project-registration-drafts/draft-a', expect.objectContaining({
-      headers: { ...headers, 'x-operation-mode': 'unknown' },
+      headers,
       body: { expectedDraftRevision: 2, payload: { name: 'Saved' }, stepIndex: 3 },
     }));
     expect(api.post).toHaveBeenNthCalledWith(2, '/api/v1/project-registration-drafts/draft-a/attachments', expect.objectContaining({

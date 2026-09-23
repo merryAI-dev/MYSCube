@@ -1,0 +1,73 @@
+import { test, expect } from '@playwright/test';
+import { Firestore } from '@google-cloud/firestore';
+import { createWorkbenchApp } from '../server/workbench/app.mjs';
+import { createReactRuntimeServer } from '../server/workbench/react-runtime-server.mjs';
+
+const env: Record<string, string> = { WORKBENCH_PROJECT_ID: 'demo-react-conversation-browser', PRODUCTION_PROJECT_ID: 'demo-react-conversation-business', WORKBENCH_MODEL_PROJECT_ID: 'demo-react-conversation-model', PRODUCTION_MODEL_PROJECT_ID: 'demo-react-conversation-production-model', WORKBENCH_AUTH_MODE: 'emulator', WORKBENCH_REACT_RUNTIME_URL: 'http://localhost:8792/runtime', WORKBENCH_APP_ORIGIN: 'http://127.0.0.1:4178', WORKBENCH_AI_ENABLED: 'true', WORKBENCH_GEMINI_API_KEY: 'fixture-only' };
+const tenantId = 'react-conversation-browser', actorId = 'admin-a';
+const now = () => '2026-09-23T05:00:00.000Z';
+const original = "import React from 'react'; export default function App(){return <main><h1>저장 전 편집 원문</h1></main>}";
+const proposal = "import React from 'react'; export default function App(){return <main><h1>카드로 만든 후속 제안</h1></main>}";
+let db: Firestore, server: any, runtime: any, base: string, inputs: any[] = [];
+const tool = (name: string, value: unknown) => ({ tool_calls: [{ function: { name, arguments: JSON.stringify(value) } }] });
+test.beforeAll(async () => {
+  test.skip(!process.env.FIRESTORE_EMULATOR_HOST, 'Firestore emulator required');
+  db = new Firestore({ projectId: env.WORKBENCH_PROJECT_ID });
+  await db.recursiveDelete(db.doc(`orgs/${tenantId}`));
+  await db.doc(`orgs/${tenantId}/members/${actorId}`).set({ status: 'ACTIVE', role: 'admin', permissionsCapturedAt: now(), analyticsDatasetIds: [], analyticsScopeRevision: '1' });
+  runtime = (await createReactRuntimeServer(env)).listen(0, '127.0.0.1'); await new Promise<void>((resolve) => runtime.once('listening', resolve));
+  env.WORKBENCH_REACT_RUNTIME_URL = `http://localhost:${runtime.address().port}/runtime`;
+  server = createWorkbenchApp({ db, env, now, authMode: 'headers', reactCompletionFactory: () => async (input: any) => {
+    inputs.push(input);
+    const request = JSON.parse(input.messages.at(-1).content).request;
+    if (request.includes('배치를 결정')) return tool('clarify_react_request', { question: '표와 카드 중 어떤 배치가 좋으세요?', reason: '내용을 유지하며 배치만 정합니다.', options: [{ id: 'cards', label: '카드로 보여 주세요' }] });
+    if (request.includes('늦은 제안')) await new Promise((resolve) => setTimeout(resolve, 700));
+    return tool('render_react_source', { title: '후속 카드 제안', code: proposal });
+  } }).listen(0, '127.0.0.1');
+  await new Promise<void>((resolve) => server.once('listening', resolve)); base = `http://127.0.0.1:${server.address().port}`;
+});
+test.afterAll(async () => { for (const item of [server, runtime]) if (item) await new Promise<void>((resolve) => item.close(() => resolve())); if (db) { await db.recursiveDelete(db.doc(`orgs/${tenantId}`)); await db.terminate(); } });
+test.beforeEach(async ({ page }) => { await page.route('**/api/**', async (route) => { const url = new URL(route.request().url()); const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...route.request().headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId } }); await route.fulfill({ response }); }); });
+
+test('clarification preserves the live preview; reload follows persisted source context and applies a proposal only explicitly', async ({ page }) => {
+  await page.goto('/?mode=react');
+  await expect(page.getByLabel('React 원문')).not.toHaveValue('');
+  await page.getByLabel('React 원문').fill(original);
+  await page.getByRole('button', { name: 'React 미리보기 적용' }).click();
+  await expect(page.frameLocator('[data-testid="react-preview-committed"]').getByRole('heading', { name: '저장 전 편집 원문' })).toBeVisible();
+  await page.getByLabel('React 화면 요청').fill('배치를 결정하기 전에 확인해 주세요');
+  await page.getByRole('button', { name: 'React 생성·수정 요청' }).click();
+  await expect(page.getByRole('region', { name: '제작 추가 확인' })).toContainText('표와 카드 중');
+  await expect(page.getByLabel('React 원문')).toHaveValue(original);
+  await expect(page.frameLocator('[data-testid="react-preview-committed"]').getByRole('heading', { name: '저장 전 편집 원문' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'React 제안 적용', exact: true })).toHaveCount(0);
+  const url = page.url(); expect(url).toContain('conversation=');
+  await page.reload();
+  await expect(page.getByRole('region', { name: '제작 추가 확인' })).toBeVisible();
+  await expect(page.getByText('이 대화에 저장된 코드와 API 버전을 기준으로 이어갑니다.', { exact: false })).toBeVisible();
+  const defaultSource = await page.getByLabel('React 원문').inputValue(); expect(defaultSource).not.toBe(original);
+  await page.getByRole('button', { name: '카드로 보여 주세요', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'React 제안 적용', exact: true })).toBeVisible();
+  expect(JSON.parse(inputs.at(-1).messages.at(-1).content).currentSource.code).toBe(original);
+  await expect(page.getByLabel('React 원문')).toHaveValue(defaultSource);
+  await page.getByRole('button', { name: 'React 제안 적용', exact: true }).click();
+  await expect(page.getByLabel('React 원문')).toHaveValue(proposal);
+  const id = new URL(page.url()).searchParams.get('conversation');
+  const owner = (await import('node:crypto')).createHash('sha256').update(actorId).digest('hex');
+  expect((await db.collection(`orgs/${tenantId}/axr_conversations/${owner}/sessions/${id}/turns`).get()).size).toBe(2);
+});
+
+test('a late source proposal cannot replace a newly selected editor page', async ({ page }) => {
+  await page.goto('/?mode=react');
+  await expect(page.getByLabel('React 원문')).not.toHaveValue('');
+  await page.getByLabel('React 원문').fill(original);
+  await page.getByLabel('React 화면 요청').fill('늦은 제안으로 카드 화면을 만들어 주세요');
+  await page.getByRole('button', { name: 'React 생성·수정 요청' }).click();
+  await expect(page.getByRole('button', { name: '대화를 처리하고 있습니다…' })).toBeVisible();
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.getByRole('button', { name: '새 React 화면', exact: true }).click();
+  const resetSource = await page.getByLabel('React 원문').inputValue();
+  await expect(page.getByRole('button', { name: '이 React 제안 검토하기' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'React 제안 적용', exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('React 원문')).toHaveValue(resetSource);
+});

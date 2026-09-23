@@ -1,0 +1,91 @@
+name: Workbench CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: workbench-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+      - name: Check dedicated host unit definitions without installing services
+        run: |
+          if [ ! -x /usr/bin/node ]; then sudo ln -s "$(command -v node)" /usr/bin/node; fi
+          /usr/bin/node --version | grep -E '^v24\.'
+          systemd-analyze verify server/workbench/host-runtime/systemd/myscube-axr-workbench.service server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.service server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.timer
+      - name: Build independent app image with synthetic authentication settings
+        run: docker build -f server/workbench/Dockerfile --build-arg VITE_WORKBENCH_AUTH_PROJECT_ID=demo-image-identity --build-arg VITE_WORKBENCH_AUTH_API_KEY=synthetic-image-key-not-a-secret --build-arg VITE_WORKBENCH_AUTH_DOMAIN=demo-image-identity.firebaseapp.com -t myscube-workbench-app:ci .
+      - name: Verify actual Linux image without external network or credentials
+        run: docker run --rm --network none --memory 1g --cpus 2 --pids-limit 128 --read-only --tmpfs /tmp:rw,nosuid,size=128m --cap-drop ALL --security-opt no-new-privileges myscube-workbench-app:ci node server/workbench/deployment/app-smoke.mjs
+  runtime-isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Build fixed renderer image
+        run: docker build -f server/workbench/remote-runtime/Dockerfile -t myscube-axr-renderer:1.58.2-v1 .
+      - name: Verify real resource and network isolation
+        env:
+          REQUIRE_REMOTE_DOCKER_QA: 'true'
+          REMOTE_DOCKER_QA_REPORT: remote-runtime-isolation.json
+        run: node server/workbench/remote-runtime/docker-qa.mjs
+      - name: Retain isolation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: remote-runtime-isolation
+          path: remote-runtime-isolation.json
+          if-no-files-found: warn
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            server/workbench/package-lock.json
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm run workbench:install
+      - run: npx playwright install --with-deps chromium
+      - name: Workbench types and independent frontend build
+        run: |
+          npx tsc --noEmit -p workbench/tsconfig.json
+          npm run workbench:build
+      - name: Real persistence and browser checks
+        env:
+          WORKBENCH_REACT_BROWSER_QA: '1'
+        run: npx firebase-tools emulators:exec --only firestore --project demo-workbench-ci 'npx vitest run --config vitest.workbench.config.ts && npm run workbench:test:e2e'
+      - name: Retain browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: workbench-browser-evidence
+          path: test-results/workbench
+          if-no-files-found: ignore
