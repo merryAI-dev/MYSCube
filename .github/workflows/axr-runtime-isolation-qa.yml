@@ -16,6 +16,13 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+      - name: Provide the declared Node path in the disposable test runner
+        run: |
+          if [ ! -x /usr/bin/node ]; then sudo ln -s "$(command -v node)" /usr/bin/node; fi
+          /usr/bin/node --version | grep -E '^v24\.'
       - name: Verify systemd template syntax without installing services
         run: systemd-analyze verify server/workbench/host-runtime/systemd/myscube-axr-workbench.service server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.service server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.timer
       - name: Build standalone app with synthetic identity settings
