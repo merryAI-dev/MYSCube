@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import http from 'node:http';
 import { promisify } from 'node:util';
@@ -6,7 +7,8 @@ const execute = promisify(execFile);
 import { writeFile } from 'node:fs/promises';
 import { compileReactPreview } from '../react-compiler.mjs';
 import { createRemoteRuntimeBroker } from './broker.mjs';
-import { REMOTE_RUNTIME_IMAGE } from './contract.mjs';
+import { REMOTE_RUNTIME_IMAGE, dockerRunArguments } from './contract.mjs';
+import { reapExpiredRenderers } from './reaper.mjs';
 
 try { execFileSync('docker', ['info', '--format', '{{.ServerVersion}}'], { stdio: 'ignore' }); }
 catch {
@@ -71,19 +73,27 @@ try {
     ['memory-pressure', 'const values=[];while(true){values.push(new Uint8Array(8000000).fill(1));}'],
     ['api-flood', `for(let i=0;i<1000;i++)window.workbench.callApi('${apiId}',{i});`],
   ]) {
-    const code = `import React from 'react';export default function App(){return <button style={{position:'absolute',left:20,top:20}} onClick={async()=>{await window.workbench.callApi('${apiId}',{attackStarted:'${name}'});${attackCode}}}>Trigger synthetic attack</button>}`;
+    const code = `import React from 'react';export default function App(){return <button style={{position:'absolute',left:20,top:20}} onClick={()=>{window.workbench.callApi('${apiId}',{attackStarted:'${name}'});${attackCode}}}>Trigger synthetic attack</button>}`;
     const candidate = await broker.create(context(name), await compiled(code));
     const started = Date.now();
-    const attack = broker.event(context(name), candidate.sessionId, { type: 'click', x: 50, y: 28 }).then(value => ({ value }), error => ({ error }));
-    const canaryStart = Date.now(); const healthy = await broker.frame(context('canary'), canary.sessionId);
-    const canaryLatencyMs = Date.now() - canaryStart; assert.ok(healthy.pngBase64); assert.ok(canaryLatencyMs < 8000);
-    const result = await attack;
+    let finished = false;
+    const attack = broker.event(context(name), candidate.sessionId, { type: 'click', x: 50, y: 28 }).then(value => ({ value }), error => ({ error })).finally(() => { finished = true; });
+    while (!calls.some(call => call.input.attackStarted === name) && !finished && Date.now() - started < 8000) await new Promise(resolve => setTimeout(resolve, 25));
     assert.ok(calls.some(call => call.input.attackStarted === name), `${name} must execute the attack handler before a rejection counts`);
+    const measurements = []; let healthy;
+    do {
+      const canaryStart = Date.now(), overlappedAttack = !finished;
+      healthy = await broker.frame(context('canary'), canary.sessionId);
+      measurements.push({ latencyMs: Date.now() - canaryStart, overlappedAttack }); assert.ok(healthy.pngBase64);
+      if (!finished) await new Promise(resolve => setTimeout(resolve, 100));
+    } while (!finished);
+    const canaryLatencyMs = Math.max(...measurements.map(item => item.latencyMs)); assert.ok(canaryLatencyMs < 8000);
+    const result = await attack;
     if (result.value) { await new Promise(resolve => setTimeout(resolve, 500)); await assert.rejects(broker.frame(context(name), candidate.sessionId)); }
     else assert.ok(['remote_command_timeout', 'remote_exited', 'remote_react_error', 'remote_api_limit'].includes(result.error.code), `${name}: ${result.error.code}`);
     const elapsedMs = Date.now() - started; assert.ok(elapsedMs < 12000);
     assert.ok((await broker.frame(context('canary'), canary.sessionId)).sequence > healthy.sequence);
-    outcomes.push({ case: name, pass: true, attackStarted: true, elapsedMs, canaryLatencyMs, termination: result.error?.code || 'terminated-after-first-event', memoryCapInspected: true, kernelOomObserved: false });
+    outcomes.push({ case: name, pass: true, attackStarted: true, elapsedMs, canaryLatencyMs, measurements, termination: result.error?.code || 'terminated-after-first-event', memoryCapInspected: true, kernelOomObserved: false });
   }
   await broker.close(context('canary'), canary.sessionId);
   assert.equal(receiverHits, 0);
@@ -105,5 +115,18 @@ try {
 assert.equal(broker.activeSessions, 0);
 assert.equal(broker.reservedSessions, 0);
 result.cleanupVerified = true;
+const orphanName = `axr-render-${randomUUID()}`;
+const orphanArgs = dockerRunArguments(orphanName).filter(value => value !== '-i');
+orphanArgs.splice(1, 0, '-d'); orphanArgs.splice(orphanArgs.length - 1, 0, '--entrypoint', 'node');
+orphanArgs.push('-e', 'setInterval(()=>{},1000)');
+const orphanId = (await execute('docker', orphanArgs, { timeout: 10000 })).stdout.trim();
+try {
+  const fresh = await reapExpiredRenderers(); assert.ok(fresh.skipped >= 1); assert.ok(!fresh.removed.includes(orphanId));
+  const expired = await reapExpiredRenderers({ now: () => Date.now() + 361000 });
+  assert.ok(expired.removed.includes(orphanId)); assert.equal(expired.failures.length, 0);
+  assert.equal(execFileSync('docker', ['ps', '-aq', '--filter', `id=${orphanId}`], { encoding: 'utf8' }).trim(), '');
+  result.outcomes.push({ case: 'managed-orphan-expiry-reaper-with-advanced-test-clock', pass: true, freshPreserved: true, expiredRemoved: true });
+} finally { await execute('docker', ['rm', '-f', orphanId], { timeout: 5000 }).catch(() => {}); }
+
 if (process.env.REMOTE_DOCKER_QA_REPORT) await writeFile(process.env.REMOTE_DOCKER_QA_REPORT, JSON.stringify(result, null, 2));
 console.log(JSON.stringify(result, null, 2));

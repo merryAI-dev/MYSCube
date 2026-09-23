@@ -54,6 +54,13 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
     } catch { clean(session, fail('미리보기 조회 권한을 확인하지 못했습니다.', 'remote_scope_changed', 403)); }
     finally { clearTimeout(timer); session.authPolling = false; }
   };
+  const reapCleanup = () => {
+    for (const session of sessions.values()) if (session.closed && !session.removing && session.cleanupAttempts >= 3) {
+      session.cleanupAttempts = 0; session.cleanupFailed = false; removeContainer(session);
+    }
+  };
+  const cleanupPoll = setInterval(reapCleanup, 60000); cleanupPoll.unref();
+  let stopped = false;
   const send = (session, message) => {
     if (session.closed) throw fail('미리보기 실행이 종료되었습니다.', 'remote_session_closed', 410);
     const line = `${JSON.stringify(message)}\n`;
@@ -131,6 +138,7 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
   };
   return {
     async create(context, input) {
+      if (stopped) throw fail('미리보기 실행 서비스가 종료 중입니다.', 'remote_shutdown');
       await authorize(context); const scope = scopeKey(context);
       const artifact = checkArtifact(input.artifact); const viewport = checkViewport(input.viewport);
       if (!/^[a-f0-9]{64}$/.test(input.sourceHash || '') || input.artifact.sourceHash !== input.sourceHash || !Array.isArray(input.apiBindings) || input.apiBindings.length > 12 || input.apiBindings.some(item => !item || !/^[a-f0-9-]{36}$/.test(item.id || '') || !Number.isSafeInteger(item.version) || item.version < 1) || new Set(input.apiBindings.map(item => item.id)).size !== input.apiBindings.length) throw fail('실행할 원문과 API 연결 버전을 확인해 주세요.', 'remote_binding_invalid', 400);
@@ -168,11 +176,8 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
     async close(context, id) { const session = await withOwner(context, id); clean(session); return { closed: true }; },
     closeAll() { for (const session of sessions.values()) clean(session); },
     revokeOwner(context) { for (const session of sessions.values()) if (sameOwner(session, context)) clean(session); },
-    reapCleanup() {
-      for (const session of sessions.values()) if (session.closed && !session.removing && session.cleanupAttempts >= 3) {
-        session.cleanupAttempts = 0; session.cleanupFailed = false; removeContainer(session);
-      }
-    },
+    reapCleanup,
+    shutdown() { stopped = true; clearInterval(cleanupPoll); for (const session of sessions.values()) clean(session); },
     get cleanupStatus() { return [...sessions.values()].filter(session => session.closed).map(session => ({ sessionId: session.id, attempts: session.cleanupAttempts, failed: Boolean(session.cleanupFailed), pending: session.removing || session.cleanupAttempts < 3 })); },
     get reservedSessions() { return sessions.size; },
     get activeSessions() { return [...sessions.values()].filter(session => !session.closed).length; },

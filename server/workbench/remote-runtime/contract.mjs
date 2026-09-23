@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
 
 export const REMOTE_RUNTIME_IMAGE = 'myscube-axr-renderer:1.58.2-v1';
+export const REMOTE_RENDERER_LABEL = 'io.myscube.axr.renderer';
+export const REMOTE_RENDERER_LABEL_VALUE = 'v1';
 export const REMOTE_LIMITS = Object.freeze({ ttlMs: 300000, commandMs: 8000, apiMs: 10000, inputBytes: 400000, outputBytes: 900000, totalOutputBytes: 50000000, commands: 600, apiCalls: 60, pendingApi: 8, sessions: 4, actorSessions: 1 });
 export const digest = (value) => createHash('sha256').update(value).digest('hex');
 export function remoteError(code, message, statusCode = 400) { return Object.assign(new Error(message), { code, statusCode, expose: true }); }
@@ -25,7 +27,7 @@ export function checkEvent(value, viewport) {
 }
 export function dockerRunArguments(name) {
   if (!/^axr-render-[a-f0-9-]{36}$/.test(name)) throw new Error('Invalid container name');
-  return ['run', '--pull=never', '--rm', '-i', '--name', name, '--network', 'none', '--memory', '512m', '--memory-swap', '512m', '--cpus', '1', '--pids-limit', '128',
+  return ['run', '--pull=never', '--rm', '-i', '--name', name, '--label', `${REMOTE_RENDERER_LABEL}=${REMOTE_RENDERER_LABEL_VALUE}`, '--network', 'none', '--memory', '512m', '--memory-swap', '512m', '--cpus', '1', '--pids-limit', '128',
     '--user', '10001:10001', '--read-only', '--tmpfs', '/tmp:rw,noexec,nosuid,size=128m', '--tmpfs', '/dev/shm:rw,noexec,nosuid,size=128m',
     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--init', '--log-driver', 'none', REMOTE_RUNTIME_IMAGE];
 }
