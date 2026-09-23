@@ -3,6 +3,12 @@ import { spawn } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { getReactPackageSet, compileReactPreview } from '../react-compiler.mjs';
 import { executeAnalyticsQuery } from '../analytics-engine.mjs';
+import { createBuildMetadata } from './build-metadata.mjs';
+
+const metadata = JSON.parse(await readFile('workbench-build.json', 'utf8'));
+assert.equal(metadata.classification, 'synthetic', 'Smoke only accepts synthetic authentication builds');
+assert.deepEqual(metadata, await createBuildMetadata({ env: { WORKBENCH_RELEASE_SHA: metadata.sourceSha, WORKBENCH_BUILD_CLASS: 'synthetic', VITE_WORKBENCH_AUTH_PROJECT_ID: 'demo-image-identity', VITE_WORKBENCH_AUTH_API_KEY: 'synthetic-image-key-not-a-secret', VITE_WORKBENCH_AUTH_DOMAIN: 'demo-image-identity.firebaseapp.com' } }));
+if (process.env.WORKBENCH_EXPECTED_SOURCE_SHA) assert.equal(metadata.sourceSha, process.env.WORKBENCH_EXPECTED_SOURCE_SHA);
 
 const env = { PATH: process.env.PATH, NODE_ENV: 'production', PORT: '18971', WORKBENCH_PROJECT_ID: 'demo-image-workbench', PRODUCTION_PROJECT_ID: 'demo-image-business', WORKBENCH_MODEL_PROJECT_ID: 'demo-image-model', PRODUCTION_MODEL_PROJECT_ID: 'demo-image-business-model', WORKBENCH_AUTH_PROJECT_ID: 'demo-image-identity', WORKBENCH_TENANT_ID: 'synthetic-image-qa', WORKBENCH_AI_ENABLED: 'false', WORKBENCH_REMOTE_RUNTIME_ENABLED: 'false' };
 const child = spawn(process.execPath, ['server/workbench/server.mjs'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -28,7 +34,7 @@ try {
   const query = await executeAnalyticsQuery({ sql: 'SELECT SUM(amount) AS total FROM synthetic', datasets: [{ datasetId: 'synthetic', schema: [{ name: 'amount', type: 'decimal', scale: 0 }], rows: [{ amount: '10' }, { amount: '0' }] }] });
   assert.equal(query.rows[0].total, '10');
   const lock = JSON.parse(await readFile('server/workbench/package-lock.json', 'utf8')); assert.equal(lock.packages['node_modules/@duckdb/node-api'].version, '1.5.5-r.5');
-  report = { status: 'PASS', platform: process.platform, architecture: process.arch, checks: ['server-health', 'built-auth-and-assets', 'unauthorized-api', 'react-packages', 'tsx-tailwind-compiler', 'native-duckdb', 'graceful-server-exit'], productionReads: 0 };
+  report = { status: 'PASS', platform: process.platform, architecture: process.arch, nodeVersion: process.version, glibc: process.report.getReport().header.glibcVersionRuntime, sourceSha: metadata.sourceSha, classification: metadata.classification, checks: ['build-metadata-and-locks', 'server-health', 'built-auth-and-assets', 'unauthorized-api', 'react-packages', 'tsx-tailwind-compiler', 'native-duckdb', 'graceful-server-exit'], productionReads: 0 };
 } finally {
   clearTimeout(timer);
   if (child.exitCode === null && child.signalCode === null) { const exited = new Promise(resolve => child.once('exit', resolve)); child.kill('SIGTERM'); const timeout = setTimeout(() => child.kill('SIGKILL'), 11000); await exited; clearTimeout(timeout); }

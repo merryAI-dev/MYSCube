@@ -89,7 +89,7 @@ jobs:
           SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
-          docker build -f server/workbench/Dockerfile --build-arg "VITE_WORKBENCH_AUTH_PROJECT_ID=$AUTH_PROJECT" --build-arg "VITE_WORKBENCH_AUTH_API_KEY=$AUTH_KEY" --build-arg "VITE_WORKBENCH_AUTH_DOMAIN=$AUTH_DOMAIN" -t "$REGION-docker.pkg.dev/$PROJECT/workbench/app:$SHA" .
+          docker build -f server/workbench/Dockerfile --build-arg "WORKBENCH_RELEASE_SHA=$SHA" --build-arg WORKBENCH_BUILD_CLASS=production_candidate --build-arg "VITE_WORKBENCH_AUTH_PROJECT_ID=$AUTH_PROJECT" --build-arg "VITE_WORKBENCH_AUTH_API_KEY=$AUTH_KEY" --build-arg "VITE_WORKBENCH_AUTH_DOMAIN=$AUTH_DOMAIN" -t "$REGION-docker.pkg.dev/$PROJECT/workbench/app:$SHA" .
           docker push "$REGION-docker.pkg.dev/$PROJECT/workbench/app:$SHA"
       - name: Recheck existing settings after the image build
         id: candidate

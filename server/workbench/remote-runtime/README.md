@@ -5,7 +5,7 @@ The browser receives PNG frames and sends bounded pointer/keyboard events. Gener
 Build from the repository root:
 
 ```sh
-docker build -f server/workbench/remote-runtime/Dockerfile -t myscube-axr-renderer:1.58.2-v1 .
+docker build -f server/workbench/remote-runtime/Dockerfile --build-arg "WORKBENCH_RELEASE_SHA=$(git rev-parse HEAD)" --build-arg WORKBENCH_BUILD_CLASS=synthetic -t myscube-axr-renderer:1.58.2-v1 .
 REQUIRE_REMOTE_DOCKER_QA=true node server/workbench/remote-runtime/docker-qa.mjs
 ```
 
