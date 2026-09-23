@@ -71,7 +71,13 @@
     "prepare": "husky",
     "policy:jvm-roles:write": "node scripts/extract_jvm_command_roles.mjs --write",
     "typecheck": "node scripts/verify-typecheck-baseline.mjs",
-    "typecheck:baseline": "node scripts/verify-typecheck-baseline.mjs --update"
+    "typecheck:baseline": "node scripts/verify-typecheck-baseline.mjs --update",
+    "workbench:dev": "vite --config workbench/vite.config.ts",
+    "workbench:build": "vite build --config workbench/vite.config.ts",
+    "workbench:server": "node server/workbench/server.mjs",
+    "workbench:test:e2e": "playwright test --config workbench/playwright.config.mjs",
+    "workbench:install": "npm ci --ignore-scripts --prefix server/workbench",
+    "workbench:runtime": "node server/workbench/react-runtime-server.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
@@ -125,6 +131,7 @@
     "lucide-react": "0.487.0",
     "motion": "12.23.24",
     "next-themes": "0.4.6",
+    "parse5": "5.1.1",
     "pdfjs-dist": "^5.4.624",
     "react": "18.3.1",
     "react-day-picker": "8.10.1",
@@ -143,7 +150,9 @@
     "tw-animate-css": "1.3.8",
     "vaul": "1.1.2",
     "ws": "8.21.0",
-    "zod": "^4.3.6"
+    "zod": "^4.3.6",
+    "@tailwindcss/node": "4.1.12",
+    "tailwindcss": "4.1.12"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.1",
@@ -154,15 +163,14 @@
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "4.7.0",
     "@vitest/coverage-v8": "3.2.6",
+    "esbuild": "0.25.12",
     "firebase-tools": "^15.6.0",
     "husky": "^9.1.7",
     "supertest": "^7.2.2",
-    "tailwindcss": "4.1.12",
     "tsx": "4.22.4",
     "typescript": "^5.6.3",
     "vite": "6.4.3",
-    "vitest": "3.2.6",
-    "esbuild": "0.25.12"
+    "vitest": "3.2.6"
   },
   "peerDependencies": {
     "react": "18.3.1",

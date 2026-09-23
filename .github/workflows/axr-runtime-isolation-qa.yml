@@ -1,0 +1,53 @@
+name: AXR Runtime Isolation QA
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'server/workbench/**'
+      - '.github/workflows/axr-runtime-isolation-qa.yml'
+permissions:
+  contents: read
+concurrency:
+  group: axr-runtime-proof-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  app-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+      - name: Provide the declared Node path in the disposable test runner
+        run: |
+          if [ ! -x /usr/bin/node ]; then sudo ln -s "$(command -v node)" /usr/bin/node; fi
+          /usr/bin/node --version | grep -E '^v24\.'
+      - name: Verify systemd template syntax without installing services
+        run: systemd-analyze verify server/workbench/host-runtime/systemd/myscube-axr-workbench.service server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.service server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.timer
+      - name: Build standalone app with synthetic identity settings
+        run: docker build -f server/workbench/Dockerfile --build-arg VITE_WORKBENCH_AUTH_PROJECT_ID=demo-image-identity --build-arg VITE_WORKBENCH_AUTH_API_KEY=synthetic-image-key-not-a-secret --build-arg VITE_WORKBENCH_AUTH_DOMAIN=demo-image-identity.firebaseapp.com -t myscube-workbench-app:ci .
+      - name: Verify Linux app, compiled assets, authentication boundary and native dependencies
+        run: docker run --rm --network none --memory 1g --cpus 2 --pids-limit 128 --read-only --tmpfs /tmp:rw,nosuid,size=128m --cap-drop ALL --security-opt no-new-privileges myscube-workbench-app:ci node server/workbench/deployment/app-smoke.mjs
+  isolation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: docker build -f server/workbench/remote-runtime/Dockerfile -t myscube-axr-renderer:1.58.2-v1 .
+      - name: Verify synthetic attacks with real Docker
+        env:
+          REQUIRE_REMOTE_DOCKER_QA: 'true'
+          REMOTE_DOCKER_QA_REPORT: remote-runtime-isolation.json
+        run: node server/workbench/remote-runtime/docker-qa.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: remote-runtime-isolation
+          path: remote-runtime-isolation.json
+          if-no-files-found: warn
