@@ -8,7 +8,7 @@ import { writeFile } from 'node:fs/promises';
 import { compileReactPreview } from '../react-compiler.mjs';
 import { createRemoteRuntimeBroker } from './broker.mjs';
 import { REMOTE_RUNTIME_IMAGE, dockerRunArguments } from './contract.mjs';
-import { reapExpiredRenderers } from './reaper.mjs';
+import { reapExpiredRenderers, assertRendererHostReady } from './reaper.mjs';
 
 try { execFileSync('docker', ['info', '--format', '{{.ServerVersion}}'], { stdio: 'ignore' }); }
 catch {
@@ -16,6 +16,7 @@ catch {
   process.exit(process.env.REQUIRE_REMOTE_DOCKER_QA === 'true' ? 1 : 0);
 }
 execFileSync('docker', ['image', 'inspect', REMOTE_RUNTIME_IMAGE], { stdio: 'ignore' });
+await assertRendererHostReady();
 const calls = [], containers = [], outcomes = [];
 let receiverHits = 0, result;
 const receiver = http.createServer((_req, res) => { receiverHits++; res.end('external receiver'); }).listen(0, '0.0.0.0');
@@ -121,11 +122,13 @@ orphanArgs.splice(1, 0, '-d'); orphanArgs.splice(orphanArgs.length - 1, 0, '--en
 orphanArgs.push('-e', 'setInterval(()=>{},1000)');
 const orphanId = (await execute('docker', orphanArgs, { timeout: 10000 })).stdout.trim();
 try {
+  await assert.rejects(assertRendererHostReady(), { code: 'remote_host_not_ready' });
   const fresh = await reapExpiredRenderers(); assert.ok(fresh.skipped >= 1); assert.ok(!fresh.removed.includes(orphanId));
   const expired = await reapExpiredRenderers({ now: () => Date.now() + 361000 });
   assert.ok(expired.removed.includes(orphanId)); assert.equal(expired.failures.length, 0);
   assert.equal(execFileSync('docker', ['ps', '-aq', '--filter', `id=${orphanId}`], { encoding: 'utf8' }).trim(), '');
-  result.outcomes.push({ case: 'managed-orphan-expiry-reaper-with-advanced-test-clock', pass: true, freshPreserved: true, expiredRemoved: true });
+  assert.deepEqual(await assertRendererHostReady(), { ready: true, ownedContainers: 0 });
+  result.outcomes.push({ case: 'managed-orphan-expiry-reaper-with-advanced-test-clock', pass: true, freshPreserved: true, expiredRemoved: true, restartGuardVerified: true });
 } finally { await execute('docker', ['rm', '-f', orphanId], { timeout: 5000 }).catch(() => {}); }
 
 if (process.env.REMOTE_DOCKER_QA_REPORT) await writeFile(process.env.REMOTE_DOCKER_QA_REPORT, JSON.stringify(result, null, 2));

@@ -11,6 +11,17 @@ const defaultExecute = async (args, { timeoutMs, maxBuffer }) => {
 };
 const containerName = /^\/axr-render-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
 
+export async function assertRendererHostReady({ execute = defaultExecute } = {}) {
+  let raw;
+  try {
+    raw = await execute(['ps', '-aq', '--no-trunc', '--filter', `label=${REMOTE_RENDERER_LABEL}=${REMOTE_RENDERER_LABEL_VALUE}`], { timeoutMs: 3000, maxBuffer: 65536 });
+  } catch {
+    throw Object.assign(new Error('독립 미리보기 실행 공간의 정리 상태를 확인하지 못했습니다.'), { code: 'remote_host_unavailable', statusCode: 503, expose: true });
+  }
+  if (String(raw).trim()) throw Object.assign(new Error('이전 미리보기 실행 공간이 남아 있습니다. 자동 정리가 완료된 뒤 서비스를 다시 시작해 주세요.'), { code: 'remote_host_not_ready', statusCode: 503, expose: true });
+  return { ready: true, ownedContainers: 0 };
+}
+
 export async function reapExpiredRenderers({ execute = defaultExecute, now = () => Date.now() } = {}) {
   const started = Date.now(); const cutoff = now() - REMOTE_LIMITS.ttlMs - 60000;
   if (!Number.isFinite(cutoff)) throw new Error('Invalid reaper clock');
