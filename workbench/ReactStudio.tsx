@@ -115,7 +115,7 @@ export function ReactStudio() {
     {!runtimeAvailable && <p className="notice">별도 React 실행 공간 연결 전입니다. 소스 편집·컴파일·저장은 사용할 수 있습니다.</p>}
     {capabilities?.runtimeMode === 'local-test' && <p className="notice">로컬 실행 검증 환경입니다. 운영 환경의 네트워크·자원 격리가 검증된 상태를 의미하지 않습니다.</p>}
     {!capabilities?.gitEnabled && <p className="notice">GitHub 전용 연결 설정 전입니다. 화면은 버전으로 저장되며 연결 후 같은 버전으로 PR 생성을 재시도할 수 있습니다.</p>}
-    <RecoveryPanel scope="react-page" onRecovered={(value) => { if (!value || typeof value !== 'object' || !('source' in value) || !('artifact' in value) || !('id' in value) || typeof (value as Revision).source?.code !== 'string' || !mayLeave()) return false; load(value as Revision); setMessage('확인한 저장 결과를 불러왔습니다.'); return true; }} />
+    <RecoveryPanel scope="react-page" disabled={busy} targetKey={String(editorTarget.current)} onRecovered={(value) => { if (!value || typeof value !== 'object' || !('source' in value) || !('artifact' in value) || !('id' in value) || typeof (value as Revision).source?.code !== 'string' || !mayLeave()) return false; load(value as Revision); setMessage('확인한 저장 결과를 불러왔습니다.'); return true; }} />
     {message && <p className="notice" role="status">{message}</p>}{error && <p className="error" role="alert">{error}</p>}
     <nav className="canvas-tabs" aria-label="React 제작 메뉴"><button className={tab === 'make' ? 'active' : ''} onClick={() => setTab('make')}>화면 만들기</button><button className={tab === 'apis' ? 'active' : ''} onClick={() => { clearExecutions(); setPreview(null); setTab('apis'); }}>API 등록·관리</button></nav>
     {tab === 'apis' ? <ApiRegistryPanel onChanged={() => { void refreshApis().catch((reason) => setError(reason.message)); }} /> : <div className="workspace">

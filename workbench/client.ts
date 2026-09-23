@@ -21,5 +21,6 @@ try { storage = window.sessionStorage; } catch { /* In-memory operation keys rem
 const transport = createWorkbenchTransport({ actor: () => demo ? 'demo-admin' : auth?.currentUser?.uid || null, token: async () => auth?.currentUser?.getIdToken(), storage });
 export const workbenchRequest = transport.request;
 export const recoverWorkbenchRequests = transport.recover;
+export const recoverWorkbenchRequest = transport.recoverOne;
 export const acknowledgeWorkbenchRequest = transport.acknowledge;
 export const request = (path: string, method = 'GET', body?: unknown) => workbenchRequest(`/html-work-pages${path}`, method, body);

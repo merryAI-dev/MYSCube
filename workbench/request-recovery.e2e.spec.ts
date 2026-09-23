@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Page, type Locator } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { Firestore } from '@google-cloud/firestore';
 import { createWorkbenchApp } from '../server/workbench/app.mjs';
@@ -37,6 +37,16 @@ async function loseOneResponse(page: Page, path: string) {
   return () => committed;
 }
 
+async function loadRecovered(page: Page, recovery: Locator, accept: boolean) {
+  const confirmation = page.waitForEvent('dialog').then(async (dialog) => {
+    expect(dialog.type()).toBe('confirm');
+    if (accept) await dialog.accept(); else await dialog.dismiss();
+  });
+  await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await confirmation;
+  await expect(recovery.getByRole('button', { name: '저장 결과 확인' })).toBeEnabled();
+}
+
 test('React save committed before a lost HTTP response is recovered after reload without replacing dirty input until confirmed', async ({ page }) => {
   const committed = await loseOneResponse(page, '/react-work-pages');
   await page.goto('/?mode=react'); await expect(page.getByLabel('React 원문')).not.toHaveValue('');
@@ -48,12 +58,11 @@ test('React save committed before a lost HTTP response is recovered after reload
   await expect.poll(() => pending(page)).toHaveLength(1);
   await page.getByLabel('React 화면 제목').fill('아직 저장하지 않은 새 제목');
   const recovery = page.getByRole('region', { name: '저장 결과 복구' }); await recovery.getByRole('button', { name: '저장 결과 확인' }).click();
-  page.once('dialog', (dialog) => dialog.dismiss()); await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await loadRecovered(page, recovery, false);
   await expect(page.getByLabel('React 화면 제목')).toHaveValue('아직 저장하지 않은 새 제목'); expect((await pending(page)).length).toBe(1);
   await page.reload(); await expect(page.getByLabel('React 원문')).not.toHaveValue('');
   expect((await pending(page)).length).toBe(1); await page.getByLabel('React 화면 제목').fill('재접속 후 편집 중인 제목');
-  await recovery.getByRole('button', { name: '저장 결과 확인' }).click(); page.once('dialog', (dialog) => dialog.accept());
-  await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await recovery.getByRole('button', { name: '저장 결과 확인' }).click(); await loadRecovered(page, recovery, true);
   await expect(page.getByLabel('React 화면 제목')).toHaveValue('응답 유실 저장본'); await expect(page.getByLabel('React 원문')).toHaveValue(source); await expect.poll(() => pending(page)).toHaveLength(0);
   expect((await collection.get()).size).toBe(1); expect((await collection.doc(committed().id).collection('versions').get()).size).toBe(1);
 });
@@ -70,14 +79,14 @@ test('API recovery filters its own result, retains the request when replacement 
   expect((await collection.get()).size).toBe(1); expect((await collection.doc(committed().id).collection('versions').get()).size).toBe(1);
   await registry.getByLabel('연결 이름', { exact: true }).fill('복구 전 편집 중인 API');
   const recovery = registry.getByRole('region', { name: '저장 결과 복구' }); await recovery.getByRole('button', { name: '저장 결과 확인' }).click();
-  page.once('dialog', (dialog) => dialog.dismiss()); await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await loadRecovered(page, recovery, false);
   await expect(registry.getByLabel('연결 이름', { exact: true })).toHaveValue('복구 전 편집 중인 API'); expect((await pending(page)).length).toBe(1);
   await page.reload(); await expect(page.getByRole('button', { name: 'API 등록·관리', exact: true })).toBeVisible();
   const reactRecovery = page.getByRole('region', { name: '저장 결과 복구' }); await reactRecovery.getByRole('button', { name: '저장 결과 확인' }).click();
   await expect(reactRecovery).toContainText('확인하지 않은 저장 요청이 없습니다'); expect((await pending(page)).length).toBe(1);
   await page.getByRole('button', { name: 'API 등록·관리', exact: true }).click(); await expect(registry.getByLabel('연결할 사본')).toBeEnabled();
   await registry.getByLabel('연결 이름', { exact: true }).fill('다시 열린 편집 입력'); await recovery.getByRole('button', { name: '저장 결과 확인' }).click();
-  page.once('dialog', (dialog) => dialog.accept()); await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await loadRecovered(page, recovery, true);
   await expect(registry.getByRole('heading', { name: '저장 버전 v1 테스트' })).toBeVisible(); await expect(registry.getByLabel('연결 이름', { exact: true })).toHaveValue('응답 유실 API');
   await expect.poll(() => pending(page)).toHaveLength(0); expect((await collection.get()).size).toBe(1); expect((await collection.doc(committed().id).collection('versions').get()).size).toBe(1);
 });
@@ -93,10 +102,10 @@ test('HTML save response loss survives reload and restores the confirmed source 
   expect((await collection.get()).size).toBe(1); expect((await collection.doc(committed().id).collection('versions').get()).size).toBe(1);
   await page.getByLabel('화면 제목', { exact: true }).fill('아직 보관할 편집 내용');
   const recovery = page.getByRole('region', { name: '저장 결과 복구' }); await recovery.getByRole('button', { name: '저장 결과 확인' }).click();
-  page.once('dialog', (dialog) => dialog.dismiss()); await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await loadRecovered(page, recovery, false);
   await expect(page.getByLabel('화면 제목', { exact: true })).toHaveValue('아직 보관할 편집 내용'); expect((await pending(page)).length).toBe(1);
   await page.reload(); await expect(page.getByLabel('HTML 원문')).not.toHaveValue(''); await page.getByLabel('화면 제목', { exact: true }).fill('재접속 후 편집 내용');
-  await recovery.getByRole('button', { name: '저장 결과 확인' }).click(); page.once('dialog', (dialog) => dialog.accept()); await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await recovery.getByRole('button', { name: '저장 결과 확인' }).click(); await loadRecovered(page, recovery, true);
   await page.getByRole('tab', { name: '소스', exact: true }).click(); await expect(page.getByLabel('HTML 원문')).toHaveValue(html); await expect(page.getByLabel('화면 제목', { exact: true })).toHaveValue('HTML 응답 유실 저장본');
   await expect.poll(() => pending(page)).toHaveLength(0); expect((await collection.get()).size).toBe(1); expect((await collection.doc(committed().id).collection('versions').get()).size).toBe(1);
 });
@@ -158,11 +167,11 @@ test('current permission revalidation unlocks a lost save only through an explic
   await page.getByLabel('화면 제목', { exact: true }).fill('현재 편집을 유지합니다');
   const recovery = page.getByRole('region', { name: '저장 결과 복구' }); await recovery.getByRole('button', { name: '저장 결과 확인' }).click();
   await expect(recovery).toContainText('현재 권한으로 다시 확인한 저장본'); await expect(page.getByLabel('화면 제목', { exact: true })).toHaveValue('현재 편집을 유지합니다');
-  page.once('dialog', (dialog) => dialog.dismiss()); await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await loadRecovered(page, recovery, false);
   expect((await pending(page))[0].key).toBe(originalKey); await expect(page.getByLabel('화면 제목', { exact: true })).toHaveValue('현재 편집을 유지합니다');
   await page.reload(); await expect(page.getByLabel('HTML 원문')).not.toHaveValue(''); await page.getByLabel('화면 제목', { exact: true }).fill('재접속 후 편집 중');
   await recovery.getByRole('button', { name: '저장 결과 확인' }).click(); await expect(recovery).toContainText('현재 권한으로 다시 확인한 저장본');
-  page.once('dialog', (dialog) => dialog.accept()); await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await loadRecovered(page, recovery, true);
   await page.getByRole('tab', { name: '소스', exact: true }).click(); await expect(page.getByLabel('HTML 원문')).toHaveValue(html);
   await expect(page.getByLabel('화면 제목', { exact: true })).toHaveValue('권한 재확인 복구본'); await expect.poll(() => pending(page)).toHaveLength(0);
   const owner = createHash('sha256').update(actorId).digest('hex'), collection = db.collection(`${root}/html_work_pages/${owner}/pages`);

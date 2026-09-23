@@ -45,19 +45,31 @@ export function createWorkbenchTransport(options: Options) {
       })()]);
     } finally { clearTimeout(timeout); clearTimeout(rejectDeadline!); }
   }
+  const matchingPending = (actor: string, value: PendingWrite) => records(actor).find((record) => record.key === value.key && record.path === value.path && record.method === value.method && record.fingerprint === value.fingerprint);
+  async function recoverOne(value: PendingWrite): Promise<RecoveredWrite> {
+    const actor = options.actor();
+    const record = actor && matchingPending(actor, value);
+    if (!actor || !record) throw new Error('현재 계정에서 확인 중인 저장 요청이 아닙니다. 저장 결과를 다시 확인해 주세요.');
+    const query = new URLSearchParams({ path: record.path, method: record.method });
+    const { response, data } = await send(`/workbench-requests/${record.key}?${query}`, 'GET', undefined, actor);
+    assertActor(actor);
+    if (!response.ok) throw new Error(data?.message || '이전 저장 결과를 확인하지 못했습니다.');
+    if (!matchingPending(actor, record)) throw new Error('저장 요청의 확인 상태가 바뀌었습니다. 저장 결과를 다시 확인해 주세요.');
+    if (!data || !['completed', 'pending', 'failed', 'not_found', 'scope_changed'].includes(data.state)) throw new Error('저장 결과의 상태를 확인하지 못했습니다. 저장 요청은 보존됩니다.');
+    return { ...data, ...record };
+  }
   return {
     pending: () => options.actor() ? records(options.actor()!) : [],
     acknowledge,
+    recoverOne,
     async recover(): Promise<RecoveredWrite[]> {
       const actor = options.actor(); if (!actor) return [];
       const results: RecoveredWrite[] = [];
       for (const record of records(actor)) {
-        const query = new URLSearchParams({ path: record.path, method: record.method });
-        const { response, data } = await send(`/workbench-requests/${record.key}?${query}`, 'GET', undefined, actor);
-        if (options.actor() !== actor) throw new Error('계정이 바뀌었습니다. 현재 계정으로 다시 확인해 주세요.');
-        if (!response.ok) throw new Error(data?.message || '이전 저장 결과를 확인하지 못했습니다.');
-        results.push({ ...record, ...data });
+        assertActor(actor);
+        results.push(await recoverOne(record));
       }
+      assertActor(actor);
       return results;
     },
     async request(path: string, method = 'GET', body?: unknown) {

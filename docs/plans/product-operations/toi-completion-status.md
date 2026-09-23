@@ -14,15 +14,15 @@
 | 운영 기록 | 과거 사본 집계, 내보낸 HTTP 기록의 원자적 가져오기·별도 집계, 실패 당시 SHA 후보 대조, 실제 API와 화면 확인 | 운영 로그 내보내기 검증·자동 공급과 전체 요청 오류율·감소 추이 |
 | Sheets 입금 질의 | 승인된 대상의 고정 범위 GET → 좌표 계약 → 독립 사본 → 집계. 빈칸·0원·실패 대상 구분 | 실제 승인 시트와 Google 읽기 권한 |
 | Git 커밋·PR | 불변 React 저장 버전의 source-only 커밋·Draft PR, 영수증과 중복 방지. 실제 공개 테스트 PR817 확인 | 운영용 비공개 저장소·전용 GitHub App |
-| 저장 복구 | HTML·React·API 응답 유실 복구. 권한 변경 후에도 현재 조회가 허용된 원래 저장 버전은 명시적으로 불러오기 가능. 중복 생성 차단 | 현재 권한으로 조회할 수 없는 자료·증명 불가 요청은 보존하며 운영 지원 필요 |
-| CI·배포 준비 | 독립 테스트·빌드, Docker 제한 검증, 기존 설정 사전검사를 갖춘 무트래픽 후보 배포·전용 호스트 설치 템플릿. 같은 SHA의 이미지 묶음·읽기 전용 검증기·복원 CI 추가 | 새 복원 CI 결과 확인, 승인된 묶음 보관·전달 대상, 전용 호스트·타이머 설치, 운영 로그인과 연결 확인 |
+| 저장 복구 | HTML·React·API 응답 유실 복구. 권한 변경 후에도 현재 조회가 허용된 원래 저장 버전은 명시적으로 불러오기 가능. 중복 생성 차단. 불러오기 직전 권한 재확인·늦은 응답 무시 | 현재 권한으로 조회할 수 없는 자료·증명 불가 요청은 보존하며 운영 지원 필요 |
+| CI·배포 준비 | 독립 테스트·빌드, Docker 제한 검증, 기존 설정 사전검사를 갖춘 무트래픽 후보 배포·전용 호스트 설치 템플릿. 같은 SHA의 이미지 묶음·읽기 전용 검증기·실제 Linux 복원 실행 통과 | 승인된 묶음 보관·전달 대상, 전용 호스트·타이머 설치, 운영 로그인과 연결 확인 |
 
 ## 검증 결과
 
-- Workbench Vitest **491/491, 60개 파일**, Playwright **38/38**, TypeScript 검사·독립 Vite 빌드 통과.
-- [최종 검증 기록과 소스 해시](evidence/2026-09-23-workbench-final-validation.json)에 검증한 작업 트리와 로그를 식별했다. 로컬 검증 후 전체 구현을 커밋 `2e6c165a`까지의 [Draft PR819](https://github.com/merryAI-dev/MYSCube/pull/819)로 분리했다. 해당 커밋의 기존 서비스·Workbench CI는 모두 통과했다. S20 추가 커밋의 CI는 PR에서 별도로 확인한다. 로컬 검증 기준 커밋과 전달 커밋을 구분한다.
-- Linux Docker 격리 [실행 35863959611](https://github.com/merryAI-dev/MYSCube/actions/runs/35863959611) 통과. 실제 원시 통신 차단, 공격 실행 중 정상 세션 응답, 잔여 컨테이너 정리·재시작 차단·정상 종료를 확인했다. 같은 커밋의 [앱 이미지 검사](evidence/2026-09-23-app-image.json)와 [기존 서비스 CI](https://github.com/merryAI-dev/MYSCube/actions/runs/35863959597)도 통과했다.
-- 첫 화면은 테스트에서 1,081ms와 1,025ms였다. 각 1회 측정이므로 운영 성능 보장 수치가 아니다. 메모리 상한은 확인했지만 실제 커널 OOM은 관측하지 않았다.
+- 전달 커밋 `2e55cadd37cc3bcc5ed72de2b9a5ff93717e02c8`에서 [Workbench CI](https://github.com/merryAI-dev/MYSCube/actions/runs/35873564504)와 [기존 서비스 CI](https://github.com/merryAI-dev/MYSCube/actions/runs/35873564445) 모두 통과. Workbench **543/543, 64개 파일**, Playwright **38/38**, 타입검사·독립 빌드 통과.
+- 같은 CI의 실제 checkout은 PR 병합 검사 SHA `2d7f6788abe9cd9df2484fa58ce9fabadb644b16`이다. 원래 앱·renderer 이미지를 제거한 후 Docker save 파일에서 복원해 검증했다. 별도 위치에 추출한 앱도 원래 `/app`과 checkout 없이 실행했다. [S21](s21-release-pair-verification.md)에 manifest와 검증 범위를 기록했다.
+- 복원한 renderer로 원시 TCP/DNS 차단, 공격 실행 중 정상 세션 응답, 정리·재시작 차단을 확인했다. 첫 화면 801ms·다음 세션 826ms는 각 1회 측정이며 운영 SLO가 아니다. 실제 커널 OOM은 관측하지 않았다.
+- 후속 복구 UI 수정은 로컬에서 독립 브라우저 **8/8**, 기존 복구 브라우저 **6/6**, transport·API 검사 **23/23** 및 타입검사·빌드를 통과했다. 권한 회수 후 캐시 결과 사용과 늦은 응답의 새 화면 덮어쓰기를 실제 Firestore·HTTP로 재현해 수정했다. 이 수정의 전체 CI는 PR819의 최신 커밋 결과를 확인한다.
 - [PR817](https://github.com/merryAI-dev/MYSCube/pull/817)은 합성 React 저장본의 자동 Git 전달 증거다. [PR818](https://github.com/merryAI-dev/MYSCube/pull/818)은 Linux 실행 격리·독립 앱 이미지 검증용 Draft PR이다. 둘 다 플랫폼 전체 배포 PR이 아니다. 전체 구현은 [Draft PR819](https://github.com/merryAI-dev/MYSCube/pull/819)에 있으며 아직 병합·운영 배포하지 않았다.
 - 생성 모델은 fixture다. HTTP·Firestore·SQL·브라우저 저장 경로를 실제로 검증했으며 실제 모델 품질이나 운영 데이터 검증으로 바꿔 표현하지 않는다.
 
@@ -38,4 +38,4 @@
 
 HTTP 로그의 검증·표시·원본 미확인 범위는 [S20](s20-offline-http-evidence.md)에 구분했다. 운영자가 내보낸 기록은 실시간 자동 수집이나 전체 분모 공급의 대체물이 아니다.
 
-[S21 배포 묶음 검증](s21-release-pair-verification.md)은 로컬 58개 검사와 독립 QA를 통과했다. 실제 이미지 저장·복원 실행은 PR819의 해당 커밋 CI artifact로 별도 확인한다. CI의 합성 묶음은 임시 공간에서 폐기하므로 운영 전달·설치 완료를 의미하지 않는다.
+[S21 배포 묶음 검증](s21-release-pair-verification.md)은 로컬 58개 검사와 독립 QA, 실제 Linux 이미지 저장·복원 실행을 통과했다. 증거는 위 CI의 release-bundle-evidence artifact다. CI의 합성 묶음은 임시 공간에서 폐기하므로 운영 전달·설치 완료를 의미하지 않는다.

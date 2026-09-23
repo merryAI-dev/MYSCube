@@ -48,8 +48,10 @@ export function ApiRegistryPanel({ onChanged }: { onChanged?: () => void }) {
   const [result, setResult] = useState<unknown>(null); const [hasResult, setHasResult] = useState(false);
   const [busy, setBusy] = useState(''); const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [loaded, setLoaded] = useState(false); const [dirty, setDirty] = useState(false);
   const active = useRef(true); const working = useRef(false);
+  const [editorTarget, setEditorTarget] = useState(0);
   const clearResult = () => { setResult(null); setHasResult(false); };
   const install = (api: RegisteredApi | null, definition?: Definition) => {
+    setEditorTarget((value) => value + 1);
     const source = definition || api?.definition;
     setSelected(api); setName(source?.name || ''); setDescription(source?.description || ''); setEnabled(source?.enabled ?? true);
     setKind(source?.kind || 'analytics-copy'); setEndpointKey(source?.kind === 'external-read' ? `${source.endpointId}:${source.endpointVersion}` : '');
@@ -142,7 +144,7 @@ export function ApiRegistryPanel({ onChanged }: { onChanged?: () => void }) {
     <div className="section-heading"><div><h2>API 연결 관리</h2><p className="subtle">페이지에서 조회할 자료와 입력 항목을 등록합니다. 분석 사본 또는 승인된 외부 읽기 API를 연결할 수 있습니다.</p></div></div>
     <div className="header-actions"><button type="button" className="quiet compact" disabled={Boolean(busy)} onClick={() => { if (abandon()) void run('연결 목록 확인 중', () => refresh()); }}>목록 새로고침</button><button type="button" className="quiet compact" disabled={Boolean(busy)} onClick={() => { if (abandon()) { install(null); setError(''); setNotice('새 연결의 이름과 조회할 사본을 선택해 주세요.'); } }}>새 연결</button></div>
     <p className="subtle">외부 서비스는 서버에 승인된 연결만 선택할 수 있습니다. 주소나 비밀키를 이 화면에 입력하지 마세요.{!endpoints.length && ' 외부 연결 준비 중입니다.'}</p>
-    <RecoveryPanel scope="registered-api" onRecovered={(value) => {
+    <RecoveryPanel scope="registered-api" disabled={Boolean(busy)} targetKey={String(editorTarget)} onRecovered={(value) => {
       if (working.current || !validApi(value) || !abandon()) return false;
       install(value); setItems((previous) => [value, ...previous.filter((item) => item.id !== value.id)]); setError(''); onChanged?.();
       void run('복구한 연결의 조회 기준 확인 중', async () => { await refresh(false); setNotice(`복구한 연결 v${value.version}을 불러왔습니다. 기존 화면의 연결 버전은 자동으로 바뀌지 않습니다.`); }, false);

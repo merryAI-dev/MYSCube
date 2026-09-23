@@ -24,6 +24,6 @@ Cloud Run 후보 이미지 생성만으로는 생성 React를 실행할 전용 D
 
 - 로컬 배포 관련 검사 **58/58** 통과: 기존 후보 설정 6, 빌드 정보 7, 생성기 12, 파일 검증기 24, 독립 QA 9. 파일 검증은 합성 파일로 수행했으며 Docker 실행 증거가 아니다.
 - 독립 QA가 운영 후보 분류와 테스트용 인증 프로젝트가 함께 쓰이는 모순을 발견했다. 최종 검증기에서도 거부하도록 수정하고 같은 테스트가 통과하는 것을 확인했다.
-- 실제 Linux 이미지 저장·복원 검증은 [Draft PR819](https://github.com/merryAI-dev/MYSCube/pull/819)의 해당 커밋 `Workbench CI / app-image` 결과와 `release-bundle-evidence` artifact로 확인한다. 이 문서를 쓴 시점에는 해당 CI 실행 전이다. 이미지 검증이 실패하면 수정을 이어간다.
+- 실제 Linux 이미지 저장·복원 검증은 [CI 35873564504](https://github.com/merryAI-dev/MYSCube/actions/runs/35873564504)의 `app-image`와 `release-bundle-evidence` artifact에서 통과했다. 전달 HEAD는 `2e55cadd37cc3bcc5ed72de2b9a5ff93717e02c8`, 실제 PR 병합 검사 소스는 `2d7f6788abe9cd9df2484fa58ce9fabadb644b16`이다. 독립 QA가 부모 커밋, manifest digest `c2211e37ea83f901f9449a90bb1390709749fc3c3368b9b87d028f47f92500c7`, 소스·lockfile·복원 이미지 ID 일치를 확인했다. Linux amd64 / Node 24.21.0 / glibc 2.36에서 원래 이미지를 제거하고 저장 파일에서 복원했으며, 원래 앱 경로를 숨긴 추출 파일 실행도 통과했다. 원시 TCP/DNS 격리·다른 세션 응답·종료/만료 정리·재시작 차단도 복원 이미지로 확인했다. 운영 전달 완료 표시는 false이며 실제 호스트 설치를 의미하지 않는다.
 
 구체적인 명령과 결과 해석은 [배포 묶음 안내](../../../server/workbench/deployment/README.md)를 따른다.
