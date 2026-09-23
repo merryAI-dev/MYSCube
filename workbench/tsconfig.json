@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "types": ["vite/client"] },
+  "include": ["./*.tsx", "./client.ts", "./vite.config.ts", "../src/app/components/product-operations/html-preview/SourcePreview.tsx", "../shared/workbench-html.d.mts"],
+  "exclude": ["./*.e2e.spec.ts"]
+}

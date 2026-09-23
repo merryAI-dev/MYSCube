@@ -11,6 +11,17 @@ concurrency:
   group: axr-runtime-proof-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  app-image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify systemd template syntax without installing services
+        run: systemd-analyze verify server/workbench/host-runtime/systemd/myscube-axr-workbench.service server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.service server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.timer
+      - name: Build standalone app with synthetic identity settings
+        run: docker build -f server/workbench/Dockerfile --build-arg VITE_WORKBENCH_AUTH_PROJECT_ID=demo-image-identity --build-arg VITE_WORKBENCH_AUTH_API_KEY=synthetic-image-key-not-a-secret --build-arg VITE_WORKBENCH_AUTH_DOMAIN=demo-image-identity.firebaseapp.com -t myscube-workbench-app:ci .
+      - name: Verify Linux app, compiled assets, authentication boundary and native dependencies
+        run: docker run --rm --network none --memory 1g --cpus 2 --pids-limit 128 --read-only --tmpfs /tmp:rw,nosuid,size=128m --cap-drop ALL --security-opt no-new-privileges myscube-workbench-app:ci node server/workbench/deployment/app-smoke.mjs
   isolation:
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -90,7 +90,7 @@ export async function answerQaQuestion({ complete, reviewComplete, query, contex
 }
 
 export function mountWorkbenchAssistantRoutes(app, { db, now, env, readSnapshot, asyncHandler, idempotencyService, completionFactory = createGeminiCompletion }) {
-  const enabled = env.PRODUCT_WORKBENCH_AI_ENABLED === 'true' && Boolean(env.SETTLEMENT_AGENT_GEMINI_API_KEY);
+  const enabled = env.WORKBENCH_AI_ENABLED === 'true' && Boolean(env.WORKBENCH_GEMINI_API_KEY);
   const qaQuery = createQaEvidenceService({ db, now });
   const query = createCashflowEvidenceQuery({ db, now, readSnapshot, release: env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA });
   app.get('/api/v1/workbench-assistant/capabilities', asyncHandler(async (req, res) => res.json({
@@ -145,7 +145,7 @@ export function mountWorkbenchAssistantRoutes(app, { db, now, env, readSnapshot,
     let inputTokens = 0;
     let outputTokens = 0;
     const completion = () => {
-      const complete = completionFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
+      const complete = completionFactory({ apiKey: env.WORKBENCH_GEMINI_API_KEY, maxInputTokens: 16000,
         onUsage: async (usage) => { inputTokens += usage.promptTokenCount || 0; outputTokens += usage.candidatesTokenCount || 0; } });
       return async (args) => { await authorize(); return complete(args); };
     };

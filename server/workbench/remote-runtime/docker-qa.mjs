@@ -9,6 +9,7 @@ import { compileReactPreview } from '../react-compiler.mjs';
 import { createRemoteRuntimeBroker } from './broker.mjs';
 import { REMOTE_RUNTIME_IMAGE, dockerRunArguments } from './contract.mjs';
 import { reapExpiredRenderers, assertRendererHostReady } from './reaper.mjs';
+import { closeWorkbenchServer } from '../shutdown.mjs';
 
 try { execFileSync('docker', ['info', '--format', '{{.ServerVersion}}'], { stdio: 'ignore' }); }
 catch {
@@ -96,7 +97,16 @@ try {
     assert.ok((await broker.frame(context('canary'), canary.sessionId)).sequence > healthy.sequence);
     outcomes.push({ case: name, pass: true, attackStarted: true, elapsedMs, canaryLatencyMs, measurements, termination: result.error?.code || 'terminated-after-first-event', memoryCapInspected: true, kernelOomObserved: false });
   }
-  await broker.close(context('canary'), canary.sessionId);
+  const shutdownServer = http.createServer((_req, res) => res.end('ready')).listen(0, '127.0.0.1');
+  await new Promise(resolve => shutdownServer.once('listening', resolve));
+  const response = await fetch(`http://127.0.0.1:${shutdownServer.address().port}/health`); await response.text();
+  let databaseTerminated = false;
+  const exitCode = await closeWorkbenchServer({ server: shutdownServer, remoteRuntime: { closeAll: () => broker.shutdown(), get reservedSessions() { return broker.reservedSessions; } }, db: { terminate: async () => {
+    for (const name of containers) assert.equal(execFileSync('docker', ['ps', '-aq', '--filter', `name=^/${name}$`], { encoding: 'utf8' }).trim(), '', 'Database must stay open until actual renderer removal is confirmed');
+    databaseTerminated = true;
+  } } });
+  assert.equal(exitCode, 0); assert.equal(databaseTerminated, true); assert.equal(broker.reservedSessions, 0);
+  outcomes.push({ case: 'graceful-http-and-renderer-shutdown-before-database-close', pass: true, exitCode, databaseTerminated, reservedSessions: broker.reservedSessions });
   assert.equal(receiverHits, 0);
   result = { status: 'PASS', isolationVerified: true, image: REMOTE_RUNTIME_IMAGE, imageId: inspected.Image, outcomes };
 

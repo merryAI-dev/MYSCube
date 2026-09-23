@@ -139,7 +139,9 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
   return {
     async create(context, input) {
       if (stopped) throw fail('미리보기 실행 서비스가 종료 중입니다.', 'remote_shutdown');
-      await authorize(context); const scope = scopeKey(context);
+      await authorize(context);
+      if (stopped) throw fail('미리보기 실행 서비스가 종료 중입니다.', 'remote_shutdown');
+      const scope = scopeKey(context);
       const artifact = checkArtifact(input.artifact); const viewport = checkViewport(input.viewport);
       if (!/^[a-f0-9]{64}$/.test(input.sourceHash || '') || input.artifact.sourceHash !== input.sourceHash || !Array.isArray(input.apiBindings) || input.apiBindings.length > 12 || input.apiBindings.some(item => !item || !/^[a-f0-9-]{36}$/.test(item.id || '') || !Number.isSafeInteger(item.version) || item.version < 1) || new Set(input.apiBindings.map(item => item.id)).size !== input.apiBindings.length) throw fail('실행할 원문과 API 연결 버전을 확인해 주세요.', 'remote_binding_invalid', 400);
       const owned = [...sessions.values()].filter(item => item.context.tenantId === context.tenantId && item.context.actorId === context.actorId);
