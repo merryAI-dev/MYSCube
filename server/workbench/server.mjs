@@ -10,6 +10,7 @@ import { resolveReactRuntime } from './react-runtime-config.mjs';
 import { assertRendererHostReady } from './remote-runtime/reaper.mjs';
 import { resolveWorkbenchListenHost } from './listen-host.mjs';
 import { closeWorkbenchServer } from './shutdown.mjs';
+import { workbenchShellCsp } from './shell-csp.mjs';
 
 const env = process.env;
 const runtime = resolveWorkbenchRuntime(env);
@@ -37,7 +38,7 @@ const app = express();
 app.use((_req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'no-referrer');
-  res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com; frame-src 'self' https://*.firebaseapp.com ${reactRuntime?.origin || ''}; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`);
+  res.setHeader('Content-Security-Policy', workbenchShellCsp({ reactRuntimeOrigin: reactRuntime?.origin || '' }));
   next();
 });
 if (demo) app.use('/api', (req, _res, next) => { req.headers['x-actor-id'] = 'demo-admin'; req.headers['x-tenant-id'] = env.WORKBENCH_TENANT_ID || 'demo-org'; next(); });
