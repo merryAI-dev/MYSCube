@@ -205,7 +205,7 @@ export async function configureBootstrapHost(options) {
   await writeFile('/etc/nginx/conf.d/myscube-workbench.conf', renderBootstrapNginx(options.domain), { flag: 'wx', mode: 0o644 });
   if (await exists('/etc/nginx/sites-enabled/default')) await rename('/etc/nginx/sites-enabled/default', `${configRoot}/nginx-default-site.link`);
   await command('systemd-analyze', ['verify', '/etc/systemd/system/myscube-axr-workbench.service', '/etc/systemd/system/myscube-axr-renderer-reaper.service', '/etc/systemd/system/myscube-axr-renderer-reaper.timer']);
-  await command('nginx', ['-t']);
+  await command('/usr/sbin/nginx', ['-t']);
   await writeFile(`${configRoot}/activation.json`, JSON.stringify({ sourceSha: options.sourceSha, domain: options.domain, configurationSha256: digest(renderRuntimeEnvironment(configuration)) }), { flag: 'wx', mode: 0o600 });
   return { action: 'configured', sourceSha: options.sourceSha, activated: false };
 }
@@ -216,7 +216,7 @@ export async function activateBootstrapHost(options) {
   await checkNginxSites();
   const activation = JSON.parse(await rootFile(`${configRoot}/activation.json`, 4096, true));
   if (activation.sourceSha !== options.sourceSha || digest(await rootFile(`${configRoot}/runtime.env`, 50000, true)) !== activation.configurationSha256) fail('Activation configuration changed since validation.');
-  await command('nginx', ['-t']);
+  await command('/usr/sbin/nginx', ['-t']);
   if (await command('systemctl', ['is-active', 'nginx']).catch(() => '') === 'active') fail('An active nginx service requires a separate maintenance plan.');
   await command('systemctl', ['daemon-reload']);
   await command('systemctl', ['enable', '--now', 'myscube-axr-renderer-reaper.timer']);

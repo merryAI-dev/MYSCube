@@ -77,6 +77,8 @@ describe('dedicated host bootstrap contracts (not real Linux acceptance)', () =>
     expect(source).toContain('assertRendererHostReady();');
     expect(source).toContain("docker('create', '--pull', 'never', '--network', 'none', '--read-only'");
     expect(source).toContain("if (status !== '401')");
+    expect(source.match(/command\('\/usr\/sbin\/nginx', \['-t'\]\)/g)).toHaveLength(2);
+    expect(source).not.toContain("command('nginx'");
     expect(source.indexOf("['start', 'nginx']")).toBeGreaterThan(source.indexOf("if (status !== '401')"));
   });
 });
