@@ -59,16 +59,19 @@ suite('independent auto conversation uses the actual copied query and pinned API
     expect(() => validateReactScreenBindings({ bindings: [binding], evidence: [evidence], apis: [api], catalog: latest })).toThrow(expect.objectContaining({ code: 'react_screen_binding_mismatch' }));
   });
 
-  const scenario = (fault?: 'mismatch' | 'revoke' | 'dataset-change' | 'dataset-change-during-generation') => {
+  const scenario = (fault?: 'mismatch' | 'revoke' | 'dataset-change' | 'dataset-change-during-generation' | 'disable', queryViaApi = false) => {
     const calls: any[] = []; let generated = 0, querySteps = 0;
     const service = createReactConversationService({ db, now, env, authorize: core.authorize, apis, analytics, qa: core.qa,
       completionFactory: () => async (input: any) => {
         calls.push(input);
         if (input.tools[0].function.name === 'workbench_step') {
           const resultMessage = input.messages.findLast((message: any) => message.content.startsWith('조회 도구 결과'));
-          if (!resultMessage) { querySteps++; return tool('workbench_step', { action: 'query', interpretation, plan }); }
+          if (!resultMessage) { querySteps++; return tool('workbench_step', queryViaApi
+            ? { action: 'query_api', interpretation, apiId: api.id, apiVersion: api.version, input: {} }
+            : { action: 'query', interpretation, plan }); }
           const evidence = JSON.parse(resultMessage.content.slice(resultMessage.content.indexOf(':') + 1));
           if (fault === 'revoke') await member.update({ status: 'INACTIVE' });
+          if (fault === 'disable') await apis.save({ ...context, idempotencyKey: randomUUID() }, api.id, { expectedVersion: api.version, definition: { ...api.definition, enabled: false } });
           if (fault === 'dataset-change') await seed('changed-during-turn');
           return tool('workbench_step', { action: 'build_screen', interpretation, purpose: 'connected', request: '확인한 조건으로 조회하는 화면을 만들어 주세요', evidenceIds: [evidence.evidenceId],
             bindings: [{ apiId: api.id, apiVersion: fault === 'mismatch' ? 999 : api.version, input: {}, evidenceId: evidence.evidenceId }] });
@@ -77,9 +80,9 @@ suite('independent auto conversation uses the actual copied query and pinned API
         if (fault === 'dataset-change-during-generation') await seed('changed-inside-generator');
         // The sentinel exists in a result row and in the API filter. Forbid serialized result rows, not the approved API definition.
         expect(JSON.stringify(input.messages)).not.toContain('"rows":');
-        return tool('render_react_source', { title: '조회 연결 제안', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: {
-          'App.tsx': `import React from 'react'; export default function App(){return <button onClick={()=>{void window.workbench.callApi('${api.id}',{})}}>다시 조회</button>}`,
-        } } });
+        return tool('render_react_source', { title: '조회 연결 제안', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: [{
+          path: 'App.tsx', content: `import React from 'react'; export default function App(){return <button onClick={()=>{void window.workbench.callApi('${api.id}',{})}}>다시 조회</button>}`,
+        }] } });
       } });
     return { service, calls, counts: () => ({ generated, querySteps }) };
   };
@@ -92,6 +95,27 @@ suite('independent auto conversation uses the actual copied query and pinned API
     expect((await service.get(context, session.id)).reactContext.source).toEqual(source);
     expect((await db.collection(`${root}/react_work_pages/${createHash('sha256').update(actorId).digest('hex')}/pages`).get()).empty).toBe(true);
     const before = calls.length; expect((await service.turn(context, session.id, input)).replayed).toBe(true); expect(calls).toHaveLength(before);
+  });
+  it('queries the selected immutable API plan directly and preserves the exact evidence through the generated connection', async () => {
+    const { service, calls, counts } = scenario(undefined, true), session = await service.create(context);
+    const input = { expectedVersion: 0, requestId: 'selected-api-query', mode: 'auto', message: '선택한 API로 조회하고 같은 조건의 화면을 만들어줘', currentSource: source, apis: [{ id: api.id, version: api.version }] };
+    const result = await service.turn(context, session.id, input);
+    expect(result.result.type).toBe('source'); expect(counts()).toEqual({ generated: 1, querySteps: 1 });
+    const evidence = await analytics.evidence(context, result.result.screenBindings[0].evidenceId);
+    expect(evidence.rows).toEqual([{ project_id: 'SYNTHETIC_ROW_ONLY', status: 'WAITING_FOR_UPDATE' }]);
+    expect(evidence.semantic.appliedPlan).toMatchObject(plan);
+    expect(result.result.screenBindings[0]).toMatchObject({ apiId: api.id, apiVersion: api.version, input: {}, plan: evidence.semantic.appliedPlan });
+    expect(result.result.source.workspace.files['App.tsx']).toContain(`window.workbench.callApi('${api.id}',{})`);
+    expect(result.result.source.workspace.files['App.tsx']).not.toContain('SYNTHETIC_ROW_ONLY');
+    expect((await db.collection(`${root}/react_work_pages/${createHash('sha256').update(actorId).digest('hex')}/pages`).get()).empty).toBe(true);
+    const before = calls.length; expect((await service.turn(context, session.id, input)).replayed).toBe(true); expect(calls).toHaveLength(before);
+  });
+  it.each(['revoke', 'disable'] as const)('revalidates selected API authorization after query_api when %s occurs', async (fault) => {
+    const { service, counts } = scenario(fault, true), session = await service.create(context);
+    await expect(service.turn(context, session.id, { expectedVersion: 0, requestId: fault, mode: 'auto', message: '선택한 API로 조회하고 화면을 만들어줘', currentSource: source, apis: [{ id: api.id, version: api.version }] }))
+      .rejects.toMatchObject(fault === 'disable' ? { code: 'registered_api_disabled' } : { statusCode: 403 });
+    expect(counts()).toEqual({ generated: 0, querySteps: 1 });
+    expect((await db.collection(`${root}/react_work_pages/${createHash('sha256').update(actorId).digest('hex')}/pages`).get()).empty).toBe(true);
   });
   it.each(['mismatch', 'dataset-change'] as const)('asks for matching evidence/API after %s without invoking generator', async (fault) => {
     const { service, counts } = scenario(fault), session = await service.create(context);

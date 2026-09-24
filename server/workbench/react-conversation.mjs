@@ -10,7 +10,7 @@ import { generateReactPage, parseReact, reactHash, reactSourceHash, ReactSourceS
 
 export const ReactConversationInput = z.object({ expectedVersion: z.number().int().nonnegative(), requestId: z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/),
   message: z.string().trim().min(1).max(4000), mode: z.enum(['react', 'analysis', 'auto']).default('react'), currentSource: ReactSourceSchema.optional(), apis: ReactApiRefsSchema.optional(), clarificationId: z.string().uuid().optional() }).strict();
-const errorText = (error) => ({ code: /^[a-zA-Z0-9_]{1,100}$/.test(error.code || '') ? error.code : 'react_conversation_failed', message: error.expose ? error.message.slice(0, 1000) : '요청을 완료하지 못했습니다. 기존 대화와 편집 내용은 유지됩니다.' });
+const errorText = (error) => ({ code: typeof error.code === 'string' && /^[a-zA-Z0-9_]{1,100}$/.test(error.code) ? error.code : 'react_conversation_failed', message: error.expose ? error.message.slice(0, 1000) : '요청을 완료하지 못했습니다. 기존 대화와 편집 내용은 유지됩니다.' });
 const safeTokens = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
 
 export function createReactConversationService({ db, now = () => new Date().toISOString(), authorize, apis, analytics, qa, env, completionFactory, deadlineMs = 110000 }) {

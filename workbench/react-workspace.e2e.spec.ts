@@ -19,19 +19,19 @@ test.beforeAll(async () => {
   await db.doc(`${root}/members/${actorId}`).set({ status: 'ACTIVE', role: 'admin', permissionsCapturedAt: now(), analyticsDatasetIds: [], analyticsScopeRevision: '1' });
   runtime = (await createReactRuntimeServer(env)).listen(0, '127.0.0.1'); await new Promise<void>(resolve => runtime.once('listening', resolve));
   env.WORKBENCH_REACT_RUNTIME_URL = `http://localhost:${runtime.address().port}/runtime`;
-  server = createWorkbenchApp({ db, env, now, authMode: 'headers', reactCompletionFactory: () => async (input: any) => input.tools[0].function.name === 'workbench_step' ? { tool_calls: [{ function: { name: 'workbench_step', arguments: JSON.stringify({ action: 'build_screen', interpretation: { summary: '자료 없는 다중 파일 화면 만들기', context: { datasetIds: [], filters: {}, evidenceIds: [] }, ambiguities: [] }, purpose: 'layout_only', request: '카운터와 파일을 분리한 화면', evidenceIds: [], bindings: [] }) } }] } : ({ tool_calls: [{ function: { name: 'render_react_source', arguments: JSON.stringify(source) } }] }) }).listen(0, '127.0.0.1');
+  server = createWorkbenchApp({ db, env, now, authMode: 'headers', reactCompletionFactory: () => async (input: any) => input.tools[0].function.name === 'workbench_step' ? { tool_calls: [{ function: { name: 'workbench_step', arguments: JSON.stringify({ action: 'build_screen', interpretation: { summary: '자료 없는 다중 파일 화면 만들기', context: { datasetIds: [], filters: {}, evidenceIds: [] }, ambiguities: [] }, purpose: 'layout_only', request: '카운터와 파일을 분리한 화면', evidenceIds: [], bindings: [] }) } }] } : ({ tool_calls: [{ function: { name: 'render_react_source', arguments: JSON.stringify({ ...source, workspace: { ...source.workspace, files: Object.entries(source.workspace.files).map(([path, content]) => ({ path, content })) }, ...(JSON.parse(input.messages.at(-1).content).currentSource?.workspace?.files?.['Obsolete.ts'] ? { removedFiles: ['Obsolete.ts'] } : {}) }) } }] }) }).listen(0, '127.0.0.1');
   await new Promise<void>(resolve => server.once('listening', resolve)); base = `http://127.0.0.1:${server.address().port}`;
 });
 test.afterAll(async () => { for (const item of [server, runtime]) if (item) await new Promise<void>(resolve => item.close(() => resolve())); if (db) { await db.recursiveDelete(db.doc(root)); await db.terminate(); } });
 test.beforeEach(async ({ page }) => { await page.route('**/api/**', async route => { const url = new URL(route.request().url()); const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...route.request().headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId } }); await route.fulfill({ response }); }); });
-const generate = async (page: any) => { await page.getByLabel('업무 요청').fill('자료 없이 카운터와 제목 컴포넌트를 여러 파일로 나눈 화면을 만들어 주세요'); await page.getByRole('button', { name: '보내기' }).click(); await expect(page.getByRole('button', { name: '검토한 변경 적용', exact: true })).toBeEnabled(); };
+const generate = async (page: any, request = '자료 없이 카운터와 제목 컴포넌트를 여러 파일로 나눈 화면을 만들어 주세요') => { await page.getByLabel('업무 요청').fill(request); await page.getByRole('button', { name: '보내기' }).click(); await expect(page.getByRole('button', { name: '검토한 변경 적용', exact: true })).toBeEnabled(); };
 
 test('real HTTP and Firestore: generate, multi-file diff, apply, helper edit, preview, save, reopen and restore', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('/?mode=react'); await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await expect(page.getByLabel('React 원문')).not.toHaveValue('');
   await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await page.getByLabel('새 파일 경로').fill('Obsolete.ts'); await page.getByRole('button', { name: '파일 추가', exact: true }).click();
   await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await page.getByLabel('React 원문').fill('export const old = true;');
-  await generate(page);
+  await generate(page, '자료 없이 카운터와 제목 컴포넌트를 여러 파일로 나눈 화면을 만들어 주세요. 더 이상 사용하지 않는 Obsolete.ts 파일은 삭제해 주세요.');
   await expect(page.getByRole('region', { name: 'React 파일 변경 제안' })).toContainText('삭제 · Obsolete.ts');
   await expect(page.getByLabel('Obsolete.ts 변경 내용')).toContainText('− export const old = true;');
   await expect(page.getByLabel('components/Counter.tsx 변경 내용')).toContainText('useState');

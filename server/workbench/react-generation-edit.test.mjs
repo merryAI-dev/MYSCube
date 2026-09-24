@@ -5,7 +5,10 @@ const source={title:'기존 카운터',workspace:{schemaVersion:1,entry:'App.tsx
   'lib/format.ts':'export const format=(n:number)=>String(n);',
   'lib/unreferenced.ts':'export const retained = "unused but intentional";',
 }}};
-const tool=(args)=>({tool_calls:[{function:{name:'render_react_source',arguments:JSON.stringify(args)}}]});
+const tool=(args)=>{
+  const {code,...rest}=args; const workspace=args.workspace||{schemaVersion:1,entry:'App.tsx',packageSetId:'react18-tailwind4-v1',files:{'App.tsx':code}};
+  return {tool_calls:[{function:{name:'render_react_source',arguments:JSON.stringify({...rest,workspace:{...workspace,files:Object.entries(workspace.files).map(([path,content])=>({path,content}))}})}}]};
+};
 const edited=()=>({...structuredClone(source),title:'작업 현황',workspace:{...source.workspace,files:{...source.workspace.files,'App.tsx':source.workspace.files['App.tsx'].replace('기존 제목','작업 현황').replace('<button ','<button className="mt-6 px-5 py-3" ')}}});
 const run=(complete,extra={})=>generateReactPage({complete,prompt:'독립 HTML 화면을 구성해 주세요.',businessContext:{originalRequest:'제목과 버튼 간격만 바꾸고 카운터와 다른 파일은 유지해줘.',clarificationReply:null},currentSource:source,apis:[],authorize:async()=>{},signal:AbortSignal.timeout(15000),...extra});
 describe('React source-author editing contract and bounded compile repair',()=>{

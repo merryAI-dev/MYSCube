@@ -28,7 +28,7 @@ test.beforeAll(async () => {
     const request = JSON.parse(input.messages.at(-1).content).request;
     if (request.includes('배치를 결정')) return tool('clarify_react_request', { question: '표와 카드 중 어떤 배치가 좋으세요?', reason: '내용을 유지하며 배치만 정합니다.', options: [{ id: 'cards', label: '카드로 보여 주세요' }] });
     if (request.includes('늦은 제안')) await new Promise((resolve) => setTimeout(resolve, 700));
-    return tool('render_react_source', { title: '후속 카드 제안', code: proposal });
+    return tool('render_react_source', { title: '후속 카드 제안', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: [{ path: 'App.tsx', content: proposal }] } });
   } }).listen(0, '127.0.0.1');
   await new Promise<void>((resolve) => server.once('listening', resolve)); base = `http://127.0.0.1:${server.address().port}`;
 });

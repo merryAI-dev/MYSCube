@@ -35,9 +35,9 @@ test.beforeAll(async () => {
       const evidence = JSON.parse(message.content.slice(message.content.indexOf(':') + 1));
       return tool('workbench_step', { action: 'build_screen', interpretation, purpose: 'connected', request: '9월 조회 화면', evidenceIds: [evidence.evidenceId], bindings: [{ apiId: api.id, apiVersion: api.version, input: { month: '2026-09' }, evidenceId: evidence.evidenceId }] });
     }
-    return tool('render_react_source', { title: '잘못된 초기 조건 반증', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: {
-      'App.tsx': `import React,{useState,useEffect} from 'react';export default function App(){const[rows,setRows]=useState<Array<Record<string,unknown>>>([]);const load=(month:'2026-09'|'2026-10')=>window.workbench.callApi('${api.id}',{month}).then(r=>setRows(r.rows));useEffect(()=>{void load('2026-10')},[]);return <main><h1>실제 API 결과</h1>{rows.map((r,i)=><p key={i}>{String(r.project_id)}</p>)}<button onClick={()=>{void load('2026-09')}}>9월로 변경</button></main>}`,
-    } } });
+    return tool('render_react_source', { title: '잘못된 초기 조건 반증', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: [{
+      path: 'App.tsx', content: `import React,{useState,useEffect} from 'react';export default function App(){const[rows,setRows]=useState<Array<Record<string,unknown>>>([]);const load=(month:'2026-09'|'2026-10')=>window.workbench.callApi('${api.id}',{month}).then(r=>setRows(r.rows));useEffect(()=>{void load('2026-10')},[]);return <main><h1>실제 API 결과</h1>{rows.map((r,i)=><p key={i}>{String(r.project_id)}</p>)}<button onClick={()=>{void load('2026-09')}}>9월로 변경</button></main>}`,
+    }] } });
   } }).listen(0, '127.0.0.1'); await new Promise<void>(resolve => server.once('listening', resolve)); base = `http://127.0.0.1:${server.address().port}`;
 });
 test.afterAll(async () => { for (const item of [server, runtime]) if (item) await new Promise<void>(resolve => item.close(() => resolve())); if (db) { await db.recursiveDelete(db.doc(root)); await db.terminate(); } });

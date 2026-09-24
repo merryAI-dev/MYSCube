@@ -14,6 +14,23 @@ suite('React conversation failure and competing answers', () => {
   const service = (complete: any, deadlineMs = 2000) => createReactConversationService({ db, now, env, authorize: core.authorize, apis: { get: async () => { throw new Error('unexpected API'); } }, analytics: {}, qa: () => {}, completionFactory: () => complete, deadlineMs });
   beforeEach(async () => { await db.recursiveDelete(db.doc(`orgs/${tenantId}`)); await db.doc(`orgs/${tenantId}/members/admin`).set({ role: 'admin', status: 'ACTIVE', permissionsCapturedAt: now(), analyticsDatasetIds: [], analyticsScopeRevision: 'v1' }); });
   afterAll(async () => { await db.recursiveDelete(db.doc(`orgs/${tenantId}`)); await db.terminate(); });
+  it('persists a generic failure for numeric dependency codes, releases the lease and permits the next turn', async () => {
+    const failure = Object.assign(new Error('private dependency detail'), { code: 5 });
+    let calls = 0;
+    const api = service(async () => { calls++; throw failure; });
+    const session = await api.create(context());
+    const input = { expectedVersion: 0, requestId: 'numeric-failure', message: '화면 설명' };
+    await expect(api.turn(context(), session.id, input)).rejects.toBe(failure);
+    const failed = await api.get(context(), session.id);
+    expect(failed.version).toBe(1); expect(failed.active).toBeNull(); expect(failed.reactContext).toBeNull();
+    expect(failed.turns[0]).toMatchObject({ state: 'failed', error: { code: 'react_conversation_failed' } });
+    expect(JSON.stringify(failed)).not.toContain('private dependency detail');
+    expect((await db.doc(`orgs/${tenantId}/html_generation_locks/active`).get()).exists).toBe(false);
+    const replay = await api.turn(context(), session.id, input);
+    expect(replay.replayed).toBe(true); expect(replay.turn.error.code).toBe('react_conversation_failed'); expect(calls).toBe(1);
+    const retry = await service(async () => result).turn(context(), session.id, { expectedVersion: 1, requestId: 'numeric-retry', message: '다시 설명' });
+    expect(retry.result.type).toBe('answer'); expect(retry.version).toBe(2);
+  });
   it('releases a failed turn and tenant lease even when the provider ignores abort; a late result cannot become a proposal', async () => {
     let release: (value: any) => void = () => {}, called = false;
     const slow = service(async () => { called = true; return new Promise((resolve) => { release = resolve; }); }, 400);

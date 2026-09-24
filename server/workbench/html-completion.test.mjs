@@ -67,6 +67,20 @@ describe('isolated HTML model completion', () => {
     await expect(createHtmlCompletion({ client, onUsage })(input())).rejects.toMatchObject({ code: 'html_model_action_invalid' });
     expect(onUsage).toHaveBeenCalledWith({ totalTokenCount: 100 });
   });
+  it.each([
+    { parts: [], reason: 'no_function_call', count: 0, hasText: false },
+    { parts: [{ text: 'private text' }], reason: 'no_function_call', count: 0, hasText: true },
+    { parts: [{ text: 'private thought', thought: true, thoughtSignature: 'private signature' }], reason: 'no_function_call', count: 0, hasText: false },
+    { parts: [{ functionCall: { name: 'private function', args: { secret: 'private args' } } }], reason: 'unknown_function', count: 1, hasText: false },
+    { parts: [null, { functionCall: { name: 'propose_html', args: {} } }], reason: 'malformed_response', count: 1, hasText: false },
+    { parts: {}, reason: 'malformed_response', count: 0, hasText: false },
+    { parts: Array.from({ length: 105 }, () => ({ functionCall: { name: 'propose_html', args: {} } })), reason: 'multiple_function_calls', count: 100, hasText: false },
+  ])('computes safe action diagnostics without returning provider content: $reason/$count', async ({ parts, reason, count, hasText }) => {
+    const client = { models: { countTokens: vi.fn(async () => ({ totalTokens: 10 })), generateContent: vi.fn(async () => ({ providerActionReason: 'injected', candidates: [{ finishReason: 'STOP', content: { parts } }] })) } };
+    const error = await createHtmlCompletion({ client })(input()).catch(error => error);
+    expect(error).toMatchObject({ code: 'html_model_action_invalid', statusCode: 502, providerActionReason: reason, providerCallCount: count, providerHasText: hasText });
+    expect(JSON.stringify(error)).not.toMatch(/private|injected/);
+  });
   const interpretation = (datasetIds = []) => ({ summary: '조회 기준 확인', context: { datasetIds, filters: {}, evidenceIds: [] }, ambiguities: [] });
   const conversation = (step, { authorize = vi.fn(async () => {}) } = {}) => {
     const fetch = vi.fn(async (url) => new Response(JSON.stringify(String(url).includes(':countTokens')

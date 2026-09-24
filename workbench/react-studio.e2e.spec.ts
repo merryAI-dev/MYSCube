@@ -38,7 +38,7 @@ test.beforeAll(async () => {
       const evidence = JSON.parse(evidenceMessage.content.slice(evidenceMessage.content.indexOf(':') + 1));
       return tool('workbench_step', { action: 'build_screen', interpretation, purpose: 'connected', request: '확인한 사업 현황을 버튼으로 조회하는 화면', evidenceIds: [evidence.evidenceId], bindings: [{ apiId: registeredId, apiVersion: 1, input: { yearMonth: '2026-09', weekNo: 1 }, evidenceId: evidence.evidenceId }] });
     }
-    return ({ tool_calls: [{ function: { name: 'render_react_source', arguments: JSON.stringify({ title: '나의 React QA 화면', code: code() }) } }] }); } });
+    return ({ tool_calls: [{ function: { name: 'render_react_source', arguments: JSON.stringify({ title: '나의 React QA 화면', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: [{ path: 'App.tsx', content: code() }] } }) } }] }); } });
   server = app.listen(0, '127.0.0.1'); await new Promise<void>((resolve) => server.once('listening', resolve)); base = `http://127.0.0.1:${server.address().port}`;
 });
 test.afterAll(async () => { for (const item of [server, runtimeServer]) if (item) await new Promise<void>((resolve) => item.close(() => resolve())); if (db) { await db.recursiveDelete(db.doc(root)); await db.terminate(); } });

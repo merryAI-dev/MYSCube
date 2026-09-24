@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { createIsolatedWorkbenchCore } from './core.mjs';
 import { createConversationService } from './conversations.mjs';
 import { createReactConversationService } from './react-conversation.mjs';
+import { reactSourceHash } from './react-pages.mjs';
 
 const suite = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
 suite('independent React conversation persistence, clarification and scope QA', () => {
@@ -17,7 +18,10 @@ suite('independent React conversation persistence, clarification and scope QA', 
   const context = () => ({ tenantId, actorId: 'admin-a', actorRole: 'admin' });
   const member = db.doc(`orgs/${tenantId}/members/admin-a`);
   let inputs: any[], refs: number[], responses: any[];
-  const tool = (name: string, value: any) => ({ tool_calls: [{ function: { name, arguments: JSON.stringify(value) } }] });
+  const tool = (name: string, value: any) => {
+    if (name === 'render_react_source') value = { title: value.title, workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: [{ path: 'App.tsx', content: value.code }] } };
+    return { tool_calls: [{ function: { name, arguments: JSON.stringify(value) } }] };
+  };
   const service = () => createReactConversationService({ db, now, env, authorize: core.authorize,
     apis: { get: async (_context: any, id: string, version: number) => { expect(id).toBe(apiId); refs.push(version); return { id, version, definition: { kind: 'analytics-copy', name: '고정 API', description: '테스트 조회 정의', parameters: {} } }; } },
     analytics: {}, qa: () => { throw new Error('unexpected QA tool'); },
@@ -38,6 +42,8 @@ suite('independent React conversation persistence, clarification and scope QA', 
     const next = { expectedVersion: 1, requestId: 'followup', mode: 'react', message: '표로 해 주세요', clarificationId: reopened.pendingClarification.id };
     const second = await service().turn(context(), session.id, next);
     expect(second.result.type).toBe('source'); expect(second.result.compiled.bundleHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(second.result.compiled.sourceHash).toBe(reactSourceHash(second.result.source));
+    expect(second.result.source.workspace.files['App.tsx']).toBe("import React from 'react'; export default function App(){return <main className='p-4'>표 제안</main>}");
     expect(JSON.stringify(inputs[1].messages)).toContain('보기 좋은 화면으로 만들어 주세요');
     expect(JSON.stringify(inputs[1].messages)).toContain('편집 중 원문'); expect(new Set(refs)).toEqual(new Set([2]));
     const replay = await service().turn(context(), session.id, next); expect(replay.replayed).toBe(true); expect(inputs).toHaveLength(2);

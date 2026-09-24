@@ -69,7 +69,7 @@ export function mountConversations(app, { db, now, env, core, analytics, asyncHa
       const saved = await service.completeTurn(req.context, req.params.id, { turnId: begun.turnId, result });
       res.json({ ...saved, turnId: begun.turnId, result });
     } catch (error) {
-      await service.failTurn(req.context, req.params.id, { turnId: begun.turnId, error: { code: /^[a-zA-Z0-9_]{1,100}$/.test(error.code || '') ? error.code : 'conversation_failed',
+      await service.failTurn(req.context, req.params.id, { turnId: begun.turnId, error: { code: typeof error.code === 'string' && /^[a-zA-Z0-9_]{1,100}$/.test(error.code) ? error.code : 'conversation_failed',
         message: error.expose ? error.message.slice(0, 1000) : '요청을 완료하지 못했습니다. 이전 결과와 작성 내용은 유지됩니다.' } });
       throw error;
     } finally {

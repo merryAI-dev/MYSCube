@@ -17,10 +17,13 @@ import { readEvaluationManifest, verifyEvaluationManifest } from './manifest.mjs
 
 const digest = (value) => createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(value)).digest('hex');
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-const safeError = (error) => ({ code: /^[a-zA-Z0-9_]{1,100}$/.test(error?.code || '') ? error.code : 'evaluation_failed', message: error?.expose ? String(error.message).slice(0, 1000) : '평가 단계를 완료하지 못했습니다. 비밀값을 포함할 수 있는 원문 오류는 기록하지 않았습니다.',
+const safeError = (error) => ({ code: typeof error?.code === 'string' && /^[a-zA-Z0-9_]{1,100}$/.test(error.code) ? error.code : 'evaluation_failed', message: error?.expose ? String(error.message).slice(0, 1000) : '평가 단계를 완료하지 못했습니다. 비밀값을 포함할 수 있는 원문 오류는 기록하지 않았습니다.',
   ...(Number.isInteger(error?.providerStatus) ? { providerStatus: error.providerStatus } : {}),
   ...(['countTokens', 'generateContent'].includes(error?.providerStage) ? { providerStage: error.providerStage } : {}),
-  ...(/^[A-Z_]{1,40}$/.test(error?.providerFinishReason || '') ? { providerFinishReason: error.providerFinishReason } : {}) });
+  ...(/^[A-Z_]{1,40}$/.test(error?.providerFinishReason || '') ? { providerFinishReason: error.providerFinishReason } : {}),
+  ...(['no_function_call', 'multiple_function_calls', 'unknown_function', 'malformed_response'].includes(error?.providerActionReason) ? { providerActionReason: error.providerActionReason } : {}),
+  ...(Number.isInteger(error?.providerCallCount) && error.providerCallCount >= 0 && error.providerCallCount <= 100 ? { providerCallCount: error.providerCallCount } : {}),
+  ...(typeof error?.providerHasText === 'boolean' ? { providerHasText: error.providerHasText } : {}) });
 
 export async function runAcceptance({ db, complete, outputDirectory, sourceSha, model, executionManifest = null, spawnDocker, now = () => ACCEPTANCE_SUITE.clock, render = true }) {
   const runId = randomUUID();

@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { createHttpError } from '../bff/bff-utils.mjs';
+import { attachCompletionContent, getNativeMessageContent } from './model-turn-history.mjs';
 
 export function createHtmlCompletion({ apiKey, model = 'gemini-3.6-flash', client, onUsage = async () => {} }) {
   if (!client && !apiKey) throw createHttpError(503, 'HTML 생성용 AI 연결 설정이 필요합니다.', 'html_model_unconfigured');
@@ -22,7 +23,8 @@ export function createHtmlCompletion({ apiKey, model = 'gemini-3.6-flash', clien
       }
     };
     const systemInstruction = messages.filter((item) => item.role === 'system').map((item) => item.content).join('\n');
-    const contents = messages.filter((item) => item.role !== 'system').map((item) => ({ role: item.role === 'assistant' ? 'model' : 'user', parts: [{ text: item.content }] }));
+    const contents = messages.filter((item) => item.role !== 'system').map((item) => getNativeMessageContent(item)
+      || { role: item.role === 'assistant' ? 'model' : 'user', parts: [{ text: item.content }] });
     const declarations = tools.map(({ function: fn }) => ({ name: fn.name, description: fn.description, parametersJsonSchema: fn.parameters }));
     const counted = await call('countTokens', () => ai.models.countTokens({ model, config: { abortSignal: signal, httpOptions: { extraBody: { generateContentRequest: {
       model: `models/${model}`, contents, systemInstruction: { role: 'user', parts: [{ text: systemInstruction }] }, tools: [{ functionDeclarations: declarations }],
@@ -40,12 +42,20 @@ export function createHtmlCompletion({ apiKey, model = 'gemini-3.6-flash', clien
       error.providerFinishReason = ['MAX_TOKENS', 'SAFETY', 'RECITATION', 'LANGUAGE', 'OTHER', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'MALFORMED_FUNCTION_CALL', 'UNEXPECTED_TOOL_CALL'].includes(reason) ? reason : 'UNKNOWN';
       throw error;
     }
-    const parts = response.candidates[0].content?.parts || [];
-    const calls = parts.filter((part) => part.functionCall);
-    if (calls.length !== 1 || !declarations.some(({ name }) => name === calls[0].functionCall.name)) {
-      throw createHttpError(502, 'AI가 실행할 작업을 명확히 지정하지 못했습니다. 요청을 다시 확인해 주세요. 작성한 내용은 유지됩니다.', 'html_model_action_invalid');
+    const content = response.candidates[0].content;
+    const parts = Array.isArray(content?.parts) ? content.parts : [];
+    const malformed = !Array.isArray(content?.parts) || parts.some((part) => !part || typeof part !== 'object' || Array.isArray(part)
+      || (part.functionCall !== undefined && (!part.functionCall || typeof part.functionCall !== 'object' || Array.isArray(part.functionCall))));
+    const calls = parts.filter((part) => part?.functionCall);
+    if (malformed || calls.length !== 1 || !declarations.some(({ name }) => name === calls[0].functionCall.name)) {
+      const error = createHttpError(502, 'AI가 실행할 작업을 명확히 지정하지 못했습니다. 요청을 다시 확인해 주세요. 작성한 내용은 유지됩니다.', 'html_model_action_invalid');
+      error.providerActionReason = malformed ? 'malformed_response' : !calls.length ? 'no_function_call' : calls.length > 1 ? 'multiple_function_calls' : 'unknown_function';
+      error.providerCallCount = Math.min(calls.length, 100);
+      error.providerHasText = parts.some((part) => part?.thought !== true && typeof part?.text === 'string' && part.text.length > 0);
+      throw error;
     }
-    return { tool_calls: calls.map((part, index) => ({ id: `html_${index}`, type: 'function',
+    const result = { tool_calls: calls.map((part, index) => ({ id: part.functionCall.id || `html_${index}`, type: 'function',
       function: { name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args || {}) } })) };
+    return attachCompletionContent(result, { ...content, role: 'model' });
   };
 }

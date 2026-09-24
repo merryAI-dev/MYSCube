@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { normalizeReactSource } from '../../shared/workbench-react-workspace.mjs';
 import { generateReactPage } from './react-pages.mjs';
 
-const tool = (name, value) => ({ tool_calls: [{ function: { name, arguments: JSON.stringify(value) } }] });
+const tool = (name, value) => {
+  if (name === 'render_react_source') { const normalized = normalizeReactSource(value); value = { ...normalized, workspace: { ...normalized.workspace, files: Object.entries(normalized.workspace.files).map(([path, content]) => ({ path, content })) } }; }
+  return { tool_calls: [{ function: { name, arguments: JSON.stringify(value) } }] };
+};
 const source = { title: '편집본', code: 'export default function App(){return <div>그대로</div>}' };
 const run = (complete, extra = {}) => generateReactPage({ complete, prompt: '이 화면을 다듬어 주세요.', currentSource: source, apis: [], authorize: async () => {}, signal: AbortSignal.timeout(10000), ...extra });
 describe('typed React generation outcomes', () => {
