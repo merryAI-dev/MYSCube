@@ -24,7 +24,13 @@ describe('isolated HTML model completion', () => {
   });
   it('rejects token-truncated HTML as incomplete', async () => {
     const client = { models: { countTokens: vi.fn(async () => ({ totalTokens: 10 })), generateContent: vi.fn(async () => ({ candidates: [{ finishReason: 'MAX_TOKENS' }] })) } };
-    await expect(createHtmlCompletion({ client })(input())).rejects.toMatchObject({ code: 'html_generation_incomplete' });
+    await expect(createHtmlCompletion({ client })(input())).rejects.toMatchObject({ code: 'html_generation_incomplete', providerFinishReason: 'MAX_TOKENS' });
+  });
+  it('does not expose an unrecognized provider finish reason as diagnostic text', async () => {
+    const client = { models: { countTokens: vi.fn(async () => ({ totalTokens: 10 })), generateContent: vi.fn(async () => ({ candidates: [{ finishReason: 'private provider diagnostic' }] })) } };
+    const failure = await createHtmlCompletion({ client })(input()).catch(error => error);
+    expect(failure).toMatchObject({ code: 'html_generation_incomplete', providerFinishReason: 'UNKNOWN' });
+    expect(JSON.stringify(failure)).not.toContain('private provider diagnostic');
   });
   it('preserves provider status and the failed stage with the actual SDK transport without retrying or exposing its response', async () => {
     const fetch = vi.fn()
@@ -63,9 +69,9 @@ describe('isolated HTML model completion', () => {
   });
   const interpretation = (datasetIds = []) => ({ summary: '조회 기준 확인', context: { datasetIds, filters: {}, evidenceIds: [] }, ambiguities: [] });
   const conversation = (step, { authorize = vi.fn(async () => {}) } = {}) => {
-    const fetch = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ totalTokens: 500 }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ candidates: [{ finishReason: 'STOP', content: { parts: [{ functionCall: { name: 'workbench_step', args: step } }] } }] }), { status: 200 }));
+    const fetch = vi.fn(async (url) => new Response(JSON.stringify(String(url).includes(':countTokens')
+      ? { totalTokens: 500 }
+      : { candidates: [{ finishReason: 'STOP', content: { parts: [{ functionCall: { name: 'workbench_step', args: step } }] } }] }), { status: 200 }));
     vi.stubGlobal('fetch', fetch);
     const analytics = { catalog: vi.fn(async () => ({ items: [], semantic: { items: [] } })), queryPlan: vi.fn(), evidence: vi.fn(), recordEvidence: vi.fn() };
     let declaredSchema;
@@ -92,7 +98,7 @@ describe('isolated HTML model completion', () => {
     const run = conversation({ action: 'query', interpretation: interpretation(['weekly_submission']),
       plan: { datasetId: 'weekly_submission', definitionVersion: '1', measures: ['observation_count'], filters: [{ field: 'status', op: 'eq', value: { untyped: 'COMPLETED' } }] } });
     await expect(run.result).rejects.toMatchObject({ code: 'conversation_plan_invalid' });
-    expect(run.fetch).toHaveBeenCalledTimes(2);
+    expect(run.fetch).toHaveBeenCalledTimes(4);
     expect(run.analytics.queryPlan).not.toHaveBeenCalled();
   });
   it('keeps the domain permission check after a structurally valid AUTO tool response', async () => {

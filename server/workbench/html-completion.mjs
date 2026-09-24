@@ -34,7 +34,12 @@ export function createHtmlCompletion({ apiKey, model = 'gemini-3.6-flash', clien
       maxOutputTokens: 16384, tools: [{ functionDeclarations: declarations }], toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
     } }));
     await onUsage(response.usageMetadata || {});
-    if (response.candidates?.[0]?.finishReason !== 'STOP') throw createHttpError(502, 'HTML 응답이 끝까지 생성되지 않았습니다. 기존 소스를 유지합니다.', 'html_generation_incomplete');
+    if (response.candidates?.[0]?.finishReason !== 'STOP') {
+      const error = createHttpError(502, 'AI 응답이 끝까지 생성되지 않았습니다. 기존 소스를 유지합니다.', 'html_generation_incomplete');
+      const reason = response.candidates?.[0]?.finishReason;
+      error.providerFinishReason = ['MAX_TOKENS', 'SAFETY', 'RECITATION', 'LANGUAGE', 'OTHER', 'BLOCKLIST', 'PROHIBITED_CONTENT', 'SPII', 'MALFORMED_FUNCTION_CALL', 'UNEXPECTED_TOOL_CALL'].includes(reason) ? reason : 'UNKNOWN';
+      throw error;
+    }
     const parts = response.candidates[0].content?.parts || [];
     const calls = parts.filter((part) => part.functionCall);
     if (calls.length !== 1 || !declarations.some(({ name }) => name === calls[0].functionCall.name)) {

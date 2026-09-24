@@ -16,6 +16,19 @@ export const SemanticQueryPlanSchema = z.object({
 }).strict();
 
 const problem = (code, message, extras = {}) => Object.assign(analyticsError(422, code, message), extras);
+export const SEMANTIC_SELECTION_POLICY = Object.freeze({ exactlyOneOf: Object.freeze(['select', 'measures']), groupByRequires: 'measures' });
+export const SEMANTIC_REQUIRED_FILTER_POLICY = Object.freeze({ operator: 'eq', count: 1, arrayValueAllowed: false });
+export function semanticFilterOperators(field) {
+  return [...(field.allowedOperators || (['string', 'boolean'].includes(field.type)
+    ? ['eq', 'ne', 'in', 'not_in', 'is_null', 'is_not_null']
+    : ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'not_in', 'is_null', 'is_not_null']))];
+}
+function assertSelection(input) {
+  if (SEMANTIC_SELECTION_POLICY.exactlyOneOf.filter((key) => input[key]?.length).length !== 1
+    || (input.groupBy.length && !input[SEMANTIC_SELECTION_POLICY.groupByRequires]?.length)) {
+    throw problem('semantic_selection_invalid', '개별 행의 항목을 선택하거나, 확정된 지표와 묶음 기준을 선택해 주세요.');
+  }
+}
 const quoted = (value) => `"${assertIdentifier(value)}"`;
 const textLiteral = (value) => `'${value.replaceAll("'", "''")}'`;
 function literal(value, field) {
@@ -79,11 +92,11 @@ export function compileSemanticQuery({ plan, catalogItems, definitionRegistry = 
   for (const requirement of definition.requiredFilters || []) {
     const matches = (input.filters || []).filter((filter) => filter.field === requirement.field);
     if (matches.length === 0) throw problem('semantic_clarification_required', requirement.question, { details: { missingFields: [requirement] } });
-    if (matches.length !== 1 || matches[0].op !== 'eq' || matches[0].value === undefined || Array.isArray(matches[0].value)) throw problem('semantic_required_filter_invalid', `${getField(requirement.field).label} 기준을 하나만 선택해 주세요. 서로 다른 입금 기준은 한 합계로 섞을 수 없습니다.`);
+    if (matches.length !== SEMANTIC_REQUIRED_FILTER_POLICY.count || matches[0].op !== SEMANTIC_REQUIRED_FILTER_POLICY.operator || matches[0].value === undefined || (!SEMANTIC_REQUIRED_FILTER_POLICY.arrayValueAllowed && Array.isArray(matches[0].value))) throw problem('semantic_required_filter_invalid', `${getField(requirement.field).label} 기준을 하나만 선택해 주세요. 서로 다른 입금 기준은 한 합계로 섞을 수 없습니다.`);
   }
   const groups = input.groupBy || []; let measures = input.measures || []; let selected = input.select || [];
   for (const values of [groups, measures, selected, (input.orderBy || []).map((order) => order.field)]) if (new Set(values).size !== values.length) throw problem('semantic_plan_duplicate', '같은 조회 항목이나 정렬 조건을 중복해서 사용할 수 없습니다.');
-  if ((!measures.length && !selected.length) || (measures.length && selected.length) || (!measures.length && groups.length)) throw problem('semantic_selection_invalid', '개별 행의 항목을 선택하거나, 확정된 지표와 묶음 기준을 선택해 주세요.');
+  assertSelection({ measures, select: selected, groupBy: groups });
   measures = [...new Set([...measures, ...measures.flatMap((key) => definition.metrics[key]?.companions || [])])];
   selected = [...new Set([...selected, ...selected.flatMap((key) => definition.fields[key]?.companions || [])])];
   for (const fieldId of groups) if (!getField(fieldId).groupable) throw problem('semantic_group_not_allowed', '이 항목은 묶음별 집계 기준으로 사용할 수 없습니다.');
@@ -107,7 +120,7 @@ export function compileSemanticQuery({ plan, catalogItems, definitionRegistry = 
     const field = getField(filter.field);
     if (!field.filterable) throw problem('semantic_filter_not_allowed', '이 항목은 조건으로 사용할 수 없습니다. 확인된 상태 항목을 사용해 주세요.');
     if ([timeFields.yearMonth, timeFields.weekNo].includes(filter.field)) throw problem('semantic_time_filter_conflict', '정산 월과 주차는 기간 선택으로 지정해 주세요. 서로 다른 기간 조건을 중복 적용할 수 없습니다.');
-    const allowed = field.allowedOperators || (['string', 'boolean'].includes(field.type) ? ['eq', 'ne', 'in', 'not_in', 'is_null', 'is_not_null'] : Object.keys(symbol).concat(['in', 'not_in', 'is_null', 'is_not_null']));
+    const allowed = semanticFilterOperators(field);
     if (!allowed.includes(filter.op)) throw problem('semantic_filter_operator_invalid', `${field.label}에 사용할 수 없는 비교 방식입니다.`);
     const column = expression(filter.field);
     if (['is_null', 'is_not_null'].includes(filter.op)) {

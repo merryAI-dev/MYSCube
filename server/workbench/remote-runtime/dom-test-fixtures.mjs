@@ -9,4 +9,3 @@ export function domFrame(sessionId = randomUUID(), sourceHash = 'a'.repeat(64), 
     ] } };
 }
 export function domEvent(frame, extra = {}) { return { sessionId: frame.sessionId, sourceHash: frame.sourceHash, documentEpoch: frame.documentEpoch, eventId: randomUUID(), nodeId: domNodeId('b'), baseRevision: frame.snapshot.revision, type: 'click', ...extra }; }
-
