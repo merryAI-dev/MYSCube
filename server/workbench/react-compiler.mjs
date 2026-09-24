@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { analyticsError } from './analytics-contract.mjs';
-import { ReactSourceSchema, ReactDiagnosticSchema, MAX_REACT_DIAGNOSTICS, normalizeReactSource } from '../../shared/workbench-react-workspace.mjs';
+import { ReactSourceSchema, ReactDiagnosticSchema, ReactCompiledArtifactSchema, MAX_REACT_DIAGNOSTICS, normalizeReactSource, canonicalWorkspace, reactSourceIdentity } from '../../shared/workbench-react-workspace.mjs';
 export { getReactPackageSet, REACT_RUNTIME_VERSION } from './react-compiler-packages.mjs';
 
 let active = 0;
+const hash = (value) => createHash('sha256').update(value).digest('hex');
+/** @returns {Promise<import('zod/v4').infer<typeof ReactCompiledArtifactSchema>>} */
 export async function compileReactPreview(source, { signal, timeoutMs = 8000, apis = [] } = {}) {
   let parsed;
   try { parsed = ReactSourceSchema.parse(source); normalizeReactSource(parsed); } catch { throw analyticsError(400, 'react_source_invalid', '제목은 80자, React 파일은 32개와 전체 180KB 이내로 작성해 주세요. 파일 경로와 시작 파일도 확인해 주세요.'); }
@@ -39,7 +42,13 @@ export async function compileReactPreview(source, { signal, timeoutMs = 8000, ap
         if (diagnostics.success && ['policy', 'type', 'bundle'].includes(result.details.stage)) error.details = { stage: result.details.stage, diagnostics: diagnostics.data, truncated: result.details.truncated === true };
         finish(error);
       }
-      else finish(null, result.artifact);
+      else {
+        const artifact = ReactCompiledArtifactSchema.safeParse(result.artifact);
+        if (!artifact.success || artifact.data.sourceHash !== hash(reactSourceIdentity(parsed))
+          || artifact.data.workspaceHash !== hash(canonicalWorkspace(normalizeReactSource(parsed).workspace))
+          || artifact.data.bundleHash !== hash(artifact.data.bundle) || artifact.data.cssHash !== hash(artifact.data.css)) finish(analyticsError(422, 'react_compile_artifact_invalid', '컴파일 실행본의 버전과 검사 결과를 확인하지 못했습니다. 기존 화면은 유지합니다.'));
+        else finish(null, artifact.data);
+      }
     });
     child.stdin.on('error', () => {}); child.stdin.end(JSON.stringify({ source: parsed, apis }));
     if (signal?.aborted) abort();

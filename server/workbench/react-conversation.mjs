@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { validateReactScreenBindings } from './react-screen-bindings.mjs';
 import * as z from 'zod/v4';
 import { createHttpError } from '../bff/bff-utils.mjs';
 import { createConversationService } from './conversations.mjs';
@@ -8,7 +9,7 @@ import { resolveHtmlBindings } from './html-bindings.mjs';
 import { generateReactPage, parseReact, reactHash, reactSourceHash, ReactSourceSchema, ReactApiRefsSchema } from './react-pages.mjs';
 
 export const ReactConversationInput = z.object({ expectedVersion: z.number().int().nonnegative(), requestId: z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/),
-  message: z.string().trim().min(1).max(4000), mode: z.enum(['react', 'analysis']).default('react'), currentSource: ReactSourceSchema.optional(), apis: ReactApiRefsSchema.optional(), clarificationId: z.string().uuid().optional() }).strict();
+  message: z.string().trim().min(1).max(4000), mode: z.enum(['react', 'analysis', 'auto']).default('react'), currentSource: ReactSourceSchema.optional(), apis: ReactApiRefsSchema.optional(), clarificationId: z.string().uuid().optional() }).strict();
 const errorText = (error) => ({ code: /^[a-zA-Z0-9_]{1,100}$/.test(error.code || '') ? error.code : 'react_conversation_failed', message: error.expose ? error.message.slice(0, 1000) : '요청을 완료하지 못했습니다. 기존 대화와 편집 내용은 유지됩니다.' });
 const safeTokens = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
 
@@ -50,18 +51,29 @@ export function createReactConversationService({ db, now = () => new Date().toIS
       } if (recorded) await record.update({ ...tokens, lastUsageAt: now() }); };
       try {
         const changedScope = begun.workContext?.scopeFingerprint && begun.workContext.scopeFingerprint !== context.analyticsScope.fingerprint;
-        if (changedScope && input.mode === 'react') throw createHttpError(409, '조회 권한이 변경되어 이전 코드와 연결을 AI에 다시 전달하지 않았습니다. 새 대화에서 현재 권한의 API를 선택해 주세요.', 'react_conversation_scope_changed');
+        if (changedScope && input.mode !== 'analysis') throw createHttpError(409, '조회 권한이 변경되어 이전 코드와 연결을 AI에 다시 전달하지 않았습니다. 새 대화에서 현재 권한의 API를 선택해 주세요.', 'react_conversation_scope_changed');
         const previous = changedScope ? {} : begun.workContext || {};
         const { react, lastMode, scopeFingerprint: _scope, ...analysisContext } = previous;
         const source = changedScope ? undefined : input.currentSource || react?.source;
         const refs = changedScope ? [] : input.apis || react?.apis || [];
         const reactContext = source || refs.length ? { ...(source ? { source, sourceHash: reactSourceHash(source) } : {}), apis: refs, ...(react?.lastProposal ? { lastProposal: react.lastProposal } : {}) } : null;
-        const pending = changedScope || (begun.pendingClarification?.mode || 'analysis') !== input.mode ? null : begun.pendingClarification;
+        const pending = changedScope || (input.mode !== 'auto' && (begun.pendingClarification?.mode || 'analysis') !== input.mode) ? null : begun.pendingClarification;
         if (input.clarificationId && pending?.id !== input.clarificationId) throw createHttpError(409, '이전 확인 질문의 답변입니다. 최신 대화를 다시 열어 현재 질문에 답해 주세요.', 'react_clarification_stale');
         const selected = [];
-        const authorizeApis = async () => { signal.throwIfAborted(); await guard(context); for (const ref of refs) await apis.get(context, ref.id, ref.version); signal.throwIfAborted(); };
+        let screenCheck = null;
+        const authorizeApis = async () => {
+          signal.throwIfAborted(); await guard(context);
+          const currentApis = [];
+          for (const ref of refs) currentApis.push(await apis.get(context, ref.id, ref.version));
+          if (screenCheck) {
+            const catalog = await analytics.catalog(context);
+            const evidence = await Promise.all(screenCheck.evidenceIds.map((evidenceId) => analytics.evidence(context, evidenceId)));
+            validateReactScreenBindings({ bindings: screenCheck.bindings, evidence, apis: currentApis, catalog });
+          }
+          signal.throwIfAborted();
+        };
         await authorizeApis();
-        if (input.mode === 'react') for (const ref of refs) { const api = await apis.get(context, ref.id, ref.version); selected.push({ id: api.id, version: api.version, ...api.definition, responseKind: api.responseKind || api.definition.kind, responseSchema: api.responseSchema || null }); }
+        if (input.mode !== 'analysis') for (const ref of refs) { const api = await apis.get(context, ref.id, ref.version); selected.push({ id: api.id, version: api.version, ...api.definition, responseKind: api.responseKind || api.definition.kind, responseSchema: api.responseSchema || null }); }
         await db.runTransaction(async (tx) => {
           const [usage, active] = await Promise.all([tx.get(budget), tx.get(lock)]); const value = usage.data() || { count: 0, actors: {} };
           if (value.count >= 20 || (value.actors?.[owner] || 0) >= 5) throw createHttpError(429, '오늘 AI 요청 한도에 도달했습니다. 저장된 대화와 직접 편집은 계속 이용할 수 있습니다.', 'react_daily_limit');
@@ -82,10 +94,27 @@ export function createReactConversationService({ db, now = () => new Date().toIS
           const measuredComplete = async (args) => { const started = performance.now(); try { return await complete(args); } finally { onStage({ stage: 'model', durationMs: Math.round(performance.now() - started) }); } };
           const analysisStart = performance.now(); let analysis;
           try { analysis = await withConversationDeadline(() => runConversationTurn({ context, message: input.message, history: changedScope ? [] : begun.history,
-            workContext: analysisContext, pendingClarification: pending, complete: measuredComplete, analytics, qa, authorize, bindHtml: resolveHtmlBindings, signal, now }), signal); }
+            workContext: analysisContext, pendingClarification: pending, complete: measuredComplete, analytics, qa,
+            authorize: input.mode === 'auto' ? authorizeApis : authorize, bindHtml: resolveHtmlBindings, signal, now,
+            ...(input.mode === 'auto' ? { currentSource: source, registeredApis: selected, screenBuilder: async ({ request, purpose, bindings, evidence, businessContext }) => {
+              let verified = [];
+              if (purpose === 'connected') {
+                verified = validateReactScreenBindings({ bindings, evidence, apis: selected, catalog: await analytics.catalog(context) });
+                screenCheck = { bindings, evidenceIds: evidence.map((item) => item.evidenceId) };
+                try { await authorizeApis(); }
+                catch (error) { screenCheck = null; throw error; }
+              }
+              const generated = await generateReactPage({ complete, prompt: request, currentSource: source, apis: selected,
+                previousProposal: react?.lastProposal, businessContext: { ...businessContext, screenBindings: verified, purpose },
+                history: changedScope ? [] : begun.history, pendingClarification: pending, authorize: authorizeApis, signal, onStage });
+              const { artifact, ...proposal } = generated;
+              return { ...proposal, screenBindings: verified,
+                ...(artifact ? { compiled: { sourceHash: artifact.sourceHash, bundleHash: artifact.bundleHash, cssHash: artifact.cssHash, packageSetHash: artifact.packageSetHash, runtimeVersion: artifact.runtimeVersion } } : {}) };
+            } } : {}) }), signal); }
           finally { onStage({ stage: 'analysis', durationMs: Math.round(performance.now() - analysisStart) }); }
-          result = { ...analysis, type: analysis.status === 'clarification_required' ? 'clarification' : 'answer',
-            ...(analysis.clarification ? { clarification: { ...analysis.clarification, mode: 'analysis' } } : {}), context: { ...analysis.context, ...(reactContext ? { react: reactContext } : {}), lastMode: input.mode } };
+          if (!analysis.source) screenCheck = null;
+          result = { ...analysis, type: analysis.type || (analysis.status === 'clarification_required' ? 'clarification' : 'answer'),
+            ...(analysis.clarification ? { clarification: { ...analysis.clarification, mode: input.mode } } : {}), context: { ...analysis.context, ...(reactContext || analysis.source ? { react: { ...reactContext, ...(analysis.source ? { lastProposal: analysis.source } : {}) } } : {}), lastMode: input.mode } };
         }
         await authorizeApis();
         result.mode = input.mode; result.scopeFingerprint = context.analyticsScope.fingerprint;

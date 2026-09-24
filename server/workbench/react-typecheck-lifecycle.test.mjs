@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 const { spawn } = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock('node:child_process', () => ({ spawn }));
 import { compileReactPreview } from './react-compiler.mjs';
+import { fixtureArtifact } from './react-contract-fixtures.mjs';
 
 const source = { title: '기한 검증', code: 'export default ()=> <div/>' };
 function fakeChild() {
@@ -27,8 +28,9 @@ describe('compiler termination and real close admission boundary', () => {
     child.emit('close', null, 'SIGKILL');
     expect(await result).toMatchObject({ code: 'react_compile_timeout' });
     const next = fakeChild(); const nextResult = compileReactPreview(source);
-    next.stdout.emit('data', JSON.stringify({ ok: true, artifact: { proof: 'next-child' } })); next.emit('close', 0);
-    expect(await nextResult).toEqual({ proof: 'next-child' });
+    const artifact = fixtureArtifact(source);
+    next.stdout.emit('data', JSON.stringify({ ok: true, artifact })); next.emit('close', 0);
+    expect(await nextResult).toEqual(artifact);
   });
   it('does not count an abort or kill request as a completed child', async () => {
     const child = fakeChild(); const controller = new AbortController();
@@ -38,5 +40,14 @@ describe('compiler termination and real close admission boundary', () => {
     child.stdout.emit('data', JSON.stringify({ ok: true, artifact: { stale: true } }));
     child.emit('close', 0);
     expect(await result).toMatchObject({ code: 'react_compile_cancelled' });
+  });
+  it.each(['shape', 'identity', 'bytes'])('rejects a successful worker message with invalid %s', async (kind) => {
+    const child = fakeChild(); const result = compileReactPreview(source).catch((error) => error);
+    const artifact = fixtureArtifact(source);
+    if (kind === 'shape') delete artifact.typecheck;
+    if (kind === 'identity') artifact.workspaceHash = 'f'.repeat(64);
+    if (kind === 'bytes') artifact.bundle += ' changed';
+    child.stdout.emit('data', JSON.stringify({ ok: true, artifact })); child.emit('close', 0);
+    expect(await result).toMatchObject({ code: 'react_compile_artifact_invalid' });
   });
 });

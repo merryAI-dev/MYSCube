@@ -45,7 +45,7 @@ test('real Firestore, SQL evidence, server bindings, preview and saved source su
     const request = route.request(); const url = new URL(request.url()); const headers = { ...request.headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId, ...(request.method() === 'GET' ? {} : { 'idempotency-key': crypto.randomUUID() }) };
     const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers }); await route.fulfill({ response });
   });
-  await page.goto('/');
+  await page.goto('/?mode=html');
   await page.getByRole('button', { name: '새 대화', exact: true }).click();
   await page.getByRole('textbox', { name: '업무 대화 입력', exact: true }).fill('9월 업데이트 대기 사업 화면을 보여줘');
   await page.getByRole('button', { name: '질문 보내기', exact: true }).click();
@@ -68,7 +68,9 @@ test('real Firestore, SQL evidence, server bindings, preview and saved source su
   await expect(page.getByRole('button', { name: '현재 소스 저장', exact: true })).toBeEnabled();
   await page.getByRole('navigation', { name: '대화 목록' }).getByRole('button').first().click();
   await expect(page.getByText('확인한 업데이트 대기 사업을 표에 연결했습니다.')).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: /사업 식별자/ })).toBeVisible();
+  await expect(page.getByRole('region', { name: '업무 대화' }).getByRole('columnheader', { name: /사업 식별자/ })).toBeVisible();
+  await expect(page.getByTestId('bound-evidence').getByRole('columnheader', { name: '사업 식별자', exact: true })).toBeVisible();
+  await expect(page.getByTestId('bound-evidence').getByRole('cell', { name: '업데이트 대기 사업', exact: true })).toBeVisible();
   await page.screenshot({ path: '/tmp/myscube-real-conversation-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 }); expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: '/tmp/myscube-real-conversation-mobile.png', fullPage: true });

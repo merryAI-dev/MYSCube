@@ -10,6 +10,7 @@ import { createGitDeliveryService } from './git-delivery.mjs';
 import { resolveReactRuntime } from './react-runtime-config.mjs';
 import { createReactConversationService } from './react-conversation.mjs';
 import { withConversationDeadline } from './execution-deadline.mjs';
+import { ReactPageMutationResponseSchema, ReactExecutionArtifactSchema, ReactPreviewRequestSchema } from '../../shared/workbench-react-workspace.mjs';
 
 export function mountReactStudio(app, { db, now, env, core, analytics, asyncHandler, createMutatingRoute, idempotencyService,
   completionFactory = createHtmlCompletion, gitFetch }) {
@@ -56,23 +57,23 @@ export function mountReactStudio(app, { db, now, env, core, analytics, asyncHand
   app.get(`${prefix}/:id`, asyncHandler(async (req, res) => res.json(await pages.get(req.context, req.params.id))));
   const save = (id) => mutate(limited(async (req) => {
     const saved = await pages.save(req.context, id ? req.params.id : null, req.body);
-    const git = await delivery(req.context, saved); return { status: id ? 200 : 201, body: { ...saved, git } };
+    const git = await delivery(req.context, saved); return { status: id ? 200 : 201, body: ReactPageMutationResponseSchema.parse({ ...saved, git }) };
   }));
   app.post(prefix, save(false)); app.put(`${prefix}/:id`, save(true));
-  app.post(`${prefix}/:id/restore`, mutate(limited(async (req) => { const saved = await pages.restore(req.context, req.params.id, req.body); return { status: 200, body: { ...saved, git: await delivery(req.context, saved) } }; })));
+  app.post(`${prefix}/:id/restore`, mutate(limited(async (req) => { const saved = await pages.restore(req.context, req.params.id, req.body); return { status: 200, body: ReactPageMutationResponseSchema.parse({ ...saved, git: await delivery(req.context, saved) }) }; })));
   app.post(`${prefix}/:id/publish`, asyncHandler(async (req, res) => res.json(await limited(async (request) => {
     const { version } = parseReact(z.object({ version: z.number().int().positive() }).strict(), request.body);
     return delivery(request.context, await pages.get(request.context, request.params.id, version));
   })(req))));
   app.post(`${prefix}/preview`, asyncHandler(async (req, res) => res.json(await limited(async (request) => {
     if (!runtime) throw createHttpError(503, '별도 React 실행 공간이 연결되지 않았습니다. 소스 편집과 저장은 사용할 수 있습니다.', 'react_runtime_unconfigured');
-    const input = parseReact(z.object({ source: ReactSourceSchema, apis: ReactApiRefsSchema }).strict(), request.body);
+    const input = parseReact(ReactPreviewRequestSchema, request.body);
     const selectedApis = await pages.validateApis(request.context, input.apis);
     const artifact = await compileReactPreview(input.source, { apis: selectedApis });
     await core.authorize(request.context);
     const executionId = randomUUID();
     await db.doc(`orgs/${request.context.tenantId}/react_executions/${executionId}`).create({ owner: request.context.actorId, apis: input.apis, sourceHash: reactSourceHash(input.source), scopeFingerprint: request.context.analyticsScope.fingerprint, createdAt: now(), expiresAt: new Date(Date.parse(now()) + 30 * 60000).toISOString() });
-    return { ...artifact, executionId };
+    return ReactExecutionArtifactSchema.parse({ ...artifact, executionId });
   })(req))));
   app.post(`${prefix}/executions/:id/call`, asyncHandler(async (req, res) => res.json(await limited(async (request) => {
     if (env.WORKBENCH_READS_ENABLED === 'false') throw createHttpError(503, '분석 조회를 잠시 중지했습니다.', 'workbench_reads_disabled');

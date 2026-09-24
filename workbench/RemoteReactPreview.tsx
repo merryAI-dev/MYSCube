@@ -1,3 +1,4 @@
+import type { ScreenQueryExpectation } from './screen-evidence';
 import { useEffect, useRef, useState } from 'react';
 import { workbenchRequest } from './client';
 import { BoundEvidence } from './BoundEvidence';
@@ -5,7 +6,7 @@ import type { ReactSource } from './react-workspace-editor';
 
 export type RemoteFrame = { pngBase64: string; width: number; height: number; sequence: number };
 export type RemoteSession = { sessionId: string; frame: RemoteFrame; expiresAt: string; evidence?: Record<string, { evidenceId: string }> };
-export type RemoteDraft = { source: ReactSource; apis: Array<{ id: string; version: number }>; key: number };
+export type RemoteDraft = { source: ReactSource; apis: Array<{ id: string; version: number }>; key: number; expectedQueries?: ScreenQueryExpectation[] };
 export type RemotePreviewResult = { status: 'ready' | 'error'; key: number; durationMs?: number; message?: string };
 const keys = new Set(['Tab', 'Enter', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
 const endpoint = (id: string) => `/react-work-pages/remote/${id}`;
@@ -29,16 +30,17 @@ async function decodeFrame(frame: RemoteFrame) {
   if (image.naturalWidth !== frame.width || image.naturalHeight !== frame.height) throw new Error('실행 화면의 이미지 크기를 확인하지 못했습니다.');
 }
 
-export function RemoteReactPreview({ draft, onResult, onPreparing }: { draft: RemoteDraft | null; onResult?: (value: RemotePreviewResult) => void; onPreparing?: (value: boolean) => void }) {
+export function RemoteReactPreview({ draft, onResult, onPreparing, canCommit, onPermissionError }: { draft: RemoteDraft | null; onResult?: (value: RemotePreviewResult) => void; onPreparing?: (value: boolean) => void; canCommit?: (key: number) => boolean; onPermissionError?: (reason: unknown) => void }) {
   const [session, setSession] = useState<RemoteSession | null>(null), [error, setError] = useState(''), [liveError, setLiveError] = useState('');
   const [preparing, setPreparing] = useState(false), [acting, setActing] = useState(false), [typing, setTyping] = useState('');
+  const [expectedQueries, setExpectedQueries] = useState<ScreenQueryExpectation[]>([]);
   const generation = useRef(0), live = useRef<RemoteSession | null>(null), network = useRef<Promise<unknown> | null>(null), inputBusy = useRef(false), failed = useRef(false);
-  const callbacks = useRef({ onResult, onPreparing }); callbacks.current = { onResult, onPreparing };
+  const callbacks = useRef({ onResult, onPreparing, canCommit, onPermissionError }); callbacks.current = { onResult, onPreparing, canCommit, onPermissionError };
   const authorizationFailure = (reason: unknown) => {
     if (![401, 403].includes(Number((reason as { status?: number })?.status))) return false;
     generation.current++; if (live.current) void close(live.current.sessionId); live.current = null; setSession(null); failed.current = true;
     setError(''); setLiveError('조회 권한이 바뀌어 이전 실행 이미지와 계산 근거를 숨겼습니다. 현재 권한을 확인한 뒤 미리보기를 다시 적용해 주세요.');
-    setPreparing(false); callbacks.current.onPreparing?.(false); return true;
+    setPreparing(false); callbacks.current.onPreparing?.(false); callbacks.current.onPermissionError?.(reason); return true;
   };
   const setFailure = (reason: unknown, fallback: string) => { if (authorizationFailure(reason)) return; failed.current = true; setLiveError(reason instanceof Error ? reason.message : fallback); };
   const merge = async (id: string, value: unknown) => {
@@ -67,12 +69,13 @@ export function RemoteReactPreview({ draft, onResult, onPreparing }: { draft: Re
         throw reason;
       }
       if (generation.current !== current) { void close(value.sessionId); return; }
+      if (callbacks.current.canCommit && !callbacks.current.canCommit(draft.key)) { void close(value.sessionId); throw new Error('화면을 준비하는 동안 편집 내용이 바뀌었습니다. 현재 내용으로 다시 미리보기를 확인해 주세요.'); }
       const previous = live.current;
-      live.current = value; setSession(value); setTyping(''); failed.current = false; setLiveError('');
+      live.current = value; setSession(value); setExpectedQueries(draft.expectedQueries || []); setTyping(''); failed.current = false; setLiveError('');
       if (previous && previous.sessionId !== value.sessionId) void close(previous.sessionId);
       callbacks.current.onResult?.({ status: 'ready', key: draft.key, durationMs: Math.round(performance.now() - start) });
     }).catch((reason) => {
-      if (generation.current === current) { if (authorizationFailure(reason)) return; setError(reason.message); callbacks.current.onResult?.({ status: 'error', key: draft.key, message: reason.message }); }
+      if (generation.current === current) { if (authorizationFailure(reason)) { callbacks.current.onResult?.({ status: 'error', key: draft.key, message: '조회 권한을 확인하지 못해 이전 실행 화면을 숨겼습니다.' }); return; } setError(reason.message); callbacks.current.onResult?.({ status: 'error', key: draft.key, message: reason.message }); }
     }).finally(() => { if (generation.current === current) { setPreparing(false); callbacks.current.onPreparing?.(false); } });
   }, [draft?.key]);
   useEffect(() => () => { generation.current++; if (live.current) void close(live.current.sessionId); live.current = null; }, []);
@@ -117,7 +120,7 @@ export function RemoteReactPreview({ draft, onResult, onPreparing }: { draft: Re
         <button className="quiet" onClick={() => void sendEvent({ type: 'scroll', deltaX: 0, deltaY: -500 })}>위로 이동</button><button className="quiet" onClick={() => void sendEvent({ type: 'scroll', deltaX: 0, deltaY: 500 })}>아래로 이동</button></div></fieldset>
       <button className="quiet compact" disabled={acting} onClick={() => void refresh(session.sessionId)}>실행 상태 다시 확인</button>
       {acting && <p role="status" className="subtle">입력을 전달하고 있습니다.</p>}
-      {!liveError && <BoundEvidence key={session.sessionId} bindings={session.evidence && Object.keys(session.evidence).length ? session.evidence : undefined} />}
+      {!liveError && <BoundEvidence key={session.sessionId} onPermissionError={authorizationFailure} expectedQueries={expectedQueries} bindings={session.evidence && Object.keys(session.evidence).length ? session.evidence : undefined} />}
     </>}
   </section>;
 }

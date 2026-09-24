@@ -56,7 +56,7 @@ test('offline planner → real HTTP/Firestore/DuckDB → partial inflow evidence
     const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...request.headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId, ...(request.method() === 'GET' ? {} : { 'idempotency-key': crypto.randomUUID() }) } });
     await route.fulfill({ response });
   });
-  await page.goto('/');
+  await page.goto('/?mode=html');
   await page.getByRole('button', { name: '새 대화', exact: true }).click();
   await page.getByRole('textbox', { name: '업무 대화 입력', exact: true }).fill('2026년 9월 1주 매출과 부가세 입금액을 표로 보여줘');
   await page.getByRole('button', { name: '질문 보내기', exact: true }).click();
@@ -99,7 +99,7 @@ test('host-owned evidence stays visible when generated HTML hides its table, bef
     const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...request.headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId, ...(request.method() === 'GET' ? {} : { 'idempotency-key': crypto.randomUUID() }) } });
     await route.fulfill({ response });
   });
-  await page.goto('/');
+  await page.goto('/?mode=html');
   await page.getByRole('button', { name: '새 대화', exact: true }).click();
   await page.getByRole('textbox', { name: '업무 대화 입력', exact: true }).fill('2026년 9월 1주 정산주 기준 실제 매출과 부가세 입금 원화 합계를 보여줘');
   await page.getByRole('button', { name: '질문 보내기', exact: true }).click();

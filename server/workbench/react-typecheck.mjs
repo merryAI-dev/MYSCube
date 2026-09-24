@@ -3,10 +3,11 @@ import { createRequire } from 'node:module';
 import { readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, posix } from 'node:path';
 import { REACT_PUBLIC_ENTRIES, reactHash } from './react-compiler-packages.mjs';
+import { REACT_TYPE_DEPENDENCIES, ReactTypecheckSchema } from '../../shared/workbench-react-workspace.mjs';
 
 const require = createRequire(import.meta.url);
 const ROOT = '/workspace/';
-const TYPE_VERSIONS = Object.freeze({ typescript: '5.9.3', '@types/react': '18.3.28', '@types/react-dom': '18.3.7', csstype: '3.2.3', '@types/prop-types': '15.7.15' });
+const TYPE_VERSIONS = Object.fromEntries(REACT_TYPE_DEPENDENCIES.map(({ name, version }) => [name, version]));
 const packagePaths = { react: '/types/react/index.d.ts', 'react/jsx-runtime': '/types/react/jsx-runtime.d.ts', 'react-dom': '/types/react-dom/index.d.ts', 'react-dom/client': '/types/react-dom/client.d.ts', csstype: '/types/csstype/index.d.ts', 'prop-types': '/types/prop-types/index.d.ts' };
 const quote = (value) => JSON.stringify(value);
 const record = (value) => value && typeof value === 'object' && !Array.isArray(value);
@@ -149,5 +150,5 @@ export function checkReactWorkspace(workspace, apis, inspected = inspectReactWor
   const entry = program.getSourceFile(`${ROOT}${workspace.entry}`), checker = program.getTypeChecker();
   const exported = entry && checker.getSymbolAtLocation(entry) && checker.getExportsOfModule(checker.getSymbolAtLocation(entry)).find((item) => item.name === 'default');
   if (!exported || checker.getTypeOfSymbolAtLocation(exported, entry).flags & ts.TypeFlags.Any) throw diagnosticError('type', [{ file: workspace.entry, line: 1, column: 1, code: 'AXR_DEFAULT_COMPONENT', message: '시작 파일은 타입이 확인되는 React 컴포넌트를 default export해야 합니다.' }]);
-  return { ...inspected, typecheck: { status: 'passed', typescriptVersion: ts.version, dependencies, declarationHash: reactHash(files.get('/bridge.d.ts')) } };
+  return { ...inspected, typecheck: ReactTypecheckSchema.parse({ status: 'passed', typescriptVersion: ts.version, dependencies, declarationHash: reactHash(files.get('/bridge.d.ts')) }) };
 }

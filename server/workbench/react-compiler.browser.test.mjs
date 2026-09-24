@@ -75,13 +75,13 @@ describe.runIf(process.env.WORKBENCH_REACT_BROWSER_QA === '1')('real React ifram
     const page = await open();
     const source = `import React,{useState}from'react';export default function App(){const[text,setText]=useState('대기');async function load(){setText('조회 중');try{const result=await window.workbench.callApi('copied_metrics',{month:'2026-09'});setText(result.data.grant+':'+result.data.amount)}catch(error){setText(error instanceof Error ? error.message : String(error))}}return <><button onClick={load}>자료 조회</button><p>{text}</p></>}`;
     try {
-      const built = await artifact(source, [fixtureApi('copied_metrics', { month: { type: 'string', required: true } }, { grant: { type: 'string' }, amount: { type: 'number' } })]); await show(page, { ...built, executionId: 'execution-a' }, 'A');
+      const built = await artifact(source, [fixtureApi('copied_metrics', { month: { type: 'string', required: true } }, { grant: { type: 'string' }, amount: { type: 'number' } })]); await show(page, { ...built, executionId: 'aaaaaaaa-1111-4111-8111-111111111111' }, 'A');
       await committed(page).getByRole('button').click(); await committed(page).getByText('A:125', { exact: true }).waitFor();
       await page.evaluate(() => { window.rejectNext = true; });
       await committed(page).getByRole('button').click(); await committed(page).getByText('현재 조회 권한이 없습니다.', { exact: true }).waitFor();
       await committed(page).getByRole('button').click(); await committed(page).getByText('A:125', { exact: true }).waitFor();
       runtimeDelays.push(600);
-      await page.evaluate((value) => window.setReactPreview({ artifact: value, grant: 'B' }), { ...built, executionId: 'execution-b' });
+      await page.evaluate((value) => window.setReactPreview({ artifact: value, grant: 'B' }), { ...built, executionId: 'bbbbbbbb-2222-4222-8222-222222222222' });
       await page.locator('[data-testid="react-preview-candidate"]').waitFor({ state: 'attached' });
       await committed(page).getByRole('button').click(); await committed(page).getByText('A:125', { exact: true }).waitFor();
       await page.waitForFunction(() => window.lastResult?.status === 'ready');
@@ -138,8 +138,9 @@ describe.runIf(process.env.WORKBENCH_REACT_BROWSER_QA === '1')('real React ifram
     page.setDefaultTimeout(5000); const errors = []; page.on('pageerror', (error) => errors.push(error.message)); let stage = 'setup';
     const source = (name) => `import React,{useState}from'react';export default function App(){const[value,setValue]=useState('대기');async function load(){try{const result=await window.workbench.callApi('metrics',{});setValue(result.data.label)}catch(error){setValue(error instanceof Error ? error.message : String(error))}}return <><h1>${name}</h1><button onClick={load}>자료 조회</button><p>{value}</p></>}`;
     const sources = { A: source('실행 A'), B: source('실행 B'), C: source('실행 C'), failed: "export default function App():never{throw Error('실패 후보입니다')}" };
+    const executionIds = { A: 'aaaaaaaa-1111-4111-8111-111111111111', B: 'bbbbbbbb-2222-4222-8222-222222222222', C: 'cccccccc-3333-4333-8333-333333333333', failed: 'dddddddd-4444-4444-8444-444444444444' };
     const artifacts = {};
-    for (const [id, value] of Object.entries(sources)) artifacts[id] = { ...await artifact(value, [fixtureApi('metrics', {}, { label: { type: 'string' } })]), executionId: id };
+    for (const [id, value] of Object.entries(sources)) artifacts[id] = { ...await artifact(value, [fixtureApi('metrics', {}, { label: { type: 'string' } })]), executionId: executionIds[id] };
     const ids = { A: 'aaaaaaaa-1111-4111-8111-111111111111', B: 'bbbbbbbb-2222-4222-8222-222222222222', C: 'cccccccc-3333-4333-8333-333333333333' };
     const amounts = { A: '111', B: '222', C: '333' }; const counts = { A: 0, B: 0, C: 0 };
     const deferred = {}; const observed = {};
@@ -147,14 +148,16 @@ describe.runIf(process.env.WORKBENCH_REACT_BROWSER_QA === '1')('real React ifram
     try {
       await page.route('**/api/v1/**', async (route) => {
         const url = new URL(route.request().url()); const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
-        if (url.pathname.endsWith('/capabilities')) return json({ modelEnabled: false, gitEnabled: false, runtimeUrl: `${runtimeOrigin}/runtime`, runtimeMode: 'local-test', example: sources.A });
-        if (url.pathname === '/api/v1/react-work-pages' || url.pathname === '/api/v1/workbench-apis') return json({ items: [] });
+        if (url.pathname.endsWith('/capabilities')) return json({ modelEnabled: false, gitEnabled: false, gitRepository: null, runtimeUrl: `${runtimeOrigin}/runtime`, runtimeMode: 'local-test', example: sources.A });
+        if (url.pathname === '/api/v1/react-work-pages') return json({ schemaVersion: 1, items: [], truncated: false });
+        if (url.pathname === '/api/v1/workbench-apis') return json({ items: [] });
+        if (url.pathname === '/api/v1/react-work-pages/conversations') return json({ items: [] });
         if (url.pathname.endsWith('/preview')) {
           const value = route.request().postDataJSON().source.workspace.files['App.tsx']; const id = Object.keys(sources).find((key) => sources[key] === value); return json(artifacts[id]);
         }
-        const match = url.pathname.match(/\/executions\/(A|B|C)\/call$/);
+        const match = url.pathname.match(/\/executions\/([a-f0-9-]{36})\/call$/);
         if (match) {
-          const id = match[1]; counts[id]++;
+          const id = Object.keys(executionIds).find((key) => executionIds[key] === match[1]); counts[id]++;
           if (counts[id] === 2) { observed[id] = true; await new Promise((resolve) => { deferred[id] = resolve; }); }
           return id === 'B' && counts[id] === 2 ? json({ message: '폐기된 B의 늦은 권한 오류' }, 403) : json(response(id));
         }
@@ -163,7 +166,7 @@ describe.runIf(process.env.WORKBENCH_REACT_BROWSER_QA === '1')('real React ifram
         return json({ message: 'unexpected fixture route' }, 404);
       });
       await page.goto(`${hostOrigin}/studio`);
-      const apply = async (id) => { stage = `apply ${id}`; await page.getByLabel('React 원문').fill(sources[id]); await page.getByRole('button', { name: 'React 미리보기 적용', exact: true }).click(); if (id !== 'failed') await committed(page).getByRole('heading', { name: `실행 ${id}` }).waitFor(); };
+      const apply = async (id) => { stage = `apply ${id}`; await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await page.getByLabel('React 원문').fill(sources[id]); await page.getByRole('button', { name: '미리보기 적용', exact: true }).click(); if (id !== 'failed') await committed(page).getByRole('heading', { name: `실행 ${id}` }).waitFor(); };
       const query = async (id) => { stage = `query ${id}`; await committed(page).getByRole('button', { name: '자료 조회' }).click(); await page.getByRole('region', { name: '계산 근거', exact: true }).getByText(`${amounts[id]}원`, { exact: true }).waitFor(); };
       await apply('A'); await query('A'); await committed(page).getByRole('button').click(); await expect.poll(() => observed.A).toBe(true);
       await apply('B'); await query('B'); deferred.A(); await page.waitForTimeout(200);
@@ -176,7 +179,7 @@ describe.runIf(process.env.WORKBENCH_REACT_BROWSER_QA === '1')('real React ifram
       await committed(page).getByRole('button').click(); await expect.poll(() => observed.C).toBe(true);
       await apply('failed'); await page.getByRole('alert').filter({ hasText: '새 React 화면을 확인하지 못했습니다' }).first().waitFor();
       await committed(page).getByRole('heading', { name: '실행 C' }).waitFor(); expect(await page.getByRole('region', { name: '계산 근거', exact: true }).textContent()).toContain('333원');
-      page.once('dialog', (dialog) => dialog.accept()); await page.getByRole('button', { name: '새 React 화면', exact: true }).click(); deferred.C(); await page.waitForTimeout(200);
+      page.once('dialog', (dialog) => dialog.accept()); await page.getByRole('button', { name: '새 화면', exact: true }).click(); deferred.C(); await page.waitForTimeout(200);
       expect(await page.locator('iframe').count()).toBe(0); expect(await page.getByRole('region', { name: '계산 근거', exact: true }).count()).toBe(0);
     } catch (error) { throw new Error(`${stage}: ${error.message}; browser errors: ${JSON.stringify(errors)}; ${await page.locator('body').innerText().catch(() => '')}`); }
     finally { for (const release of Object.values(deferred)) release(); await page.close(); }

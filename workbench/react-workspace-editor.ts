@@ -1,18 +1,19 @@
+import type { ScreenQueryExpectation } from './screen-evidence';
 import type * as z from 'zod/v4';
-import { editorIdentity, normalizeReactSource, ReactApiRefsSchema, ReactSourceSchema, REACT_PACKAGE_SET_ID, WorkspacePathSchema } from '../shared/workbench-react-workspace.mjs';
+import { editorIdentity, normalizeReactSource, ReactApiRefsSchema, ReactSourceSchema, ReactRevisionSchema, REACT_PACKAGE_SET_ID, WorkspacePathSchema } from '../shared/workbench-react-workspace.mjs';
 
 export type ReactSource = z.infer<typeof ReactSourceSchema>;
 export type ApiRef = z.infer<typeof ReactApiRefsSchema>[number];
 export type WorkspaceSource = ReturnType<typeof normalizeReactSource>;
-export type EditorRevision = { id: string; version: number; source: ReactSource; apis: ApiRef[] };
-export type SourceProposal = { source: ReactSource; apis?: ApiRef[]; baseEditorIdentity?: string };
-export type EditorState = { source: WorkspaceSource; apis: ApiRef[]; saved: EditorRevision | null; activeFile: string; proposal: SourceProposal | null; target: number; notice: string };
-export const newWorkspace = (code = ''): WorkspaceSource => ({ title: '나의 React 업무 화면', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: REACT_PACKAGE_SET_ID, files: { 'App.tsx': code } } });
+export type EditorRevision = Pick<z.infer<typeof ReactRevisionSchema>, 'id' | 'version' | 'source' | 'apis'>;
+export type SourceProposal = { source: ReactSource; apis?: ApiRef[]; baseEditorIdentity?: string; screenBindings?: ScreenQueryExpectation[] };
+export type EditorState = { source: WorkspaceSource; apis: ApiRef[]; saved: EditorRevision | null; activeFile: string; proposal: SourceProposal | null; target: number; notice: string; expectedQueries: ScreenQueryExpectation[] };
+export const newWorkspace = (code = ''): WorkspaceSource => ({ title: '나의 업무 화면', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: REACT_PACKAGE_SET_ID, files: { 'App.tsx': code } } });
 export function draftIdentity(source: ReactSource, apis: ApiRef[]) {
   try { return editorIdentity(source, apis); }
   catch { return `invalid:${JSON.stringify({ source, apis })}`; }
 }
-export function initialEditor(code = ''): EditorState { return { source: newWorkspace(code), apis: [], saved: null, activeFile: 'App.tsx', proposal: null, target: 0, notice: '' }; }
+export function initialEditor(code = ''): EditorState { return { source: newWorkspace(code), apis: [], saved: null, activeFile: 'App.tsx', proposal: null, target: 0, notice: '', expectedQueries: [] }; }
 export function proposalProblem(state: EditorState): string | null {
   const proposal = state.proposal;
   if (!proposal) return '검토할 제안이 없습니다.';
@@ -41,7 +42,7 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
   if (action.type === 'load' || action.type === 'context') {
     const value = action.type === 'load' ? action.revision : action;
     const source = normalizeReactSource(value.source), apis = ReactApiRefsSchema.parse(value.apis);
-    return { ...state, source, apis, saved: action.type === 'load' ? action.revision : state.saved, activeFile: source.workspace.entry, target: state.target + 1, proposal: null, notice: '' };
+    return { ...state, source, apis, saved: action.type === 'load' ? action.revision : state.saved, activeFile: source.workspace.entry, target: state.target + 1, proposal: null, notice: '', expectedQueries: [] };
   }
   if (action.type === 'remember') {
     if (action.target !== state.target) return state;
@@ -54,23 +55,23 @@ export function editorReducer(state: EditorState, action: EditorAction): EditorS
     const problem = proposalProblem(state);
     if (problem) return { ...state, notice: problem };
     const proposal = state.proposal!, source = normalizeReactSource(proposal.source);
-    return { ...state, source, apis: ReactApiRefsSchema.parse(proposal.apis), activeFile: Object.hasOwn(source.workspace.files, state.activeFile) ? state.activeFile : source.workspace.entry, proposal: null, notice: '검토한 파일과 API 버전을 편집기에 함께 적용했습니다. 미리보기와 저장을 확인해 주세요.' };
+    return { ...state, source, apis: ReactApiRefsSchema.parse(proposal.apis), activeFile: Object.hasOwn(source.workspace.files, state.activeFile) ? state.activeFile : source.workspace.entry, proposal: null, expectedQueries: proposal.screenBindings || [], notice: '검토한 파일과 API 버전을 편집기에 함께 적용했습니다. 미리보기와 저장을 확인해 주세요.' };
   }
-  if (action.type === 'title') return { ...state, source: { ...state.source, title: action.value }, notice: '' };
-  if (action.type === 'apis') return { ...state, apis: action.value, notice: '' };
+  if (action.type === 'title') return { ...state, source: { ...state.source, title: action.value }, expectedQueries: [], notice: '' };
+  if (action.type === 'apis') return { ...state, apis: action.value, expectedQueries: [], notice: '' };
   const workspace = state.source.workspace, files = workspace.files;
   if (action.type === 'select') return Object.hasOwn(files, action.path) ? { ...state, activeFile: action.path } : state;
-  if (action.type === 'code') return Object.hasOwn(files, action.path) ? { ...state, source: { ...state.source, workspace: { ...workspace, files: { ...files, [action.path]: action.value } } }, notice: '' } : state;
+  if (action.type === 'code') return Object.hasOwn(files, action.path) ? { ...state, source: { ...state.source, workspace: { ...workspace, files: { ...files, [action.path]: action.value } } }, expectedQueries: [], notice: '' } : state;
   if (action.type === 'add') {
     if (!WorkspacePathSchema.safeParse(action.path).success || Object.keys(files).some(path => path.toLowerCase() === action.path.toLowerCase()) || Object.keys(files).length >= 32) return { ...state, notice: '중복되지 않는 .ts 또는 .tsx 파일 경로를 입력해 주세요. 파일은 최대 32개입니다.' };
-    return { ...state, activeFile: action.path, source: { ...state.source, workspace: { ...workspace, files: { ...files, [action.path]: '' } } }, notice: '' };
+    return { ...state, activeFile: action.path, source: { ...state.source, workspace: { ...workspace, files: { ...files, [action.path]: '' } } }, expectedQueries: [], notice: '' };
   }
   if (!Object.hasOwn(files, action.path)) return state;
-  if (action.type === 'entry') return { ...state, source: { ...state.source, workspace: { ...workspace, entry: action.path } }, notice: '' };
+  if (action.type === 'entry') return { ...state, source: { ...state.source, workspace: { ...workspace, entry: action.path } }, expectedQueries: [], notice: '' };
   if (action.type === 'remove') {
     if (action.path === workspace.entry) return { ...state, notice: '시작 파일은 삭제할 수 없습니다. 먼저 다른 시작 파일을 선택해 주세요.' };
     const remaining = { ...files }; delete remaining[action.path];
-    return { ...state, activeFile: state.activeFile === action.path ? workspace.entry : state.activeFile, source: { ...state.source, workspace: { ...workspace, files: remaining } }, notice: '파일을 삭제했습니다. 이 파일을 불러오던 import도 확인해 주세요.' };
+    return { ...state, activeFile: state.activeFile === action.path ? workspace.entry : state.activeFile, source: { ...state.source, workspace: { ...workspace, files: remaining } }, expectedQueries: [], notice: '파일을 삭제했습니다. 이 파일을 불러오던 import도 확인해 주세요.' };
   }
   return state;
 }

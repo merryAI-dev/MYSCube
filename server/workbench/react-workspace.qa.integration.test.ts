@@ -45,7 +45,7 @@ suite('independent canonical workspace persistence and genuine legacy receipts',
     const legacy = { title: '예전 단일 파일', code: 'export default function App(){return <h1>기존 원문</h1>}' };
     const compiled = await compileReactPreview(legacy);
     // The old storage contract predates workspaceHash, irrespective of the current compiler output shape.
-    const { workspaceHash: _newIdentity, ...artifact } = compiled;
+    const { workspaceHash: _newIdentity, schemaVersion: _newSchema, typecheck: _newTypecheck, ...artifact } = compiled;
     artifact.sourceHash = hash(legacy.code);
     const record = { id, version: 1, source: legacy, sourceHash: hash(legacy.code), artifact, apis: [], updatedAt: now(), updatedBy: actorId, restoredFrom: null };
     const input = { expectedVersion: 0, source: legacy, apis: [] };

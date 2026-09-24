@@ -9,7 +9,7 @@ async function applyPreview(page: Page) {
 }
 
 test('exact HTML persists through reload and restore with matching review bytes', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?mode=html');
   await expect(page.getByRole('heading', { name: 'HTML 제작 공간', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox', { name: 'HTML 원문', exact: true })).not.toHaveValue('');
   const title = `HTML QA ${Date.now()}`;
@@ -48,7 +48,7 @@ test('exact HTML persists through reload and restore with matching review bytes'
 });
 
 test('disabled model is clear; reference material and exact source stay usable', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?mode=html');
   await expect(page.getByRole('textbox', { name: 'HTML 원문', exact: true })).not.toHaveValue('');
   await expect(page.getByRole('button', { name: 'HTML 생성·수정 요청' })).toBeDisabled();
   await expect(page.locator('.notice')).toContainText('AI 연결 설정 전');

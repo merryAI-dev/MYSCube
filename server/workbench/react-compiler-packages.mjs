@@ -3,9 +3,10 @@ import { createRequire } from 'node:module';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { REACT_RUNTIME_VERSION, REACT_BUILD_DEPENDENCIES } from '../../shared/workbench-react-workspace.mjs';
 
-export const REACT_RUNTIME_VERSION = 'react-preview-v1';
-export const REACT_DEPENDENCIES = Object.freeze([{ name: 'react', version: '18.3.1' }, { name: 'react-dom', version: '18.3.1' }, { name: 'esbuild', version: '0.25.12' }, { name: 'tailwindcss', version: '4.1.12' }, { name: '@tailwindcss/node', version: '4.1.12' }]);
+export { REACT_RUNTIME_VERSION } from '../../shared/workbench-react-workspace.mjs';
+export const REACT_DEPENDENCIES = REACT_BUILD_DEPENDENCIES;
 export const REACT_PUBLIC_ENTRIES = Object.freeze(['react', 'react-dom', 'react-dom/client', 'react/jsx-runtime']);
 export const reactHash = (value) => createHash('sha256').update(value).digest('hex');
 const require = createRequire(import.meta.url);

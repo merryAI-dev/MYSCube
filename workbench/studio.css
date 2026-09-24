@@ -26,3 +26,32 @@
 .diff-add { background: #e7f6eb; color: #165c2b; }
 .diff-remove { background: #fff0ef; color: #a42622; }
 .diff-number { display: inline-block; width: 88px; padding: 0 8px; color: #657083; user-select: none; }
+
+/* Keep the working canvas and conversation visible before secondary tools. */
+.react-studio .studio-subnav{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:10px 24px;border-bottom:1px solid #e5e8eb;background:#fff}
+.react-studio .studio-connection{position:relative;margin:0;padding:7px 10px;border:0;font-size:12px;max-width:430px}
+.react-studio .studio-connection p{line-height:1.6;color:#6b7684}
+.react-studio .workspace{grid-template-columns:156px minmax(0,1fr);padding:18px 24px;gap:16px;max-width:1900px}
+.react-studio .studio-main{grid-template-columns:minmax(0,1fr) minmax(340px,390px);gap:16px}
+.react-studio .studio-rail{gap:12px}
+.react-studio .canvas-toolbar h2{font-size:15px;margin:0 0 4px}
+.react-studio .canvas-toolbar .canvas-tabs{flex-shrink:0}
+.react-studio .canvas-panel{min-height:640px}
+.react-studio .react-source-editor{border:0;margin:0;border-radius:0;padding:16px}
+.react-studio .react-source-editor .code{min-height:360px;max-height:60vh}
+.react-studio .studio-tools{margin:0;padding:14px;box-shadow:none}
+.react-studio .studio-tools[open]>summary{margin-bottom:12px}
+.react-studio .studio-tools .side-panel{border:0;border-top:1px solid #e5e8eb;border-radius:0;padding:14px 0 0;margin-top:14px;box-shadow:none}
+.react-studio .conversation-panel{padding:16px}
+.react-studio .conversation-thread:empty{display:none}
+.react-studio .conversation-thread{max-height:360px;margin:12px 0}
+.react-studio .conversation-panel>.prompt{min-height:96px;max-height:200px;margin:12px 0}
+.react-studio .conversation-panel>button:last-of-type{width:100%}
+.react-studio .proposal-panel h2{font-size:15px;margin:0}
+.react-studio .studio-message{padding:8px 14px;margin:8px 24px;max-width:none}
+.react-studio .header-actions a{font-size:12px;text-decoration:none}
+.react-studio [hidden]{display:none!important}
+@media(max-width:1180px){.react-studio .workspace{grid-template-columns:1fr}.react-studio .library{display:flex;gap:8px;overflow:auto;align-items:center}.react-studio .library .section-heading{min-width:140px;margin:0}.react-studio .library .subtle{display:none}.react-studio .page-item{flex:0 0 180px;margin:0}.react-studio .studio-main{grid-template-columns:minmax(0,1fr) 350px}}
+@media(max-width:850px){.react-studio .studio-main{display:flex;flex-direction:column}.react-studio .studio-rail{display:contents}.react-studio .conversation-panel{order:-2;width:100%}.react-studio .proposal-panel{order:-1;width:100%}.react-studio .canvas-panel,.react-studio .studio-tools{width:100%}.react-studio .canvas-panel{min-height:440px}.react-studio .studio-subnav{padding:10px 16px;align-items:flex-start}.react-studio .studio-connection{max-width:45%}.react-studio .workspace{padding:14px 16px}.react-studio .canvas-toolbar{flex-direction:row}.react-studio .canvas-toolbar .canvas-tabs{width:auto}.react-studio .brand p{display:none}}
+@media(max-width:520px){.react-studio .studio-subnav{flex-wrap:wrap;gap:6px}.react-studio .studio-connection{max-width:100%}.react-studio .header-actions a{font-size:11px}.react-studio .canvas-toolbar{flex-wrap:wrap}.react-studio .workspace{padding:12px}.react-studio .studio-message{margin:8px 12px}}
+.react-studio .preview-runtime-note{margin:0;padding:8px 12px;border:0;border-radius:0}.react-studio .preview-runtime-note p{font-size:12px;line-height:1.6;color:#6b7684}.react-studio .preview-empty{min-height:380px}.react-studio .studio-preview-stage>section>p{padding:0 12px}

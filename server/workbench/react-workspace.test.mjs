@@ -50,11 +50,11 @@ describe('canonical React workspace contract', () => {
     expect(editorIdentity(source, refs)).not.toBe(editorIdentity(source, []));
   });
 
-  it('derives the frontend declaration from the runtime schema without divergent hand-written types', async () => {
+  it.each(['workbench-react-workspace', 'workbench-screen-bindings'])('derives %s declarations from the runtime schema without divergent hand-written types', async (contract) => {
     const directory = await mkdtemp(join(tmpdir(), 'axr-contract-types-'));
     try {
-      execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', 'shared/workbench-react-workspace.mjs', '--allowJs', '--declaration', '--emitDeclarationOnly', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--outDir', directory], { timeout: 15000 });
-      expect(await readFile(join(directory, 'workbench-react-workspace.d.mts'), 'utf8')).toBe(await readFile(new URL('../../shared/workbench-react-workspace.d.mts', import.meta.url), 'utf8'));
+      execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', `shared/${contract}.mjs`, '--allowJs', '--declaration', '--emitDeclarationOnly', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--outDir', directory], { timeout: 15000 });
+      expect(await readFile(join(directory, `${contract}.d.mts`), 'utf8')).toBe(await readFile(new URL(`../../shared/${contract}.d.mts`, import.meta.url), 'utf8'));
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
 });

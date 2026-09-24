@@ -10,7 +10,7 @@ test('static HTML sandbox retains its last safe document and never requests bloc
   page.on('pageerror', (error) => pageErrors.push(error.message));
   page.on('console', (message) => { if (message.type() === 'error') consoleErrors.push(message.text()); });
   await page.route('https://isolation-probe.invalid/**', async (route) => { attempted.push(route.request().url()); await route.abort(); });
-  await page.goto('/');
+  await page.goto('/?mode=html');
   await page.getByRole('tab', { name: '소스', exact: true }).click();
   const editor = page.getByRole('textbox', { name: 'HTML 원문', exact: true });
   await expect(editor).toBeVisible();
@@ -64,7 +64,7 @@ test('real model-disabled service refuses generation and remains available', asy
 test('compiled Tailwind styles render without a CDN or external stylesheet request', async ({ page }, testInfo) => {
   const external: string[] = [];
   page.on('request', (request) => { if (/^https?:/.test(request.url()) && !request.url().startsWith('http://127.0.0.1:4178/')) external.push(request.url()); });
-  await page.goto('/');
+  await page.goto('/?mode=html');
   await page.getByRole('tab', { name: '소스', exact: true }).click();
   await expect(page.getByRole('button', { name: '현재 소스 저장', exact: true })).toBeEnabled();
   await page.getByRole('textbox', { name: 'HTML 원문', exact: true }).fill(document('<div id="tailwind-proof" class="p-8 grid grid-cols-2 gap-4 font-bold">자료 미연결</div>'));

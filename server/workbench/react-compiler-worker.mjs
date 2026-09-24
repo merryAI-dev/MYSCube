@@ -1,7 +1,7 @@
 import { build } from 'esbuild';
 import { compile } from '@tailwindcss/node';
 import { REACT_DEPENDENCIES, REACT_PUBLIC_ENTRIES, REACT_RUNTIME_VERSION, reactCompilerBase, reactHash, reactPackageIdentity } from './react-compiler-packages.mjs';
-import { normalizeReactSource, canonicalWorkspace, reactSourceIdentity } from '../../shared/workbench-react-workspace.mjs';
+import { normalizeReactSource, canonicalWorkspace, reactSourceIdentity, ReactCompiledArtifactSchema } from '../../shared/workbench-react-workspace.mjs';
 import { checkReactWorkspace, resolveWorkspaceImport, diagnosticError } from './react-typecheck.mjs';
 
 let stdin = '';
@@ -30,7 +30,8 @@ try {
   if (Buffer.byteLength(css) > 80000) throw new Error('style_limit');
   const normalized = css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\\(?:\r\n|[\r\n\f])/g, '').replace(/\\([0-9a-f]{1,6})\s?|\\([^\r\n])/gi, (_, hex, char) => hex ? String.fromCodePoint(Math.min(parseInt(hex, 16), 0x10ffff)) : char);
   if (/<\s*\/\s*style\b/i.test(css) || /@(?:import|font-face|namespace)\b|\b(?:url|image-set|-webkit-image-set|expression)\s*\(|-moz-binding\s*:/i.test(normalized)) throw new Error('style_network_forbidden');
-  process.stdout.write(JSON.stringify({ ok: true, artifact: { bundle, css, sourceHash: reactHash(reactSourceIdentity(source)), workspaceHash: reactHash(canonicalWorkspace(workspace)), bundleHash: reactHash(bundle), cssHash: reactHash(css), runtimeVersion: REACT_RUNTIME_VERSION, packageSetHash, dependencies: REACT_DEPENDENCIES, typecheck } }));
+  const artifact = ReactCompiledArtifactSchema.parse({ schemaVersion: 1, bundle, css, sourceHash: reactHash(reactSourceIdentity(source)), workspaceHash: reactHash(canonicalWorkspace(workspace)), bundleHash: reactHash(bundle), cssHash: reactHash(css), runtimeVersion: REACT_RUNTIME_VERSION, packageSetHash, dependencies: REACT_DEPENDENCIES, typecheck });
+  process.stdout.write(JSON.stringify({ ok: true, artifact }));
 } catch (error) {
   if (!error.details && error.errors?.length) error = diagnosticError('bundle', error.errors.slice(0, 50).map((item) => ({ file: String(item.location?.file || 'App.tsx').replace(/^workspace:\/workspace\//, ''), line: item.location?.line || 1, column: (item.location?.column || 0) + 1, code: 'ESBUILD', message: item.text.slice(0, 1200) })), error.errors.length > 50);
   process.stdout.write(JSON.stringify({ ok: false, message: error?.message || 'compile_failed', ...(error.details ? { details: error.details } : {}) }));

@@ -22,7 +22,8 @@ export function mountHtmlStudio(app, { db, now, env, core, analytics, asyncHandl
     const evidence = await analytics.evidence(req.context, req.params.id);
     await core.authorize(req.context);
     res.set('Cache-Control', 'no-store');
-    res.json({ evidenceId: evidence.evidenceId, columns: evidence.columns, rows: evidence.rows, metadata: evidence.metadata, semantic: evidence.semantic, truncated: evidence.truncated });
+    res.json({ evidenceId: evidence.evidenceId, columns: evidence.columns, rows: evidence.rows, metadata: evidence.metadata,
+      datasetVersions: evidence.datasetVersions, semantic: evidence.semantic, truncated: evidence.truncated });
   }));
   app.get(prefix, asyncHandler(async (req, res) => res.json(await pages.list(req.context))));
   app.get(`${prefix}/:id/versions`, asyncHandler(async (req, res) => res.json(await pages.history(req.context, req.params.id))));

@@ -22,7 +22,7 @@ test('conversation UI refreshes canonical turns, preserves evidence values, and 
     }
     return respond({ error: 'unexpected_fixture_request' }, 500);
   });
-  await page.goto('/');
+  await page.goto('/?mode=html');
   await page.getByRole('button', { name: '새 대화', exact: true }).click();
   await page.getByRole('textbox', { name: '업무 대화 입력', exact: true }).fill(turnOne.message);
   await page.getByRole('button', { name: '질문 보내기', exact: true }).click();

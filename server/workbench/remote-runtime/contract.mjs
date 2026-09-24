@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { selectReactRuntimeArtifact } from '../../../shared/workbench-react-workspace.mjs';
 
 export const REMOTE_RUNTIME_IMAGE = 'myscube-axr-renderer:1.58.2-v1';
 export const REMOTE_RENDERER_LABEL = 'io.myscube.axr.renderer';
@@ -7,9 +8,11 @@ export const REMOTE_LIMITS = Object.freeze({ ttlMs: 300000, commandMs: 8000, api
 export const digest = (value) => createHash('sha256').update(value).digest('hex');
 export function remoteError(code, message, statusCode = 400) { return Object.assign(new Error(message), { code, statusCode, expose: true }); }
 export function checkArtifact(value) {
-  if (!value || typeof value.bundle !== 'string' || Buffer.byteLength(value.bundle) > 240000 || typeof value.css !== 'string' || Buffer.byteLength(value.css) > 80000
-    || value.bundleHash !== digest(value.bundle) || value.cssHash !== digest(value.css) || !/^[a-f0-9]{64}$/.test(value.packageSetHash || '') || value.runtimeVersion !== 'react-preview-v1') throw remoteError('remote_artifact_invalid', '저장된 React 실행본의 버전과 검증값을 확인해 주세요.');
-  return { bundle: value.bundle, css: value.css, bundleHash: value.bundleHash, cssHash: value.cssHash, packageSetHash: value.packageSetHash, runtimeVersion: value.runtimeVersion };
+  try {
+    const artifact = selectReactRuntimeArtifact(value);
+    if (artifact.bundleHash !== digest(artifact.bundle) || artifact.cssHash !== digest(artifact.css)) throw new Error('artifact_hash');
+    return artifact;
+  } catch { throw remoteError('remote_artifact_invalid', '저장된 React 실행본의 버전과 검증값을 확인해 주세요.'); }
 }
 export function checkViewport(value = { width: 1280, height: 720 }) {
   if (!value || !Number.isSafeInteger(value.width) || !Number.isSafeInteger(value.height) || value.width < 320 || value.width > 1600 || value.height < 240 || value.height > 1200) throw remoteError('remote_viewport_invalid', '미리보기 크기는 가로 320~1600, 세로 240~1200 범위로 선택해 주세요.');

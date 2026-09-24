@@ -1,4 +1,5 @@
 import { REACT_RUNTIME_VERSION } from './react-compiler-packages.mjs';
+import { ReactRuntimeArtifactJsonSchema } from '../../shared/workbench-react-workspace.mjs';
 
 function checkRuntimeOptions({ nonce, parentOrigin }) {
   if (typeof nonce !== 'string' || !/^[A-Za-z0-9+/_=-]{16,128}$/.test(nonce)) throw new Error('A runtime nonce is required.');
@@ -35,8 +36,14 @@ function runtimeBootstrap(config) {
   Object.defineProperty(window, 'workbench', { value: Object.freeze({ callApi }), writable: false, configurable: false });
   async function render(artifact) {
     if (initialized) return; initialized = true;
-    if (!packages?.React || !packages?.ReactDOMClient || artifact?.runtimeVersion !== config.runtimeVersion || artifact?.packageSetHash !== config.packageSetHash
-      || typeof artifact.bundle !== 'string' || encoder.encode(artifact.bundle).byteLength > 240000 || typeof artifact.css !== 'string' || encoder.encode(artifact.css).byteLength > 80000
+    if (!artifact || typeof artifact !== 'object') throw new Error('React 실행본의 형식을 확인해 주세요.');
+    for (const key of config.artifactSchema.required) {
+      const rule = config.artifactSchema.properties[key], value = artifact[key];
+      if (typeof value !== rule.type || rule.const !== undefined && value !== rule.const
+        || rule.minLength !== undefined && value.length < rule.minLength || rule.maxLength !== undefined && encoder.encode(value).byteLength > rule.maxLength
+        || rule.pattern !== undefined && !new RegExp(rule.pattern).test(value)) throw new Error('React 실행본의 형식을 확인해 주세요.');
+    }
+    if (!packages?.React || !packages?.ReactDOMClient || artifact.packageSetHash !== config.packageSetHash
       || await hash(artifact.bundle) !== artifact.bundleHash || await hash(artifact.css) !== artifact.cssHash) throw new Error('React 실행본의 버전 또는 내용이 일치하지 않습니다.');
     const style = document.createElement('style'); style.textContent = artifact.css; document.head.append(style);
     const script = document.createElement('script'); script.nonce = nonce; script.textContent = artifact.bundle; document.head.append(script); script.remove();
@@ -79,6 +86,6 @@ function runtimeBootstrap(config) {
 export function createReactRuntimeDocument({ nonce, parentOrigin, packageSetHash }) {
   checkRuntimeOptions({ nonce, parentOrigin });
   if (!/^[a-f0-9]{64}$/.test(packageSetHash)) throw new Error('A pinned package set is required.');
-  const config = JSON.stringify({ parentOrigin, packageSetHash, runtimeVersion: REACT_RUNTIME_VERSION }).replaceAll('<', '\\u003c');
+  const config = JSON.stringify({ parentOrigin, packageSetHash, runtimeVersion: REACT_RUNTIME_VERSION, artifactSchema: ReactRuntimeArtifactJsonSchema }).replaceAll('<', '\\u003c');
   return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>React 미리보기 실행 공간</title><script nonce="${nonce}" src="/packages/${packageSetHash}.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script></head><body><div id="root"></div><script nonce="${nonce}">(${runtimeBootstrap.toString()})(${config});</script></body></html>`;
 }

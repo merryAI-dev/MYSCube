@@ -49,7 +49,7 @@ async function snapshot(page: Page) {
 }
 
 async function openPreview(page: Page, heading: string) {
-  await page.goto('/');
+  await page.goto('/?mode=html');
   await expect(page.getByRole('button', { name: '미리보기 적용', exact: true })).toBeEnabled();
   await page.getByRole('textbox', { name: 'HTML 원문', exact: true }).fill(htmlDocument(heading));
   await page.getByRole('button', { name: '미리보기 적용', exact: true }).click();
