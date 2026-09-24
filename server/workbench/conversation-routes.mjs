@@ -43,7 +43,7 @@ export function mountConversations(app, { db, now, env, core, analytics, asyncHa
     let acquired = false;
     try {
       await db.runTransaction(async (tx) => {
-        const [usage, active] = await Promise.all([tx.get(budget), tx.get(lease)]);
+        const [usage, active] = await tx.getAll(budget, lease);
         const current = usage.data() || { count: 0, actors: {} };
         if (current.count >= 20 || (current.actors?.[owner] || 0) >= 5) throw createHttpError(429, '오늘 AI 요청 한도에 도달했습니다. 저장한 화면과 직접 편집은 계속 이용할 수 있습니다.', 'conversation_daily_limit');
         if (Date.parse(active.data()?.expiresAt) > Date.parse(now())) throw createHttpError(429, '다른 분석 요청을 처리 중입니다. 잠시 후 다시 요청해 주세요.', 'conversation_busy');

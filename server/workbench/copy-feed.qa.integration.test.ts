@@ -1,10 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { Firestore } from '@google-cloud/firestore';
 import { applyPermissionCopy, copyLogPage } from './copy-feed.mjs';
 const suite = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
 suite('independent copy ordering and historical coverage QA', () => {
   const source = new Firestore({ projectId: 'demo-copy-qa-source' }), db = new Firestore({ projectId: 'demo-copy-qa-target' });
-  const tenantId = 'copy-qa', root = `orgs/${tenantId}`, now = () => '2026-09-23T12:00:00.000Z';
+  const tenantId = `copy-qa-${randomUUID()}`, root = `orgs/${tenantId}`, now = () => '2026-09-23T12:00:00.000Z';
   const env = { WORKBENCH_PROJECT_ID: db.projectId, PRODUCTION_PROJECT_ID: source.projectId, WORKBENCH_MODEL_PROJECT_ID: 'demo-copy-qa-model', PRODUCTION_MODEL_PROJECT_ID: 'demo-copy-qa-business-model', WORKBENCH_COPY_ENABLED: 'true', WORKBENCH_COPY_SOURCE_PROJECT_ID: source.projectId, WORKBENCH_TENANT_ID: tenantId };
   const feed = (members: any[], capturedAt = now()) => ({ version: 1, sourceProjectId: source.projectId, tenantId, capturedAt, sourceRevision: JSON.stringify(members), membershipComplete: true, members });
   const admin = { id: 'alice', role: 'admin', status: 'ACTIVE', datasetIds: ['weekly'] };
@@ -30,8 +31,9 @@ suite('independent copy ordering and historical coverage QA', () => {
     expect((await db.doc(`${root}/client_error_events/z-current`).get()).data()?.extra.code).toBe('UPDATED');
     expect((await db.doc(`${root}/workbench_copy_state/client_error_events`).get()).data()?.cursor.id).toBe('z-current');
   });
-  it('commits only one cursor generation when two workers read the same starting marker', async () => {
+  it.each(Array.from({ length: 20 }, (_, index) => index + 1))('commits only one cursor generation when two workers read the same starting marker (race %i)', async () => {
     await source.doc(`${root}/client_error_events/event-a`).set({ createdAt: now(), actorId: 'alice', extra: { code: 'OK' } });
+    const original = await source.doc(`${root}/client_error_events/event-a`).get();
     let reads = 0; let release!: () => void; const barrier = new Promise<void>(resolve => { release = resolve; });
     const wrap = (query: any): any => new Proxy(query, { get(target, key) {
       if (key === 'get') return async () => { const snapshot = await target.get(); if (++reads === 4) release(); await barrier; return snapshot; };
@@ -40,8 +42,19 @@ suite('independent copy ordering and historical coverage QA', () => {
     const wrapped = { projectId: source.projectId, collection: (path: string) => wrap(source.collection(path)) };
     const results = await Promise.allSettled([run(wrapped), run(wrapped)]);
     expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
-    const failed: any = results.find(result => result.status === 'rejected'); expect(failed.reason.code).toBe('workbench_copy_concurrent');
-    expect((await db.doc(`${root}/workbench_copy_state/client_error_events`).get()).data()?.generation).toBe(1);
-    expect((await db.collection(`${root}/client_error_events`).get()).size).toBe(1);
+    const failed = results.find(result => result.status === 'rejected');
+    expect(failed?.status).toBe('rejected');
+    if (failed?.status !== 'rejected') throw new Error('One concurrent copy must be rejected.');
+    expect(failed.reason).toMatchObject({ code: 'workbench_copy_concurrent', statusCode: 409 });
+    const marker = (await db.doc(`${root}/workbench_copy_state/client_error_events`).get()).data();
+    expect(marker).toMatchObject({ generation: 1, copiedThisPage: 1, cursor: { at: now(), id: 'event-a' }, sweepCursor: null, sweepCompletedAt: now() });
+    const copied = await db.collection(`${root}/client_error_events`).get();
+    expect(copied.size).toBe(1);
+    expect(copied.docs[0].id).toBe('event-a');
+    expect(copied.docs[0].get('extra.code')).toBe('OK');
+    expect(copied.docs[0].get('copySourceUpdatedAt').isEqual(original.updateTime)).toBe(true);
+    const unchanged = await original.ref.get();
+    expect(unchanged.data()).toEqual(original.data());
+    expect(unchanged.updateTime?.isEqual(original.updateTime!)).toBe(true);
   });
 });

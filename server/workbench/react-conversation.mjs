@@ -75,7 +75,7 @@ export function createReactConversationService({ db, now = () => new Date().toIS
         await authorizeApis();
         if (input.mode !== 'analysis') for (const ref of refs) { const api = await apis.get(context, ref.id, ref.version); selected.push({ id: api.id, version: api.version, ...api.definition, responseKind: api.responseKind || api.definition.kind, responseSchema: api.responseSchema || null }); }
         await db.runTransaction(async (tx) => {
-          const [usage, active] = await Promise.all([tx.get(budget), tx.get(lock)]); const value = usage.data() || { count: 0, actors: {} };
+          const [usage, active] = await tx.getAll(budget, lock); const value = usage.data() || { count: 0, actors: {} };
           if (value.count >= 20 || (value.actors?.[owner] || 0) >= 5) throw createHttpError(429, '오늘 AI 요청 한도에 도달했습니다. 저장된 대화와 직접 편집은 계속 이용할 수 있습니다.', 'react_daily_limit');
           if (Date.parse(active.data()?.expiresAt) > Date.parse(now())) throw createHttpError(429, '다른 분석 요청을 처리 중입니다. 잠시 후 다시 요청해 주세요.', 'react_conversation_busy');
           tx.set(budget, { count: value.count + 1, actors: { ...value.actors, [owner]: (value.actors?.[owner] || 0) + 1 } });

@@ -115,11 +115,11 @@ export async function copyLogPage({ source, db, env, kind, now = () => new Date(
     const existing = documents.get(doc.id);
     if (!existing || compareRevision(doc.updateTime, existing.updateTime) >= 0) documents.set(doc.id, doc);
   }
+  const refs = [...documents.keys()].map(docId => db.doc(`${root}/${kind}/${docId}`));
   return db.runTransaction(async (tx) => {
-    const current = (await tx.get(marker)).data();
+    const [markerSnapshot, ...stored] = await tx.getAll(marker, ...refs);
+    const current = markerSnapshot.data();
     if ((current?.generation || 0) !== (previous?.generation || 0)) throw createHttpError(409, '다른 복사 작업이 먼저 완료되었습니다. 다음 실행에서 이어받습니다.', 'workbench_copy_concurrent');
-    const refs = [...documents.keys()].map(docId => db.doc(`${root}/${kind}/${docId}`));
-    const stored = refs.length ? await tx.getAll(...refs) : [];
     let count = 0;
     for (const target of stored) {
       const doc = documents.get(target.id), value = target.data();

@@ -146,7 +146,7 @@ export function createHtmlPageService({ db, authorize, now = () => new Date().to
       await guard(context);
       const saved = await db.runTransaction(async (tx) => {
         if (operation) { const receipt = (await tx.get(operation)).data(); if (receipt) return receiptValue(context, receipt, (ref) => tx.get(ref), payloadHash); }
-        const [latest, selected] = await Promise.all([tx.get(ref), tx.get(ref.collection('versions').doc(String(version)))]);
+        const [latest, selected] = await tx.getAll(ref, ref.collection('versions').doc(String(version)));
         const previous = latest.data();
         assertVersion(previous, expectedVersion);
         if (!selected.exists) throw createHttpError(404, '선택한 HTML 저장 버전을 찾을 수 없습니다.', 'html_page_version_not_found');

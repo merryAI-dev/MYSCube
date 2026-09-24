@@ -124,7 +124,7 @@ export function createConversationService({ db, now = () => new Date().toISOStri
       // this read to the same head without holding a write lock during a query stream.
       const prior = await queryHistory(ref, request.expectedVersion).get();
       return db.runTransaction(async (tx) => {
-        const [sessionDoc, previousRequest] = await Promise.all([tx.get(ref), tx.get(requestRef(ref, request.requestId))]);
+        const [sessionDoc, previousRequest] = await tx.getAll(ref, requestRef(ref, request.requestId));
         let session = assertSession(sessionDoc.data());
         const at = now();
         if (previousRequest.exists) {
@@ -170,7 +170,7 @@ export function createConversationService({ db, now = () => new Date().toISOStri
       assertSize({ result });
       const ref = sessionRef(context, id);
       const outcome = await db.runTransaction(async (tx) => {
-        const [sessionDoc, turnDoc] = await Promise.all([tx.get(ref), tx.get(ref.collection('turns').doc(turnId))]);
+        const [sessionDoc, turnDoc] = await tx.getAll(ref, ref.collection('turns').doc(turnId));
         const session = assertSession(sessionDoc.data());
         const turn = turnDoc.data();
         if (!turn) throw createHttpError(404, '대화 항목을 찾을 수 없습니다.', 'conversation_turn_not_found');
@@ -195,7 +195,7 @@ export function createConversationService({ db, now = () => new Date().toISOStri
       const error = parse(failureInput, input?.error || { code: 'conversation_request_failed', message: '요청을 완료하지 못했습니다. 작성 내용은 저장되어 있으니 새 요청으로 다시 시도해 주세요.' });
       const ref = sessionRef(context, id);
       return db.runTransaction(async (tx) => {
-        const [sessionDoc, turnDoc] = await Promise.all([tx.get(ref), tx.get(ref.collection('turns').doc(turnId))]);
+        const [sessionDoc, turnDoc] = await tx.getAll(ref, ref.collection('turns').doc(turnId));
         const session = assertSession(sessionDoc.data());
         const turn = turnDoc.data();
         if (!turn) throw createHttpError(404, '대화 항목을 찾을 수 없습니다.', 'conversation_turn_not_found');

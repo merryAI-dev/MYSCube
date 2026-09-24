@@ -92,7 +92,7 @@ export async function importHttpLogExport({ db, env, input, now = () => new Date
   const refs = records.map(({ id: recordId }) => db.doc(`${root}/workbench_http_requests/${recordId}`));
   const counts = { acceptedCount: records.length, ignoredCount: feed.entries.length - records.length };
   return db.runTransaction(async tx => {
-    const snapshots = await Promise.all([tx.get(receiptRef), ...refs.map(ref => tx.get(ref))]);
+    const snapshots = await tx.getAll(receiptRef, ...refs);
     const existing = snapshots.slice(1);
     for (let i = 0; i < existing.length; i += 1) if (existing[i].exists && (!validateStoredHttpLogRecord(existing[i].data()) || httpLogRecordDigest(existing[i].data()) !== records[i].record.sourceRecordHash)) throw fail('workbench_http_record_collision', 409);
     if (snapshots[0].exists) {

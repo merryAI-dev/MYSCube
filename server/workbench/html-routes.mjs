@@ -62,7 +62,7 @@ export function mountHtmlStudio(app, { db, now, env, core, analytics, asyncHandl
     const lease = db.doc(`orgs/${req.context.tenantId}/html_generation_locks/active`);
     const runId = randomUUID();
     await db.runTransaction(async (tx) => {
-      const [usage, active] = await Promise.all([tx.get(budget), tx.get(lease)]);
+      const [usage, active] = await tx.getAll(budget, lease);
       const current = usage.data() || { count: 0, actors: {} };
       if (current.count >= 20 || (current.actors?.[owner] || 0) >= 5) throw createHttpError(429, '오늘 HTML 생성 한도에 도달했습니다. 직접 편집과 저장은 계속 이용할 수 있습니다.', 'html_daily_limit');
       if (Date.parse(active.data()?.expiresAt) > Date.parse(now())) throw createHttpError(429, 'HTML 생성 요청이 처리 중입니다. 잠시 후 다시 요청해 주세요.', 'html_generation_busy');
