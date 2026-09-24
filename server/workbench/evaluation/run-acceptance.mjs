@@ -149,11 +149,11 @@ async function main() {
   } });
   try {
     await runAcceptance({ db, model, executionManifest: manifest, spawnDocker, sourceSha: env.WORKBENCH_EVAL_SOURCE_SHA, outputDirectory: resolve(process.argv[2]), complete: async (args) => {
-      if (++calls > 60 || totalTokens >= 350000) throw Object.assign(new Error('Evaluation budget reached'), { code: 'evaluation_budget_reached' });
+      if (++calls > 60 || totalTokens >= 700000) throw Object.assign(new Error('Evaluation budget reached'), { code: 'evaluation_budget_reached' });
       return complete(args);
     } });
   } finally {
-    try { await writeFile(resolve(process.argv[2], 'usage.json'), JSON.stringify({ model, calls, totalTokens, maxCalls: 60, maxTokensBeforeNextCall: 350000 }, null, 2), { mode: 0o600 }); }
+    try { await writeFile(resolve(process.argv[2], 'usage.json'), JSON.stringify({ model, calls, totalTokens, maxCalls: 60, maxTokensBeforeNextCall: 700000 }, null, 2), { mode: 0o600 }); }
     finally { await db.terminate(); }
   }
 }
