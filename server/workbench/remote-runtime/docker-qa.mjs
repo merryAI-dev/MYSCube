@@ -29,7 +29,11 @@ const apiId = '11111111-1111-4111-8111-111111111111';
 const context = actorId => ({ tenantId: 'synthetic-docker-qa', actorId, actorRole: 'admin', analyticsScope: { fingerprint: 'synthetic-only' } });
 const spawnDocker = args => { if (args[0] === 'run') containers.push(args[args.indexOf('--name') + 1]); return spawn('docker', args, { env: { PATH: process.env.PATH, LANG: 'C.UTF-8' }, stdio: ['pipe', 'pipe', 'pipe'] }); };
 const broker = createRemoteRuntimeBroker({ authorize: async value => { assert.equal(value.tenantId, 'synthetic-docker-qa'); }, callApi: async (_context, input) => { calls.push(input); return { data: { ok: true } }; }, spawnDocker });
-const compiled = async code => { const artifact = await compileReactPreview({ title: 'Synthetic isolation QA', code }); return { artifact, sourceHash: artifact.sourceHash, apiBindings: [{ id: apiId, version: 1 }], viewport: { width: 640, height: 480 } }; };
+const fixtureApi = { id: apiId, version: 1, definition: { kind: 'external-read', parameters: {
+  count: { type: 'integer', required: false }, i: { type: 'integer', required: false },
+  attackStarted: { type: 'string', required: false }, egressBlocked: { type: 'boolean', required: false },
+} }, responseKind: 'external-read', responseSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false } };
+const compiled = async code => { const artifact = await compileReactPreview({ title: 'Synthetic isolation QA', code }, { apis: [fixtureApi] }); return { artifact, sourceHash: artifact.sourceHash, apiBindings: [{ id: apiId, version: 1 }], viewport: { width: 640, height: 480 } }; };
 try {
   const normal = await compiled(`import React,{useState} from 'react';export default function App(){const[n,setN]=useState(0);return <button style={{position:'absolute',left:20,top:20}} onClick={()=>{setN(n+1);window.workbench.callApi('${apiId}',{count:n+1})}}>Canary {n}</button>}`);
   const coldStart = performance.now();

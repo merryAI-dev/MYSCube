@@ -19,7 +19,7 @@ suite('independent React conversation persistence, clarification and scope QA', 
   let inputs: any[], refs: number[], responses: any[];
   const tool = (name: string, value: any) => ({ tool_calls: [{ function: { name, arguments: JSON.stringify(value) } }] });
   const service = () => createReactConversationService({ db, now, env, authorize: core.authorize,
-    apis: { get: async (_context: any, id: string, version: number) => { expect(id).toBe(apiId); refs.push(version); return { id, version, definition: { name: '고정 API', description: '테스트 조회 정의', parameters: {} } }; } },
+    apis: { get: async (_context: any, id: string, version: number) => { expect(id).toBe(apiId); refs.push(version); return { id, version, definition: { kind: 'analytics-copy', name: '고정 API', description: '테스트 조회 정의', parameters: {} } }; } },
     analytics: {}, qa: () => { throw new Error('unexpected QA tool'); },
     completionFactory: ({ onUsage }: any) => async (input: any) => { inputs.push(input); await onUsage({ promptTokenCount: 2, candidatesTokenCount: 3, totalTokenCount: 5 }); return responses.shift(); },
   });

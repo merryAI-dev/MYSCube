@@ -60,7 +60,7 @@ export function createConversationService({ db, now = () => new Date().toISOStri
   };
   const sessionRef = (context, id) => sessions(context).doc(parse(uuid, id));
   const requestRef = (ref, requestId) => ref.collection('requests').doc(hash(requestId));
-  const queryHistory = (ref) => ref.collection('turns').orderBy('sequence', 'desc').limit(13)
+  const queryHistory = (ref, version) => ref.collection('turns').where('sequence', '<=', version).orderBy('sequence', 'desc').limit(13)
     .select('id', 'state', 'sequence', 'message', 'result.answer', 'result.scopeFingerprint', 'error.message');
   const finishValue = (turn, state, version, at, fields) => {
     const value = { ...turn, state, version, completedAt: at, ...fields };
@@ -120,6 +120,9 @@ export function createConversationService({ db, now = () => new Date().toISOStri
       const request = parse(beginInput, input);
       const ref = sessionRef(context, id);
       const fingerprint = hash(JSON.stringify(request));
+      // Finished turns are immutable. The transaction's version check below binds
+      // this read to the same head without holding a write lock during a query stream.
+      const prior = await queryHistory(ref, request.expectedVersion).get();
       return db.runTransaction(async (tx) => {
         const [sessionDoc, previousRequest] = await Promise.all([tx.get(ref), tx.get(requestRef(ref, request.requestId))]);
         let session = assertSession(sessionDoc.data());
@@ -144,7 +147,6 @@ export function createConversationService({ db, now = () => new Date().toISOStri
           activeTurn = (await tx.get(ref.collection('turns').doc(session.active.turnId))).data();
           if (!activeTurn || activeTurn.state !== 'pending') throw createHttpError(500, '대화 처리 기록을 확인할 수 없습니다.', 'conversation_integrity_failed');
         }
-        const prior = await tx.get(queryHistory(ref));
         const priorTurns = prior.docs.map((doc) => doc.data());
         if (activeTurn) {
           const ended = finishValue(activeTurn, 'failed', session.version + 1, at, { error: expiredError });

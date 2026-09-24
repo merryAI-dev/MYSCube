@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { createGitDeliveryService } from './git-delivery.mjs';
+import { canonicalWorkspace, normalizeReactSource } from '../../shared/workbench-react-workspace.mjs';
 
 const hash = (s) => createHash('sha256').update(s).digest('hex');
 const gitHash = (s) => createHash('sha1').update(s).digest('hex');
@@ -73,6 +74,40 @@ describe('isolated Git delivery', () => {
     expect(JSON.stringify([...db.values.values()])).not.toContain(env.WORKBENCH_GITHUB_TOKEN);
     expect(JSON.stringify([...remote.blobs.values()])).not.toContain(context.actorId);
     expect(JSON.stringify([...remote.blobs.values()])).not.toContain(env.WORKBENCH_GITHUB_TOKEN);
+  });
+  it('exports every canonical workspace file with exact bytes and pins its identity', async () => {
+    const { service, remote } = setup();
+    const workspace = { ...normalizeReactSource({ title: source.title, code }).workspace, files: {
+      'App.tsx': "import {Card} from './components/Card'; export default function App(){ return <Card/>; }",
+      'components/Card.tsx': "import {label} from '../lib/label'; export function Card(){ return <p>{label}</p>; }",
+      'lib/label.ts': 'export const label = "실제 파일 묶음";\n',
+    } };
+    const { code: _legacy, ...metadata } = source;
+    const input = { ...metadata, workspace, sourceHash: hash(canonicalWorkspace(workspace)) };
+    const delivered = await service.publish(context, input);
+    const tree = remote.calls.find((call) => call.path === '/git/trees').body.tree;
+    for (const [path, content] of Object.entries(workspace.files)) {
+      const entry = tree.find((item) => item.path.endsWith('/' + path));
+      expect(remote.blobs.get(entry.sha)).toBe(content);
+    }
+    const manifest = JSON.parse(remote.blobs.get(tree.find((item) => item.path.endsWith('/manifest.json')).sha));
+    expect(manifest).toMatchObject({ schemaVersion: 2, workspaceSchemaVersion: 1, entry: workspace.entry,
+      workspaceHash: input.sourceHash, packageSetId: workspace.packageSetId, files: Object.keys(workspace.files).sort() });
+    expect(await service.publish(context, { ...input, workspace: { ...workspace, files: Object.fromEntries(Object.entries(workspace.files).reverse()) } })).toEqual(delivered);
+    expect(remote.calls.filter((call) => call.path === '/git/commits')).toHaveLength(1);
+    const changed = { ...workspace, files: { ...workspace.files, 'lib/label.ts': 'export const label = "바뀜";' } };
+    await expect(service.publish(context, { ...input, workspace: changed })).rejects.toMatchObject({ code: 'git_source_invalid' });
+    await expect(service.publish(context, { ...input, workspace: changed, sourceHash: hash(canonicalWorkspace(changed)) })).rejects.toMatchObject({ code: 'git_version_conflict' });
+  });
+  it('scans all helper files for secrets and rejects dual source identities before network', async () => {
+    const { service, remote } = setup();
+    const workspace = normalizeReactSource({ title: source.title, code }).workspace;
+    workspace.files['lib/settings.ts'] = 'export const token = "very-secret-literal";';
+    const { code: _legacy, ...metadata } = source;
+    const input = { ...metadata, workspace, sourceHash: hash(canonicalWorkspace(workspace)) };
+    await expect(service.publish(context, input)).rejects.toMatchObject({ code: 'git_source_secret_detected' });
+    await expect(service.publish(context, { ...input, code })).rejects.toMatchObject({ code: 'git_source_invalid' });
+    expect(remote.calls).toHaveLength(0);
   });
   it('records immutable API versions in the source review manifest', async () => {
     const { service, remote } = setup();

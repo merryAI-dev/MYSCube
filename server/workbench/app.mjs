@@ -20,6 +20,7 @@ import { workbenchOperationScopeMiddleware } from './operation-scopes.mjs';
 import { mountRemotePreview } from './remote-preview-routes.mjs';
 import { createRemoteRuntimeBroker } from './remote-runtime/broker.mjs';
 import { createCopiedLogSummary } from './copied-log-summary.mjs';
+import { ReactDiagnosticSchema, MAX_REACT_DIAGNOSTICS } from '../../shared/workbench-react-workspace.mjs';
 
 const asyncHandler = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 function createMutatingRoute(service, fn, { validateReplay } = {}) {
@@ -81,6 +82,16 @@ export function createWorkbenchApp(options) {
     summary: createCopiedLogSummary({ db, env, now, authorize: core.authorize, readHttpSummary: core.httpLogs.summary }),
     observeClient: async () => { throw createHttpError(410, '운영 기록은 승인된 원본의 읽기 전용 사본으로 확인합니다.', 'workbench_observation_readonly'); },
   } });
-  app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.code || 'workbench_failed', message: error.expose ? error.message : '분석 도구 요청을 처리하지 못했습니다.' }));
+  app.use((error, _req, res, _next) => {
+    const details = error.expose && error.code === 'react_compile_failed' ? error.details : null;
+    const diagnostics = details && Array.isArray(details.diagnostics)
+      ? details.diagnostics.slice(0, MAX_REACT_DIAGNOSTICS).map((item) => ReactDiagnosticSchema.safeParse(item)).filter((item) => item.success).map((item) => item.data)
+      : [];
+    res.status(error.statusCode || 500).json({
+      error: error.code || 'workbench_failed',
+      message: error.expose ? error.message : '분석 도구 요청을 처리하지 못했습니다.',
+      ...(diagnostics.length ? { details: { stage: ['type', 'policy', 'bundle'].includes(details.stage) ? details.stage : 'type', diagnostics, truncated: Boolean(details.truncated || details.diagnostics.length > MAX_REACT_DIAGNOSTICS) } } : {}),
+    });
+  });
   return app;
 }

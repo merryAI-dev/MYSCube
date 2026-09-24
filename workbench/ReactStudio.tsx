@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useReducer, useRef, useState } from 'react';
 import { workbenchRequest } from './client';
 import { ReactPreview, type ReactPreviewResult } from './ReactPreview';
 import { ApiRegistryPanel } from './ApiRegistryPanel';
@@ -7,54 +7,55 @@ import { ReactConversationPanel } from './ReactConversationPanel';
 import { RecoveryPanel } from './RecoveryPanel';
 import { RemoteReactPreview, type RemoteDraft, type RemotePreviewResult } from './RemoteReactPreview';
 
-type Source = { title: string; code: string };
-type ApiRef = { id: string; version: number };
+import { ReactSourceSchema, ReactApiRefsSchema, ReactDiagnosticSchema, MAX_REACT_DIAGNOSTICS } from '../shared/workbench-react-workspace.mjs';
+import { draftIdentity, editorReducer, initialEditor, newWorkspace, type ReactSource as Source, type ApiRef } from './react-workspace-editor';
+import { ReactWorkspaceEditor, ReactProposalReview } from './ReactWorkspaceEditor';
 type Artifact = { bundle: string; css: string; sourceHash: string; bundleHash: string; cssHash: string; runtimeVersion: string; packageSetHash: string; dependencies: Array<{ name: string; version: string }>; executionId: string };
 type EvidenceBindings = Record<string, { evidenceId: string; kind: 'table' }>;
 type Revision = { id: string; version: number; source: Source; apis: ApiRef[]; sourceHash: string; artifact: Artifact; updatedAt: string };
 type GitResult = { status: string; pullUrl?: string; commitSha?: string; message?: string };
 type Api = ApiRef & { definition: { name: string; enabled: boolean; description: string } };
 const request = (path: string, method = 'GET', body?: unknown) => workbenchRequest(`/react-work-pages${path}`, method, body);
-const empty = { title: '나의 React 업무 화면', code: '' };
 const date = (value: string) => new Date(value).toLocaleString('ko-KR');
 
 export function ReactStudio() {
-  const [source, setSource] = useState<Source>(empty);
-  const [saved, setSaved] = useState<Revision | null>(null);
+  const [editor, dispatch] = useReducer(editorReducer, undefined, () => initialEditor());
+  const { source, saved, apis: selected } = editor;
+  const editorRef = useRef(editor); editorRef.current = editor;
   const [pages, setPages] = useState<Revision[]>([]);
   const [apis, setApis] = useState<Api[]>([]);
-  const [selected, setSelected] = useState<ApiRef[]>([]);
   const [history, setHistory] = useState<Revision[]>([]);
   const [preview, setPreview] = useState<Artifact | null>(null);
   const [previewSource, setPreviewSource] = useState('');
   const [remoteDraft, setRemoteDraft] = useState<RemoteDraft | null>(null), [remotePreparing, setRemotePreparing] = useState(false);
   const remoteKey = useRef(0);
-  const [proposal, setProposal] = useState<{ source: Source } | null>(null);
   const [capabilities, setCapabilities] = useState<{ modelEnabled: boolean; gitEnabled: boolean; gitRepository: string | null; runtimeUrl: string | null; remoteRuntime?: boolean; runtimeMode: string; example: string } | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(''), [message, setMessage] = useState('');
+  const [diagnostics, setDiagnostics] = useState<Array<{ file: string; line: number; column: number; message: string; code: string | number }>>([]);
+  const [focusLocation, setFocusLocation] = useState<{ file: string; line: number; column: number; sequence: number } | null>(null);
   const [git, setGit] = useState<GitResult | null>(null);
   const [tab, setTab] = useState<'make' | 'apis'>('make');
   const [evidence, setEvidence] = useState<EvidenceBindings>({});
   const executionGeneration = useRef(0);
-  const editorTarget = useRef(0);
   const executions = useRef<{ visible: string | null; target: string | null; evidence: Map<string, EvidenceBindings> }>({ visible: null, target: null, evidence: new Map() });
   const retainExecutions = () => { const state = executions.current; for (const id of state.evidence.keys()) if (id !== state.visible && id !== state.target) state.evidence.delete(id); };
   const clearExecutions = () => { remoteKey.current++; setRemoteDraft(null); setRemotePreparing(false); setPreviewSource(''); executionGeneration.current++; executions.current = { visible: null, target: null, evidence: new Map() }; setEvidence({}); };
   useEffect(() => () => { executionGeneration.current++; executions.current = { visible: null, target: null, evidence: new Map() }; }, []);
-  const dirty = saved ? JSON.stringify(source) !== JSON.stringify(saved.source) || JSON.stringify(selected) !== JSON.stringify(saved.apis) : source.code !== capabilities?.example || source.title !== empty.title || selected.length > 0;
+  const identity = draftIdentity(source, selected);
+  const dirty = identity !== (saved ? draftIdentity(saved.source, saved.apis) : draftIdentity(newWorkspace(capabilities?.example || ''), []));
   const refreshApis = async () => { const result = await workbenchRequest('/workbench-apis'); setApis(result.items); };
   useEffect(() => {
     let active = true; setBusy(true);
     void Promise.all([request('/capabilities'), request(''), workbenchRequest('/workbench-apis')]).then(([caps, list, registered]) => {
-      if (!active) return; setCapabilities(caps); setPages(list.items); setApis(registered.items); setSource({ ...empty, code: caps.example });
+      if (!active) return; setCapabilities(caps); setPages(list.items); setApis(registered.items); dispatch({ type: 'reset', code: caps.example });
     }).catch((reason) => { if (active) setError(reason.message); }).finally(() => { if (active) setBusy(false); });
     return () => { active = false; };
   }, []);
   useEffect(() => { const handler = (event: BeforeUnloadEvent) => { if (dirty) event.preventDefault(); }; window.addEventListener('beforeunload', handler); return () => window.removeEventListener('beforeunload', handler); }, [dirty]);
-  const run = async (fn: () => Promise<void>) => { setBusy(true); setError(''); try { await fn(); } catch (reason) { setError(reason instanceof Error ? reason.message : '요청을 완료하지 못했습니다.'); } finally { setBusy(false); } };
+  const run = async (fn: () => Promise<void>) => { setBusy(true); setError(''); setDiagnostics([]); try { await fn(); } catch (reason) { setError(reason instanceof Error ? reason.message : '요청을 완료하지 못했습니다.'); const parsed = ReactDiagnosticSchema.array().max(MAX_REACT_DIAGNOSTICS).safeParse((reason as { details?: { diagnostics?: unknown } })?.details?.diagnostics); if (parsed.success) setDiagnostics(parsed.data); } finally { setBusy(false); } };
   const mayLeave = () => !dirty || window.confirm('저장하지 않은 React 변경이 있습니다. 변경을 버리고 이동할까요?');
-  const load = (value: Revision) => { editorTarget.current++; clearExecutions(); setSaved(value); setSource(value.source); setSelected(value.apis); setHistory([]); setProposal(null); setPreview(null); setGit(null); };
-  const remember = (value: Revision & { git?: GitResult }) => { setSaved(value); setSource(value.source); setSelected(value.apis); setPages((items) => [value, ...items.filter((item) => item.id !== value.id)]); setGit(value.git || null); };
+  const load = (value: Revision) => { ReactSourceSchema.parse(value.source); ReactApiRefsSchema.parse(value.apis); clearExecutions(); setDiagnostics([]); dispatch({ type: 'load', revision: value }); setHistory([]); setPreview(null); setGit(null); };
+  const remember = (value: Revision & { git?: GitResult }, target: number, savedIdentity: string) => { dispatch({ type: 'remember', revision: value, target, identity: savedIdentity }); setPages((items) => [value, ...items.filter((item) => item.id !== value.id)]); if (editorRef.current.target === target) setGit(value.git || null); };
   const applyPreview = () => {
     if (capabilities?.remoteRuntime) { setError(''); setRemoteDraft({ source: { ...source }, apis: selected.map((api) => ({ ...api })), key: ++remoteKey.current }); return; }
     void run(async () => {
@@ -64,8 +65,10 @@ export function ReactStudio() {
     });
   };
   const save = () => void run(async () => {
+    if (!ReactSourceSchema.safeParse(source).success || !ReactApiRefsSchema.safeParse(selected).success) throw new Error('화면 제목, 시작 파일, 파일 경로와 연결 API 버전을 확인해 주세요. 파일은 최대 32개, 전체 내용은 180KB까지 저장할 수 있습니다.');
+    const target = editor.target, savedIdentity = identity;
     const result = await request(saved ? `/${saved.id}` : '', saved ? 'PUT' : 'POST', { source, apis: selected, expectedVersion: saved?.version || 0 });
-    remember(result); setMessage(`버전 ${result.version}으로 저장했습니다. ${result.git?.status === 'complete' ? 'GitHub 커밋과 Draft PR도 생성했습니다.' : 'GitHub 전달 상태를 확인해 주세요.'}`);
+    remember(result, target, savedIdentity); setMessage(`버전 ${result.version}으로 저장했습니다. ${result.git?.status === 'complete' ? 'GitHub 커밋과 Draft PR도 생성했습니다.' : 'GitHub 전달 상태를 확인해 주세요.'}`);
   });
   const callback = preview ? async (apiId: string, input: unknown) => {
     const id = preview.executionId;
@@ -87,7 +90,7 @@ export function ReactStudio() {
     }
   } : undefined;
   const previewGeneration = executionGeneration.current;
-  const proposalTarget = editorTarget.current;
+  const proposalTarget = editor.target;
   const previewResult = (result: ReactPreviewResult) => {
     const id = result.executionId, state = executions.current;
     if (!id || executionGeneration.current !== previewGeneration) return;
@@ -115,31 +118,31 @@ export function ReactStudio() {
     {!runtimeAvailable && <p className="notice">별도 React 실행 공간 연결 전입니다. 소스 편집·컴파일·저장은 사용할 수 있습니다.</p>}
     {capabilities?.runtimeMode === 'local-test' && <p className="notice">로컬 실행 검증 환경입니다. 운영 환경의 네트워크·자원 격리가 검증된 상태를 의미하지 않습니다.</p>}
     {!capabilities?.gitEnabled && <p className="notice">GitHub 전용 연결 설정 전입니다. 화면은 버전으로 저장되며 연결 후 같은 버전으로 PR 생성을 재시도할 수 있습니다.</p>}
-    <RecoveryPanel scope="react-page" disabled={busy} targetKey={String(editorTarget.current)} onRecovered={(value) => { if (!value || typeof value !== 'object' || !('source' in value) || !('artifact' in value) || !('id' in value) || typeof (value as Revision).source?.code !== 'string' || !mayLeave()) return false; load(value as Revision); setMessage('확인한 저장 결과를 불러왔습니다.'); return true; }} />
-    {message && <p className="notice" role="status">{message}</p>}{error && <p className="error" role="alert">{error}</p>}
+    <RecoveryPanel scope="react-page" disabled={busy} targetKey={String(editor.target)} onRecovered={(value) => { if (!value || typeof value !== 'object' || !('source' in value) || !('artifact' in value) || !('id' in value) || !ReactSourceSchema.safeParse((value as Revision).source).success || !ReactApiRefsSchema.safeParse((value as Revision).apis).success || !mayLeave()) return false; load(value as Revision); setMessage('확인한 저장 결과를 불러왔습니다.'); return true; }} />
+    {editor.notice && <p className="notice" role="status">{editor.notice}</p>}{message && <p className="notice" role="status">{message}</p>}{error && <p className="error" role="alert">{error}</p>}{diagnostics.length > 0 && <section className="notice" aria-label="React 파일 오류"><strong>수정할 위치를 확인해 주세요</strong><ul>{diagnostics.map((item, index) => <li key={index}><button className="quiet compact" disabled={!Object.hasOwn(source.workspace.files, item.file)} onClick={() => { dispatch({ type: 'select', path: item.file }); setFocusLocation({ ...item, sequence: Date.now() }); }}>{item.file} · {item.line}행 {item.column}열</button> {item.message}</li>)}</ul></section>}
     <nav className="canvas-tabs" aria-label="React 제작 메뉴"><button className={tab === 'make' ? 'active' : ''} onClick={() => setTab('make')}>화면 만들기</button><button className={tab === 'apis' ? 'active' : ''} onClick={() => { clearExecutions(); setPreview(null); setTab('apis'); }}>API 등록·관리</button></nav>
     {tab === 'apis' ? <ApiRegistryPanel onChanged={() => { void refreshApis().catch((reason) => setError(reason.message)); }} /> : <div className="workspace">
-      <aside className="library" aria-label="저장한 React 화면"><div className="section-heading"><h2>나의 화면</h2><button className="quiet compact" disabled={busy} onClick={() => { if (mayLeave()) { editorTarget.current++; clearExecutions(); setSaved(null); setSource({ ...empty, code: capabilities?.example || '' }); setSelected([]); setPreview(null); setProposal(null); setGit(null); setHistory([]); } }}>새 React 화면</button></div>
+      <aside className="library" aria-label="저장한 React 화면"><div className="section-heading"><h2>나의 화면</h2><button className="quiet compact" disabled={busy} onClick={() => { if (mayLeave()) { clearExecutions(); dispatch({ type: 'reset', code: capabilities?.example || '' }); setPreview(null); setGit(null); setHistory([]); } }}>새 React 화면</button></div>
         {!pages.length && <p className="subtle">저장하면 다시 열고 이전 버전으로 복원할 수 있습니다.</p>}{pages.map((item) => <button className={`page-item ${item.id === saved?.id ? 'selected' : ''}`} key={item.id} disabled={busy} onClick={() => { if (mayLeave()) void run(async () => load(await request(`/${item.id}`))); }}><strong>{item.source.title}</strong><small>버전 {item.version} · {date(item.updatedAt)}</small></button>)}
       </aside>
       <main className="studio-main"><section className="canvas-panel"><div className="canvas-toolbar"><h2>실행 화면</h2><span className="badge">등록한 읽기 API만 연결</span></div>
         {previewSource && previewSource !== JSON.stringify({ source, selected }) && <p className="notice">현재 편집 내용과 실행 중인 버전이 다릅니다. ‘React 미리보기 적용’으로 확인해 주세요.</p>}
         {!capabilities?.remoteRuntime && Object.keys(evidence).length > 0 && <BoundEvidence bindings={evidence} />}
         {capabilities?.remoteRuntime ? <RemoteReactPreview draft={remoteDraft} onResult={remoteResult} onPreparing={setRemotePreparing} /> : preview && capabilities?.runtimeUrl && callback ? <ReactPreview artifact={preview} runtimeUrl={capabilities.runtimeUrl} onApiCall={callback} onResult={previewResult} /> : <div className="preview-empty"><strong>실행할 준비가 되었습니다</strong><span>React 코드를 작성하거나 AI에 요청한 뒤 미리보기를 적용하세요.</span></div>}
-        <details className="react-source-editor" open><summary>App.tsx 소스 보기·편집</summary><fieldset disabled={busy}><label>React 화면 제목<input value={source.title} maxLength={80} onChange={(event) => setSource({ ...source, title: event.target.value })} /></label><label>React 원문<textarea className="code" spellCheck={false} value={source.code} onChange={(event) => setSource({ ...source, code: event.target.value })} /></label></fieldset></details>
+        <ReactWorkspaceEditor state={editor} dispatch={dispatch} disabled={busy} focusLocation={focusLocation} />
       </section>
       <aside className="studio-rail">{capabilities && <ReactConversationPanel modelEnabled={Boolean(capabilities?.modelEnabled)} busy={busy} currentSource={source} apis={selected}
-        onProposal={(value) => { if (proposalTarget === editorTarget.current) setProposal(value); }} onRestoreContext={(value) => { if (!mayLeave()) return false; clearExecutions(); setSource(value.source); setSelected(value.apis); setPreview(null); setProposal(null); setMessage('대화 당시 편집 내용과 연결 API 버전을 불러왔습니다. 저장 전 내용을 확인해 주세요.'); return true; }} />}
+        onProposal={(value) => dispatch({ type: 'propose', value, target: proposalTarget })} onRestoreContext={(value) => { if (!mayLeave()) return false; clearExecutions(); dispatch({ type: 'context', source: value.source, apis: value.apis }); setPreview(null); setMessage('대화 당시 편집 내용과 연결 API 버전을 불러왔습니다. 저장 전 내용을 확인해 주세요.'); return true; }} />}
       <section className="side-panel"><h2>소스 제안 검토</h2>
-        {proposal && <section className="proposal"><h3>{proposal.source.title}</h3><pre>{proposal.source.code}</pre><button disabled={busy} onClick={() => { setSource(proposal.source); setProposal(null); }}>React 제안 적용</button><button className="quiet" onClick={() => setProposal(null)}>제안 닫기</button></section>}
+        <ReactProposalReview state={editor} dispatch={dispatch} disabled={busy} />
       </section><section className="side-panel"><h2>연결할 API</h2><p className="subtle">선택한 API 버전만 이 화면에서 조회할 수 있습니다.</p>
         {!apis.length && <p>등록된 API가 없습니다. ‘API 등록·관리’에서 먼저 등록해 주세요.</p>}
-        {apis.map((api) => <label className="reference" key={api.id}><input type="checkbox" disabled={busy || !api.definition.enabled && !selected.some((item) => item.id === api.id)} checked={selected.some((item) => item.id === api.id)} onChange={(event) => setSelected((refs) => event.target.checked ? [...refs, { id: api.id, version: api.version }] : refs.filter((item) => item.id !== api.id))} /><span>{api.definition.name} · 버전 {selected.find((item) => item.id === api.id)?.version || api.version}{!api.definition.enabled && ' · 사용 중지'}<small>{api.definition.description}</small></span></label>)}
-        {selected.filter((ref) => !apis.some((api) => api.id === ref.id)).map((ref) => <p className="error" key={ref.id}>이전에 연결한 API를 현재 권한으로 확인할 수 없습니다. <button onClick={() => setSelected((refs) => refs.filter((item) => item.id !== ref.id))}>연결 해제</button></p>)}
+        {apis.map((api) => <label className="reference" key={api.id}><input type="checkbox" disabled={busy || !api.definition.enabled && !selected.some((item) => item.id === api.id)} checked={selected.some((item) => item.id === api.id)} onChange={(event) => dispatch({ type: 'apis', value: event.target.checked ? [...selected, { id: api.id, version: api.version }] : selected.filter((item) => item.id !== api.id) })} /><span>{api.definition.name} · 버전 {selected.find((item) => item.id === api.id)?.version || api.version}{!api.definition.enabled && ' · 사용 중지'}<small>{api.definition.description}</small></span></label>)}
+        {selected.filter((ref) => !apis.some((api) => api.id === ref.id)).map((ref) => <p className="error" key={ref.id}>이전에 연결한 API를 현재 권한으로 확인할 수 없습니다. <button onClick={() => dispatch({ type: 'apis', value: selected.filter((item) => item.id !== ref.id) })}>연결 해제</button></p>)}
       </section><section className="side-panel"><h2>저장 버전·GitHub</h2><p className="subtle">저장한 원문마다 별도 커밋과 Draft PR을 만듭니다. API 조회 결과는 Git 전송 대상에 추가하지 않습니다.</p>
         {git && <div role="status"><p>{git.status === 'complete' ? 'GitHub 전달 완료' : git.message || 'GitHub 전달 상태 확인 필요'}</p>{git.pullUrl && <a href={git.pullUrl} target="_blank" rel="noreferrer">Draft PR 열기 ↗</a>}{git.commitSha && <p className="hash">커밋 {git.commitSha}</p>}</div>}
         <div className="button-row"><button className="quiet" disabled={busy || !saved} onClick={() => void run(async () => setGit(await request(`/${saved!.id}/publish`, 'POST', { version: saved!.version })))}>저장 버전 PR 확인·재시도</button><button className="quiet" disabled={busy || !saved} onClick={() => void run(async () => setHistory((await request(`/${saved!.id}/versions`)).items))}>React 버전 이력</button></div>
-        {history.map((item) => <div className="history-row" key={item.version}><span>버전 {item.version} · {date(item.updatedAt)}</span><button disabled={busy} onClick={() => { if (mayLeave()) void run(async () => { const result = await request(`/${saved!.id}/restore`, 'POST', { expectedVersion: saved!.version, version: item.version }); load(result); remember(result); setMessage(`이전 원문을 새 버전 ${result.version}으로 복원했습니다.`); }); }}>React 버전 복원</button></div>)}
+        {history.map((item) => <div className="history-row" key={item.version}><span>버전 {item.version} · {date(item.updatedAt)}</span><button disabled={busy} onClick={() => { if (mayLeave()) void run(async () => { const result = await request(`/${saved!.id}/restore`, 'POST', { expectedVersion: saved!.version, version: item.version }); load(result); setPages((items) => [result, ...items.filter((item) => item.id !== result.id)]); setGit(result.git || null); setMessage(`이전 원문을 새 버전 ${result.version}으로 복원했습니다.`); }); }}>React 버전 복원</button></div>)}
       </section></aside></main>
     </div>}
   </div>;

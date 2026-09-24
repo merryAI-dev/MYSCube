@@ -38,7 +38,7 @@ test('remote apply sends only a source snapshot, commits a decoded candidate, an
   const state = await setup(page);
   await page.getByRole('button', { name: 'React 미리보기 적용' }).click();
   const image = page.getByTestId('remote-react-frame'); await expect(image).toHaveAttribute('data-session', idA);
-  expect(state.posts[0]).toEqual({ source: { title: '나의 React 업무 화면', code: source }, apis: [], viewport: { width: 1100, height: 700 } });
+  expect(state.posts[0]).toEqual({ source: { title: '나의 React 업무 화면', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: { 'App.tsx': source } } }, apis: [], viewport: { width: 1100, height: 700 } });
   expect(await page.locator('iframe').count()).toBe(0); expect(await page.evaluate(() => (window as any).__REMOTE_CODE_EXECUTED)).toBeUndefined();
   const edited = source.replace('서버에서만 실행', '수정된 다음 화면'); await page.getByLabel('React 원문').fill(edited);
   await expect(page.getByText(/현재 편집 내용과 실행 중인 버전이 다릅니다/)).toBeVisible();
@@ -49,7 +49,7 @@ test('remote apply sends only a source snapshot, commits a decoded candidate, an
   await expect(page.getByRole('button', { name: 'React 미리보기 적용' })).toBeDisabled();
   release(); state.holdCreate = null;
   await expect(image).toHaveAttribute('data-session', idB); await expect.poll(() => state.deleted).toContain(idA);
-  expect(state.posts[1].previousSessionId).toBe(idA); expect(state.posts[1].source.code).toBe(edited);
+  expect(state.posts[1].previousSessionId).toBe(idA); expect(state.posts[1].source.workspace.files['App.tsx']).toBe(edited);
   state.failCreate = true; await page.getByLabel('React 원문').fill(`${edited}\n// 아직 저장하지 않은 변경`);
   await page.getByRole('button', { name: 'React 미리보기 적용' }).click();
   await expect(page.getByRole('region', { name: '격리된 React 실행 화면' }).getByRole('alert')).toContainText('완성하지 못했습니다');

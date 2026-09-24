@@ -11,7 +11,8 @@ const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1'
 const close = (server) => new Promise((resolve) => { server.closeAllConnections(); server.close(resolve); });
 let browser; let host; let runtime; let hostOrigin; let runtimeOrigin; let hostBundle; let studioBundle; let packages; const requests = []; const runtimeDelays = [];
 const code = (label) => `import React,{useState}from'react';export default function App(){const[n,setN]=useState(0);return <main className="p-4 bg-blue-50"><h1>${label}</h1><button onClick={()=>setN(n+1)}>횟수 {n}</button></main>}`;
-const artifact = (source) => compileReactPreview({ title: 'React 브라우저 검증', code: source });
+const fixtureApi = (id, parameters, properties) => ({ id, version: 1, definition: { kind: 'external-read', parameters }, responseKind: 'external-read', responseSchema: { type: 'object', properties, required: Object.keys(properties), additionalProperties: false } });
+const artifact = (source, apis = []) => compileReactPreview({ title: 'React 브라우저 검증', code: source }, { apis });
 
 beforeAll(async () => {
   packages = await getReactPackageSet();
@@ -32,7 +33,7 @@ beforeAll(async () => {
     res.statusCode = 404; res.end();
   }); runtimeOrigin = await listen(runtime);
   hostBundle = (await build({ stdin: { contents: `import React from 'react';import {createRoot}from'react-dom/client';import {ReactPreview}from './workbench/ReactPreview';
-  function Harness(){const [value,setValue]=React.useState(null);window.setReactPreview=value=>{window.lastResult=null;setValue(value)};return <ReactPreview artifact={value?.artifact??null} runtimeUrl=${JSON.stringify(`${runtimeOrigin}/runtime`)} onResult={value=>{window.lastResult=value}} onApiCall={async(apiId,input)=>{window.apiCalls.push({apiId,input,grant:value.grant});if(window.rejectNext){window.rejectNext=false;throw Error('현재 조회 권한이 없습니다.')}return {grant:value.grant,amount:125}}}/>};window.apiCalls=[];createRoot(document.getElementById('app')).render(<Harness/>);`, loader: 'tsx', sourcefile: 'harness.tsx', resolveDir: fileURLToPath(new URL('../../', import.meta.url)) }, bundle: true, platform: 'browser', write: false, minify: true, define: { 'process.env.NODE_ENV': '"production"' } })).outputFiles[0].text;
+  function Harness(){const [value,setValue]=React.useState(null);window.setReactPreview=value=>{window.lastResult=null;setValue(value)};return <ReactPreview artifact={value?.artifact??null} runtimeUrl=${JSON.stringify(`${runtimeOrigin}/runtime`)} onResult={value=>{window.lastResult=value}} onApiCall={async(apiId,input)=>{window.apiCalls.push({apiId,input,grant:value.grant});if(window.rejectNext){window.rejectNext=false;throw Error('현재 조회 권한이 없습니다.')}return {data:{grant:value.grant,amount:125}}}}/>};window.apiCalls=[];createRoot(document.getElementById('app')).render(<Harness/>);`, loader: 'tsx', sourcefile: 'harness.tsx', resolveDir: fileURLToPath(new URL('../../', import.meta.url)) }, bundle: true, platform: 'browser', write: false, minify: true, define: { 'process.env.NODE_ENV': '"production"' } })).outputFiles[0].text;
   studioBundle = (await build({ stdin: { contents: "import React from 'react';import{createRoot}from'react-dom/client';import{ReactStudio}from'./workbench/ReactStudio';createRoot(document.getElementById('app')).render(<ReactStudio/>);", loader: 'tsx', sourcefile: 'studio-harness.tsx', resolveDir: fileURLToPath(new URL('../../', import.meta.url)) }, bundle: true, platform: 'browser', write: false, minify: true, define: { 'process.env.NODE_ENV': '"production"', 'import.meta.env': '{}' } })).outputFiles[0].text;
   browser = await chromium.launch({ headless: true });
 }, 15000);
@@ -72,9 +73,9 @@ describe.runIf(process.env.WORKBENCH_REACT_BROWSER_QA === '1')('real React ifram
   }, 15000);
   it('uses the captured frame grant for API results, reports errors, and permits an explicit retry', async () => {
     const page = await open();
-    const source = `import React,{useState}from'react';export default function App(){const[text,setText]=useState('대기');async function load(){setText('조회 중');try{const result=await window.workbench.callApi('copied_metrics',{month:'2026-09'});setText(result.grant+':'+result.amount)}catch(error){setText(error.message)}}return <><button onClick={load}>자료 조회</button><p>{text}</p></>}`;
+    const source = `import React,{useState}from'react';export default function App(){const[text,setText]=useState('대기');async function load(){setText('조회 중');try{const result=await window.workbench.callApi('copied_metrics',{month:'2026-09'});setText(result.data.grant+':'+result.data.amount)}catch(error){setText(error instanceof Error ? error.message : String(error))}}return <><button onClick={load}>자료 조회</button><p>{text}</p></>}`;
     try {
-      const built = await artifact(source); await show(page, { ...built, executionId: 'execution-a' }, 'A');
+      const built = await artifact(source, [fixtureApi('copied_metrics', { month: { type: 'string', required: true } }, { grant: { type: 'string' }, amount: { type: 'number' } })]); await show(page, { ...built, executionId: 'execution-a' }, 'A');
       await committed(page).getByRole('button').click(); await committed(page).getByText('A:125', { exact: true }).waitFor();
       await page.evaluate(() => { window.rejectNext = true; });
       await committed(page).getByRole('button').click(); await committed(page).getByText('현재 조회 권한이 없습니다.', { exact: true }).waitFor();
@@ -104,7 +105,7 @@ describe.runIf(process.env.WORKBENCH_REACT_BROWSER_QA === '1')('real React ifram
     const page = await open();
     try {
       await show(page, await artifact(code('정상 화면'))); await committed(page).getByRole('button', { name: '횟수 0' }).click();
-      for (const source of ["export default function App(){throw Error('render failed')}", "import{useEffect}from'react';export default function App(){useEffect(()=>{throw Error('effect failed')},[]);return <div>실패 후보</div>}"]) {
+      for (const source of ["export default function App():never{throw Error('render failed')}", "import{useEffect}from'react';export default function App(){useEffect(()=>{throw Error('effect failed')},[]);return <div>실패 후보</div>}"]) {
         const value = await artifact(source); await page.evaluate((value) => window.setReactPreview({ artifact: value, grant: 'failed' }), value);
         await page.waitForFunction(() => window.lastResult?.status === 'error');
         await committed(page).getByRole('button', { name: '횟수 1' }).waitFor(); expect(await page.locator('[data-testid="react-preview-committed"]').getAttribute('data-probe-id')).toBe('1');
@@ -117,7 +118,7 @@ describe.runIf(process.env.WORKBENCH_REACT_BROWSER_QA === '1')('real React ifram
   it('blocks external nonce-bearing scripts, fetch, image, CSS, WebSocket and beacon through CSP', async () => {
     const page = await open(); requests.length = 0;
     try {
-      const source = `export default function App(){function attack(){const target=${JSON.stringify(hostOrigin)};fetch(target+'/attack-fetch').catch(()=>{});const script=document.createElement('script');script.nonce=document.querySelector('script[nonce]').nonce;script.src=target+'/attack-script';document.head.append(script);const img=new Image();img.src=target+'/attack-image';document.body.append(img);const style=document.createElement('style');style.textContent='@import "'+target+'/attack-css";';document.head.append(style);try{new WebSocket(target.replace('http:','ws:')+'/attack-websocket')}catch{};try{navigator.sendBeacon(target+'/attack-beacon','sample')}catch{}}return <button onClick={attack}>차단 검증</button>}`;
+      const source = `export default function App(){function attack(){const target=${JSON.stringify(hostOrigin)};fetch(target+'/attack-fetch').catch(()=>{});const script=document.createElement('script');script.nonce=(document.querySelector('script[nonce]') as HTMLScriptElement).nonce;script.src=target+'/attack-script';document.head.append(script);const img=new Image();img.src=target+'/attack-image';document.body.append(img);const style=document.createElement('style');style.textContent='@import "'+target+'/attack-css";';document.head.append(style);try{new WebSocket(target.replace('http:','ws:')+'/attack-websocket')}catch{};try{navigator.sendBeacon(target+'/attack-beacon','sample')}catch{}}return <button onClick={attack}>차단 검증</button>}`;
       await show(page, await artifact(source)); await committed(page).getByRole('button').click();
       await page.waitForTimeout(500);
       expect(requests).toEqual([]);
@@ -135,21 +136,21 @@ describe.runIf(process.env.WORKBENCH_REACT_BROWSER_QA === '1')('real React ifram
   it('keeps host evidence with its committed execution through late success/error, failed candidates and a new-page reset', async () => {
     const page = await browser.newPage();
     page.setDefaultTimeout(5000); const errors = []; page.on('pageerror', (error) => errors.push(error.message)); let stage = 'setup';
-    const source = (name) => `import React,{useState}from'react';export default function App(){const[value,setValue]=useState('대기');async function load(){try{const result=await window.workbench.callApi('metrics',{});setValue(result.label)}catch(error){setValue(error.message)}}return <><h1>${name}</h1><button onClick={load}>자료 조회</button><p>{value}</p></>}`;
-    const sources = { A: source('실행 A'), B: source('실행 B'), C: source('실행 C'), failed: "export default function App(){throw Error('실패 후보입니다')}" };
+    const source = (name) => `import React,{useState}from'react';export default function App(){const[value,setValue]=useState('대기');async function load(){try{const result=await window.workbench.callApi('metrics',{});setValue(result.data.label)}catch(error){setValue(error instanceof Error ? error.message : String(error))}}return <><h1>${name}</h1><button onClick={load}>자료 조회</button><p>{value}</p></>}`;
+    const sources = { A: source('실행 A'), B: source('실행 B'), C: source('실행 C'), failed: "export default function App():never{throw Error('실패 후보입니다')}" };
     const artifacts = {};
-    for (const [id, value] of Object.entries(sources)) artifacts[id] = { ...await artifact(value), executionId: id };
+    for (const [id, value] of Object.entries(sources)) artifacts[id] = { ...await artifact(value, [fixtureApi('metrics', {}, { label: { type: 'string' } })]), executionId: id };
     const ids = { A: 'aaaaaaaa-1111-4111-8111-111111111111', B: 'bbbbbbbb-2222-4222-8222-222222222222', C: 'cccccccc-3333-4333-8333-333333333333' };
     const amounts = { A: '111', B: '222', C: '333' }; const counts = { A: 0, B: 0, C: 0 };
     const deferred = {}; const observed = {};
-    const response = (id) => ({ evidenceId: ids[id], label: `조회 ${id}` });
+    const response = (id) => ({ evidenceId: ids[id], data: { label: `조회 ${id}` } });
     try {
       await page.route('**/api/v1/**', async (route) => {
         const url = new URL(route.request().url()); const json = (body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
         if (url.pathname.endsWith('/capabilities')) return json({ modelEnabled: false, gitEnabled: false, runtimeUrl: `${runtimeOrigin}/runtime`, runtimeMode: 'local-test', example: sources.A });
         if (url.pathname === '/api/v1/react-work-pages' || url.pathname === '/api/v1/workbench-apis') return json({ items: [] });
         if (url.pathname.endsWith('/preview')) {
-          const value = route.request().postDataJSON().source.code; const id = Object.keys(sources).find((key) => sources[key] === value); return json(artifacts[id]);
+          const value = route.request().postDataJSON().source.workspace.files['App.tsx']; const id = Object.keys(sources).find((key) => sources[key] === value); return json(artifacts[id]);
         }
         const match = url.pathname.match(/\/executions\/(A|B|C)\/call$/);
         if (match) {

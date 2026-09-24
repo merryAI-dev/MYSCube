@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { workbenchRequest } from './client';
 import { BoundEvidence } from './BoundEvidence';
+import type { ReactSource } from './react-workspace-editor';
 
 export type RemoteFrame = { pngBase64: string; width: number; height: number; sequence: number };
 export type RemoteSession = { sessionId: string; frame: RemoteFrame; expiresAt: string; evidence?: Record<string, { evidenceId: string }> };
-export type RemoteDraft = { source: { title: string; code: string }; apis: Array<{ id: string; version: number }>; key: number };
+export type RemoteDraft = { source: ReactSource; apis: Array<{ id: string; version: number }>; key: number };
 export type RemotePreviewResult = { status: 'ready' | 'error'; key: number; durationMs?: number; message?: string };
 const keys = new Set(['Tab', 'Enter', 'Escape', 'Backspace', 'Delete', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
 const endpoint = (id: string) => `/react-work-pages/remote/${id}`;

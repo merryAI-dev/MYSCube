@@ -5,7 +5,7 @@ import { createConversationService } from './conversations.mjs';
 import { runConversationTurn } from './conversation-agent.mjs';
 import { withConversationDeadline } from './execution-deadline.mjs';
 import { resolveHtmlBindings } from './html-bindings.mjs';
-import { generateReactPage, parseReact, reactHash, ReactSourceSchema, ReactApiRefsSchema } from './react-pages.mjs';
+import { generateReactPage, parseReact, reactHash, reactSourceHash, ReactSourceSchema, ReactApiRefsSchema } from './react-pages.mjs';
 
 export const ReactConversationInput = z.object({ expectedVersion: z.number().int().nonnegative(), requestId: z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/),
   message: z.string().trim().min(1).max(4000), mode: z.enum(['react', 'analysis']).default('react'), currentSource: ReactSourceSchema.optional(), apis: ReactApiRefsSchema.optional(), clarificationId: z.string().uuid().optional() }).strict();
@@ -55,7 +55,7 @@ export function createReactConversationService({ db, now = () => new Date().toIS
         const { react, lastMode, scopeFingerprint: _scope, ...analysisContext } = previous;
         const source = changedScope ? undefined : input.currentSource || react?.source;
         const refs = changedScope ? [] : input.apis || react?.apis || [];
-        const reactContext = source || refs.length ? { ...(source ? { source, sourceHash: reactHash(source.code) } : {}), apis: refs, ...(react?.lastProposal ? { lastProposal: react.lastProposal } : {}) } : null;
+        const reactContext = source || refs.length ? { ...(source ? { source, sourceHash: reactSourceHash(source) } : {}), apis: refs, ...(react?.lastProposal ? { lastProposal: react.lastProposal } : {}) } : null;
         const pending = changedScope || (begun.pendingClarification?.mode || 'analysis') !== input.mode ? null : begun.pendingClarification;
         if (input.clarificationId && pending?.id !== input.clarificationId) throw createHttpError(409, '이전 확인 질문의 답변입니다. 최신 대화를 다시 열어 현재 질문에 답해 주세요.', 'react_clarification_stale');
         const selected = [];

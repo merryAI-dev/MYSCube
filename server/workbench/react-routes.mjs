@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 import { createHttpError } from '../bff/bff-utils.mjs';
 import { createWorkbenchAdmission } from '../bff/workbench-admission.mjs';
 import { createRegisteredApiService } from './registered-apis.mjs';
-import { createReactPageService, generateReactPage, parseReact, reactHash, ReactSourceSchema, ReactApiRefsSchema, REACT_EXAMPLE } from './react-pages.mjs';
+import { createReactPageService, generateReactPage, parseReact, reactHash, reactSourceHash, ReactSourceSchema, ReactApiRefsSchema, REACT_EXAMPLE } from './react-pages.mjs';
 import { compileReactPreview } from './react-compiler.mjs';
 import { createHtmlCompletion } from './html-completion.mjs';
 import { createGitDeliveryService } from './git-delivery.mjs';
@@ -32,7 +32,7 @@ export function mountReactStudio(app, { db, now, env, core, analytics, asyncHand
   const limited = (fn) => async (req) => { const lease = await admission.acquire(req.context); try { return await fn(req); } finally { await lease.release(); } };
   const delivery = async (context, value) => {
     if (!gitEnabled) return { status: 'disabled', message: 'GitHub 연결 전입니다. 저장 버전은 보존되어 있으며 연결 후 PR을 만들 수 있습니다.' };
-    try { return await git.publish(context, { pageId: value.id, version: value.version, title: value.source.title, code: value.source.code, sourceHash: value.sourceHash, packageSetHash: value.artifact.packageSetHash, apiIds: value.apis.map((item) => item.id), apiBindings: value.apis }); }
+    try { return await git.publish(context, { pageId: value.id, version: value.version, title: value.source.title, ...('workspace' in value.source ? { workspace: value.source.workspace } : { code: value.source.code }), sourceHash: value.sourceHash, packageSetHash: value.artifact.packageSetHash, apiIds: value.apis.map((item) => item.id), apiBindings: value.apis }); }
     catch (error) { return { status: 'failed', message: error.expose ? error.message : '화면은 저장했지만 GitHub 전달에 실패했습니다. 같은 저장 버전으로 다시 시도해 주세요.' }; }
   };
   app.get(`${apiPrefix}/catalog`, asyncHandler(async (req, res) => { const result = await analytics.catalog(req.context); await core.authorize(req.context); res.json(result); }));
@@ -67,11 +67,11 @@ export function mountReactStudio(app, { db, now, env, core, analytics, asyncHand
   app.post(`${prefix}/preview`, asyncHandler(async (req, res) => res.json(await limited(async (request) => {
     if (!runtime) throw createHttpError(503, '별도 React 실행 공간이 연결되지 않았습니다. 소스 편집과 저장은 사용할 수 있습니다.', 'react_runtime_unconfigured');
     const input = parseReact(z.object({ source: ReactSourceSchema, apis: ReactApiRefsSchema }).strict(), request.body);
-    await pages.validateApis(request.context, input.apis);
-    const artifact = await compileReactPreview(input.source);
+    const selectedApis = await pages.validateApis(request.context, input.apis);
+    const artifact = await compileReactPreview(input.source, { apis: selectedApis });
     await core.authorize(request.context);
     const executionId = randomUUID();
-    await db.doc(`orgs/${request.context.tenantId}/react_executions/${executionId}`).create({ owner: request.context.actorId, apis: input.apis, sourceHash: reactHash(input.source.code), scopeFingerprint: request.context.analyticsScope.fingerprint, createdAt: now(), expiresAt: new Date(Date.parse(now()) + 30 * 60000).toISOString() });
+    await db.doc(`orgs/${request.context.tenantId}/react_executions/${executionId}`).create({ owner: request.context.actorId, apis: input.apis, sourceHash: reactSourceHash(input.source), scopeFingerprint: request.context.analyticsScope.fingerprint, createdAt: now(), expiresAt: new Date(Date.parse(now()) + 30 * 60000).toISOString() });
     return { ...artifact, executionId };
   })(req))));
   app.post(`${prefix}/executions/:id/call`, asyncHandler(async (req, res) => res.json(await limited(async (request) => {
@@ -93,7 +93,7 @@ export function mountReactStudio(app, { db, now, env, core, analytics, asyncHand
     await db.runTransaction(async (tx) => { const data = (await tx.get(budget)).data() || { count: 0, actors: {} }; if (data.count >= 20 || (data.actors?.[owner] || 0) >= 5) throw createHttpError(429, '오늘 AI 요청 한도에 도달했습니다.', 'react_daily_limit'); tx.set(budget, { count: data.count + 1, actors: { ...data.actors, [owner]: (data.actors?.[owner] || 0) + 1 } }); });
     const record = db.doc(`orgs/${req.context.tenantId}/react_generation_runs/${randomUUID()}`);
     const started = performance.now(), stages = []; let inputTokens = null, outputTokens = null;
-    await record.create({ actorId: req.context.actorId, sourceHash: input.source ? reactHash(input.source.code) : null, state: 'started', createdAt: now() });
+    await record.create({ actorId: req.context.actorId, sourceHash: input.source ? reactSourceHash(input.source) : null, state: 'started', createdAt: now() });
     try {
       const complete = completionFactory({ apiKey: env.WORKBENCH_GEMINI_API_KEY, model: env.WORKBENCH_HTML_MODEL || 'gemini-3.6-flash', onUsage: async (usage) => {
         if (Number.isSafeInteger(usage.promptTokenCount) && usage.promptTokenCount >= 0) inputTokens = (inputTokens || 0) + usage.promptTokenCount;
@@ -103,7 +103,7 @@ export function mountReactStudio(app, { db, now, env, core, analytics, asyncHand
       const signal = AbortSignal.timeout(110000);
       const result = await withConversationDeadline(() => generateReactPage({ complete, prompt: input.prompt, currentSource: input.source, apis: selected.map((api) => ({ id: api.id, version: api.version, ...api.definition, responseSchema: api.responseSchema || null, responseKind: api.responseKind || api.definition.kind })), authorize: async () => { await core.authorize(req.context); await pages.validateApis(req.context, input.apis); }, signal, onStage: (stage) => stages.push(stage) }), signal);
       await core.authorize(req.context); await pages.validateApis(req.context, input.apis);
-      await record.update({ state: 'completed', resultType: result.type, outputHash: result.source ? reactHash(result.source.code) : null, completedAt: now(), inputTokens, outputTokens, stages, elapsedMs: Math.round(performance.now() - started) });
+      await record.update({ state: 'completed', resultType: result.type, outputHash: result.source ? reactSourceHash(result.source) : null, completedAt: now(), inputTokens, outputTokens, stages, elapsedMs: Math.round(performance.now() - started) });
       return { status: 200, body: result };
     } catch (error) { await record.update({ state: 'failed', completedAt: now(), code: error.code || 'react_generation_failed', inputTokens, outputTokens, stages, elapsedMs: Math.round(performance.now() - started) }); throw error; }
   })));

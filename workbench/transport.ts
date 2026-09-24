@@ -99,7 +99,7 @@ export function createWorkbenchTransport(options: Options) {
       if (options.actor() !== actor) throw new Error('계정이 바뀌어 이전 계정의 응답을 표시하지 않았습니다.');
       if (!result.response.ok) {
         if (pending && actor && !uncertain && result.response.status < 500 && (![408, 409, 429].includes(result.response.status) || ['react_page_conflict', 'html_page_conflict', 'registered_api_conflict'].includes(result.data?.error))) acknowledge(pending, actor);
-        throw Object.assign(new Error(result.data?.message || `요청을 완료하지 못했습니다 (${result.response.status}).`), { status: result.response.status, code: result.data?.error });
+        throw Object.assign(new Error(result.data?.message || `요청을 완료하지 못했습니다 (${result.response.status}).`), { status: result.response.status, code: result.data?.error, details: result.data?.details });
       }
       if (pending && actor) acknowledge(pending, actor);
       return result.data;

@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { workbenchRequest } from './client';
 
-type Source = { title: string; code: string };
-type ApiRef = { id: string; version: number };
+import { draftIdentity, type ReactSource as Source, type ApiRef, type SourceProposal } from './react-workspace-editor';
 type Mode = 'react' | 'analysis';
 type Clarification = { id: string; mode?: Mode; question: string; reason?: string; options?: Array<{ id: string; label: string }> };
-type Result = { type?: 'source' | 'clarification' | 'answer'; mode?: Mode; answer: string; source?: Source; clarification?: Clarification;
+type Result = { type?: 'source' | 'clarification' | 'answer'; mode?: Mode; answer: string; source?: Source; apis?: ApiRef[]; baseEditorIdentity?: string; clarification?: Clarification;
   evidence?: Array<{ evidenceId: string; columns: Array<{ name: string; label?: string }>; rows: Array<Record<string, unknown>>; metadata?: Record<string, unknown> }>; proposal?: { html?: string } };
 type Turn = { id: string; state: string; message: string; result?: Result; error?: { message: string } };
 type Session = { id: string; title: string; version: number; turns?: Turn[]; lastMode?: Mode; truncated?: boolean; pendingClarification?: Clarification | null; reactContext?: { source?: Source; sourceHash?: string; apis: ApiRef[] } | null };
-type Props = { modelEnabled: boolean; busy: boolean; currentSource: Source; apis: ApiRef[]; onProposal: (proposal: { source: Source }) => void; onRestoreContext: (context: { source: Source; apis: ApiRef[] }) => boolean };
+type Props = { modelEnabled: boolean; busy: boolean; currentSource: Source; apis: ApiRef[]; onProposal: (proposal: SourceProposal) => void; onRestoreContext: (context: { source: Source; apis: ApiRef[] }) => boolean };
 const request = (path: string, method = 'GET', body?: unknown) => workbenchRequest(`/react-work-pages/conversations${path}`, method, body);
 const display = (value: unknown) => value == null ? '확인 필요' : typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '상세 자료';
 
@@ -17,7 +16,7 @@ export function ReactConversationPanel({ modelEnabled, busy, currentSource, apis
   const [sessions, setSessions] = useState<Session[]>([]), [session, setSession] = useState<Session | null>(null);
   const [mode, setMode] = useState<Mode>('react'), [message, setMessage] = useState('등록한 API로 조회하고 월과 주차를 선택할 수 있는 업무 화면을 만들어 주세요. 확인되지 않은 수치는 확인 필요로 보여 주세요.'), [loading, setLoading] = useState(false), [error, setError] = useState('');
   const generation = useRef(0), working = useRef(false), mounted = useRef(true);
-  const editor = JSON.stringify({ currentSource, apis });
+  const editor = draftIdentity(currentSource, apis);
   const editorRef = useRef(editor); editorRef.current = editor;
   const [storedContext, setStoredContext] = useState<{ sessionId: string; editor: string } | null>(null);
   const usingStoredContext = Boolean(session && storedContext?.sessionId === session.id && storedContext.editor === editor);
@@ -49,7 +48,7 @@ export function ReactConversationPanel({ modelEnabled, busy, currentSource, apis
       if (!mounted.current || generation.current !== at) return;
       await hydrate(active!.id, at); await refreshList();
       if (!mounted.current || generation.current !== at) return;
-      setMessage(''); if (response.result?.type === 'source' && response.result.source) onProposal({ source: response.result.source });
+      setMessage(''); if (response.result?.type === 'source' && response.result.source) onProposal({ source: response.result.source, apis: response.result.apis, baseEditorIdentity: response.result.baseEditorIdentity });
     } catch (reason) {
       if (mounted.current && generation.current === at) {
         setError(reason instanceof Error ? reason.message : '대화를 완료하지 못했습니다. 편집 내용은 유지됩니다.');
@@ -70,7 +69,8 @@ export function ReactConversationPanel({ modelEnabled, busy, currentSource, apis
       {turn.result && <><p className="turn-answer">{turn.result.answer}</p>
         {turn.result.clarification && <section className="clarification" aria-label="제작 추가 확인"><strong>{turn.result.clarification.question}</strong>{turn.result.clarification.reason && <p className="subtle">{turn.result.clarification.reason}</p>}
           <div className="actions">{turn.result.clarification.options?.map((option) => <button className="quiet compact" key={option.id} disabled={disabled || index !== session.turns!.length - 1 || session.pendingClarification?.id !== turn.result!.clarification!.id || (turn.result!.clarification!.mode || 'analysis') !== mode} onClick={() => void send(option.label, turn.result!.clarification!.id)}>{option.label}</button>)}</div><small>입력창에 직접 답변해도 됩니다. 이전 질문의 선택지는 다시 사용하지 않습니다.</small></section>}
-        {turn.result.source && <button className="quiet compact" disabled={disabled} onClick={() => onProposal({ source: turn.result!.source! })}>이 React 제안 검토하기</button>}
+        {turn.result.source && !turn.result.baseEditorIdentity && <p className="notice">이전 방식으로 생성한 제안은 현재 편집 내용과 비교할 기준이 없습니다. 현재 편집 내용으로 다시 생성해 주세요.</p>}
+        {turn.result.source && <button className="quiet compact" disabled={disabled} onClick={() => onProposal({ source: turn.result!.source!, apis: turn.result!.apis, baseEditorIdentity: turn.result!.baseEditorIdentity })}>이 React 제안 검토하기</button>}
         {turn.result.evidence?.map((item) => <details key={item.evidenceId} className="evidence-card"><summary>확인한 자료와 조회 범위</summary><p>{display(item.metadata?.resultScope)} · {display(item.metadata?.asOf)} · {display(item.metadata?.completeness)}</p><div className="evidence-table-wrap"><table><thead><tr>{item.columns.map((column) => <th key={column.name}>{column.label || column.name}</th>)}</tr></thead><tbody>{item.rows.slice(0, 20).map((row, rowIndex) => <tr key={rowIndex}>{item.columns.map((column) => <td key={column.name}>{display(row[column.name])}</td>)}</tr>)}</tbody></table></div>{item.rows.length > 20 && <p>처음 20행을 표시합니다. 조회 범위를 좁혀 이어서 질문해 주세요.</p>}</details>)}
         {turn.result.proposal?.html && <p className="subtle">이 대화에는 HTML 화면 제안도 저장되어 있습니다. HTML 제작 공간의 같은 대화에서 확인할 수 있습니다.</p>}
       </>}

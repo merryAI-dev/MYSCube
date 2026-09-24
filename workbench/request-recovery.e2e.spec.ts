@@ -125,7 +125,9 @@ test('HTML restore response loss recovers its new immutable revision rather than
   await expect(page.getByRole('alert')).toContainText('저장 결과를 아직 확인할 수 없습니다'); expect(restored.version).toBe(3); expect(restored.restoredFrom).toBe(1);
   await page.reload(); await expect(page.getByLabel('HTML 원문')).not.toHaveValue('');
   const recovery = page.getByRole('region', { name: '저장 결과 복구' }); await recovery.getByRole('button', { name: '저장 결과 확인' }).click();
-  await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click(); await page.getByRole('tab', { name: '소스', exact: true }).click();
+  await recovery.getByRole('button', { name: '복구한 저장본 불러오기' }).click();
+  await expect(page.getByText('확인한 HTML 저장 결과를 불러왔습니다.', { exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: '소스', exact: true }).click();
   await expect(page.getByLabel('HTML 원문')).toHaveValue(original); await expect.poll(() => pending(page)).toHaveLength(0);
   const owner = createHash('sha256').update(actorId).digest('hex'), collection = db.collection(`${root}/html_work_pages/${owner}/pages`);
   expect((await collection.get()).size).toBe(1); expect((await collection.doc(restored.id).collection('versions').get()).size).toBe(3); expect((await collection.doc(restored.id).get()).data()?.version).toBe(3);

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { normalizeReactSource } from '../../shared/workbench-react-workspace.mjs';
 import { generateReactPage } from './react-pages.mjs';
 
 const tool = (name, value) => ({ tool_calls: [{ function: { name, arguments: JSON.stringify(value) } }] });
@@ -19,7 +20,7 @@ describe('typed React generation outcomes', () => {
   it('repairs invalid React only once and records actual model and compile stage durations', async () => {
     const stages = []; let calls = 0;
     const result = await run(async () => ++calls === 1 ? tool('render_react_source', { title: '실패', code: 'import bad from "node:fs"; export default bad;' }) : tool('render_react_source', source), { onStage: (stage) => stages.push(stage) });
-    expect(result.type).toBe('source'); expect(result.source).toEqual(source); expect(result.attempts).toBe(2); expect(result.artifact.bundleHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(result.type).toBe('source'); expect(result.source).toEqual(normalizeReactSource(source)); expect(result.attempts).toBe(2); expect(result.artifact.bundleHash).toMatch(/^[a-f0-9]{64}$/);
     expect(stages.map((stage) => stage.stage)).toEqual(['model', 'compile', 'model', 'compile']);
     expect(stages.every((stage) => Number.isInteger(stage.durationMs) && stage.durationMs >= 0)).toBe(true);
   });

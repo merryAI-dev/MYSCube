@@ -48,8 +48,12 @@ test('clarification preserves the live preview; reload follows persisted source 
   const defaultSource = await page.getByLabel('React 원문').inputValue(); expect(defaultSource).not.toBe(original);
   await page.getByRole('button', { name: '카드로 보여 주세요', exact: true }).click();
   await expect(page.getByRole('button', { name: 'React 제안 적용', exact: true })).toBeVisible();
-  expect(JSON.parse(inputs.at(-1).messages.at(-1).content).currentSource.code).toBe(original);
+  expect(JSON.parse(inputs.at(-1).messages.at(-1).content).currentSource.workspace.files['App.tsx']).toBe(original);
   await expect(page.getByLabel('React 원문')).toHaveValue(defaultSource);
+  await expect(page.getByRole('button', { name: 'React 제안 적용', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: '대화 당시 편집 내용 불러오기', exact: true }).click();
+  await expect(page.getByLabel('React 원문')).toHaveValue(original);
+  await page.getByRole('button', { name: '이 React 제안 검토하기', exact: true }).click();
   await page.getByRole('button', { name: 'React 제안 적용', exact: true }).click();
   await expect(page.getByLabel('React 원문')).toHaveValue(proposal);
   const id = new URL(page.url()).searchParams.get('conversation');

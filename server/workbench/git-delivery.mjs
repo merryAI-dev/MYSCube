@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { setTimeout as pause } from 'node:timers/promises';
 import { createGitCredentialProvider } from './git-credentials.mjs';
 import { createHttpError } from '../bff/bff-utils.mjs';
+import { WorkspaceSourceSchema, reactSourceIdentity } from '../../shared/workbench-react-workspace.mjs';
 
 const digest = (value) => createHash('sha256').update(value).digest('hex');
 const fail = (status, code, message) => createHttpError(status, message, code);
@@ -10,16 +11,24 @@ const sha = (value) => {
   return value;
 };
 const sourceInput = (input) => {
-  const keys = ['pageId', 'version', 'title', 'sourceHash', 'code', 'apiIds', 'apiBindings', 'packageSetHash'];
+  const keys = ['pageId', 'version', 'title', 'sourceHash', 'code', 'workspace', 'apiIds', 'apiBindings', 'packageSetHash'];
+  let identity;
+  if (input && Object.hasOwn(input, 'workspace') && !Object.hasOwn(input, 'code')) {
+    const parsed = WorkspaceSourceSchema.safeParse({ title: input.title, workspace: input.workspace });
+    if (parsed.success) identity = reactSourceIdentity(parsed.data);
+  } else if (input && !Object.hasOwn(input, 'workspace') && typeof input.code === 'string' && input.code.trim() && Buffer.byteLength(input.code) <= 200_000) {
+    identity = input.code;
+  }
   if (!input || Object.keys(input).some((key) => !keys.includes(key)) || !/^[a-zA-Z0-9-]{1,100}$/.test(input.pageId || '')
     || !Number.isSafeInteger(input.version) || input.version < 1 || typeof input.title !== 'string' || !input.title.trim() || input.title.length > 80
-    || typeof input.code !== 'string' || !input.code.trim() || Buffer.byteLength(input.code) > 200_000
-    || !/^[a-f0-9]{64}$/.test(input.sourceHash || '') || digest(input.code) !== input.sourceHash
+    || identity === undefined
+    || !/^[a-f0-9]{64}$/.test(input.sourceHash || '') || digest(identity) !== input.sourceHash
     || !/^[a-zA-Z0-9._:-]{1,100}$/.test(input.packageSetHash || '') || !Array.isArray(input.apiIds) || input.apiIds.length > 20
     || input.apiIds.some((id) => !/^[a-zA-Z0-9-]{1,100}$/.test(id)) || new Set(input.apiIds).size !== input.apiIds.length) {
     throw fail(400, 'git_source_invalid', '저장된 React 버전과 원문 검증값을 확인해 주세요.');
   }
-  if (/(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._-]{16,}|(?:api[_-]?key|secret|token|password)\s*[:=]\s*["'][^"']{8,}["'])/i.test(input.code)) {
+  const sourceText = input.workspace ? Object.values(input.workspace.files).join('\n') : input.code;
+  if (/(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AIza[A-Za-z0-9_-]{30,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\bBearer\s+[A-Za-z0-9._-]{16,}|(?:api[_-]?key|secret|token|password)\s*[:=]\s*["'][^"']{8,}["'])/i.test(sourceText)) {
     throw fail(400, 'git_source_secret_detected', '코드에 인증 정보로 보이는 값이 있습니다. 제거한 뒤 새 버전으로 저장해 주세요.');
   }
   const bindings = input.apiBindings;
@@ -30,7 +39,7 @@ const sourceInput = (input) => {
     || new Set(bindings.map((binding) => binding.id)).size !== input.apiIds.length)) {
     throw fail(400, 'git_api_bindings_invalid', '저장한 페이지의 API 연결과 버전이 일치하지 않습니다. 저장 버전을 다시 확인해 주세요.');
   }
-  return { ...input, apiIds: [...input.apiIds].sort(), ...(bindings !== undefined ? { apiBindings: [...bindings].sort((a, b) => a.id.localeCompare(b.id)) } : {}) };
+  return { ...input, ...(input.workspace ? { workspace: JSON.parse(identity) } : {}), apiIds: [...input.apiIds].sort(), ...(bindings !== undefined ? { apiBindings: [...bindings].sort((a, b) => a.id.localeCompare(b.id)) } : {}) };
 };
 const configuration = (env) => {
   const repository = env.WORKBENCH_GIT_REPOSITORY;
@@ -125,9 +134,19 @@ export function createGitDeliveryService({ db, env = process.env, authorize, fet
             await checkpoint({ baseSha: sha(base.object?.sha), baseTree: sha(commit.tree?.sha) });
           }
           const folder = `generated/${id}`;
+          const workspace = input.workspace;
+          const sourceFiles = workspace ? workspace.files : { 'App.tsx': input.code };
+          const manifest = {
+            schemaVersion: workspace ? 2 : 1, pageId: input.pageId, version: input.version,
+            entry: workspace?.entry || 'App.tsx', sourceHash: input.sourceHash,
+            ...(workspace ? { workspaceSchemaVersion: workspace.schemaVersion, workspaceHash: input.sourceHash, packageSetId: workspace.packageSetId, files: Object.keys(sourceFiles).sort() } : {}),
+            packageSetHash: input.packageSetHash, apiIds: input.apiIds,
+            ...(input.apiBindings !== undefined ? { apis: input.apiBindings } : {}),
+            runtime: 'isolated-react', dataExportPolicy: 'source-only-no-response-injection',
+          };
           const files = {
-            [`${folder}/App.tsx`]: input.code,
-            [`${folder}/manifest.json`]: `${JSON.stringify({ schemaVersion: 1, pageId: input.pageId, version: input.version, entry: 'App.tsx', sourceHash: input.sourceHash, packageSetHash: input.packageSetHash, apiIds: input.apiIds, ...(input.apiBindings !== undefined ? { apis: input.apiBindings } : {}), runtime: 'isolated-react', dataExportPolicy: 'source-only-no-response-injection' }, null, 2)}\n`,
+            ...Object.fromEntries(Object.entries(sourceFiles).map(([path, content]) => [`${folder}/${path}`, content])),
+            [`${folder}/manifest.json`]: `${JSON.stringify(manifest, null, 2)}\n`,
             [`${folder}/README.md`]: '# MYSCube AXR generated React page\n\nThis immutable source is for code review. Registered API identifiers are references. This exporter does not add API credentials or fetched responses. Review any literals already present in the source before sharing. No production deployment or merge is performed.\n',
           };
           const tree = [];

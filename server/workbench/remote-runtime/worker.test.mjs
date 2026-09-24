@@ -36,7 +36,7 @@ describe('local renderer protocol and actual React DOM (not isolation proof)', (
   it('renders styled React, routes two live state changes through IPC and emits changed PNG frames', async () => {
     const apiId = '11111111-1111-4111-8111-111111111111';
     const source = { title: 'Synthetic local fixture', code: `import React,{useState} from 'react'; export default function App(){const[n,setN]=useState(0);return <button className="bg-blue-600 text-white p-4" style={{position:'absolute',left:20,top:20}} onClick={()=>{setN(n+1);window.workbench.callApi('${apiId}',{count:n+1});}}>Counter {n}</button>}` };
-    const artifact = await compileReactPreview(source);
+    const artifact = await compileReactPreview(source, { apis: [{ id: apiId, version: 1, definition: { kind: 'external-read', parameters: { count: { type: 'integer', required: true } } }, responseKind: 'external-read', responseSchema: { type: 'object', properties: { value: { type: 'number' } }, required: ['value'], additionalProperties: false } }] });
     send({ type: 'init', requestId: 'initialize', viewport: { width: 640, height: 480 }, artifact });
     const first = await waitFor(message => ['frame','error'].includes(message.type) && message.requestId === 'initialize');
     expect(first.type, JSON.stringify(first)).toBe('frame'); expect(first.pngBase64.startsWith('iVBORw0KGgo')).toBe(true);

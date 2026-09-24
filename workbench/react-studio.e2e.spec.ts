@@ -13,7 +13,7 @@ let db: Firestore, server: any, runtimeServer: any, base: string, registeredId: 
 const code = () => `import React, { useState } from 'react';
 export default function App() {
  const [count,setCount]=useState(0); const [answer,setAnswer]=useState('아직 조회하지 않았습니다');
- const query=async()=>{try{const result=await window.workbench.callApi('${registeredId}',{yearMonth:'2026-09',weekNo:1});setAnswer(result.rows[0].project_id)}catch(error){setAnswer(error.message)}};
+ const query=async()=>{try{const result=await window.workbench.callApi('${registeredId}',{yearMonth:'2026-09',weekNo:1});setAnswer(String(result.rows[0].project_id))}catch(error){setAnswer(error instanceof Error ? error.message : "조회 실패")}};
  return <main className="p-8 bg-slate-50 min-h-screen"><h1 className="text-2xl font-bold">나의 프로젝트 현황</h1><button onClick={()=>setCount(count+1)}>클릭 {count}회</button><button onClick={query}>사업 조회</button><p role="status">{answer}</p></main>;
 }`;
 test.beforeAll(async () => {
@@ -84,6 +84,10 @@ test('register API → generate React → real state and API bridge → immutabl
   const stopped = page.getByRole('checkbox', { name: /주정산 상태 확인.*사용 중지/ });
   await expect(stopped).toBeEnabled();
   await stopped.uncheck();
+  await page.getByRole('button', { name: 'React 저장·PR 생성' }).click();
+  await expect(page.getByRole('region', { name: 'React 파일 오류' })).toContainText('App.tsx');
+  await expect(page.getByText(/버전 2으로 저장했습니다/)).toHaveCount(0);
+  await page.getByLabel('React 원문').fill('import React from "react"; export default function App(){return <main><h1>API 연결을 해제한 화면</h1></main>}');
   await page.getByRole('button', { name: 'React 저장·PR 생성' }).click();
   await expect(page.getByText(/버전 2으로 저장했습니다/)).toBeVisible();
   expect(errors).toEqual([]);
