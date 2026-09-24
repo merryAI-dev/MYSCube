@@ -21,6 +21,12 @@ describe('untrusted DOM transport rejects unsafe structure/styles and wrong even
     } finally { await rm(directory, { recursive: true, force: true }); }
   });
   it('accepts an explicit bounded native DOM frame and its button event', () => { const frame = domFrame(); expect(RemoteDomFrameSchema.safeParse(frame).success).toBe(true); expect(checkDomEvent(domEvent(frame), frame).type).toBe('click'); });
+  it('accepts bounded viewport-only events and rejects node fields, stale sequences and unsafe dimensions',()=>{
+    const frame=domFrame(),event={type:'resize',eventId:randomUUID(),sessionId:frame.sessionId,sourceHash:frame.sourceHash,documentEpoch:frame.documentEpoch,baseSequence:frame.sequence,baseRevision:frame.snapshot.revision,width:340,height:700};
+    expect(checkDomEvent(event,frame)).toEqual(event);expect(RemoteDomEventSchema.safeParse({...event,nodeId:frame.snapshot.rootNodeId}).success).toBe(false);
+    for(const width of [319,1601,NaN,340.5])expect(RemoteDomEventSchema.safeParse({...event,width}).success).toBe(false);
+    expect(()=>checkDomEvent({...event,baseSequence:frame.sequence+1},frame)).toThrow();
+  });
   it.each(['script', 'url', 'css-url', 'css-filter', 'duplicate', 'cycle', 'extra-root', 'reference', 'fake-focus', 'control-mismatch', 'span-size', 'autofill', 'pattern', 'positive-tab'])('rejects %s from the renderer boundary', (kind) => {
     const frame = domFrame(), node = frame.snapshot.nodes[1];
     if (kind === 'script') node.tag = 'script';

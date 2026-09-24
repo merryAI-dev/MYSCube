@@ -25,6 +25,7 @@ async function renderer(input = source) {
   const normalize = (value) => { const { type, requestId, ...rest } = value; return rest; };
   return { get frame() { return normalize(frame); }, get nodes() { return frame.snapshot?.nodes || []; },
     async event(nodeId, body) { const previous = frame; frame = await send({ type: 'event', event: { sessionId, sourceHash: artifact.sourceHash, documentEpoch: frame.documentEpoch, nodeId, baseRevision: frame.snapshot.revision, eventId: randomUUID(), ...body } }); return { previous: normalize(previous), current: normalize(frame) }; },
+    async resize(width, height = 480) { const previous = frame; frame = await send({ type: 'event', event: { type: 'resize', sessionId, sourceHash: artifact.sourceHash, documentEpoch: frame.documentEpoch, baseSequence: frame.sequence, baseRevision: frame.kind === 'dom' ? frame.snapshot.revision : frame.documentRevision, eventId: randomUUID(), width, height } }); return { previous: normalize(previous), current: normalize(frame) }; },
     async raw(event) { return send({ type: 'event', event }); },
   };
 }
@@ -84,6 +85,29 @@ describe('actual generated React DOM over local CDP (not Docker isolation or OS 
   it('ignores generated main-world getter and serializer replacements when copying native input state', async () => {
     const view = await renderer({ title: 'Prototype fixture', code: `import React,{useEffect} from 'react';export default function App(){useEffect(()=>{window.getComputedStyle=()=>{throw Error('forged')};Object.defineProperty(HTMLInputElement.prototype,'value',{get(){return 'FORGED'},set(){}});JSON.stringify=()=> 'FORGED';},[]);return <main><h1>실제 제목</h1><input defaultValue="ACTUAL" readOnly/></main>}` });
     expect(view.frame.kind, JSON.stringify(view.frame.unsupported)).toBe('dom'); expect(view.nodes.find(node => node.tag === 'input').control.value).toBe('ACTUAL'); expect(text(view)).toContain('실제 제목');
+  });
+  it('resizes the same React document without resetting state, selection, focus or stable node identities', async () => {
+    const view = await renderer(), first = view.frame, input = view.nodes.find(node => node.control?.type === 'text');
+    await view.event(input.id, { type:'input', value:'AB', inputType:'insertText', data:'AB', selectionStart:1, selectionEnd:1, inputRevision:1 });
+    await view.event(view.nodes.find(node => node.tag === 'button').id, {type:'click'});
+    await view.event(input.id, {type:'focus'});
+    const before=view.frame; await view.resize(340);
+    expect(view.frame).toMatchObject({kind:'dom',sessionId:first.sessionId,sourceHash:first.sourceHash,documentEpoch:first.documentEpoch,width:340});
+    expect(view.frame.snapshot.revision).toBeGreaterThan(before.snapshot.revision);expect(view.frame.snapshot.focusedNodeId).toBe(input.id);
+    expect(view.nodes.find(node=>node.id===input.id).control).toMatchObject({value:'AB',selectionStart:1,selectionEnd:1});expect(text(view)).toContain('|1|1|');
+    await view.resize(900);expect(view.frame.width).toBe(900);expect(view.nodes.find(node=>node.id===input.id).control.value).toBe('AB');
+  });
+  it('returns ordered fallback metadata and recovers unsupported responsive styles by resize alone', async () => {
+    const view=await renderer({title:'Responsive fallback',code:`import React,{useState} from 'react';export default function App(){const[n,setN]=useState(0);return <main className="max-sm:rotate-3"><button onClick={()=>setN(n+1)}>횟수 {n}</button></main>}`});
+    const first=view.frame,button=view.nodes.find(node=>node.tag==='button');await view.event(button.id,{type:'click'});
+    await view.resize(340);expect(view.frame.kind).toBe('png');expect(view.frame.documentRevision).toBeGreaterThan(first.snapshot.revision);expect(view.frame.ack.eventId).toEqual(expect.any(String));
+    const refused=await view.raw({type:'click',eventId:randomUUID(),sessionId:first.sessionId,sourceHash:first.sourceHash,documentEpoch:first.documentEpoch,baseRevision:view.frame.documentRevision,nodeId:button.id});expect(refused.code).toBe('remote_dom_unsupported');
+    await view.resize(900);expect(view.frame).toMatchObject({kind:'dom',sessionId:first.sessionId,documentEpoch:first.documentEpoch,width:900});expect(text(view)).toContain('횟수 1');expect(view.nodes.find(node=>node.tag==='button').id).toBe(button.id);
+  });
+  it('refuses viewport changes during active composition and accepts them after its final ACK', async () => {
+    const view=await renderer(), input=view.nodes.find(node=>node.control?.type==='text');await view.event(input.id,{type:'composition',phase:'start',text:'',selectionStart:0,selectionEnd:0,inputRevision:1});
+    const first=view.frame;const refused=await view.raw({type:'resize',eventId:randomUUID(),sessionId:first.sessionId,sourceHash:first.sourceHash,documentEpoch:first.documentEpoch,baseSequence:first.sequence,baseRevision:first.snapshot.revision,width:340,height:480});expect(refused.code).toBe('remote_dom_composition_busy');
+    await view.event(input.id,{type:'composition',phase:'end',text:'한',selectionStart:1,selectionEnd:1,inputRevision:2});await view.resize(340);expect(view.nodes.find(node=>node.id===input.id).control.value).toBe('한');
   });
   it('explicitly falls back for unsupported canvas instead of reporting omitted content as a normal DOM view', async () => {
     const view = await renderer({ title: 'Unsupported fixture', code: `import React from 'react';export default function App(){return <main><h1>그래프</h1><canvas width={100} height={100}/></main>}` });

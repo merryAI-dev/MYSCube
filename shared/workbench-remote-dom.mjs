@@ -102,6 +102,7 @@ const identityShape = { sessionId: z.string().uuid(), sourceHash: z.string().reg
 export const RemoteDomFrameSchema = z.object({ kind: z.literal('dom'), ...identityShape, sequence: integer.min(1), width: z.number().int().min(320).max(1600), height: z.number().int().min(240).max(1200), snapshot: RemoteDomSnapshotSchema }).strict();
 const eventShape = { ...identityShape, eventId: z.string().uuid(), nodeId, baseRevision: integer.min(1) };
 export const RemoteDomEventSchema = z.discriminatedUnion('type', [
+  z.object({ ...identityShape, eventId: z.string().uuid(), baseRevision: integer.min(1), baseSequence: integer.min(1), type: z.literal('resize'), width: z.number().int().min(320).max(1600), height: z.number().int().min(240).max(1200) }).strict(),
   z.object({ ...eventShape, type: z.literal('focus') }).strict(), z.object({ ...eventShape, type: z.literal('click') }).strict(),
   z.object({ ...eventShape, type: z.literal('input'), value: inputValue, inputType: z.enum(['insertText', 'insertFromPaste', 'deleteContentBackward', 'deleteContentForward', 'deleteByCut', 'insertLineBreak', 'historyUndo', 'historyRedo', 'insertReplacementText']), data: inputValue.nullable(), selectionStart: selection, selectionEnd: selection, inputRevision: integer.min(1) }).strict(),
   z.object({ ...eventShape, type: z.literal('check'), checked: z.boolean(), inputRevision: integer.min(1) }).strict(),
@@ -116,3 +117,5 @@ export const RemoteDomEventSchema = z.discriminatedUnion('type', [
   if (value.type === 'composition' && (value.selectionStart > value.selectionEnd || ['update', 'end'].includes(value.phase) && value.selectionEnd > value.text.length)) context.addIssue({ code: 'custom', message: '조합 선택 범위가 유효하지 않습니다.' });
 });
 export const RemoteDomUnsupportedSchema = z.array(z.object({ code: z.string().regex(/^[a-z_]+$/).max(80), message: z.string().max(200), nodeId: nodeId.optional() }).strict()).min(1).max(20);
+
+export const RemoteDomFallbackFrameSchema = z.object({ kind: z.literal('png'), ...identityShape, sequence: integer.min(1), width: z.number().int().min(320).max(1600), height: z.number().int().min(240).max(1200), documentRevision: integer.min(1), ack: ack.nullable(), unsupported: RemoteDomUnsupportedSchema, pngBase64: z.string().max(860000).regex(/^iVBORw0KGgo[A-Za-z0-9+/]*={0,2}$/) }).strict();

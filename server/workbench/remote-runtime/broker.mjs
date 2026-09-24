@@ -1,4 +1,4 @@
-import { RemoteDomFrameSchema, RemoteDomEventSchema, RemoteDomUnsupportedSchema, REMOTE_DOM_LIMITS } from '../../../shared/workbench-remote-dom.mjs';
+import { RemoteDomFrameSchema, RemoteDomEventSchema, RemoteDomFallbackFrameSchema, REMOTE_DOM_LIMITS } from '../../../shared/workbench-remote-dom.mjs';
 import { checkDomEvent } from './dom-events.mjs';
 import { digest } from './contract.mjs';
 import { spawn } from 'node:child_process';
@@ -138,31 +138,36 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
       }
       clean(session, fail('React 미리보기를 완성하지 못했습니다.', 'remote_react_error', 422)); return;
     }
+    const expectedViewport = pending.event?.type === 'resize' ? pending.event : session.viewport;
     if (session.viewMode === 'dom' && message.kind === 'dom') {
       const { type, requestId, ...payload } = message;
       const parsed = RemoteDomFrameSchema.safeParse(payload);
       if (!parsed.success || payload.sessionId !== session.id || payload.sourceHash !== session.sourceHash
-        || payload.width !== session.viewport.width || payload.height !== session.viewport.height || payload.sequence <= session.sequence
+        || payload.width !== expectedViewport.width || payload.height !== expectedViewport.height || payload.sequence <= session.sequence
         || session.documentEpoch && session.documentEpoch !== payload.documentEpoch || payload.snapshot.revision <= session.domRevision
         || pending.event && (payload.snapshot.ack?.eventId !== pending.event.eventId || payload.snapshot.ack?.inputRevision !== pending.event.inputRevision)
         || !pending.event && payload.snapshot.ack !== null) { clean(session, fail('원본 화면의 요소·입력 순서를 확인하지 못했습니다.', 'remote_dom_frame_invalid')); return; }
-      session.sequence = payload.sequence; session.documentEpoch = payload.documentEpoch; session.domRevision = payload.snapshot.revision; session.domFrame = parsed.data;
+      session.sequence = payload.sequence; session.documentEpoch = payload.documentEpoch; session.domRevision = payload.snapshot.revision; session.domFrame = parsed.data; session.viewport = checkViewport(payload);
       clearTimeout(pending.timer); session.pending.delete(message.requestId); pending.resolve(parsed.data); return;
     }
     let unsupported;
     if (session.viewMode === 'dom') {
-      const parsed = RemoteDomUnsupportedSchema.safeParse(message.unsupported);
-      if (message.kind !== 'png' || !parsed.success || message.sessionId !== session.id || message.sourceHash !== session.sourceHash
-        || !/^[a-f0-9-]{36}$/.test(message.documentEpoch || '') || session.documentEpoch && session.documentEpoch !== message.documentEpoch) { clean(session, fail('지원하지 않는 화면의 안내 정보를 확인하지 못했습니다.', 'remote_dom_frame_invalid')); return; }
-      unsupported = parsed.data; session.documentEpoch = message.documentEpoch; session.domFrame = null;
+      const { type, requestId, ...payload } = message;
+      const parsed = RemoteDomFallbackFrameSchema.safeParse(payload);
+      if (!parsed.success || payload.sessionId !== session.id || payload.sourceHash !== session.sourceHash
+        || session.documentEpoch && session.documentEpoch !== payload.documentEpoch || payload.documentRevision <= session.domRevision
+        || pending.event && (payload.ack?.eventId !== pending.event.eventId || payload.ack?.inputRevision !== pending.event.inputRevision)
+        || !pending.event && payload.ack !== null) { clean(session, fail('지원하지 않는 화면의 안내 정보를 확인하지 못했습니다.', 'remote_dom_frame_invalid')); return; }
+      unsupported = parsed.data;
     }
     let png;
     if (typeof message.pngBase64 === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(message.pngBase64)) png = Buffer.from(message.pngBase64, 'base64');
-    if (!png || png.length < 24 || png.length > 640000 || png.toString('base64') !== message.pngBase64 || png.readUInt32BE(16) !== session.viewport.width || png.readUInt32BE(20) !== session.viewport.height || !png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) || message.width !== session.viewport.width || message.height !== session.viewport.height
+    if (!png || png.length < 24 || png.length > 640000 || png.toString('base64') !== message.pngBase64 || png.readUInt32BE(16) !== expectedViewport.width || png.readUInt32BE(20) !== expectedViewport.height || !png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) || message.width !== expectedViewport.width || message.height !== expectedViewport.height
       || !Number.isSafeInteger(message.sequence) || message.sequence <= session.sequence) { clean(session, fail('미리보기 이미지와 순서를 확인하지 못했습니다.', 'remote_frame_invalid')); return; }
     session.sequence = message.sequence;
+    if (unsupported) { session.documentEpoch = unsupported.documentEpoch; session.domRevision = unsupported.documentRevision; session.domFrame = unsupported; session.viewport = checkViewport(unsupported); }
     clearTimeout(pending.timer); session.pending.delete(message.requestId);
-    pending.resolve({ pngBase64: message.pngBase64, width: message.width, height: message.height, sequence: message.sequence, sourceHash: session.sourceHash, ...(unsupported ? { kind: 'png', sessionId: session.id, documentEpoch: session.documentEpoch, unsupported } : {}) });
+    pending.resolve({ pngBase64: message.pngBase64, width: message.width, height: message.height, sequence: message.sequence, sourceHash: session.sourceHash, ...(unsupported || {}) });
   };
   return {
     async create(context, input) {

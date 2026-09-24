@@ -17,13 +17,14 @@ async function mount(page: Page) {
     const { RemoteDomSurface } = await import('/RemoteDomSurface.tsx' as string);
     const win = window as any; win.events = []; win.errors = []; win.frame = initial; win.hold = false; win.releases = [];
     const root = ReactDOM.createRoot(document.getElementById('fixture'));
-    win.render = () => root.render(React.createElement(RemoteDomSurface, { frame: win.frame, onError: (error: any) => win.errors.push(error.message), onEvent: async (event: any) => {
+    win.render = () => root.render(React.createElement(RemoteDomSurface, { frame: win.frame, disabled: win.disabled || false, suspended: win.suspended || false, onInputState: (busy:boolean) => {win.inputBusy=busy;}, onError: (error: any) => win.errors.push(error.message), onEvent: async (event: any) => {
       win.events.push(event);
       if (win.hold) await new Promise(resolve => win.releases.push(resolve));
       const next = structuredClone(win.frame); next.sequence++; next.snapshot.revision++; next.snapshot.ack = { eventId: event.eventId, ...('inputRevision' in event ? { inputRevision: event.inputRevision } : {}) };
       if (['focus', 'input'].includes(event.type)) next.snapshot.focusedNodeId=event.nodeId;
       if (event.type === 'click') next.snapshot.focusedNodeId='n_000000000000000000000006';
       if (event.type === 'input') { const node = next.snapshot.nodes.find((node: any) => node.id === event.nodeId); node.control.value = event.value.toUpperCase(); node.control.selectionStart = event.selectionStart; node.control.selectionEnd = event.selectionEnd; }
+      if(win.fallback){win.fallback=false;win.suspended=true;win.render();return {kind:'png',sessionId:next.sessionId,sourceHash:next.sourceHash,documentEpoch:next.documentEpoch,sequence:next.sequence,width:next.width,height:next.height,documentRevision:next.snapshot.revision,ack:next.snapshot.ack,unsupported:[{code:'dom_style_unsupported',message:'지원하지 않는 화면 효과'}],pngBase64:'iVBORw0KGgo='};}
       win.frame = next; win.render(); return next;
     } })); win.render();
   }, fixture());
@@ -89,4 +90,27 @@ test('an older remote focus ACK cannot steal newer local focus or active composi
   await input.focus();await input.evaluate((el:HTMLInputElement)=>{el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));el.value='조합';el.dispatchEvent(new InputEvent('input',{bubbles:true,isComposing:true,inputType:'insertCompositionText',data:'조합'}));});
   await page.evaluate(()=>{const win=window as any,next=structuredClone(win.frame);next.snapshot.revision++;next.sequence++;next.snapshot.focusedNodeId='n_000000000000000000000008';next.snapshot.ack=null;win.frame=next;win.render();});
   await expect(input).toBeFocused();await expect(input).toHaveValue('조합');
+});
+
+test('fallback retains unsent input and refuses to transplant it when its original node disappears',async({page})=>{
+  await mount(page);const input=page.frameLocator('iframe').getByLabel('사업 검색');await input.focus();await expect.poll(()=>page.evaluate(()=>(window as any).events.length)).toBe(1);
+  await page.evaluate(()=>{const w=window as any;w.hold=true;w.fallback=true;});await input.fill('first');await expect.poll(()=>page.evaluate(()=>(window as any).releases.length)).toBe(1);await input.fill('unsent draft');
+  await page.evaluate(()=>{const w=window as any;w.hold=false;w.releases.shift()();});await expect(page.getByRole('status')).toContainText('대기 중인 입력을 보존');await expect(input).toHaveValue('unsent draft');
+  expect(await page.evaluate(()=>(window as any).events.filter((e:any)=>e.type==='input').map((e:any)=>e.value))).toEqual(['first']);expect(await page.evaluate(()=>(window as any).inputBusy)).toBe(false);
+  await page.evaluate(()=>{const w=window as any,next=structuredClone(w.frame);next.sequence+=2;next.snapshot.revision+=2;next.snapshot.ack=null;next.snapshot.focusedNodeId=null;next.snapshot.nodes=next.snapshot.nodes.filter((n:any)=>!['n_000000000000000000000005','n_000000000000000000000006','n_000000000000000000000007'].includes(n.id));w.frame=next;w.suspended=false;w.render();});
+  await expect(page.getByRole('status')).toContainText('입력하던 요소가 사라졌습니다');await expect(input).toHaveValue('unsent draft');expect(await page.evaluate(()=>(window as any).events.filter((e:any)=>e.type==='input').length)).toBe(1);
+});
+test('poll fallback during composition preserves visible draft and explicitly blocks resize until a safe recovery',async({page})=>{
+  await mount(page);const input=page.frameLocator('iframe').getByLabel('사업 검색');await input.fill('AB');await expect(input).toHaveValue('AB');
+  await input.evaluate((el:HTMLInputElement)=>{el.setSelectionRange(1,1);el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true,data:''}));el.value='AㅎB';el.setSelectionRange(2,2);el.dispatchEvent(new CompositionEvent('compositionupdate',{bubbles:true,data:'ㅎ'}));el.dispatchEvent(new InputEvent('input',{bubbles:true,isComposing:true,inputType:'insertCompositionText',data:'ㅎ'}));});
+  await expect.poll(()=>page.evaluate(()=>(window as any).events.filter((e:any)=>e.type==='composition').length)).toBe(2);
+  await page.evaluate(()=>{const w=window as any;w.suspended=true;w.render();});await expect(page.getByRole('status')).toContainText('크기 변경으로 자동 복귀하지 않습니다');await expect(input).toBeVisible();await expect(input).toHaveValue('AㅎB');expect(await page.evaluate(()=>(window as any).inputBusy)).toBe(true);
+});
+
+test('resize completion resumes retained FIFO inputs immediately without waiting for polling',async({page})=>{
+  await mount(page);const input=page.frameLocator('iframe').getByLabel('사업 검색');await input.focus();await expect.poll(()=>page.evaluate(()=>(window as any).events.length)).toBe(1);
+  await page.evaluate(()=>{const w=window as any;w.hold=true;w.fallback=true;});await input.fill('first');await expect.poll(()=>page.evaluate(()=>(window as any).releases.length)).toBe(1);await input.fill('queued');await page.evaluate(()=>{const w=window as any;w.hold=false;w.releases.shift()();});await expect(page.getByRole('status')).toContainText('대기 중인 입력을 보존');
+  await page.evaluate(()=>{const w=window as any,next=structuredClone(w.frame);next.sequence+=2;next.snapshot.revision+=2;next.snapshot.ack=null;w.frame=next;w.disabled=true;w.suspended=false;w.render();});
+  expect(await page.evaluate(()=>(window as any).events.filter((e:any)=>e.type==='input').length)).toBe(1);
+  await page.evaluate(()=>{const w=window as any;w.disabled=false;w.render();});await expect(input).toHaveValue('QUEUED');expect(await page.evaluate(()=>(window as any).events.filter((e:any)=>e.type==='input').map((e:any)=>e.value))).toEqual(['first','queued']);
 });

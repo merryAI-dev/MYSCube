@@ -196,6 +196,16 @@ export const RemoteDomFrameSchema: z.ZodObject<{
     kind: z.ZodLiteral<"dom">;
 }, z.core.$strict>;
 export const RemoteDomEventSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
+    eventId: z.ZodString;
+    baseRevision: z.ZodNumber;
+    baseSequence: z.ZodNumber;
+    type: z.ZodLiteral<"resize">;
+    width: z.ZodNumber;
+    height: z.ZodNumber;
+    sessionId: z.ZodString;
+    sourceHash: z.ZodString;
+    documentEpoch: z.ZodString;
+}, z.core.$strict>, z.ZodObject<{
     type: z.ZodLiteral<"focus">;
     eventId: z.ZodString;
     nodeId: z.ZodString;
@@ -320,4 +330,24 @@ export const RemoteDomUnsupportedSchema: z.ZodArray<z.ZodObject<{
     message: z.ZodString;
     nodeId: z.ZodOptional<z.ZodString>;
 }, z.core.$strict>>;
+export const RemoteDomFallbackFrameSchema: z.ZodObject<{
+    sequence: z.ZodNumber;
+    width: z.ZodNumber;
+    height: z.ZodNumber;
+    documentRevision: z.ZodNumber;
+    ack: z.ZodNullable<z.ZodObject<{
+        eventId: z.ZodString;
+        inputRevision: z.ZodOptional<z.ZodNumber>;
+    }, z.core.$strict>>;
+    unsupported: z.ZodArray<z.ZodObject<{
+        code: z.ZodString;
+        message: z.ZodString;
+        nodeId: z.ZodOptional<z.ZodString>;
+    }, z.core.$strict>>;
+    pngBase64: z.ZodString;
+    sessionId: z.ZodString;
+    sourceHash: z.ZodString;
+    documentEpoch: z.ZodString;
+    kind: z.ZodLiteral<"png">;
+}, z.core.$strict>;
 import * as z from 'zod/v4';

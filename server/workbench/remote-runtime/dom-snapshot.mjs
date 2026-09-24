@@ -43,6 +43,7 @@ export async function createDomSnapshot({ cdp, frameId, rootBackendNodeId }) {
     } finally { await cdp.send('Runtime.releaseObject', { objectId }).catch(() => {}); }
   };
   const capture = async (ack = null) => {
+    revision++;
     const properties = [...REMOTE_DOM_STYLE_PROPERTIES, ...REMOTE_DOM_UNSUPPORTED_STYLES];
     const raw = await cdp.send('DOMSnapshot.captureSnapshot', { computedStyles: properties });
     const document = raw.documents[0], tree = document?.nodes, strings = raw.strings;
@@ -105,10 +106,10 @@ export async function createDomSnapshot({ cdp, frameId, rootBackendNodeId }) {
       try { const description = await cdp.send('DOM.describeNode', { objectId: active.result.objectId }); focusedNodeId = nextMap.get(description.node.backendNodeId)?.id || null; }
       finally { await cdp.send('Runtime.releaseObject', { objectId: active.result.objectId }).catch(() => {}); }
     }
-    const result = RemoteDomSnapshotSchema.safeParse({ schemaVersion: 1, revision: revision + 1, rootNodeId: nextMap.get(rootBackendNodeId).id, nodes, focusedNodeId, ack });
+    const result = RemoteDomSnapshotSchema.safeParse({ schemaVersion: 1, revision, rootNodeId: nextMap.get(rootBackendNodeId).id, nodes, focusedNodeId, ack });
     if (!result.success) return { unsupported: [issue('dom_contract_unsupported', '요소·입력값·레이아웃이 지원 범위를 넘어 이미지 미리보기를 표시합니다.')] };
-    nodeMap = nextMap; lastSnapshot = result.data; revision++;
+    nodeMap = nextMap; lastSnapshot = result.data;
     return { snapshot: lastSnapshot };
   };
-  return { capture, cdp, executionContextId, rootBackendNodeId, resolveNode, get snapshot() { return lastSnapshot; }, backendNode(id) { return [...nodeMap.values()].find(value => value.id === id)?.backend; } };
+  return { capture, cdp, executionContextId, rootBackendNodeId, resolveNode, get revision() { return revision; }, get snapshot() { return lastSnapshot; }, backendNode(id) { return [...nodeMap.values()].find(value => value.id === id)?.backend; } };
 }

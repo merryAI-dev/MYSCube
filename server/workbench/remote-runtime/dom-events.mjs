@@ -5,7 +5,12 @@ export function checkDomEvent(value, frame) {
   const parsed = RemoteDomEventSchema.safeParse(value);
   if (!parsed.success) throw remoteError('remote_dom_event_invalid', '화면 조작 내용을 확인해 주세요.');
   const event = parsed.data;
-  if (!frame || frame.kind !== 'dom' || ['sessionId', 'sourceHash', 'documentEpoch'].some(key => event[key] !== frame[key])) throw remoteError('remote_dom_generation_changed', '화면이 변경되었습니다. 새 화면에서 다시 입력해 주세요.', 409);
+  if (!frame || ['sessionId', 'sourceHash', 'documentEpoch'].some(key => event[key] !== frame[key])) throw remoteError('remote_dom_generation_changed', '화면이 변경되었습니다. 새 화면에서 다시 입력해 주세요.', 409);
+  if (event.type === 'resize') {
+    if (event.baseSequence !== frame.sequence || event.baseRevision !== (frame.kind === 'dom' ? frame.snapshot.revision : frame.documentRevision)) throw remoteError('remote_dom_revision_changed', '화면 크기와 내용이 갱신되었습니다. 다시 확인해 주세요.', 409);
+    return event;
+  }
+  if (frame.kind !== 'dom') throw remoteError('remote_dom_unsupported', '이미지 화면에서는 크기 변경만 사용할 수 있습니다.', 409);
   if (event.baseRevision !== frame.snapshot.revision) throw remoteError('remote_dom_revision_changed', '화면 내용이 갱신되었습니다. 새 화면에서 다시 입력해 주세요.', 409);
   const node = frame.snapshot.nodes.find(item => item.id === event.nodeId);
   if (node?.kind !== 'element') throw remoteError('remote_dom_node_changed', '입력 요소가 변경되었습니다. 화면을 다시 확인해 주세요.', 409);
@@ -84,6 +89,10 @@ export async function createDomEvents({ dom, page }) {
   const inputRevisions = new Map(); let composing = null;
   return {
     async apply(event) {
+      if (event.type === 'resize') {
+        if (composing) throw remoteError('remote_dom_composition_busy', '조합 입력이 끝난 뒤 화면 크기를 변경해 주세요.', 409);
+        await page.setViewportSize({ width: event.width, height: event.height }); return;
+      }
       const backend = dom.backendNode(event.nodeId); if (!backend) throw remoteError('remote_dom_node_changed', '입력 요소가 변경되었습니다.', 409);
       const previous = inputRevisions.get(event.nodeId) || 0;
       if (event.inputRevision && event.inputRevision <= previous) throw remoteError('remote_dom_input_changed', '이미 처리된 입력보다 이전 입력입니다.', 409);

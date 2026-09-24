@@ -1,28 +1,30 @@
 import { useEffect, useRef, useState } from 'react';
-import { RemoteDomFrameSchema } from '../shared/workbench-remote-dom.mjs';
-import { bindDomAction, domIdentity, type DomFrame, type DomEvent, type DomAction, type InputDraft, type DomControl } from './remote-dom-input';
+import { RemoteDomFrameSchema, RemoteDomFallbackFrameSchema } from '../shared/workbench-remote-dom.mjs';
+import { bindDomAction, domIdentity, type DomFrame, type DomEvent, type DomAction, type InputDraft, type DomControl, type DomFallbackFrame } from './remote-dom-input';
 import { createDomRenderer, REMOTE_DOM_DOCUMENT } from './remote-dom-renderer';
 
-type Props = { frame: DomFrame; disabled?: boolean; onEvent: (event: DomEvent) => Promise<DomFrame>; onError?: (reason: unknown) => void; onResync?: () => Promise<DomFrame> };
-export function RemoteDomSurface({ frame, disabled = false, onEvent, onError, onResync }: Props) {
-  const iframe = useRef<HTMLIFrameElement>(null), callbacks = useRef({ onEvent, onError, onResync, disabled });
-  callbacks.current = { onEvent, onError, onResync, disabled };
+type Props = { frame: DomFrame; disabled?: boolean; suspended?: boolean; onEvent: (event: DomEvent) => Promise<DomFrame | DomFallbackFrame>; onError?: (reason: unknown) => void; onResync?: () => Promise<DomFrame>; onInputState?: (busy: boolean) => void };
+export function RemoteDomSurface({ frame, disabled = false, suspended = false, onEvent, onError, onResync, onInputState }: Props) {
+  const iframe = useRef<HTMLIFrameElement>(null), callbacks = useRef({ onEvent, onError, onResync, disabled, suspended, onInputState });
+  callbacks.current = { onEvent, onError, onResync, disabled, suspended, onInputState };
   const [loaded, setLoaded] = useState(0), [notice, setNotice] = useState(''), [pending, setPending] = useState(0), [failed, setFailed] = useState(false);
-  const accept = useRef<(frame: DomFrame) => void>(() => {}), resync = useRef<() => void>(() => {});
+  const accept = useRef<(frame: DomFrame) => void>(() => {}), resync = useRef<() => void>(() => {}), suspend = useRef<() => void>(() => {});
   const identity = domIdentity(frame), currentFrame = useRef(frame); currentFrame.current = frame;
   useEffect(() => {
     const frameDocument = iframe.current?.contentDocument;
     if (!frameDocument || !loaded) return;
     const document: Document = frameDocument;
-    let alive = true, blocked = false, sending = false, revision = 0, eventOrder = 0, localFocusOrder = 0, acknowledgedOrder = 0, applyingSnapshot = false;
+    let alive = true, blocked = false, pausedForFallback = false, remoteComposing = false, sending = false, revision = 0, eventOrder = 0, localFocusOrder = 0, acknowledgedOrder = 0, applyingSnapshot = false;
     const eventOrders = new Map<string, number>();
     let latest = RemoteDomFrameSchema.parse(currentFrame.current), renderer = createDomRenderer(document, setNotice);
     const drafts = new Map<string, InputDraft>(), composing = new Set<string>(), compositionEnd = new Set<string>();
     const queue: Array<{ action: DomAction; eventId: string }> = [];
     const listeners: Array<[string, EventListener]> = [];
+    const reportInput = () => callbacks.current.onInputState?.(sending || remoteComposing || composing.size > 0 || !pausedForFallback && (queue.length > 0 || drafts.size > 0));
+    suspend.current = () => { pausedForFallback = true; if (composing.size || remoteComposing) setNotice('글자 조합 중 화면에 지원하지 않는 요소가 생겨 입력을 중단했습니다. 작성 중인 글자는 아래에 보존되어 있습니다. 이 상태에서는 크기 변경으로 자동 복귀하지 않습니다. 필요한 글자를 복사한 뒤 미리보기를 다시 적용해 주세요.'); reportInput(); };
     function fail(reason: unknown) {
       if (!alive) return;
-      blocked = true; setFailed(true); setNotice('입력이 원격 화면에 반영되었는지 확인하지 못했습니다. 작성 중인 내용은 화면에 남겨 두었습니다. 원격 상태를 확인한 뒤 다시 입력해 주세요.'); callbacks.current.onError?.(reason);
+      blocked = true; setFailed(true); setNotice('입력이 원격 화면에 반영되었는지 확인하지 못했습니다. 작성 중인 내용은 화면에 남겨 두었습니다. 원격 상태를 확인한 뒤 다시 입력해 주세요. ' + (reason instanceof Error ? reason.message.slice(0, 300) : '')); callbacks.current.onError?.(reason);
     }
     function receive(next: DomFrame) {
       const checked = RemoteDomFrameSchema.parse(next);
@@ -31,14 +33,15 @@ export function RemoteDomSurface({ frame, disabled = false, onEvent, onError, on
       const acknowledged = checked.snapshot.ack && eventOrders.get(checked.snapshot.ack.eventId);
       if (acknowledged) acknowledgedOrder = Math.max(acknowledgedOrder, acknowledged);
       if (checked.snapshot.revision < latest.snapshot.revision) return;
-      latest = checked;
+      if (pausedForFallback && queue.some(item => !checked.snapshot.nodes.some(node => node.id === item.action.nodeId))) throw new Error('입력하던 요소가 사라졌습니다. 작성 내용은 이전 화면에 남겨 두었습니다. 다른 항목으로 옮겨 반영하지 않습니다.');
+      latest = checked; pausedForFallback = false;
       applyingSnapshot = true;
       try { renderer.apply(checked, drafts, acknowledgedOrder >= localFocusOrder && composing.size === 0 && iframe.current?.ownerDocument.activeElement === iframe.current); }
-      finally { applyingSnapshot = false; }
+      finally { applyingSnapshot = false; reportInput(); }
     }
-    accept.current = next => { try { receive(next); } catch (reason) { fail(reason); } };
+    accept.current = next => { try { receive(next); void pump(); } catch (reason) { fail(reason); } };
     renderer.apply(latest, drafts);
-    const allowed = () => alive && !blocked && !callbacks.current.disabled;
+    const allowed = () => alive && !blocked && !pausedForFallback && !callbacks.current.disabled && !callbacks.current.suspended;
     const nodeOf = (target: EventTarget | null) => target && 'nodeType' in target && (target as Node).nodeType === 1 ? target as HTMLElement : null;
     const idOf = (element: Element | null) => element?.getAttribute('data-remote-node');
     function readControl(element: HTMLElement): DomControl | undefined {
@@ -57,12 +60,19 @@ export function RemoteDomSurface({ frame, disabled = false, onEvent, onError, on
           const event = bindDomAction(latest, next.action, next.eventId);
           const result = await callbacks.current.onEvent(event);
           if (!alive) return;
+          if (next.action.type === 'composition') remoteComposing = !['end', 'cancel'].includes(next.action.phase);
+          if (result.kind === 'png') {
+            const parsed = RemoteDomFallbackFrameSchema.parse(result);
+            if (parsed.ack?.eventId !== next.eventId || parsed.sessionId !== latest.sessionId || parsed.sourceHash !== latest.sourceHash || parsed.documentEpoch !== latest.documentEpoch) throw new Error('입력 완료 응답을 확인하지 못했습니다.');
+            for (const [nodeId, draft] of drafts) if (!draft.composing && draft.eventId === parsed.ack.eventId && draft.revision === parsed.ack.inputRevision) drafts.delete(nodeId);
+            queue.shift(); setPending(queue.length); pausedForFallback = true; setNotice(remoteComposing ? '글자 조합 중 화면에 지원하지 않는 요소가 생겨 입력을 중단했습니다. 작성 중인 글자는 보존되어 있습니다. 이 상태에서는 크기 변경으로 자동 복귀하지 않습니다. 필요한 글자를 복사한 뒤 미리보기를 다시 적용해 주세요.' : '직접 조작이 지원되지 않아 대기 중인 입력을 보존했습니다. 화면 크기를 바꿔 복귀하면 입력 대상을 다시 확인합니다.'); break;
+          }
           const parsed = RemoteDomFrameSchema.parse(result);
           if (parsed.snapshot.ack?.eventId !== next.eventId) throw new Error('입력 완료 응답을 확인하지 못했습니다.');
           receive(parsed); queue.shift(); setPending(queue.length);
         }
       } catch (reason) { fail(reason); }
-      finally { sending = false; }
+      finally { sending = false; reportInput(); }
     }
     function enqueue(action: DomAction, element?: HTMLElement, inComposition = false) {
       if (!allowed()) return;
@@ -77,7 +87,7 @@ export function RemoteDomSurface({ frame, disabled = false, onEvent, onError, on
       const order = ++eventOrder; eventOrders.set(eventId, order);
       if (action.type === 'focus') localFocusOrder = order;
       if (eventOrders.size > 64) eventOrders.delete(eventOrders.keys().next().value!);
-      queue.push({ action, eventId }); setPending(queue.length); void pump();
+      queue.push({ action, eventId }); reportInput(); setPending(queue.length); void pump();
     }
     function listen(name: string, handler: (event: Event) => void) { const listener = handler as EventListener; document.addEventListener(name, listener, true); listeners.push([name, listener]); }
     listen('beforeinput', event => { if (!allowed() || queue.length >= 32) { event.preventDefault(); if (queue.length >= 32) fail(new Error('입력 대기 한도를 넘었습니다.')); } });
@@ -130,13 +140,13 @@ export function RemoteDomSurface({ frame, disabled = false, onEvent, onError, on
       void callbacks.current.onResync().then(next => {
         if (!alive) return;
         const checked = RemoteDomFrameSchema.parse(next); if (domIdentity(checked) !== identity) throw new Error('실행 화면이 바뀌었습니다.');
-        queue.length = 0; drafts.clear(); eventOrders.clear(); localFocusOrder = 0; acknowledgedOrder = 0; composing.clear(); compositionEnd.clear(); renderer.dispose(); renderer = createDomRenderer(document, setNotice); blocked = false; setFailed(false); setPending(0); receive(checked); setNotice('원격 화면의 현재 값을 불러왔습니다.');
+        queue.length = 0; drafts.clear(); eventOrders.clear(); localFocusOrder = 0; acknowledgedOrder = 0; composing.clear(); remoteComposing = false; compositionEnd.clear(); renderer.dispose(); renderer = createDomRenderer(document, setNotice); blocked = false; setFailed(false); setPending(0); receive(checked); setNotice('원격 화면의 현재 값을 불러왔습니다.');
       }).catch(fail);
     };
     setNotice(''); setFailed(false); setPending(0);
-    return () => { alive = false; queue.length = 0; drafts.clear(); for (const [name, listener] of listeners) document.removeEventListener(name, listener, true); renderer.dispose(); accept.current = () => {}; };
+    return () => { alive = false; callbacks.current.onInputState?.(false); queue.length = 0; drafts.clear(); for (const [name, listener] of listeners) document.removeEventListener(name, listener, true); renderer.dispose(); accept.current = () => {}; };
   }, [identity, loaded]);
-  useEffect(() => { try { accept.current(frame); } catch (reason) { setFailed(true); setNotice('실행 화면의 내용을 안전하게 확인하지 못했습니다. 마지막 정상 화면을 유지합니다.'); callbacks.current.onError?.(reason); } }, [frame]);
+  useEffect(() => { try { if (suspended) suspend.current(); else accept.current(frame); } catch (reason) { setFailed(true); setNotice('실행 화면의 내용을 안전하게 확인하지 못했습니다. 마지막 정상 화면을 유지합니다.'); callbacks.current.onError?.(reason); } }, [frame, suspended, disabled]);
   return <section aria-label="접근 가능한 원격 실행 화면">
     <iframe ref={iframe} srcDoc={REMOTE_DOM_DOCUMENT} sandbox="allow-same-origin" referrerPolicy="no-referrer" title="업무 실행 화면" data-testid="remote-dom-frame" onLoad={() => setLoaded(value => value + 1)} style={{ display: 'block', width: '100%', height: frame.height, border: 0 }} />
     <p role="status" className="subtle">{notice || (pending ? `입력 ${pending}건을 확인하고 있습니다.` : '표의 글자를 선택하고 입력칸과 버튼을 직접 사용할 수 있습니다.')}</p>

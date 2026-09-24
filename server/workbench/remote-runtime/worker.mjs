@@ -23,10 +23,12 @@ export async function runRendererWorker({ input = process.stdin, output = proces
         domFrame = { kind: 'dom', sessionId, sourceHash, documentEpoch, sequence: ++sequence, width: viewport.width, height: viewport.height, snapshot: captured.snapshot };
         send({ type: 'frame', requestId, ...domFrame }); return;
       }
-      unsupported = captured.unsupported; domFrame = null;
+      unsupported = captured.unsupported;
     }
     const png = await page.screenshot({ type: 'png', timeout: 5000, animations: 'disabled' });
-    send({ type: 'frame', requestId, sequence: ++sequence, width: viewport.width, height: viewport.height, pngBase64: png.toString('base64'), ...(unsupported ? { kind: 'png', sessionId, sourceHash, documentEpoch, unsupported } : {}) });
+    const frame = { sequence: ++sequence, width: viewport.width, height: viewport.height, pngBase64: png.toString('base64'), ...(unsupported ? { kind: 'png', sessionId, sourceHash, documentEpoch, documentRevision: dom.revision, ack, unsupported } : {}) };
+    if (unsupported) domFrame = frame;
+    send({ type: 'frame', requestId, ...frame });
   };
   const init = async (message) => {
     if (initialized) throw new Error('already_initialized'); initialized = true;
@@ -94,7 +96,7 @@ export async function runRendererWorker({ input = process.stdin, output = proces
       else if (message.type === 'frame' && initialized) await screenshot(message.requestId);
       else if (message.type === 'event' && initialized) {
         const event = viewMode === 'dom' ? checkDomEvent(message.event, domFrame) : checkEvent(message.event, viewport);
-        if (viewMode === 'dom') await domEvents.apply(event);
+        if (viewMode === 'dom') { await domEvents.apply(event); if (event.type === 'resize') viewport = checkViewport(event); }
         else if (event.type === 'click') await page.mouse.click(event.x, event.y);
         else if (event.type === 'type') await page.keyboard.insertText(event.text);
         else if (event.type === 'key') await page.keyboard.press(event.key);

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { PassThrough, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
@@ -15,6 +16,7 @@ function fixture({ transform = (value) => value, delayed = false, authorize = as
       const message = JSON.parse(chunk); commands.push(message);
       if (message.type === 'init') frame = domFrame(message.sessionId, message.sourceHash);
       else { frame = structuredClone(frame); frame.sequence++; frame.snapshot.revision++; frame.snapshot.ack = message.event ? { eventId: message.event.eventId, ...(message.event.inputRevision ? { inputRevision: message.event.inputRevision } : {}) } : null; }
+      if (message.event?.type === 'resize') { frame.width = message.event.width; frame.height = message.event.height; }
       reply = () => process.stdout.write(JSON.stringify(transform({ type: 'frame', requestId: message.requestId, ...frame }, message))+'\n');
       if (!delayed || message.type === 'init') queueMicrotask(reply); done();
     } });
@@ -53,6 +55,24 @@ describe('DOM broker generation, native event idempotence and authorization', ()
       const result = await fake.broker.create(context, input), event = domEvent(result.frame); await fake.broker.event(context, result.sessionId, event); allowed = false;
       await expect(fake.broker.event(context, result.sessionId, event)).rejects.toMatchObject({ statusCode: 403 }); expect(fake.broker.activeSessions).toBe(0);
     } finally { fake.broker.shutdown(); }
+  });
+  it('validates resize dimensions and sequence, commits only matching ACK, and replays once', async () => {
+    const fake=fixture();try {
+      const opened=await fake.broker.create(context,input), frame=opened.frame;
+      const event={type:'resize',eventId:randomUUID(),sessionId:opened.sessionId,sourceHash:frame.sourceHash,documentEpoch:frame.documentEpoch,baseSequence:frame.sequence,baseRevision:frame.snapshot.revision,width:340,height:700};
+      await expect(fake.broker.event(context,opened.sessionId,{...event,width:319})).rejects.toMatchObject({code:'remote_dom_event_invalid'});
+      await expect(fake.broker.event(context,opened.sessionId,{...event,baseSequence:frame.sequence+1})).rejects.toMatchObject({code:'remote_dom_revision_changed'});
+      const resized=await fake.broker.event(context,opened.sessionId,event);expect(resized.width).toBe(340);expect(await fake.broker.event(context,opened.sessionId,event)).toEqual(resized);
+      expect(fake.commands.filter(v=>v.type==='event')).toHaveLength(1);expect((await fake.broker.frame(context,opened.sessionId)).width).toBe(340);
+    } finally {fake.broker.shutdown();}
+  });
+  it('rechecks permission after a resized frame and never returns it after revocation',async()=>{
+    let allowed=true;const fake=fixture({delayed:true,authorize:async()=>{if(!allowed)throw Object.assign(new Error('revoked'),{statusCode:403});}});
+    try{const opened=await fake.broker.create(context,input),f=opened.frame;const pending=fake.broker.event(context,opened.sessionId,{type:'resize',eventId:randomUUID(),sessionId:opened.sessionId,sourceHash:f.sourceHash,documentEpoch:f.documentEpoch,baseSequence:f.sequence,baseRevision:f.snapshot.revision,width:340,height:700});const checked=expect(pending).rejects.toMatchObject({statusCode:403});await new Promise(resolve=>setTimeout(resolve,5));allowed=false;fake.reply();await checked;expect(fake.broker.activeSessions).toBe(0);}finally{fake.broker.shutdown();}
+  });
+  it.each(['dimensions','ack'])('fails closed on forged resize %s',async kind=>{
+    const fake=fixture({transform(value,message){if(message.event?.type==='resize'){if(kind==='dimensions')value.width++;else value.snapshot.ack.eventId=randomUUID();}return value;}});
+    try {const opened=await fake.broker.create(context,input),f=opened.frame;await expect(fake.broker.event(context,opened.sessionId,{type:'resize',eventId:randomUUID(),sessionId:opened.sessionId,sourceHash:f.sourceHash,documentEpoch:f.documentEpoch,baseSequence:f.sequence,baseRevision:f.snapshot.revision,width:340,height:700})).rejects.toMatchObject({code:'remote_dom_frame_invalid'});expect(fake.broker.activeSessions).toBe(0);}finally{fake.broker.shutdown();}
   });
   it.each(['source', 'epoch', 'ack', 'cycle'])('closes a session on forged %s from the worker', async (kind) => {
     const fake = fixture({ transform(value, message) { if (message.type === 'event') {
