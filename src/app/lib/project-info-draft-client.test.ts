@@ -81,7 +81,7 @@ describe('project information draft client', () => {
     expect(api.get).toHaveBeenCalledWith(path, expect.any(Object));
     expect(api.post).toHaveBeenNthCalledWith(1, `${path}/open`, expect.objectContaining({ headers, body: {} }));
     expect(api.patch).toHaveBeenCalledWith(path, expect.objectContaining({
-      headers: { ...headers, 'x-operation-mode': 'unknown' }, body: { expectedDraftRevision: 2, payload: { name: 'Saved' }, stepIndex: 3 },
+      headers, body: { expectedDraftRevision: 2, payload: { name: 'Saved' }, stepIndex: 3 },
     }));
     expect(api.post).toHaveBeenNthCalledWith(2, `${path}/attachments`, expect.objectContaining({
       headers, body: expect.objectContaining({ contentBase64: 'cGRm', fileSize: 3 }),

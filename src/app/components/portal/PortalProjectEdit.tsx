@@ -1,5 +1,4 @@
 import type { ProjectDraftHistoryItem } from '../../lib/project-draft-history';
-import { recordProjectValidationBlock } from '../../lib/product-operations-client';
 import { serializeProjectEditorPrivateDraft } from '../../platform/project-editor-draft-persistence';
 import { resolveProjectSaveErrorMessage } from '../../platform/project-save-error';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -737,7 +736,6 @@ function ProjectInfoEditor({
         canRemoveProjectDocuments
         onRemoveProjectDocument={removeDocument}
         autosave={record && !submitted ? { key: autosaveKey, disabled: !editorCanEdit, onSave: persistDraft } : undefined}
-        onValidationBlocked={() => recordProjectValidationBlock({ tenantId: orgId, actor }, 'project-change.submit')}
         actions={submitted ? [] : (
           canResubmit
             ? [{ id: 'resubmit', label: '수정 후 다시 제출', icon: SendHorizontal, variant: 'secondary' as const }]

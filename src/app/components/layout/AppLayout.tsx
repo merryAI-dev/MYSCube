@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { useObservationRetry } from '../product-operations/useObservationRetry';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
 import {
   ChevronLeft, ChevronRight,
@@ -32,7 +31,6 @@ import { TenantSwitcher, TenantBadge } from '../settings/TenantSwitcher';
 import { MyscWordmark } from '../brand/MyscWordmark';
 
 function AppLayoutContent() {
-  useObservationRetry();
   const { currentUser, transactions, dataSource } = useAppStore();
   const { isAuthenticated, isLoading: authLoading, user: authUser, logout, setWorkspacePreference } = useAuth();
   const hrAnnouncements = useOptionalHrAnnouncements();

@@ -1,5 +1,4 @@
 import type { ProjectDraftHistoryItem } from '../../lib/project-draft-history';
-import { recordProjectValidationBlock } from '../../lib/product-operations-client';
 import { serializeProjectEditorPrivateDraft } from '../../platform/project-editor-draft-persistence';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
@@ -359,7 +358,6 @@ function RegistrationEditor({
         topSlot={topSlot}
         readOnly={!lease.canEdit}
         autosave={autosave}
-        onValidationBlocked={() => recordProjectValidationBlock({ tenantId: orgId, actor }, 'registration.submit')}
         actions={[{ id: 'submit', label: '최종 저장', icon: Send }]}
         busyActionId={busyActionId}
         documentPreviewUrls={documentPreviewUrls}

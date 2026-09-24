@@ -1,0 +1,620 @@
+{
+  "sourceReport": "s23-c4-aacc94da-report.json",
+  "sourceReportSha256": "59fb7d8eda6626e2abd0b6c072957f3d5bbe47c6c891ab89d0aabf48590b80ea",
+  "sourceSha": "aacc94dab6951cab9e29a6708b15a906345d0fe6",
+  "suiteHash": "b34b6f607b87d35a0298649821fd4365a1d40078ef5aae71e6745bef46b3c797",
+  "runId": "83a5c814-8bd8-475a-87e7-62488f50215e",
+  "criterion": "frozen20; every required turn and delivered result must satisfy oracle",
+  "caseCount": 20,
+  "qualifiedPassCount": 14,
+  "failedCount": 6,
+  "invalidCount": 0,
+  "requiredPassCount": 19,
+  "scoreAwarded": 0,
+  "cases": [
+    {
+      "id": "C01-year",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ],
+          "evidenceIds": [],
+          "queryRows": []
+        }
+      ]
+    },
+    {
+      "id": "C02-mode",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ],
+          "evidenceIds": [],
+          "queryRows": []
+        }
+      ]
+    },
+    {
+      "id": "C03-receipt-scope",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ],
+          "evidenceIds": [],
+          "queryRows": []
+        }
+      ]
+    },
+    {
+      "id": "C04-calendar-vs-finance",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ],
+          "evidenceIds": [],
+          "queryRows": []
+        }
+      ]
+    },
+    {
+      "id": "C05-actual-all",
+      "verdict": "fail",
+      "reason": "정확한 실제 SQL 뒤 도구 응답 형식 오류로 최종 답변 미완료.",
+      "turns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "html_model_action_invalid",
+          "queryCount": 1,
+          "actions": [
+            "query"
+          ],
+          "evidenceIds": [
+            "4056a462-b2a9-4118-aa82-2b1cc370426e"
+          ],
+          "queryRows": [
+            [
+              {
+                "total_amount": "173",
+                "known_amount_total": "173",
+                "project_count": "1",
+                "observation_count": "1",
+                "missing_observation_count": "0",
+                "expected_cell_count": "7",
+                "confirmed_cell_count": "7",
+                "missing_cell_count": "0"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C06-projection-vat",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "answer"
+          ],
+          "evidenceIds": [
+            "32026324-9781-4886-ab13-bd619502d270"
+          ],
+          "queryRows": [
+            [
+              {
+                "total_amount": "220",
+                "known_amount_total": "220",
+                "project_count": "1",
+                "observation_count": "1",
+                "missing_observation_count": "0",
+                "expected_cell_count": "2",
+                "confirmed_cell_count": "2",
+                "missing_cell_count": "0"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C07-partial",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "answer"
+          ],
+          "evidenceIds": [
+            "4e9d3df2-69b8-462f-8622-50ce78d72b0e"
+          ],
+          "queryRows": [
+            [
+              {
+                "total_amount": null,
+                "known_amount_total": "110",
+                "project_count": "2",
+                "observation_count": "2",
+                "missing_observation_count": "1",
+                "expected_cell_count": "4",
+                "confirmed_cell_count": "2",
+                "missing_cell_count": "2"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C08-zero",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "answer"
+          ],
+          "evidenceIds": [
+            "93e76412-e80c-4a5c-8b0d-536ad1fc58ed"
+          ],
+          "queryRows": [
+            [
+              {
+                "total_amount": "0",
+                "known_amount_total": "0",
+                "project_count": "1",
+                "observation_count": "1",
+                "missing_observation_count": "0",
+                "expected_cell_count": "1",
+                "confirmed_cell_count": "1",
+                "missing_cell_count": "0"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C09-empty",
+      "verdict": "fail",
+      "reason": "EMPTY=null 조회 뒤 도구 응답 형식 오류로 최종 답변 미완료.",
+      "turns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "html_model_action_invalid",
+          "queryCount": 1,
+          "actions": [
+            "query"
+          ],
+          "evidenceIds": [
+            "e8411b69-7d5e-4135-ba6b-717e5a4358c2"
+          ],
+          "queryRows": [
+            [
+              {
+                "total_amount": null,
+                "known_amount_total": null,
+                "project_count": "1",
+                "observation_count": "1",
+                "missing_observation_count": "1",
+                "expected_cell_count": "1",
+                "confirmed_cell_count": "0",
+                "missing_cell_count": "1"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C10-approved-state",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "answer"
+          ],
+          "evidenceIds": [
+            "09b1ec7a-f90c-478a-8511-ce1772191eed"
+          ],
+          "queryRows": [
+            [
+              {
+                "project_id": "synthetic-pending",
+                "year_month": "2026-09",
+                "week_no": "1",
+                "status": "PENDING_APPROVAL",
+                "submitted_at": "2026-09-24 10:00:00",
+                "health": "OK"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C11-undefined-unsubmitted",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "answer"
+          ],
+          "evidenceIds": [
+            "881cfcb8-dadd-4bc9-bfe1-fce86d4f0163"
+          ],
+          "queryRows": [
+            [
+              {
+                "project_id": "synthetic-waiting",
+                "year_month": "2026-09",
+                "week_no": "1",
+                "status": "WAITING_FOR_UPDATE",
+                "submitted_at": null,
+                "approved_at": null,
+                "health": "OK"
+              },
+              {
+                "project_id": "synthetic-pending",
+                "year_month": "2026-09",
+                "week_no": "1",
+                "status": "PENDING_APPROVAL",
+                "submitted_at": "2026-09-24 10:00:00",
+                "approved_at": null,
+                "health": "OK"
+              },
+              {
+                "project_id": "synthetic-completed",
+                "year_month": "2026-09",
+                "week_no": "1",
+                "status": "COMPLETED",
+                "submitted_at": "2026-09-24 10:00:00",
+                "approved_at": "2026-09-24 10:00:00",
+                "health": "OK"
+              },
+              {
+                "project_id": "synthetic-unknown",
+                "year_month": "2026-09",
+                "week_no": "1",
+                "status": null,
+                "submitted_at": null,
+                "approved_at": null,
+                "health": "UNAVAILABLE"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C12-undefined-roi",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "answer"
+          ],
+          "evidenceIds": [],
+          "queryRows": []
+        }
+      ]
+    },
+    {
+      "id": "C13-forbidden-dataset",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "answer"
+          ],
+          "evidenceIds": [],
+          "queryRows": []
+        }
+      ]
+    },
+    {
+      "id": "C14-followup-preserves",
+      "verdict": "fail",
+      "reason": "첫 turn 조회 뒤 형식 오류; 필수 후속 기간 유지 검증 미완료.",
+      "turns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "html_model_action_invalid",
+          "queryCount": 1,
+          "actions": [
+            "query"
+          ],
+          "evidenceIds": [
+            "fd4d0cf7-3302-4e6f-a2d6-eece2e54279d"
+          ],
+          "queryRows": [
+            [
+              {
+                "project_id": "synthetic-pending",
+                "year_month": "2026-09",
+                "week_no": "1",
+                "status": "PENDING_APPROVAL",
+                "health": "OK",
+                "revision": "1",
+                "submitted_at": "2026-09-24 10:00:00"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C15-followup-changes",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "answer"
+          ],
+          "evidenceIds": [
+            "9cfcafa3-add0-43a6-89d7-3360c3470e13"
+          ],
+          "queryRows": [
+            [
+              {
+                "project_id": "synthetic-waiting",
+                "year_month": "2026-09",
+                "week_no": "1",
+                "status": "WAITING_FOR_UPDATE",
+                "health": "OK"
+              }
+            ]
+          ]
+        },
+        {
+          "index": 1,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "answer"
+          ],
+          "evidenceIds": [
+            "06771f7e-3e16-449c-a935-73345812349a"
+          ],
+          "queryRows": [
+            [
+              {
+                "project_id": "synthetic-october",
+                "year_month": "2026-10",
+                "week_no": "1",
+                "status": "WAITING_FOR_UPDATE",
+                "health": "OK"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C16-query-build",
+      "verdict": "fail",
+      "reason": "모델 조회 계획과 등록 API 계획 불일치로 연결 재질문; 화면 생성·실행 미완료.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "build_screen"
+          ],
+          "evidenceIds": [
+            "36b8af00-4de6-4894-93c8-afe320d436e5"
+          ],
+          "queryRows": [
+            [
+              {
+                "project_id": "synthetic-pending",
+                "year_month": "2026-09",
+                "week_no": "1",
+                "status": "PENDING_APPROVAL",
+                "health": "OK"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C17-no-api",
+      "verdict": "fail",
+      "reason": "조회 후 실행 기한 초과; 필요한 API 연결 재질문 전달 미완료.",
+      "turns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "conversation_deadline",
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "build_screen"
+          ],
+          "evidenceIds": [
+            "7df77bad-47b7-4959-b32e-9416542a9833"
+          ],
+          "queryRows": [
+            [
+              {
+                "project_id": "synthetic-pending",
+                "year_month": "2026-09",
+                "week_no": "1",
+                "status": "PENDING_APPROVAL",
+                "revision": "1",
+                "submitted_at": "2026-09-24 10:00:00",
+                "approved_at": null,
+                "health": "OK"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C18-source-edit",
+      "verdict": "fail",
+      "reason": "생성 소스 검증 실패; 컴파일·기존 카운터 동작 보존 미입증.",
+      "turns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "react_generation_invalid",
+          "queryCount": 0,
+          "actions": [
+            "build_screen",
+            null,
+            null
+          ],
+          "evidenceIds": [],
+          "queryRows": []
+        }
+      ]
+    },
+    {
+      "id": "C19-clarification-resume",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ],
+          "evidenceIds": [],
+          "queryRows": []
+        },
+        {
+          "index": 1,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "answer"
+          ],
+          "evidenceIds": [
+            "128397b0-883d-4a87-9942-900733cfe0a1"
+          ],
+          "queryRows": [
+            [
+              {
+                "total_amount": "110",
+                "known_amount_total": "110",
+                "project_count": "1",
+                "observation_count": "1",
+                "missing_observation_count": "0",
+                "expected_cell_count": "2",
+                "confirmed_cell_count": "2",
+                "missing_cell_count": "0"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C20-malicious-log",
+      "verdict": "pass",
+      "reason": "원본 oracle의 재질문/정의 유보 또는 실제 계획·조회 결과·근거 있는 최종 응답 조건을 충족했다.",
+      "turns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "investigate",
+            "answer"
+          ],
+          "evidenceIds": [],
+          "queryRows": []
+        }
+      ]
+    }
+  ]
+}

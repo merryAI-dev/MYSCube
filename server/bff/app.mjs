@@ -1,13 +1,5 @@
-import { mountInsightCashflowReport } from './insight-cashflow-report.mjs';
-import { createWorkbenchAdmission, workbenchAdmissionMiddleware } from './workbench-admission.mjs';
-import { mountQaEvidenceRoutes } from './qa-evidence.mjs';
 import express from 'express';
-import { mountPersonalWorkPageRoutes } from './personal-work-pages.mjs';
-import { mountCashflowEvidenceRoutes } from './cashflow-evidence-query.mjs';
-import { mountWorkbenchAssistantRoutes } from './workbench-assistant.mjs';
 import { reliabilityRequestContext } from './reliability-request-context.mjs';
-import { createReliabilityService, mountReliabilityRoutes } from './reliability-service.mjs';
-import { reliabilityResponseMiddleware } from './reliability-middleware.mjs';
 import { createSlackIngress } from '../mcp/slack-ingress.mjs';
 import { createFeedbackIngress, createSlackWorker, verifySettlementWorkerToken } from '../mcp/slack-runtime.mjs';
 import { randomUUID } from 'node:crypto';
@@ -946,8 +938,8 @@ export function createBffApp(options = {}) {
       res.setHeader('Access-Control-Allow-Origin', allowAnyOrigin ? '*' : requestOrigin);
     }
     res.setHeader('Vary', 'Origin');
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-tenant-id, x-actor-id, x-actor-role, x-actor-email, x-actor-name, x-request-id, idempotency-key, x-edit-session-id, x-edit-lease-id, x-edit-fence, x-google-access-token, x-file-name, x-file-type, x-file-size, x-operation-id, x-operation-mode');
-    res.setHeader('Access-Control-Expose-Headers', 'x-request-id, x-observation-status');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, x-tenant-id, x-actor-id, x-actor-role, x-actor-email, x-actor-name, x-request-id, idempotency-key, x-edit-session-id, x-edit-lease-id, x-edit-fence, x-google-access-token, x-file-name, x-file-type, x-file-size');
+    res.setHeader('Access-Control-Expose-Headers', 'x-request-id');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('X-Frame-Options', 'DENY');
@@ -1420,18 +1412,6 @@ export function createBffApp(options = {}) {
     resolveMcpAccessToken: (authorization) => mcpOAuthService.resolveAccessToken(authorization),
   }));
 
-  app.use('/api/v1', workbenchAdmissionMiddleware({
-    service: createWorkbenchAdmission({ db }),
-    readsEnabled: env.PRODUCT_WORKBENCH_READS_ENABLED !== 'false',
-  }));
-
-  if (env.PRODUCT_OPERATIONS_ENABLED !== 'false') {
-    const reliabilityService = createReliabilityService({ db, now, environment: runtimeSafetyConfig.deployEnv });
-    mountReliabilityRoutes(app, { service: reliabilityService, asyncHandler, createMutatingRoute, idempotencyService });
-    app.use('/api/v1', reliabilityResponseMiddleware({ service: reliabilityService,
-      environment: runtimeSafetyConfig.deployEnv, releaseSha: env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA }));
-  }
-
   app.post('/api/v1/write', createMutatingRoute(idempotencyService, async (req) => {
     assertActorRoleAllowed(req, ROUTE_ROLES.writeCore, 'write data');
     const { tenantId, actorId, actorRole, actorEmail, requestId } = req.context;
@@ -1785,11 +1765,6 @@ export function createBffApp(options = {}) {
       res.json({ ok: true, ...await runSettlementWorker() });
     }));
   }
-  mountInsightCashflowReport(app, { db, now, asyncHandler, readSnapshot: jvmReadPort.readCashflowSnapshot, release: env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA });
-  mountQaEvidenceRoutes(app, { db, now, asyncHandler, readCode: options.workbenchReadCode });
-  mountPersonalWorkPageRoutes(app, { db, now, asyncHandler, createMutatingRoute, idempotencyService });
-  mountCashflowEvidenceRoutes(app, { db, now, asyncHandler, readSnapshot: jvmReadPort.readCashflowSnapshot, release: env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA });
-  mountWorkbenchAssistantRoutes(app, { db, now, env, asyncHandler, createMutatingRoute, idempotencyService, readSnapshot: jvmReadPort.readCashflowSnapshot, completionFactory: options.workbenchCompletionFactory });
   mountLedgerRoutes(app, { db, now, idempotencyService, auditChainService, piiProtector });
   mountTransactionRoutes(app, { db, now, idempotencyService, auditChainService, piiProtector, rbacPolicy, driveService });
   mountAuditRoutes(app, { db, auditChainService });

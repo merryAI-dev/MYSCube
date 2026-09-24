@@ -1,10 +1,11 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
-import { createBffApp } from './app.mjs';
-import { createFirestoreDb } from './firestore.mjs';
-import { createReliabilityService } from './reliability-service.mjs';
-import { createPersonalWorkPageService } from './personal-work-pages.mjs';
-import { createCashflowEvidenceQuery } from './cashflow-evidence-query.mjs';
+import { createWorkbenchApp } from './app.mjs';
+const createBffApp = (options: any) => createWorkbenchApp({ ...options, env: { WORKBENCH_PROJECT_ID: 'demo-bff-it', PRODUCTION_PROJECT_ID: 'demo-operational-app', WORKBENCH_MODEL_PROJECT_ID: 'demo-workbench-model', PRODUCTION_MODEL_PROJECT_ID: 'demo-production-model', ...options.env } });
+import { createFirestoreDb } from '../bff/firestore.mjs';
+import { createReliabilityService } from '../bff/reliability-service.mjs';
+import { createPersonalWorkPageService } from '../bff/personal-work-pages.mjs';
+import { createCashflowEvidenceQuery } from '../bff/cashflow-evidence-query.mjs';
 
 const suite = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
 suite('product operations persisted contracts', () => {
@@ -17,8 +18,8 @@ suite('product operations persisted contracts', () => {
   const config = { schemaVersion: 1, title: '내 사업', description: '', source: 'cashflow-evidence', presentation: 'table', yearMonth: '2026-09', search: '' };
   beforeEach(async () => {
     await db.recursiveDelete(db.doc(`orgs/${context.tenantId}`));
-    await db.doc(`orgs/${context.tenantId}/members/a`).set({ uid: 'a', role: 'admin', status: 'ACTIVE' });
-    await db.doc(`orgs/${context.tenantId}/members/b`).set({ uid: 'b', role: 'pm', status: 'ACTIVE', projectIds: ['p1'] });
+    await db.doc(`orgs/${context.tenantId}/members/a`).set({ uid: 'a', role: 'admin', status: 'ACTIVE', permissionsCapturedAt: new Date().toISOString() });
+    await db.doc(`orgs/${context.tenantId}/members/b`).set({ uid: 'b', role: 'pm', status: 'ACTIVE', permissionsCapturedAt: new Date().toISOString(), projectIds: ['p1'] });
   });
   afterAll(async () => { await db.recursiveDelete(db.doc(`orgs/${context.tenantId}`)); });
 
@@ -86,7 +87,7 @@ suite('product operations persisted contracts', () => {
   });
 
   it('cashflow scope excludes forbidden projects and a failed read is not zero or a confirmed cause', async () => {
-    for (const id of ['p1', 'private-project']) await db.doc(`orgs/${context.tenantId}/projects/${id}`).set({ name: id, cic: 'CIC1', status: 'ACTIVE' });
+    for (const id of ['p1', 'private-project']) await db.doc(`orgs/${context.tenantId}/projects/${id}`).set({ name: id, cic: 'CIC1', status: 'ACTIVE', permissionsCapturedAt: new Date().toISOString() });
     const before = (await db.collection(`orgs/${context.tenantId}/projects`).get()).docs.map((doc) => doc.data());
     const readSnapshot = vi.fn().mockRejectedValue(Object.assign(new Error('secret upstream'), { code: 'jvm_weekly_api_unreachable' }));
     const query = createCashflowEvidenceQuery({ db, readSnapshot, now, release: 'a'.repeat(40) });
@@ -121,7 +122,7 @@ suite('product operations persisted contracts', () => {
   });
 
   it('serves actual HTTP save/reload/replay and rejects model use before configuration', async () => {
-    const app = createBffApp({ db, authMode: 'headers', env: { ...process.env, PRODUCT_WORKBENCH_AI_ENABLED: 'false' } });
+    const app = createBffApp({ db, authMode: 'headers', env: { ...process.env, WORKBENCH_AI_ENABLED: 'false' } });
     const api = request(app);
     const headers = { 'x-tenant-id': context.tenantId, 'x-actor-id': 'a', 'x-actor-role': 'admin', 'idempotency-key': 'page-create-unique' };
     const first = await api.post('/api/v1/personal-work-pages').set(headers).send({ expectedVersion: 0, config });
@@ -140,7 +141,7 @@ suite('product operations persisted contracts', () => {
 
   it('limits AI rollout to admins and rejects exhausted tenant capacity before calling the provider', async () => {
     const complete = vi.fn();
-    const app = createBffApp({ db, authMode: 'headers', env: { ...process.env, PRODUCT_WORKBENCH_AI_ENABLED: 'true', SETTLEMENT_AGENT_GEMINI_API_KEY: 'test-only' }, workbenchCompletionFactory: () => complete });
+    const app = createBffApp({ db, authMode: 'headers', env: { ...process.env, WORKBENCH_AI_ENABLED: 'true', WORKBENCH_GEMINI_API_KEY: 'test-only' }, workbenchCompletionFactory: () => complete });
     const api = request(app);
     const headers = { 'x-tenant-id': context.tenantId, 'x-actor-id': 'b', 'x-actor-role': 'pm', 'idempotency-key': 'pm-ai' };
     expect((await api.get('/api/v1/workbench-assistant/capabilities').set(headers)).body.modelEnabled).toBe(false);
@@ -154,12 +155,30 @@ suite('product operations persisted contracts', () => {
     expect(complete).not.toHaveBeenCalled();
   });
 
+  it('reads only business query fields from a serverless forwarded request', async () => {
+    const app = createBffApp({ db, authMode: 'headers' });
+    const headers = { 'x-tenant-id': context.tenantId, 'x-actor-id': 'a', 'x-actor-role': 'admin' };
+    for (const path of ['/api/v1/cashflow-evidence', '/api/v1/insight-cashflow-report']) {
+      const handler = (req: any, res: any) => {
+        Object.defineProperty(req, 'query', { configurable: true, value: { yearMonth: '2026-09', __path: path } });
+        req.url = path;
+        app(req, res);
+      };
+      const result = await request(handler).get('/api/bff').set(headers);
+      expect(result.status).toBe(200);
+      expect(result.body.rows).toEqual([]);
+      expect((await request(app).get(path).query({ yearMonth: '2026-09', unexpected: 'value' }).set(headers)).status).toBe(400);
+      const invalid = await request(app).get(path).query({ yearMonth: ['2026-09', '2026-10'], __path: path }).set(headers);
+      expect(invalid.status).toBe(400);
+    }
+  });
+
   it('rechecks revoked membership before any tool evidence can reach a model', async () => {
     const complete = vi.fn(async () => {
       await db.doc(`orgs/${context.tenantId}/members/a`).update({ role: 'pm' });
       return { tool_calls: [{ id: 'call1', function: { name: 'cashflow_diagnostics', arguments: '{}' } }] };
     });
-    const app = createBffApp({ db, authMode: 'headers', env: { ...process.env, PRODUCT_WORKBENCH_AI_ENABLED: 'true', SETTLEMENT_AGENT_GEMINI_API_KEY: 'not-a-real-key' },
+    const app = createBffApp({ db, authMode: 'headers', env: { ...process.env, WORKBENCH_AI_ENABLED: 'true', WORKBENCH_GEMINI_API_KEY: 'not-a-real-key' },
       workbenchCompletionFactory: () => complete });
     const result = await request(app).post('/api/v1/workbench-assistant/cashflow').set({ 'x-tenant-id': context.tenantId, 'x-actor-id': 'a', 'x-actor-role': 'admin', 'idempotency-key': 'revoke-during-model' })
       .send({ question: '현금흐름 오류 기록 확인', yearMonth: '2026-09' });
@@ -171,7 +190,7 @@ suite('product operations persisted contracts', () => {
 
   it('does not replay private incident or model results after role/scope changes', async () => {
     const complete = vi.fn(async () => ({ tool_calls: [{ function: { name: 'propose_page', arguments: JSON.stringify({ ...config, title: 'private generated title' }) } }] }));
-    const app = createBffApp({ db, authMode: 'headers', env: { ...process.env, PRODUCT_WORKBENCH_AI_ENABLED: 'true', SETTLEMENT_AGENT_GEMINI_API_KEY: 'test-only-no-network' }, workbenchCompletionFactory: () => complete });
+    const app = createBffApp({ db, authMode: 'headers', env: { ...process.env, WORKBENCH_AI_ENABLED: 'true', WORKBENCH_GEMINI_API_KEY: 'test-only-no-network' }, workbenchCompletionFactory: () => complete });
     const api = request(app);
     const headers = { 'x-tenant-id': context.tenantId, 'x-actor-id': 'a', 'x-actor-role': 'admin', 'idempotency-key': 'private-incident' };
     const body = { expectedVersion: 0, title: 'private incident', status: 'investigating', operationKey: null, cause: 'private cause', evidence: 'private evidence',

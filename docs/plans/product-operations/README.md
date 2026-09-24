@@ -1,6 +1,8 @@
 # MYSCube 품질·그로스·TOI 적용 스프린트
 작성: 2026-09-22. 상태: S0~S3 및 추가 개인 페이지·현금흐름 진단 구현/검증 중. 배포 전. 예상 규모는 구현 약속이 아닌 상대적 작업량이다.
 
+현재 확장 범위는 [S14 공통 조회 구조·GitHub 소스 비교·Jev 적용](s14-generic-query-research.md)와 [독립 QA 계약](s14-conversational-work-agent-qa.md)을 따른다. 질문별 파이프라인을 늘리지 않고 독립 사본·공통 조회 엔진·지속 대화·실제 HTML/Tailwind 생성으로 진행한다. 아래 초기 S6~S11의 위젯 중심 설명은 당시 단계의 기록이며, 현재 요구를 위젯 JSON으로 제한하지 않는다. 실제 모델·독립 인프라·운영 사본 연결과 전체 흐름 검증은 미완료다.
+
 ## 제품 목표
 구성원은 실패 원인과 다음 행동을 업무 화면에서 확인한다. 운영자는 원인·영향·해결·재발을 관리한다. PO는 전체 시도 대비 실패율, 업무 완료율, 배포·실험의 효과를 재현 가능한 근거로 설명한다.
 
@@ -34,13 +36,30 @@
 운영 조사와 테스트에서 실제 결재·삭제·초안 덮어쓰기를 실행하지 않는다. 쓰기 검증은 격리 테넌트/에뮬레이터와 비식별 fixture에서 진행한다. 코드 배포는 main CI 성공 후 자동 배포, 공식 주소 대상 SHA 확인까지가 완료 기준이다. 데이터 보관 확대·새 유료 서비스·외부 전송·권한 확대는 구체적인 비용과 범위를 확인한 뒤 결정한다.
 
 ## 근거와 현재 상태
-[개발 착수 결과와 검증 상태](implementation-status.md)에서 실제 조사 범위와 구현한 기반, 남은 게이트를 확인한다.
+현재 제작 공간의 완료 상태는 [TOI 완료 기준](toi-completion-status.md)과 [S19 구현·독립 QA·보완 루프](s19-completion-loop.md)를 따른다. [S18 운영 준비 점검](s18-production-readiness-audit.md)과 [개발 착수 결과](implementation-status.md)는 당시의 조사·구현 기록이다.
 
 [전체 설계·실제 로그 조사·외부 자료 비교](../2026-09-22-product-reliability-growth.md)를 기준 문서로 사용한다. client_error_events 9,141건의 최종 고정 조회 시점은 2026-09-22 07:14:02.337977 UTC이며 운영 사용자 장애 건수나 실패율이 아니다. 로그 전체 기간과 신뢰할 수 있는 비율 산출 기간은 분리한다.
 
-S7/S8은 사용자 추가 요청으로 진행한 제한된 구성/조회 기능이다. 추가 사용자 요청에 따라 S9~S11로 GitHub QA, 가변 인사이트, 격리 미리보기를 확장했다. 임의 코드·임의 패키지 설치는 허용하지 않고 등록 위젯에서 생성한 앱 코드를 실행한다. 최신 코드·저장소·브라우저 검증 결과와 미완료 게이트는 [구현 상태](implementation-status.md)를 따른다. 운영 배포와 외부 모델 활성화는 아직 하지 않았다.
+S7~S11은 당시 구현 기록이며 S13 이후의 실제 HTML 생성 범위와 구분한다. S7/S8은 사용자 추가 요청으로 진행한 제한된 구성/조회 기능이다. 추가 사용자 요청에 따라 S9~S11로 GitHub QA, 가변 인사이트, 격리 미리보기를 확장했다. 임의 코드·임의 패키지 설치는 허용하지 않고 등록 위젯에서 생성한 앱 코드를 실행한다. 최신 코드·저장소·브라우저 검증 결과와 미완료 게이트는 [구현 상태](implementation-status.md)를 따른다. 운영 배포와 외부 모델 활성화는 아직 하지 않았다.
 
 ## 추가 구현 스프린트
 - [S9 실제 로그·GitHub QA](s9-log-github-qa.md)
 - [S10 가변 CEO 인사이트](s10-variable-ceo-insights.md)
 - [S11 사전 번들·트랜잭션 미리보기](s11-transactional-preview.md)
+- [S12 기존 서비스 격리 검증](s12-isolation-toi-verification.md)
+- [S13 실제 HTML/Tailwind 제작 공간](s13-html-studio-implementation.md)
+- [S14 공통 조회 구조·GitHub 소스 비교](s14-generic-query-research.md)
+- [S14 독립 QA 기준](s14-conversational-work-agent-qa.md)
+
+- [S15 — 실제 소스 비교와 공통 라우터 설계](s15-router-architecture-decision.md): LangGraph·Dify/Graphon·WrenAI 고정 SHA의 요청/분기/저장/실행 경로와 도입 한계. Jev 제외.
+- [S16 — 업무 정의의 조합](s16-semantic-retrieval-composition.md): 벡터 예시에 대한 해석 정정, MetricFlow의 정의·계획 구조 참고, 실제 연결 범위와 남은 게이트.
+- [S17 — Sheets 질의·질문 정확도 연구](s17-sheets-question-accuracy.md): 입금/기간 정의, 독립 읽기 경로, autoregressive 관련 논문의 적용 판단과 평가 계획. Sheets 연결·실모델 평가는 미완료.
+- [S17 — Sheets 연결 전 독립 QA](s17-sheets-query-qa-gates.md): 정산주/달력주, 내부거래, 셀 누락, 부분합, 권한·quota·회귀 검증 기준.
+- [S17 — 오프라인 입금 조회 구현·검증](s17-sheets-implementation.md): 고정 시트 사본→실제 집계→영구 근거→HTML 저장·복원, 운영 연결 전 남은 게이트.
+
+- [TOI 제작 공간 — 현재 완료 상태와 다음 게이트](toi-completion-status.md): 2026-09-23 기준, 로컬 구현과 실제 모델·운영 미완료 구분.
+
+- [S18 — React 실행·사용자 API 등록·자동 Git PR](s18-react-api-git-studio.md): 실제 React/사본 API/동일 저장소 Draft PR 검증, 운영 실행 격리 제한과 미연결 항목.
+- [S19 — 구현·독립 QA·보완 루프](s19-completion-loop.md): 대화·저장 복구·외부 API·사본/Sheets 공급·실제 Docker 격리 검증, 운영 연결에 필요한 범위.
+- [S20 — 내보낸 HTTP 응답 기록과 코드 근거](s20-offline-http-evidence.md): 원자적 가져오기·독립 집계·실패 당시 코드 후보 대조. 자동 수집과 전체 오류율은 별도 운영 과제.
+- [S21 — 앱·실행 이미지 묶음과 복원 검증](s21-release-pair-verification.md): 같은 소스 버전의 이미지 쌍, 읽기 전용 무결성 검사, 실제 복원 후 앱·React 실행 확인. 보관·전달·운영 설치는 별도 게이트.
