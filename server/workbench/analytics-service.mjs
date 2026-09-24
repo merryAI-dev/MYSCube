@@ -190,7 +190,7 @@ export function createAnalyticsService({ db, now = () => new Date().toISOString(
       const columnCoverage = coverageOf(dataset);
       const value = { datasetId: dataset.datasetId, version, contentHash, manifest: dataset.manifest, schema: dataset.schema, columnCoverage, rowCount: dataset.rows.length, chunkCount: chunks.length, chunkHashes: chunks.map(sha256), actorId: context.actorId, scopeFingerprint: grant.fingerprint, importedAt: now(), importedBy: context.actorId };
       return db.runTransaction(async (tx) => {
-        const [existing, latest] = await Promise.all([tx.get(revision), tx.get(ref)]);
+        const [existing, latest] = await tx.getAll(revision, ref);
         assertOwner(existing.data(), grant); assertOwner(latest.data(), grant);
         if (existing.exists) return metadata(existing.data());
         if (latest.exists && Date.parse(latest.data().manifest.capturedAt) > Date.parse(dataset.manifest.capturedAt)) throw analyticsError(409, 'analytics_import_stale', '더 최근에 복사한 자료가 있습니다. 이전 자료로 현재 버전을 바꿀 수 없습니다.');

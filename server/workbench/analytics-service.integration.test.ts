@@ -1,4 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { Firestore } from '@google-cloud/firestore';
 import { createAnalyticsService } from './analytics-service.mjs';
 import { sha256 } from './analytics-contract.mjs';
@@ -8,7 +9,7 @@ const suite = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
 suite('isolated copied datasets and persisted analytics evidence', () => {
   const db = new Firestore({ projectId: 'demo-html-workbench' });
   const businessDb = new Firestore({ projectId: 'demo-analytics-business' });
-  const context = { tenantId: 'analytics-it', actorId: 'admin-a', actorRole: 'admin', analyticsScope: { fingerprint: sha256('admin-a-grant-v1'), datasetIds: ['sales'] } };
+  const context = { tenantId: `analytics-it-${randomUUID()}`, actorId: 'admin-a', actorRole: 'admin', analyticsScope: { fingerprint: sha256('admin-a-grant-v1'), datasetIds: ['sales'] } };
   const prefix = `orgs/${context.tenantId}`;
   const scope = `${prefix}/axr_analytics/${context.analyticsScope.fingerprint}`;
   const now = () => '2026-09-22T15:00:00.000Z';
@@ -44,6 +45,8 @@ suite('isolated copied datasets and persisted analytics evidence', () => {
     const next = dataset(); next.manifest.sourceRevision = 'fixture-2'; next.manifest.capturedAt = '2026-09-22T14:00:00.000Z'; next.rows[0].contract = '200.50';
     const second = await service().importDataset(context, next);
     expect(second.version).not.toBe(first.version);
+    expect((await service().importDataset(context, dataset())).version).toBe(first.version);
+    expect((await service().catalog(context)).items[0].version).toBe(second.version);
     expect((await service().query(context, { sql: 'select sum(contract) as total from sales', datasetVersions: { sales: first.version } })).rows[0].total).toBe('120.75');
     expect((await service().query(context, { sql: 'select sum(contract) as total from sales' })).rows[0].total).toBe('220.75');
     expect((await db.collection(`${scope}/datasets/sales/versions`).get()).size).toBe(2);
@@ -60,11 +63,29 @@ suite('isolated copied datasets and persisted analytics evidence', () => {
     expect(evidence.sourceTimes.asOf.from).toBe('2026-09-22T11:00:00Z');
     expect((await service().catalog(grant)).missingDatasetIds).toEqual(['not_ready']);
   });
-  it('commits a concurrent duplicate import as one immutable revision', async () => {
-    const [first, second] = await Promise.all([service().importDataset(context, dataset()), service().importDataset(context, dataset())]);
+  it.each(Array.from({ length: 20 }, (_, index) => index + 1))('commits a concurrent duplicate import as one immutable revision (race %i)', async () => {
+    const outcomes = await Promise.allSettled([service().importDataset(context, dataset()), service().importDataset(context, dataset())]);
+    for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason;
+    const [first, second] = outcomes.map((outcome) => {
+      if (outcome.status !== 'fulfilled') throw new Error('Both duplicate imports must succeed.');
+      return outcome.value;
+    });
     expect(first.version).toBe(second.version);
-    expect((await db.collection(`${scope}/datasets/sales/versions`).get()).size).toBe(1);
+    const head = await db.doc(`${scope}/datasets/sales`).get();
+    const versions = await db.collection(`${scope}/datasets/sales/versions`).get();
+    expect(versions.size).toBe(1);
+    expect(versions.docs[0].id).toBe(first.version);
+    expect(head.data()).toEqual(versions.docs[0].data());
+    const chunks = await versions.docs[0].ref.collection('chunks').get();
+    expect(chunks.size).toBe(1);
+    expect(chunks.docs[0].id).toBe('0000');
+    const rowsJson = chunks.docs[0].get('rowsJson');
+    expect(JSON.parse(rowsJson)).toEqual(dataset().rows);
+    expect(chunks.docs[0].get('hash')).toBe(sha256(rowsJson));
+    expect(head.get('chunkHashes')).toEqual([sha256(rowsJson)]);
+    expect(head.get('manifest.sourceRevision')).toBe(dataset().manifest.sourceRevision);
     expect((await service().query(context, { sql: 'select count(*) as n from sales' })).rows).toEqual([{ n: '3' }]);
+    expect((await businessDb.doc(`${prefix}/projects/live`).get()).data()).toEqual({ amount: 9876, revision: 'untouched' });
   });
   it('blocks absent scope, non-admin, another actor, tenant, scope revision and ungranted datasets', async () => {
     await service().importDataset(context, dataset());
