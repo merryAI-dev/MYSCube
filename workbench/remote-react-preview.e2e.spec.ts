@@ -4,8 +4,8 @@ const evidenceId = '44444444-4444-4444-8444-444444444444';
 const source = "globalThis.__REMOTE_CODE_EXECUTED = true; export default function App(){return <main>서버에서만 실행</main>}";
 const future = '2099-01-01T00:00:00.000Z';
 async function setup(page: Page) {
-  const state = { posts: [] as any[], events: [] as any[], deleted: [] as string[], png: '', sequence: 1, failCreate: false, failEvent: false, eventFailureStatus: 503, holdCreate: null as Promise<void> | null, eventSequence: undefined as number | undefined, returnedId: idA, gets: 0 };
-  const frame = (sequence = state.sequence) => ({ pngBase64: state.png, width: 1100, height: 700, sequence });
+  const state = { unsupported: false, posts: [] as any[], events: [] as any[], deleted: [] as string[], png: '', sequence: 1, failCreate: false, failEvent: false, eventFailureStatus: 503, holdCreate: null as Promise<void> | null, eventSequence: undefined as number | undefined, returnedId: idA, gets: 0 };
+  const frame = (sequence = state.sequence) => ({ pngBase64: state.png, width: 1100, height: 700, sequence, ...(state.unsupported ? { kind: 'png', unsupported: [{ code: 'dom_element_unsupported', message: '캔버스는 직접 조작을 지원하지 않습니다.' }] } : {}) });
   await page.route('**/api/v1/**', async (route) => {
     const request = route.request(), url = new URL(request.url()), path = url.pathname;
     const reply = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
@@ -38,7 +38,7 @@ test('remote apply sends only a source snapshot, commits a decoded candidate, an
   const state = await setup(page);
   await page.getByRole('button', { name: '미리보기 적용' }).click();
   const image = page.getByTestId('remote-react-frame'); await expect(image).toHaveAttribute('data-session', idA);
-  expect(state.posts[0]).toEqual({ source: { title: '나의 업무 화면', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: { 'App.tsx': source } } }, apis: [], viewport: { width: 1100, height: 700 } });
+  expect(state.posts[0]).toEqual({ source: { title: '나의 업무 화면', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: { 'App.tsx': source } } }, apis: [], viewMode: 'dom', viewport: { width: expect.any(Number), height: 700 } });
   expect(await page.locator('iframe').count()).toBe(0); expect(await page.evaluate(() => (window as any).__REMOTE_CODE_EXECUTED)).toBeUndefined();
   const edited = source.replace('서버에서만 실행', '수정된 다음 화면'); await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await page.getByLabel('React 원문').fill(edited);
   await expect(page.getByText(/현재 편집 내용과 실행 중인 버전이 다릅니다/)).toBeVisible();
@@ -119,4 +119,11 @@ test('editing the title during candidate creation rejects its commit and keeps t
   await expect.poll(() => state.deleted.includes(idB)).toBe(true); expect(state.deleted).not.toContain(idA);
   await page.getByRole('button', { name: '미리보기', exact: true }).click(); await expect(page.getByTestId('remote-react-frame')).toHaveAttribute('data-session', idA);
   await expect(page.getByRole('button', { name: '미리보기 적용' })).toBeEnabled();
+});
+
+test('unsupported DOM candidates preserve the previous session and initial fallback is read-only', async ({page}) => {
+  const state=await setup(page);state.unsupported=true;await page.getByRole('button',{name:'미리보기 적용'}).click();
+  await expect(page.getByRole('alert')).toContainText('확인용 이미지');await expect(page.getByLabel('선택한 입력칸에 보낼 글자')).toBeDisabled();await page.getByTestId('remote-react-frame').click();expect(state.events).toHaveLength(0);
+  state.unsupported=false;state.returnedId=idB;await page.getByRole('button',{name:'미리보기 적용'}).click();await expect(page.getByTestId('remote-react-frame')).toHaveAttribute('data-session',idB);
+  state.unsupported=true;state.returnedId=idC;await page.getByRole('button',{name:'미리보기 적용'}).click();await expect(page.getByRole('region',{name:'격리된 React 실행 화면'}).getByRole('alert')).toContainText('이전 정상 화면을 유지');await expect(page.getByTestId('remote-react-frame')).toHaveAttribute('data-session',idB);await expect.poll(()=>state.deleted).toContain(idC);expect(state.deleted).not.toContain(idB);
 });

@@ -33,4 +33,17 @@ suite('Remote preview HTTP contract with real compiler and permission store (bro
     const response = await request(app).post('/api/v1/react-work-pages/remote').set(headers()).send(input);
     expect(response.status).toBe(403); expect(closed).toEqual([id]); expect(response.body).not.toHaveProperty('frame');
   });
+  it('passes the accessible view choice through the authenticated compiler route and rejects unknown modes', async () => {
+    const created = await request(app).post('/api/v1/react-work-pages/remote').set(headers()).send({ ...input, viewMode: 'dom' });
+    expect(created.status).toBe(200);
+    expect(received.viewMode).toBe('dom');
+    expect(received.sourceHash).toBe(received.artifact.sourceHash);
+    received = null;
+    const invalid = await request(app).post('/api/v1/react-work-pages/remote').set(headers()).send({ ...input, viewMode: 'html' });
+    expect(invalid.status).toBe(400);
+    expect(received).toBeNull();
+    const legacy = await request(app).post('/api/v1/react-work-pages/remote').set(headers()).send(input);
+    expect(legacy.status).toBe(200);
+    expect(received.viewMode).toBeUndefined();
+  });
 });

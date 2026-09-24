@@ -1,3 +1,6 @@
+import { RemoteDomFrameSchema, RemoteDomEventSchema, RemoteDomUnsupportedSchema, REMOTE_DOM_LIMITS } from '../../../shared/workbench-remote-dom.mjs';
+import { checkDomEvent } from './dom-events.mjs';
+import { digest } from './contract.mjs';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { checkArtifact, checkEvent, checkViewport, dockerRunArguments, REMOTE_LIMITS, remoteError } from './contract.mjs';
@@ -41,6 +44,7 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
     if (session.closed) return; session.closed = true; clearTimeout(session.ttl); clearInterval(session.authPoll);
     for (const request of session.pending.values()) { clearTimeout(request.timer); request.reject(reason); } session.pending.clear();
     for (const controller of session.apiControllers.values()) controller.abort(); session.apiControllers.clear();
+    session.events?.clear(); session.replayFrames = []; session.domFrame = null;
     session.process.stdin.destroy(); session.process.kill('SIGKILL');
     session.cleanupAttempts = 0; removeContainer(session);
   };
@@ -73,7 +77,7 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
     return new Promise((resolve, reject) => {
       const requestId = randomUUID();
       const timer = setTimeout(() => clean(session, fail('React 실행 시간이 한도를 넘었습니다. 마지막 정상 화면을 유지합니다.', 'remote_command_timeout', 504)), cap.commandMs); timer.unref();
-      session.pending.set(requestId, { resolve, reject, timer });
+      session.pending.set(requestId, { resolve, reject, timer, event: data.event });
       try { send(session, { type, requestId, ...data }); } catch (error) { clearTimeout(timer); session.pending.delete(requestId); reject(error); }
     });
   };
@@ -127,14 +131,38 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
     if (message.type === 'runtime-error') { clean(session, fail('React 화면에서 오류가 발생했습니다. 저장된 코드를 확인해 주세요.', 'remote_react_error', 422)); return; }
     const pending = session.pending.get(message.requestId);
     if (!pending || !['frame', 'error'].includes(message.type)) { clean(session, fail('실행 공간의 응답 형식을 확인하지 못했습니다.', 'remote_protocol_invalid')); return; }
-    if (message.type === 'error') { clean(session, fail('React 미리보기를 완성하지 못했습니다.', 'remote_react_error', 422)); return; }
+    if (message.type === 'error') {
+      if (session.viewMode === 'dom' && message.recoverable === true && /^remote_dom_[a-z_]+$/.test(message.code || '')) {
+        clearTimeout(pending.timer); session.pending.delete(message.requestId);
+        pending.reject(fail('입력 상태가 변경되었습니다. 화면을 다시 확인해 주세요.', message.code, 409)); return;
+      }
+      clean(session, fail('React 미리보기를 완성하지 못했습니다.', 'remote_react_error', 422)); return;
+    }
+    if (session.viewMode === 'dom' && message.kind === 'dom') {
+      const { type, requestId, ...payload } = message;
+      const parsed = RemoteDomFrameSchema.safeParse(payload);
+      if (!parsed.success || payload.sessionId !== session.id || payload.sourceHash !== session.sourceHash
+        || payload.width !== session.viewport.width || payload.height !== session.viewport.height || payload.sequence <= session.sequence
+        || session.documentEpoch && session.documentEpoch !== payload.documentEpoch || payload.snapshot.revision <= session.domRevision
+        || pending.event && (payload.snapshot.ack?.eventId !== pending.event.eventId || payload.snapshot.ack?.inputRevision !== pending.event.inputRevision)
+        || !pending.event && payload.snapshot.ack !== null) { clean(session, fail('원본 화면의 요소·입력 순서를 확인하지 못했습니다.', 'remote_dom_frame_invalid')); return; }
+      session.sequence = payload.sequence; session.documentEpoch = payload.documentEpoch; session.domRevision = payload.snapshot.revision; session.domFrame = parsed.data;
+      clearTimeout(pending.timer); session.pending.delete(message.requestId); pending.resolve(parsed.data); return;
+    }
+    let unsupported;
+    if (session.viewMode === 'dom') {
+      const parsed = RemoteDomUnsupportedSchema.safeParse(message.unsupported);
+      if (message.kind !== 'png' || !parsed.success || message.sessionId !== session.id || message.sourceHash !== session.sourceHash
+        || !/^[a-f0-9-]{36}$/.test(message.documentEpoch || '') || session.documentEpoch && session.documentEpoch !== message.documentEpoch) { clean(session, fail('지원하지 않는 화면의 안내 정보를 확인하지 못했습니다.', 'remote_dom_frame_invalid')); return; }
+      unsupported = parsed.data; session.documentEpoch = message.documentEpoch; session.domFrame = null;
+    }
     let png;
     if (typeof message.pngBase64 === 'string' && /^[A-Za-z0-9+/]+={0,2}$/.test(message.pngBase64)) png = Buffer.from(message.pngBase64, 'base64');
     if (!png || png.length < 24 || png.length > 640000 || png.toString('base64') !== message.pngBase64 || png.readUInt32BE(16) !== session.viewport.width || png.readUInt32BE(20) !== session.viewport.height || !png.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) || message.width !== session.viewport.width || message.height !== session.viewport.height
       || !Number.isSafeInteger(message.sequence) || message.sequence <= session.sequence) { clean(session, fail('미리보기 이미지와 순서를 확인하지 못했습니다.', 'remote_frame_invalid')); return; }
     session.sequence = message.sequence;
     clearTimeout(pending.timer); session.pending.delete(message.requestId);
-    pending.resolve({ pngBase64: message.pngBase64, width: message.width, height: message.height, sequence: message.sequence, sourceHash: session.sourceHash });
+    pending.resolve({ pngBase64: message.pngBase64, width: message.width, height: message.height, sequence: message.sequence, sourceHash: session.sourceHash, ...(unsupported ? { kind: 'png', sessionId: session.id, documentEpoch: session.documentEpoch, unsupported } : {}) });
   };
   return {
     async create(context, input) {
@@ -142,6 +170,8 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
       await authorize(context);
       if (stopped) throw fail('미리보기 실행 서비스가 종료 중입니다.', 'remote_shutdown');
       const scope = scopeKey(context);
+      if (input.viewMode !== undefined && !['png', 'dom'].includes(input.viewMode)) throw fail('화면 보기 형식을 확인해 주세요.', 'remote_view_mode_invalid', 400);
+      const viewMode = input.viewMode || 'png';
       const artifact = checkArtifact(input.artifact); const viewport = checkViewport(input.viewport);
       if (!/^[a-f0-9]{64}$/.test(input.sourceHash || '') || input.artifact.sourceHash !== input.sourceHash || !Array.isArray(input.apiBindings) || input.apiBindings.length > 12 || input.apiBindings.some(item => !item || !/^[a-f0-9-]{36}$/.test(item.id || '') || !Number.isSafeInteger(item.version) || item.version < 1) || new Set(input.apiBindings.map(item => item.id)).size !== input.apiBindings.length) throw fail('실행할 원문과 API 연결 버전을 확인해 주세요.', 'remote_binding_invalid', 400);
       const owned = [...sessions.values()].filter(item => item.context.tenantId === context.tenantId && item.context.actorId === context.actorId);
@@ -154,7 +184,7 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
       const id = randomUUID(); const container = `axr-render-${id}`;
       const process = spawnDocker(dockerRunArguments(container));
       const session = { id, container, process, scope, previousSessionId: previous?.id, context: { ...context, analyticsScope: structuredClone(context.analyticsScope), ...(context.remoteEvidence ? { remoteEvidence: context.remoteEvidence } : {}) }, sourceHash: input.sourceHash, viewport, bindings: input.apiBindings.map(item => ({ id: item.id, version: item.version })), expiresAt: now() + cap.ttlMs,
-        pending: new Map(), apiControllers: new Map(), seenApi: new Set(), buffer: '', bytes: 0, apiCalls: 0, commands: 0, sequence: 0, closed: false };
+        viewMode, domFrame: null, domRevision: 0, documentEpoch: null, events: new Map(), replayFrames: [], pending: new Map(), apiControllers: new Map(), seenApi: new Set(), buffer: '', bytes: 0, apiCalls: 0, commands: 0, sequence: 0, closed: false };
       sessions.set(id, session); if (previous) previous.candidateId = id; session.ttl = setTimeout(() => clean(session), cap.ttlMs); session.ttl.unref();
       session.authPoll = setInterval(() => { void pollAuthorization(session); }, 30000); session.authPoll.unref();
       process.once('error', () => clean(session, fail('독립 실행 공간을 시작하지 못했습니다.', 'remote_unavailable')));
@@ -170,11 +200,28 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
           try { const message = JSON.parse(line); if (!message || typeof message !== 'object') throw new Error(); receive(session, message); } catch { clean(session, fail('실행 공간의 응답을 확인하지 못했습니다.', 'remote_protocol_invalid')); return; }
         }
       });
-      try { const frame = await request(session, 'init', { artifact, viewport }); await authorize(context); if (scopeKey(context) !== scope) throw fail('조회 권한이 변경되었습니다.', 'remote_scope_changed', 403); return { sessionId: id, frame, expiresAt: new Date(session.expiresAt).toISOString() }; }
+      try { const frame = await request(session, 'init', { artifact, viewport, ...(viewMode === 'dom' ? { viewMode, sessionId: id, sourceHash: session.sourceHash } : {}) }); await authorize(context); if (scopeKey(context) !== scope) throw fail('조회 권한이 변경되었습니다.', 'remote_scope_changed', 403); return { sessionId: id, frame, expiresAt: new Date(session.expiresAt).toISOString() }; }
       catch (error) { clean(session, error); throw error; }
     },
     async frame(context, id) { const session = await withOwner(context, id); const frame = await request(session, 'frame'); await withOwner(context, id); return frame; },
-    async event(context, id, value) { const session = await withOwner(context, id); const event = checkEvent(value, session.viewport); const frame = await request(session, 'event', { event }); await withOwner(context, id); return frame; },
+    async event(context, id, value) {
+      const session = await withOwner(context, id);
+      if (session.viewMode !== 'dom') { const event = checkEvent(value, session.viewport); const frame = await request(session, 'event', { event }); await withOwner(context, id); return frame; }
+      const parsedEvent = RemoteDomEventSchema.safeParse(value);
+      if (!parsedEvent.success) throw fail('화면 조작 내용을 확인해 주세요.', 'remote_dom_event_invalid', 400);
+      const eventKey = parsedEvent.data.eventId, fingerprint = digest(JSON.stringify(parsedEvent.data));
+      const previous = session.events.get(eventKey);
+      if (previous) {
+        if (previous.fingerprint !== fingerprint) throw fail('같은 입력 번호에 다른 내용이 포함되어 있습니다.', 'remote_dom_event_conflict', 409);
+        if (!previous.promise) throw fail('이 입력의 응답 보관 기한이 지났습니다. 화면을 다시 확인해 주세요.', 'remote_dom_event_expired', 409);
+        const frame = await previous.promise; await withOwner(context, id); return frame;
+      }
+      const event = checkDomEvent(parsedEvent.data, session.domFrame);
+      if (session.pending.size) throw fail('화면 처리 중입니다. 잠시 후 다시 시도해 주세요.', 'remote_busy', 409);
+      const promise = request(session, 'event', { event }); session.events.set(event.eventId, { fingerprint, promise }); session.replayFrames.push(event.eventId);
+      while (session.replayFrames.length > REMOTE_DOM_LIMITS.replayFrames) { const expired = session.events.get(session.replayFrames.shift()); if (expired) expired.promise = null; }
+      const frame = await promise; await withOwner(context, id); return frame;
+    },
     async close(context, id) { const session = await withOwner(context, id); clean(session); return { closed: true }; },
     closeAll() { for (const session of sessions.values()) clean(session); },
     revokeOwner(context) { for (const session of sessions.values()) if (sameOwner(session, context)) clean(session); },

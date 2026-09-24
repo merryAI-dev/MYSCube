@@ -1,10 +1,14 @@
+import { RemoteDomFrameSchema, RemoteDomUnsupportedSchema } from '../shared/workbench-remote-dom.mjs';
+import { RemoteDomSurface } from './RemoteDomSurface';
+import { domIdentity, type DomFrame, type DomEvent } from './remote-dom-input';
 import type { ScreenQueryExpectation } from './screen-evidence';
 import { useEffect, useRef, useState } from 'react';
 import { workbenchRequest } from './client';
 import { BoundEvidence } from './BoundEvidence';
 import type { ReactSource } from './react-workspace-editor';
 
-export type RemoteFrame = { pngBase64: string; width: number; height: number; sequence: number };
+type PngFrame = { kind?: 'png'; unsupported?: Array<{ code: string; message: string; nodeId?: string }>; pngBase64: string; width: number; height: number; sequence: number };
+export type RemoteFrame = PngFrame | DomFrame;
 export type RemoteSession = { sessionId: string; frame: RemoteFrame; expiresAt: string; evidence?: Record<string, { evidenceId: string }> };
 export type RemoteDraft = { source: ReactSource; apis: Array<{ id: string; version: number }>; key: number; expectedQueries?: ScreenQueryExpectation[] };
 export type RemotePreviewResult = { status: 'ready' | 'error'; key: number; durationMs?: number; message?: string };
@@ -14,6 +18,12 @@ const close = (id: string) => workbenchRequest(endpoint(id), 'DELETE').catch(() 
 function checked(value: unknown, previous?: RemoteSession): RemoteSession {
   const next = { ...previous, ...(value as Partial<RemoteSession>) };
   const frame = next.frame;
+  if (frame && 'kind' in frame && frame.kind === 'dom') {
+    const checkedFrame = RemoteDomFrameSchema.parse(frame);
+    if (next.sessionId !== checkedFrame.sessionId || typeof next.expiresAt !== 'string' || !Number.isFinite(Date.parse(next.expiresAt)) || previous && (next.sessionId !== previous.sessionId || previous.frame.kind === 'dom' && domIdentity(previous.frame) !== domIdentity(checkedFrame))) throw new Error('실행 화면의 연결 정보를 확인하지 못했습니다.');
+    return { ...next, frame: checkedFrame } as RemoteSession;
+  }
+  if (frame?.unsupported) RemoteDomUnsupportedSchema.parse(frame.unsupported);
   if (typeof next.sessionId !== 'string' || !/^[a-f0-9-]{36}$/i.test(next.sessionId) || previous && next.sessionId !== previous.sessionId || typeof next.expiresAt !== 'string' || !Number.isFinite(Date.parse(next.expiresAt))
     || !frame || !Number.isSafeInteger(frame.sequence) || frame.sequence < 1 || !Number.isSafeInteger(frame.width) || frame.width < 320 || frame.width > 1600 || !Number.isSafeInteger(frame.height) || frame.height < 240 || frame.height > 1200
     || typeof frame.pngBase64 !== 'string' || frame.pngBase64.length > 860000 || !/^iVBORw0KGgo[A-Za-z0-9+/]*={0,2}$/.test(frame.pngBase64)
@@ -25,6 +35,7 @@ function checked(value: unknown, previous?: RemoteSession): RemoteSession {
 }
 
 async function decodeFrame(frame: RemoteFrame) {
+  if (frame.kind === 'dom') return;
   const image = new Image(); image.src = `data:image/png;base64,${frame.pngBase64}`;
   await image.decode();
   if (image.naturalWidth !== frame.width || image.naturalHeight !== frame.height) throw new Error('실행 화면의 이미지 크기를 확인하지 못했습니다.');
@@ -33,6 +44,7 @@ async function decodeFrame(frame: RemoteFrame) {
 export function RemoteReactPreview({ draft, onResult, onPreparing, canCommit, onPermissionError }: { draft: RemoteDraft | null; onResult?: (value: RemotePreviewResult) => void; onPreparing?: (value: boolean) => void; canCommit?: (key: number) => boolean; onPermissionError?: (reason: unknown) => void }) {
   const [session, setSession] = useState<RemoteSession | null>(null), [error, setError] = useState(''), [liveError, setLiveError] = useState('');
   const [preparing, setPreparing] = useState(false), [acting, setActing] = useState(false), [typing, setTyping] = useState('');
+  const viewport = useRef<HTMLDivElement>(null);
   const [expectedQueries, setExpectedQueries] = useState<ScreenQueryExpectation[]>([]);
   const generation = useRef(0), live = useRef<RemoteSession | null>(null), network = useRef<Promise<unknown> | null>(null), inputBusy = useRef(false), failed = useRef(false);
   const callbacks = useRef({ onResult, onPreparing, canCommit, onPermissionError }); callbacks.current = { onResult, onPreparing, canCommit, onPermissionError };
@@ -46,6 +58,7 @@ export function RemoteReactPreview({ draft, onResult, onPreparing, canCommit, on
   const merge = async (id: string, value: unknown) => {
     const current = live.current; if (!current || current.sessionId !== id) return false;
     const next = checked(value, current);
+    if (next.frame.kind !== 'dom' && next.frame.unsupported?.length && current.frame.kind === 'dom') throw new Error('실행 중 직접 조작을 지원하지 않는 요소가 생겼습니다. 마지막 정상 화면을 유지하고 조작을 중단합니다.');
     if (next.frame.sequence <= current.frame.sequence) return false;
     await decodeFrame(next.frame);
     if (live.current?.sessionId !== id || next.frame.sequence <= live.current.frame.sequence) return false;
@@ -58,11 +71,13 @@ export function RemoteReactPreview({ draft, onResult, onPreparing, canCommit, on
       live.current = null; setSession(null); setError(''); setLiveError(''); failed.current = false; setPreparing(false); callbacks.current.onPreparing?.(false); return;
     }
     const start = performance.now(), previousSessionId = live.current?.sessionId;
+    const box = viewport.current, boxStyle = box ? getComputedStyle(box) : null;
+    const contentWidth = box ? box.clientWidth - parseFloat(boxStyle?.paddingLeft || '0') - parseFloat(boxStyle?.paddingRight || '0') : 1100;
     setPreparing(true); callbacks.current.onPreparing?.(true); setError('');
-    void workbenchRequest('/react-work-pages/remote', 'POST', { source: draft.source, apis: draft.apis, viewport: { width: 1100, height: 700 }, ...(previousSessionId ? { previousSessionId } : {}) }).then(async (raw: unknown) => {
+    void workbenchRequest('/react-work-pages/remote', 'POST', { source: draft.source, apis: draft.apis, viewMode: 'dom', viewport: { width: Math.max(320, Math.min(1600, Math.floor(contentWidth))), height: 700 }, ...(previousSessionId ? { previousSessionId } : {}) }).then(async (raw: unknown) => {
       if (generation.current !== current) { const id = (raw as Partial<RemoteSession>)?.sessionId; if (typeof id === 'string' && /^[a-f0-9-]{36}$/i.test(id) && id !== previousSessionId) void close(id); return; }
       let value: RemoteSession;
-      try { value = checked(raw); await decodeFrame(value.frame); }
+      try { value = checked(raw); await decodeFrame(value.frame); if (value.frame.kind !== 'dom' && value.frame.unsupported?.length && live.current) throw new Error(`새 화면에 직접 조작을 지원하지 않는 요소가 있습니다. 이전 정상 화면을 유지합니다. ${value.frame.unsupported.map(issue => issue.message).join(' ')}`); }
       catch (reason) {
         const id = (raw as Partial<RemoteSession>)?.sessionId;
         if (typeof id === 'string' && /^[a-f0-9-]{36}$/i.test(id) && id !== previousSessionId) void close(id);
@@ -93,7 +108,7 @@ export function RemoteReactPreview({ draft, onResult, onPreparing, canCommit, on
     return () => clearInterval(timer);
   }, [session?.sessionId]);
   const sendEvent = async (value: object) => {
-    const id = live.current?.sessionId; if (!id || inputBusy.current || failed.current) return false;
+    const id = live.current?.sessionId; if (!id || inputBusy.current || failed.current || live.current?.frame.kind !== 'dom' && live.current?.frame.unsupported?.length) return false;
     inputBusy.current = true; setActing(true);
     let pending: Promise<unknown> | undefined;
     try {
@@ -104,20 +119,46 @@ export function RemoteReactPreview({ draft, onResult, onPreparing, canCommit, on
     } catch (reason) { if (live.current?.sessionId === id) setFailure(reason, '입력을 전달하지 못했습니다.'); return false; }
     finally { if (network.current === pending) network.current = null; inputBusy.current = false; setActing(false); }
   };
-  return <section aria-label="격리된 React 실행 화면" style={{ minWidth: 0, padding: 16 }}>
+  const sendDomEvent = async (value: DomEvent): Promise<DomFrame> => {
+    const id = live.current?.sessionId;
+    if (!id || id !== value.sessionId || inputBusy.current || failed.current) throw new Error('현재 실행 화면에 입력을 전달할 수 없습니다.');
+    inputBusy.current = true; setActing(true);
+    let pending: Promise<unknown> | undefined;
+    try {
+      await network.current?.catch(() => undefined);
+      if (live.current?.sessionId !== id) throw new Error('실행 화면이 바뀌었습니다.');
+      const current = live.current;
+      if (!current || current.frame.kind !== 'dom' || current.frame.documentEpoch !== value.documentEpoch || current.frame.sourceHash !== value.sourceHash) throw new Error('입력 대상이 바뀌었습니다.');
+      pending = workbenchRequest(`${endpoint(id)}/events`, 'POST', { ...value, baseRevision: current.frame.snapshot.revision }); network.current = pending;
+      const result = checked(await pending, live.current);
+      if (live.current?.sessionId !== id || result.frame.kind !== 'dom') throw new Error('직접 조작할 수 없는 화면으로 바뀌었습니다.');
+      await merge(id, result); return result.frame;
+    } catch (reason) { if (live.current?.sessionId === id && !authorizationFailure(reason)) setFailure(reason, '입력을 확인하지 못했습니다.'); throw reason; }
+    finally { if (network.current === pending) network.current = null; inputBusy.current = false; setActing(false); }
+  };
+  const resyncDom = async (): Promise<DomFrame> => {
+    const id = live.current?.sessionId; if (!id) throw new Error('현재 실행 화면이 없습니다.');
+    const result = checked(await workbenchRequest(endpoint(id)), live.current || undefined);
+    if (live.current?.sessionId !== id || result.frame.kind !== 'dom') throw new Error('실행 화면이 바뀌었습니다.');
+    await merge(id, result); return result.frame;
+  };
+  return <section ref={viewport} aria-label="격리된 React 실행 화면" style={{ minWidth: 0, padding: 16 }}>
     <p role="status" className="subtle">{preparing ? '새 실행 화면을 준비하고 있습니다. 이전 정상 화면은 유지됩니다.' : session ? '별도 실행 공간의 화면입니다. 클릭·키보드 입력을 전달할 수 있습니다.' : '미리보기를 적용하면 실행 화면이 나타납니다.'}</p>
-    <p className="subtle">원격 화면은 이미지로 표시되어 화면 안의 글자 선택과 스크린리더 탐색이 제한됩니다. 계산 근거는 아래 별도 표로 확인할 수 있습니다. 키보드 조작 영역에서 Tab으로 이동하거나 입력칸을 클릭한 뒤 글자를 보내 주세요.</p>
+    {session?.frame.kind !== 'dom' && <p className="subtle">원격 화면은 이미지로 표시되어 화면 안의 글자 선택과 스크린리더 탐색이 제한됩니다. 계산 근거는 아래 별도 표로 확인할 수 있습니다. 키보드 조작 영역에서 Tab으로 이동하거나 입력칸을 클릭한 뒤 글자를 보내 주세요.</p>}
     {error && <p role="alert" className="error">{error}</p>}
     {liveError && <p role="alert" className="error">{session && '현재 실행 결과를 확인하지 못했습니다. 보이는 이미지는 마지막 정상 화면이며, 입력과 계산 근거 표시는 중단했습니다. '}{liveError}</p>}
     {session && <>
-      <div tabIndex={0} role="group" aria-label="실행 화면 키보드 조작" aria-disabled={acting || Boolean(liveError)} onKeyDown={(key) => {
-        if (keys.has(key.key)) { key.preventDefault(); if (!acting && !liveError) void sendEvent({ type: 'key', key: key.shiftKey && key.key === 'Tab' ? 'Shift+Tab' : key.key }); }
+      {session.frame.kind === 'dom' ? <RemoteDomSurface key={domIdentity(session.frame)} frame={session.frame} disabled={Boolean(liveError)} onEvent={sendDomEvent} onResync={resyncDom} onError={authorizationFailure} /> : <>
+      {session.frame.unsupported?.length ? <p role="alert" className="bound-evidence-warning">이 화면은 직접 조작을 지원하지 않는 요소가 있어 확인용 이미지로 표시합니다. 이미지에서 입력이나 버튼 조작은 전달하지 않습니다. {session.frame.unsupported.map(issue => issue.message).join(' ')}</p> : null}
+      <div tabIndex={0} role="group" aria-label="실행 화면 키보드 조작" aria-disabled={acting || Boolean(liveError) || Boolean(session.frame.unsupported?.length)} onKeyDown={(key) => {
+        if (keys.has(key.key)) { key.preventDefault(); if (!acting && !liveError && !(session.frame.kind !== 'dom' && session.frame.unsupported?.length)) void sendEvent({ type: 'key', key: key.shiftKey && key.key === 'Tab' ? 'Shift+Tab' : key.key }); }
       }}>
         <img alt="React 실행 결과" data-testid="remote-react-frame" data-sequence={session.frame.sequence} data-session={session.sessionId} src={`data:image/png;base64,${session.frame.pngBase64}`} style={{ width: '100%', height: 'auto', display: 'block' }}
-          onClick={(click) => { if (acting || liveError) return; const box = click.currentTarget.getBoundingClientRect(); if (!box.width || !box.height) return; void sendEvent({ type: 'click', x: Math.max(0, Math.min(session.frame.width - 1, Math.floor((click.clientX - box.left) * session.frame.width / box.width))), y: Math.max(0, Math.min(session.frame.height - 1, Math.floor((click.clientY - box.top) * session.frame.height / box.height))) }); }} />
+          onClick={(click) => { if (acting || liveError || session.frame.kind !== 'dom' && session.frame.unsupported?.length) return; const box = click.currentTarget.getBoundingClientRect(); if (!box.width || !box.height) return; void sendEvent({ type: 'click', x: Math.max(0, Math.min(session.frame.width - 1, Math.floor((click.clientX - box.left) * session.frame.width / box.width))), y: Math.max(0, Math.min(session.frame.height - 1, Math.floor((click.clientY - box.top) * session.frame.height / box.height))) }); }} />
       </div>
-      <fieldset disabled={acting || Boolean(liveError)}><div className="actions"><label>선택한 입력칸에 보낼 글자<input value={typing} maxLength={2000} onChange={(value) => setTyping(value.target.value)} /></label><button disabled={!typing} onClick={async () => { const text = typing; if (await sendEvent({ type: 'type', text })) setTyping((current) => current === text ? '' : current); }}>입력 보내기</button>
+      <fieldset disabled={acting || Boolean(liveError) || Boolean(session.frame.unsupported?.length)}><div className="actions"><label>선택한 입력칸에 보낼 글자<input value={typing} maxLength={2000} onChange={(value) => setTyping(value.target.value)} /></label><button disabled={!typing} onClick={async () => { const text = typing; if (await sendEvent({ type: 'type', text })) setTyping((current) => current === text ? '' : current); }}>입력 보내기</button>
         <button className="quiet" onClick={() => void sendEvent({ type: 'scroll', deltaX: 0, deltaY: -500 })}>위로 이동</button><button className="quiet" onClick={() => void sendEvent({ type: 'scroll', deltaX: 0, deltaY: 500 })}>아래로 이동</button></div></fieldset>
+      </>}
       <button className="quiet compact" disabled={acting} onClick={() => void refresh(session.sessionId)}>실행 상태 다시 확인</button>
       {acting && <p role="status" className="subtle">입력을 전달하고 있습니다.</p>}
       {!liveError && <BoundEvidence key={session.sessionId} onPermissionError={authorizationFailure} expectedQueries={expectedQueries} bindings={session.evidence && Object.keys(session.evidence).length ? session.evidence : undefined} />}

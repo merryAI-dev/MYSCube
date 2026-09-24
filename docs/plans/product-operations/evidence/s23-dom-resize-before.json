@@ -1,0 +1,7 @@
+{
+  "scope": "existing desktop session resized without creating a new preview; no responsive-equivalence claim",
+  "browserWidth": 390,
+  "iframeWidth": 332,
+  "documentWidth": 620,
+  "overflow": true
+}
