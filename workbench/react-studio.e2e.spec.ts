@@ -44,9 +44,12 @@ test.beforeAll(async () => {
 test.afterAll(async () => { for (const item of [server, runtimeServer]) if (item) await new Promise<void>((resolve) => item.close(() => resolve())); if (db) { await db.recursiveDelete(db.doc(root)); await db.terminate(); } });
 
 test('register API → generate React → real state and API bridge → immutable save/reload → disable blocks existing page', async ({ page }) => {
+  let previewRequests = 0, pageWrites = 0;
   const errors: string[] = []; page.on('pageerror', (error) => errors.push(error.message));
   await page.route('**/api/**', async (route) => {
     const request = route.request(), url = new URL(request.url());
+    if (request.method() === 'POST' && url.pathname === '/api/v1/react-work-pages/preview') previewRequests++;
+    if (request.method() === 'POST' && url.pathname === '/api/v1/react-work-pages') pageWrites++;
     const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...request.headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId } });
     if (request.method() === 'POST' && url.pathname === '/api/v1/workbench-apis' && response.ok()) registeredId = (await response.json()).id;
     await route.fulfill({ response });
@@ -64,11 +67,10 @@ test('register API → generate React → real state and API bridge → immutabl
   await page.getByRole('button', { name: '업무 만들기', exact: true }).click();
   await page.getByText('연결 자료 · 0개', { exact: true }).click(); await page.getByRole('checkbox', { name: /주정산 상태 확인/ }).check();
   await page.getByRole('button', { name: '보내기' }).click();
-  await expect(page.getByRole('button', { name: '검토한 변경 적용' })).toBeVisible();
-  await page.getByRole('button', { name: '검토한 변경 적용' }).click();
-  await page.getByRole('button', { name: '미리보기 적용' }).click();
+  await expect(page.getByRole('button', { name: '검토한 변경 적용' })).toHaveCount(0);
   const frame = page.frameLocator('[data-testid="react-preview-committed"]');
   await expect(frame.getByRole('heading', { name: '나의 프로젝트 현황' })).toBeVisible();
+  expect(previewRequests).toBe(1); expect(pageWrites).toBe(0);
   await frame.getByRole('button', { name: '클릭 0회' }).click();
   await expect(frame.getByRole('button', { name: '클릭 1회' })).toBeVisible();
   await frame.getByRole('button', { name: '사업 조회' }).click();

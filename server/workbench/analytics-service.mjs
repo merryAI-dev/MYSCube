@@ -227,6 +227,15 @@ export function createAnalyticsService({ db, now = () => new Date().toISOString(
       const { sql, datasetVersions: versions, ...semantic } = compiled;
       return executeQuery(context, { sql, datasetVersions: versions }, { signal, semantic });
     },
+    async recordApiEvidence(context, input) {
+      const grant = scope(context);
+      const value = parse(z.object({ apiId: z.string().uuid(), apiVersion: z.number().int().positive(), definitionHash: digest, endpointHash: digest,
+        input: z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean()])),
+        data: z.json(), metadata: z.record(z.string(), z.unknown()), truncated: z.boolean(), queriedAt: iso }).strict(), input);
+      return persistEvidence(grant, { kind: 'registered-api', ...value, evidenceId: randomUUID(), queryHash: sha256(JSON.stringify(value)),
+        columns: [], rows: [], datasetVersions: {}, engineVersion: ANALYTICS_ENGINE_VERSION, completeness: 'unknown',
+        recordedAt: now(), actorId: context.actorId, scopeFingerprint: grant.fingerprint });
+    },
     async recordEvidence(context, input) {
       const grant = scope(context);
       const value = parse(qaInput, input);

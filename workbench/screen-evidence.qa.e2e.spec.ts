@@ -52,9 +52,9 @@ test('September proposal executing October displays actual October evidence plus
   await page.goto('/');
   await page.locator('summary').filter({ hasText: '연결 자료' }).click(); await page.getByLabel(/월별 업데이트 대기/).check();
   await page.getByLabel('업무 요청').fill('2026년 9월 전체 정산주 업데이트 대기 사업을 조회하고 같은 조건의 화면으로 만들어줘');
+  const compiled = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/react-work-pages/preview') && response.request().method() === 'POST');
   await page.getByRole('button', { name: '보내기', exact: true }).click();
-  await page.getByRole('button', { name: '검토한 변경 적용', exact: true }).click();
-  await page.getByRole('button', { name: '미리보기 적용', exact: true }).click();
+  expect((await compiled).status()).toBe(200);
   const frame = page.frameLocator('[data-testid="react-preview-committed"]');
   await expect(frame.getByText('synthetic-october', { exact: true })).toBeVisible();
   const host = page.getByTestId('bound-evidence');
@@ -72,4 +72,43 @@ test('September proposal executing October displays actual October evidence plus
   await expect(page.getByText('조회 권한을 확인하지 못해 실행 화면과 계산 근거를 숨겼습니다. 편집 내용과 확인하지 않은 저장 요청은 유지됩니다.')).toBeVisible();
   await page.getByRole('button', { name: '원문·파일', exact: true }).click();
   await expect(page.getByLabel('화면 제목')).toHaveValue('잘못된 초기 조건 반증');
+});
+
+test('live API host evidence uses actual persisted October input and warns against the September expectation', async ({ page }) => {
+  await db.doc(`${root}/members/${actorId}`).update({ status: 'ACTIVE' });
+  const core = createIsolatedWorkbenchCore({ db, env, now }), analytics = createAnalyticsService({ db, now });
+  const context: any = { tenantId, actorId, actorRole: 'admin' }; await core.authorize(context);
+  const apiId = crypto.randomUUID(), definitionHash = 'a'.repeat(64), endpointHash = 'b'.repeat(64);
+  const makeEvidence = (yearMonth: string) => analytics.recordApiEvidence(context, { apiId, apiVersion: 1, definitionHash, endpointHash,
+    input: { yearMonth }, data: { yearMonth, rows: [{ projection: null, actual: 0, status: 'FAILED' }] },
+    metadata: { source: '합성 MYSCube 실시간 근거', resultScope: 'THIS_PAGE_ONLY', asOf: now(), limitations: ['이번 페이지 결과이며 전체 사업 합계가 아닙니다.', '실패·누락은 0원이 아닙니다.'] }, truncated: true, queriedAt: now() });
+  const october = await makeEvidence('2026-10'), september = await makeEvidence('2026-09');
+  const received: string[] = [];
+  await page.route('**/api/**', async route => {
+    const req = route.request(), url = new URL(req.url());
+    const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...req.headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId } });
+    if (url.pathname.includes('/evidence/')) received.push(url.pathname.split('/').at(-1)!);
+    await route.fulfill({ response });
+  });
+  await page.route('**/live-evidence-fixture', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><div id="fixture"></div>' }));
+  await page.goto('/live-evidence-fixture');
+  await page.evaluate(async ({ apiId, definitionHash, endpointHash, october, september }) => {
+    const refresh = await import('/@react-refresh' as string); refresh.default.injectIntoGlobalHook(window); (window as any).$RefreshReg$ = () => {}; (window as any).$RefreshSig$ = () => (type: any) => type;
+    const main = await (await fetch('/main.tsx')).text();
+    const React = (await import(main.match(/from "([^"]+\/react\.js[^"]*)"/)![1])).default, ReactDOM = (await import(main.match(/from "([^"]+\/react-dom_client\.js[^"]*)"/)![1])).default;
+    const { BoundEvidence } = await import('/BoundEvidence.tsx' as string);
+    const root = ReactDOM.createRoot(document.getElementById('fixture'));
+    const expected = { apiId, apiVersion: 1, input: { yearMonth: '2026-09' }, evidenceId: september, datasetVersions: {}, definitionVersions: {}, plan: { kind: 'external-read', endpointId: 'myscube-cashflow-evidence', endpointVersion: 1, definitionHash, endpointHash, input: { yearMonth: '2026-09' } } };
+    const render = (evidenceId: string) => root.render(React.createElement(BoundEvidence, { bindings: { [apiId]: { evidenceId } }, expectedQueries: [expected] }));
+    (window as any).showSeptember = () => render(september); render(october);
+  }, { apiId, definitionHash, endpointHash, october: october.evidenceId, september: september.evidenceId });
+  const host = page.getByTestId('bound-evidence');
+  await expect(host).toContainText('요청한 조회 조건과 실제 화면의 조회 조건이 다릅니다');
+  await expect(host).toContainText('yearMonth: 2026-10'); await expect(host).not.toContainText('yearMonth: 2026-09');
+  await expect(host).toContainText('THIS_PAGE_ONLY'); await expect(host).toContainText('실패·누락은 0원이 아닙니다');
+  await expect(host).not.toContainText('이 결과의 조회 기준을 확인하지 못했습니다');
+  expect(received).toContain(october.evidenceId);
+  await page.evaluate(() => (window as any).showSeptember());
+  await expect(host).toContainText('yearMonth: 2026-09'); await expect(host).not.toContainText('yearMonth: 2026-10');
+  await expect(host.getByRole('alert')).toHaveCount(0); expect(received).toContain(september.evidenceId);
 });

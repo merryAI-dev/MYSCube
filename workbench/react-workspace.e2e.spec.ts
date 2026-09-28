@@ -1,10 +1,11 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { Firestore } from '@google-cloud/firestore';
 import { createWorkbenchApp } from '../server/workbench/app.mjs';
 import { createReactRuntimeServer } from '../server/workbench/react-runtime-server.mjs';
 
 const env: Record<string, string> = { WORKBENCH_PROJECT_ID: 'demo-react-workspace-browser', PRODUCTION_PROJECT_ID: 'demo-react-workspace-business', WORKBENCH_MODEL_PROJECT_ID: 'demo-react-workspace-model', PRODUCTION_MODEL_PROJECT_ID: 'demo-react-workspace-production-model', WORKBENCH_AUTH_MODE: 'emulator', WORKBENCH_REACT_RUNTIME_URL: 'http://localhost:8792/runtime', WORKBENCH_APP_ORIGIN: 'http://127.0.0.1:4178', WORKBENCH_AI_ENABLED: 'true', WORKBENCH_GEMINI_API_KEY: 'fixture-only-no-provider' };
-const tenantId = 'workspace-browser', actorId = 'admin-a', root = `orgs/${tenantId}`;
+const tenantId = 'workspace-browser', root = `orgs/${tenantId}`;
+let actorId = 'admin-a';
 const now = () => '2026-09-24T07:00:00.000Z';
 const helper = 'export const label = "파일 연결 확인";';
 const source = { title: '여러 파일로 만든 업무 화면', workspace: { schemaVersion: 1, entry: 'App.tsx', packageSetId: 'react18-tailwind4-v1', files: {
@@ -23,10 +24,38 @@ test.beforeAll(async () => {
   await new Promise<void>(resolve => server.once('listening', resolve)); base = `http://127.0.0.1:${server.address().port}`;
 });
 test.afterAll(async () => { for (const item of [server, runtime]) if (item) await new Promise<void>(resolve => item.close(() => resolve())); if (db) { await db.recursiveDelete(db.doc(root)); await db.terminate(); } });
-test.beforeEach(async ({ page }) => { await page.route('**/api/**', async route => { const url = new URL(route.request().url()); const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...route.request().headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId } }); await route.fulfill({ response }); }); });
-const generate = async (page: any, request = '자료 없이 카운터와 제목 컴포넌트를 여러 파일로 나눈 화면을 만들어 주세요') => { await page.getByLabel('업무 요청').fill(request); await page.getByRole('button', { name: '보내기' }).click(); await expect(page.getByRole('button', { name: '검토한 변경 적용', exact: true })).toBeEnabled(); };
+test.beforeEach(async ({ page }) => { actorId = `workspace-${crypto.randomUUID()}`; await db.doc(`${root}/members/${actorId}`).set({ status: 'ACTIVE', role: 'admin', permissionsCapturedAt: now(), analyticsDatasetIds: [], analyticsScopeRevision: '1' }); await page.route('**/api/**', async route => { const url = new URL(route.request().url()); const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...route.request().headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId } }); await route.fulfill({ response }); }); });
+const generate = async (page: Page, request = '자료 없이 카운터와 제목 컴포넌트를 여러 파일로 나눈 화면을 만들어 주세요') => {
+  const title = await page.getByLabel('화면 제목').inputValue();
+  let release!: () => void; const held = new Promise<void>(resolve => { release = resolve; }); let arrived = false;
+  await page.route('**/api/v1/react-work-pages/conversations/*/turns', async route => {
+    const response = await route.fetch({ url: `${base}${new URL(route.request().url()).pathname}`, headers: { ...route.request().headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId } });
+    arrived = true; await held; await route.fulfill({ response });
+  }, { times: 1 });
+  await page.getByLabel('업무 요청').fill(request); await page.getByRole('button', { name: '보내기' }).click();
+  try {
+    await expect.poll(() => arrived).toBe(true); await page.getByRole('button', { name: '원문·파일', exact: true }).click();
+    await page.getByLabel('화면 제목').fill('생성 중 직접 편집한 제목');
+  } finally { release(); }
+  await expect(page.getByRole('button', { name: '검토한 변경 적용', exact: true })).toBeDisabled();
+  await page.getByLabel('화면 제목').fill(title);
+  await expect(page.getByRole('button', { name: '검토한 변경 적용', exact: true })).toBeEnabled();
+};
 
-test('real HTTP and Firestore: generate, multi-file diff, apply, helper edit, preview, save, reopen and restore', async ({ page }) => {
+test('a fresh multi-file conversation result compiles once and immediately displays working React without applying or saving', async ({ page }) => {
+  let previews = 0, writes = 0;
+  page.on('request', request => { const path = new URL(request.url()).pathname; if (request.method() === 'POST' && path === '/api/v1/react-work-pages/preview') previews++; if (request.method() === 'POST' && path === '/api/v1/react-work-pages') writes++; });
+  await page.goto('/?mode=react'); await expect(page.getByLabel('업무 요청')).toBeEnabled();
+  await page.getByLabel('업무 요청').fill('자료 없이 카운터와 제목 컴포넌트를 여러 파일로 나눈 화면을 만들어 주세요');
+  await page.getByRole('button', { name: '보내기' }).click();
+  const frame = page.frameLocator('[data-testid="react-preview-committed"]');
+  await expect(frame.getByRole('heading', { name: '파일 연결 확인' })).toBeVisible();
+  await frame.getByRole('button', { name: '클릭 0회' }).click(); await expect(frame.getByRole('button', { name: '클릭 1회' })).toBeVisible();
+  expect(previews).toBe(1); expect(writes).toBe(0); await expect(page.getByRole('button', { name: '검토한 변경 적용', exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await expect(page.getByRole('tab')).toHaveCount(3);
+});
+
+test('real HTTP and Firestore: concurrent edit retains proposal for multi-file review, helper edit, save, reopen and restore', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto('/?mode=react'); await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await expect(page.getByLabel('React 원문')).not.toHaveValue('');
   await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await page.getByLabel('새 파일 경로').fill('Obsolete.ts'); await page.getByRole('button', { name: '파일 추가', exact: true }).click();

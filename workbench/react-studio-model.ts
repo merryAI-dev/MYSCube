@@ -1,31 +1,41 @@
 import type * as z from 'zod/v4';
-import { ReactGitResultSchema, ReactPageListSchema, ReactHistorySchema } from '../shared/workbench-react-workspace.mjs';
+import { ReactApiRefsSchema, ReactGitResultSchema, ReactPageListSchema, ReactHistorySchema } from '../shared/workbench-react-workspace.mjs';
 import type { ScreenQueryExpectation } from './screen-evidence';
-import { editorReducer, initialEditor, draftIdentity, type EditorAction, type EditorState, type ReactSource, type ApiRef, type EditorRevision } from './react-workspace-editor';
+import { editorReducer, initialEditor, newWorkspace, draftIdentity, proposalProblem, type SourceProposal, type EditorAction, type EditorState, type ReactSource, type ApiRef, type EditorRevision } from './react-workspace-editor';
 import type { ReactPreviewArtifact } from './ReactPreview';
 import type { RemoteDraft } from './RemoteReactPreview';
 
 export type Diagnostic = { file: string; line: number; column: number; message: string; code: string | number };
 export type EvidenceBindings = Record<string, { evidenceId: string; kind: 'table' }>;
 export type GitResult = z.infer<typeof ReactGitResultSchema>;
-export type RegisteredApi = ApiRef & { definition: { name: string; enabled: boolean; description: string } };
+export type RegisteredApi = ApiRef & { definition: { name: string; enabled: boolean; description: string; kind?: string; endpointId?: string; endpointVersion?: number } };
 export type Capabilities = { modelEnabled: boolean; gitEnabled: boolean; gitRepository: string | null; runtimeUrl: string | null; remoteRuntime?: boolean; runtimeMode: string; example: string };
 export type Ticket = { id: string; target: number; identity: string };
 type Candidate = Ticket & { key: number; source: ReactSource; apis: ApiRef[]; executionId?: string; expectedQueries: ScreenQueryExpectation[] };
 type Visible = { identity: string; executionId?: string; expectedQueries: ScreenQueryExpectation[] };
 export type StudioState = EditorState & {
   capabilities: Capabilities | null; pages: z.infer<typeof ReactPageListSchema>['items']; history: z.infer<typeof ReactHistorySchema>['items']; registeredApis: RegisteredApi[];
-  task: Ticket | null; error: string; message: string; diagnostics: Diagnostic[]; git: GitResult | null;
+  newPageApis: ApiRef[]; newPagePristine: boolean; generatedRequest: string | null; task: Ticket | null; error: string; message: string; diagnostics: Diagnostic[]; git: GitResult | null;
   execution: { sequence: number; mount: number; candidate: Candidate | null; visible: Visible | null; artifact: ReactPreviewArtifact | null; remoteDraft: RemoteDraft | null; bindings: Record<string, EvidenceBindings>; preparing: boolean };
 };
 const emptyExecution = () => ({ sequence: 0, mount: 0, candidate: null, visible: null, artifact: null, remoteDraft: null, bindings: {}, preparing: false });
-export const initialStudio = (): StudioState => ({ ...initialEditor(), capabilities: null, pages: [], history: [], registeredApis: [], task: null, error: '', message: '', diagnostics: [], git: null, execution: emptyExecution() });
+export const initialStudio = (): StudioState => ({ ...initialEditor(), capabilities: null, pages: [], history: [], registeredApis: [], newPageApis: [], newPagePristine: true, generatedRequest: null, task: null, error: '', message: '', diagnostics: [], git: null, execution: emptyExecution() });
+export function defaultReactApis(apis: RegisteredApi[]): ApiRef[] {
+  const refs = ['myscube-projects', 'myscube-cashflow-evidence'].flatMap(endpointId => {
+    const matches = apis.filter(api => api.definition.enabled === true && api.definition.kind === 'external-read' && api.definition.endpointId === endpointId && api.definition.endpointVersion === 1);
+    return matches.length === 1 ? [{ id: matches[0].id, version: matches[0].version }] : [];
+  });
+  const parsed = ReactApiRefsSchema.safeParse(refs);
+  return parsed.success ? parsed.data : [];
+}
+export const studioDirty = (state: StudioState) => draftIdentity(state.source, state.apis) !== (state.saved ? draftIdentity(state.saved.source, state.saved.apis) : draftIdentity(newWorkspace(state.capabilities?.example || ''), state.newPageApis));
 export const ticketFor = (state: StudioState, id: string): Ticket => ({ id, target: state.target, identity: draftIdentity(state.source, state.apis) });
 export const sameTarget = (state: StudioState, ticket: Ticket) => state.target === ticket.target;
 export const sameDraft = (state: StudioState, ticket: Ticket) => sameTarget(state, ticket) && draftIdentity(state.source, state.apis) === ticket.identity;
 export const candidateIsCurrent = (state: StudioState, id: string | number) => Boolean(state.execution.candidate && (state.execution.candidate.key === id || state.execution.candidate.executionId === id) && sameDraft(state, state.execution.candidate));
 export const visibleEvidence = (state: StudioState): EvidenceBindings => state.execution.visible?.executionId ? state.execution.bindings[state.execution.visible.executionId] || {} : {};
 export type StudioAction = EditorAction
+  | { type: 'generated-preview'; value: SourceProposal; target: number; requestIdentity: string; requestId: string }
   | { type: 'initialize'; ticket: Ticket; capabilities: Capabilities; pages: StudioState['pages']; apis: RegisteredApi[] }
   | { type: 'apis-loaded'; ticket: Ticket; apis: RegisteredApi[] }
   | { type: 'history-loaded'; ticket: Ticket; history: StudioState['history'] }
@@ -44,9 +54,21 @@ export type StudioAction = EditorAction
   | { type: 'authorization-failed'; message: string };
 function cleared(state: StudioState) { return { ...emptyExecution(), sequence: state.execution.sequence, mount: state.execution.mount + 1 }; }
 export function studioReducer(state: StudioState, action: StudioAction): StudioState {
+  if (action.type === 'generated-preview') {
+    if (action.target !== state.target || state.generatedRequest === action.requestId) return state;
+    const proposed = { ...state, ...editorReducer(state, { type: 'propose', value: action.value, target: action.target }) };
+    const problem = state.task || state.execution.preparing ? '다른 요청을 처리하고 있어 생성한 화면을 자동으로 적용하지 않았습니다. 요청이 끝난 뒤 제안을 확인해 주세요.' : action.requestIdentity !== draftIdentity(state.source, state.apis)
+      ? '화면을 만드는 동안 편집 내용이 바뀌어 자동으로 적용하지 않았습니다. 현재 내용으로 다시 요청해 주세요.' : proposalProblem(proposed);
+    if (problem) return { ...proposed, notice: problem };
+    const applied = { ...proposed, ...editorReducer(proposed, { type: 'apply' }), generatedRequest: action.requestId, newPagePristine: false, notice: '생성한 화면을 적용했습니다. 화면을 확인한 뒤 저장해 주세요.' };
+    if (!state.capabilities?.remoteRuntime && !state.capabilities?.runtimeUrl) return { ...applied, notice: '생성한 화면을 편집기에 적용했습니다. 실행 공간 연결 전이라 미리보기를 표시할 수 없습니다. 저장은 별도로 진행해 주세요.' };
+    return studioReducer(applied, { type: 'execution-start', ticket: ticketFor(applied, action.requestId), remote: Boolean(state.capabilities.remoteRuntime) });
+  }
   if (action.type === 'initialize') {
     if (!sameTarget(state, action.ticket)) return state;
-    const next = sameDraft(state, action.ticket) ? editorReducer(state, { type: 'reset', code: action.capabilities.example }) : state;
+    const pristine = sameDraft(state, action.ticket) && state.newPagePristine && !state.saved;
+    const defaults = defaultReactApis(action.apis);
+    const next = pristine ? { ...editorReducer(state, { type: 'reset', code: action.capabilities.example }), apis: defaults, newPageApis: defaults } : state;
     return { ...state, ...next, capabilities: action.capabilities, pages: action.pages, registeredApis: action.apis, task: null };
   }
   if (action.type === 'apis-loaded') return sameTarget(state, action.ticket) ? { ...state, registeredApis: action.apis } : state;
@@ -102,7 +124,10 @@ export function studioReducer(state: StudioState, action: StudioAction): StudioS
     const bindings = { ...state.execution.bindings }; delete bindings[action.executionId];
     return { ...state, error: action.message, execution: { ...state.execution, bindings } };
   }
-  const next = editorReducer(state, action);
+  const edited = editorReducer(state, action);
+  const defaults = action.type === 'reset' ? defaultReactApis(state.registeredApis) : null;
+  const touchesDraft = ['title', 'code', 'apis', 'add', 'remove', 'entry', 'apply', 'load', 'context'].includes(action.type);
+  const next = defaults ? { ...edited, apis: defaults, newPageApis: defaults, newPagePristine: true } : touchesDraft ? { ...edited, newPagePristine: false } : edited;
   if (next === state) return state;
   if (next.target !== state.target) return { ...state, ...next, task: null, history: [], diagnostics: [], git: null, error: '', message: '', execution: cleared(state) };
   return { ...state, ...next };

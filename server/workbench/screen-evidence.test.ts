@@ -32,3 +32,12 @@ describe('trusted runtime query evidence is compared with the proposal criteria'
     expect(compareScreenEvidence(expected, { semantic: { appliedPlan: expected.plan } })).toBe('unverified');
   });
 });
+
+ it('compares the actual live API call month and pinned API definition without SQL evidence', () => {
+  const live = { ...expected, plan: { kind: 'external-read', definitionHash: 'a'.repeat(64), endpointHash: 'b'.repeat(64) } };
+  const observed = { kind: 'registered-api', apiId: live.apiId, apiVersion: live.apiVersion, definitionHash: live.plan.definitionHash, endpointHash: live.plan.endpointHash, input: live.input };
+  expect(compareScreenEvidence(live, observed)).toBe('matched');
+  expect(compareScreenEvidence(live, { ...observed, input: { month: '2026-10' } })).toBe('criteria-changed');
+  expect(compareScreenEvidence(live, { ...observed, endpointHash: 'c'.repeat(64) })).toBe('criteria-changed');
+  expect(compareScreenEvidence(live, { ...observed, kind: 'qa' })).toBe('unverified');
+ });

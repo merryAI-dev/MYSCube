@@ -23,7 +23,9 @@ export function mountHtmlStudio(app, { db, now, env, core, analytics, asyncHandl
     await core.authorize(req.context);
     res.set('Cache-Control', 'no-store');
     res.json({ evidenceId: evidence.evidenceId, columns: evidence.columns, rows: evidence.rows, metadata: evidence.metadata,
-      datasetVersions: evidence.datasetVersions, semantic: evidence.semantic, truncated: evidence.truncated });
+      datasetVersions: evidence.datasetVersions, semantic: evidence.semantic, truncated: evidence.truncated,
+      ...(evidence.kind === 'registered-api' ? { kind: evidence.kind, apiId: evidence.apiId, apiVersion: evidence.apiVersion,
+        definitionHash: evidence.definitionHash, endpointHash: evidence.endpointHash, input: evidence.input, data: evidence.data } : {}) });
   }));
   app.get(prefix, asyncHandler(async (req, res) => res.json(await pages.list(req.context))));
   app.get(`${prefix}/:id/versions`, asyncHandler(async (req, res) => res.json(await pages.history(req.context, req.params.id))));

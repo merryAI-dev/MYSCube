@@ -24,6 +24,19 @@ export function validateReactScreenBindings({ bindings, evidence, apis, catalog 
   const checked = z.array(ReactScreenBindingSchema).min(1).max(6).parse(bindings);
   if (new Set(checked.map((item) => item.apiId)).size !== checked.length) throw mismatch('같은 API에 서로 다른 조회 조건이 연결되어 있습니다. 화면에서 사용할 조건을 하나씩 정해 주세요.');
   return checked.map((binding) => {
+    const selectedApi = apis.find(api => api.id === binding.apiId && api.version === binding.apiVersion);
+    const definition = selectedApi?.definition || selectedApi;
+    if (definition?.kind === 'external-read') {
+      if (definition.enabled === false) throw mismatch('연결한 API의 사용이 중지되었습니다.');
+      validateApiInput(definition.parameters, binding.input);
+      const item = evidence.find(value => value.evidenceId === binding.evidenceId);
+      if (item?.kind !== 'registered-api' || item.apiId !== binding.apiId || item.apiVersion !== binding.apiVersion
+        || item.definitionHash !== selectedApi.definitionHash || item.endpointHash !== selectedApi.endpointHash
+        || canonical(item.input) !== canonical(binding.input)) throw mismatch('실제로 조회한 API 버전·입력 조건과 화면 연결이 다릅니다. 같은 조건으로 다시 조회해 주세요.');
+      return ScreenQueryExpectationSchema.parse({ ...binding, datasetVersions: {}, definitionVersions: {},
+        plan: { kind: 'external-read', endpointId: definition.endpointId, endpointVersion: definition.endpointVersion,
+          definitionHash: item.definitionHash, endpointHash: item.endpointHash, input: binding.input } });
+    }
     const plan = resolveSelectedApiPlan({ ...binding, apis });
     const item = evidence.find((value) => value.evidenceId === binding.evidenceId);
     if (!item?.semantic?.appliedPlan) throw mismatch('화면에 연결할 자료의 조회 조건이 없습니다. 필요한 자료를 먼저 조회해 주세요.');

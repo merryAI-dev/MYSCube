@@ -2,8 +2,7 @@ import { useEffect, useReducer, useRef } from 'react';
 import type * as z from 'zod/v4';
 import { workbenchRequest, logout as signOut } from './client';
 import { ReactSourceSchema, ReactApiRefsSchema, ReactDiagnosticSchema, MAX_REACT_DIAGNOSTICS, ReactExecutionArtifactSchema, ReactRevisionSchema, ReactPageListSchema, ReactHistorySchema, ReactPageMutationResponseSchema, ReactGitResultSchema } from '../shared/workbench-react-workspace.mjs';
-import { draftIdentity, newWorkspace } from './react-workspace-editor';
-import { studioReducer, initialStudio, ticketFor, sameTarget, candidateIsCurrent, visibleEvidence, type Ticket } from './react-studio-model';
+import { studioReducer, initialStudio, studioDirty, ticketFor, sameTarget, candidateIsCurrent, visibleEvidence, type Ticket } from './react-studio-model';
 
 type Revision = z.infer<typeof ReactRevisionSchema>;
 const request = (path: string, method = 'GET', body?: unknown) => workbenchRequest(`/react-work-pages${path}`, method, body);
@@ -14,7 +13,7 @@ export function useReactStudio() {
   const current = useRef(state); current.current = state;
   const mounted = useRef(true);
   const { capabilities, pages, history, registeredApis: apis } = state;
-  const dirty = draftIdentity(state.source, state.apis) !== (state.saved ? draftIdentity(state.saved.source, state.saved.apis) : draftIdentity(newWorkspace(capabilities?.example || ''), []));
+  const dirty = studioDirty(state);
   const active = (ticket: Ticket) => mounted.current && sameTarget(current.current, ticket);
   const rejectUnauthorized = (reason: unknown) => { if ([401, 403].includes(Number((reason as { status?: number })?.status))) { dispatch({ type: 'authorization-failed', message: '조회 권한을 확인하지 못해 실행 화면과 계산 근거를 숨겼습니다. 편집 내용과 확인하지 않은 저장 요청은 유지됩니다.' }); return true; } return false; };
   const run = async (fn: (ticket: Ticket) => Promise<void>) => {
@@ -49,19 +48,22 @@ export function useReactStudio() {
     if (!active(ticket)) return;
     dispatch({ type: 'saved', page: pageMetadata(result), ticket, revision: result, git: result.git, message: `버전 ${result.version}으로 저장했습니다. ${result.git?.status === 'complete' ? 'GitHub 커밋과 Draft PR도 생성했습니다.' : 'GitHub 전달 상태는 저장 이력에서 확인할 수 있습니다.'}` });
   });
-  const preview = () => {
-    const before = current.current, ticket = ticketFor(before, crypto.randomUUID());
-    dispatch({ type: 'execution-start', ticket, remote: Boolean(capabilities?.remoteRuntime) });
-    if (capabilities?.remoteRuntime) return;
+  const preview = () => dispatch({ type: 'execution-start', ticket: ticketFor(current.current, crypto.randomUUID()), remote: Boolean(capabilities?.remoteRuntime) });
+  const compiledCandidate = useRef<string | null>(null);
+  const candidate = state.execution.candidate;
+  useEffect(() => {
+    if (!candidate || capabilities?.remoteRuntime || !capabilities?.runtimeUrl || compiledCandidate.current === candidate.id) return;
+    compiledCandidate.current = candidate.id;
+    const ticket = candidate;
     dispatch({ type: 'task-start', ticket });
-    void request('/preview', 'POST', { source: before.source, apis: before.apis }).then(value => {
+    void request('/preview', 'POST', { source: candidate.source, apis: candidate.apis }).then(value => {
       if (active(ticket)) dispatch({ type: 'execution-compiled', ticket, artifact: ReactExecutionArtifactSchema.parse(value) });
     }).catch(reason => {
       if (!active(ticket) || rejectUnauthorized(reason)) return;
       const parsed = ReactDiagnosticSchema.array().max(MAX_REACT_DIAGNOSTICS).safeParse(reason?.details?.diagnostics);
       dispatch({ type: 'task-end', ticket, error: errorText(reason), diagnostics: parsed.success ? parsed.data : [] });
     }).finally(() => { if (active(ticket)) dispatch({ type: 'task-end', ticket }); });
-  };
+  }, [candidate?.id, capabilities?.remoteRuntime, capabilities?.runtimeUrl]);
   const callApi = async (executionId: string, apiId: string, input: unknown) => {
     const relevant = () => mounted.current && (current.current.execution.visible?.executionId === executionId || candidateIsCurrent(current.current, executionId));
     if (!relevant()) throw new Error('현재 실행 화면의 요청이 아닙니다.');

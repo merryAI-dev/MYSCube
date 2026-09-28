@@ -10,11 +10,11 @@ type Result = { dateBasisNotice?: string; dateBasis?: DateBasis; type?: 'source'
   evidence?: Array<{ evidenceId: string; columns: Array<{ name: string; label?: string }>; rows: Array<Record<string, unknown>>; metadata?: Record<string, unknown> }>; proposal?: { html?: string } };
 type Turn = { id: string; state: string; message: string; result?: Result; error?: { message: string } };
 type Session = { dateBasisNotice?: string; dateBasis?: DateBasis; id: string; title: string; version: number; turns?: Turn[]; lastMode?: Mode; truncated?: boolean; pendingClarification?: Clarification | null; reactContext?: { source?: Source; sourceHash?: string; apis: ApiRef[] } | null };
-type Props = { modelEnabled: boolean; busy: boolean; currentSource: Source; apis: ApiRef[]; onPermissionError?: (reason: unknown) => void; onProposal: (proposal: SourceProposal) => void; onRestoreContext: (context: { source: Source; apis: ApiRef[] }) => boolean };
+type Props = { modelEnabled: boolean; busy: boolean; currentSource: Source; apis: ApiRef[]; onPermissionError?: (reason: unknown) => void; onGenerated: (proposal: SourceProposal, request: { identity: string; id: string }) => void; onProposal: (proposal: SourceProposal) => void; onRestoreContext: (context: { source: Source; apis: ApiRef[] }) => boolean };
 const request = (path: string, method = 'GET', body?: unknown) => workbenchRequest(`/react-work-pages/conversations${path}`, method, body);
 const display = (value: unknown) => value == null ? '확인 필요' : typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean' ? String(value) : '상세 자료';
 
-export function ReactConversationPanel({ modelEnabled, busy, currentSource, apis, onProposal, onRestoreContext, onPermissionError }: Props) {
+export function ReactConversationPanel({ modelEnabled, busy, currentSource, apis, onGenerated, onProposal, onRestoreContext, onPermissionError }: Props) {
   const [sessions, setSessions] = useState<Session[]>([]), [session, setSession] = useState<Session | null>(null);
   const [message, setMessage] = useState('등록한 API로 조회하고 월과 주차를 선택할 수 있는 업무 화면을 만들어 주세요. 확인되지 않은 수치는 확인 필요로 보여 주세요.'), [loading, setLoading] = useState(false), [error, setError] = useState('');
   const thread = useRef<HTMLDivElement>(null);
@@ -49,15 +49,20 @@ export function ReactConversationPanel({ modelEnabled, busy, currentSource, apis
   const newConversation = () => { if (working.current || disabled) return; generation.current++; setSession(null); setStoredContext(null); setMessage(''); setError(''); rememberUrl(null); };
   const send = async (answer?: string, clarificationId?: string, optionId?: string) => {
     const text = (answer || message).trim(); if (!text || working.current || disabled || !modelEnabled) return;
-    working.current = true; setLoading(true); setError(''); const at = generation.current;
+    working.current = true; setLoading(true); setError(''); const at = generation.current, requestIdentity = editor, requestId = crypto.randomUUID();
     let active = session;
     try {
       if (!active) { const created = await request('', 'POST', { title: text.slice(0, 80) }); active = { ...created, turns: [] }; if (mounted.current && generation.current === at) { setSession(active); rememberUrl(active!.id); } }
-      const response = await request(`/${active!.id}/turns`, 'POST', { expectedVersion: active!.version, requestId: crypto.randomUUID(), message: text, mode: 'auto', ...(!usingStoredContext ? { currentSource, apis } : {}), ...(clarificationId ? { clarificationId, ...(optionId ? { selection: { clarificationId, optionId } } : {}) } : {}) });
+      const response = await request(`/${active!.id}/turns`, 'POST', { expectedVersion: active!.version, requestId, message: text, mode: 'auto', ...(!usingStoredContext ? { currentSource, apis } : {}), ...(clarificationId ? { clarificationId, ...(optionId ? { selection: { clarificationId, optionId } } : {}) } : {}) });
       if (!mounted.current || generation.current !== at) return;
       await hydrate(active!.id, at); await refreshList();
       if (!mounted.current || generation.current !== at) return;
-      setMessage(''); if (response.result?.type === 'source' && response.result.source) onProposal({ source: response.result.source, apis: response.result.apis, baseEditorIdentity: response.result.baseEditorIdentity, screenBindings: response.result.screenBindings });
+      setMessage('');
+      if (response.result?.type === 'source' && response.result.source) {
+        const proposal = { source: response.result.source, apis: response.result.apis, baseEditorIdentity: response.result.baseEditorIdentity, screenBindings: response.result.screenBindings };
+        if (response.replayed) onProposal(proposal);
+        else onGenerated(proposal, { identity: requestIdentity, id: requestId });
+      }
     } catch (reason) {
       if (mounted.current && generation.current === at) {
         if (authorizationFailure(reason)) return;
@@ -68,7 +73,7 @@ export function ReactConversationPanel({ modelEnabled, busy, currentSource, apis
   };
   return <section className="side-panel conversation-panel" aria-label="업무 대화">
     <div className="section-heading"><h2>업무 도우미</h2><button className="quiet compact" disabled={disabled} onClick={newConversation}>새 대화</button></div>
-    <p className="subtle">자료 질문과 화면 제작을 같은 대화에서 이어갑니다. 화면 변경은 검토한 뒤 적용합니다.</p>
+    <p className="subtle">자료 질문과 화면 제작을 같은 대화에서 이어갑니다. 생성하거나 수정한 화면은 바로 표시하며, 저장은 별도로 진행합니다.</p>
     <label>저장된 대화<select style={{ width: '100%', minWidth: 0 }} aria-label="저장된 제작 대화" value={session?.id || ''} disabled={disabled} onChange={(event) => { if (event.target.value) void open(event.target.value); else newConversation(); }}><option value="">새 대화</option>{sessions.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}</select></label>
     {session && <div className="actions"><button className="quiet compact" disabled={disabled} onClick={() => void open(session.id)}>저장된 대화 다시 확인</button>{session.reactContext?.source && <button className="quiet compact" disabled={disabled} onClick={() => onRestoreContext({ source: session.reactContext!.source!, apis: session.reactContext!.apis })}>대화 당시 편집 내용 불러오기</button>}</div>}
     {usingStoredContext && <p className="notice">이 대화에 저장된 코드와 API 버전을 기준으로 이어갑니다. 현재 편집 내용으로 바꾸려면 <button className="quiet compact" disabled={disabled} onClick={() => setStoredContext(null)}>현재 편집 내용으로 대화하기</button>를 눌러 주세요.</p>}

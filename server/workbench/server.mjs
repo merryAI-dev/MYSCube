@@ -56,5 +56,6 @@ let closing = false;
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
   if (closing) return;
   closing = true;
+  workbench.locals.clearLiveCredentials();
   void closeWorkbenchServer({ server, db, remoteRuntime: workbench.locals.remoteRuntime }).then((code) => process.exit(code));
 });

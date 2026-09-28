@@ -13,13 +13,13 @@ import { withConversationDeadline } from './execution-deadline.mjs';
 import { ReactPageMutationResponseSchema, ReactExecutionArtifactSchema, ReactPreviewRequestSchema } from '../../shared/workbench-react-workspace.mjs';
 
 export function mountReactStudio(app, { db, now, env, core, analytics, asyncHandler, createMutatingRoute, idempotencyService,
-  completionFactory = createHtmlCompletion, gitFetch }) {
+  completionFactory = createHtmlCompletion, gitFetch, liveAdapter }) {
   const prefix = '/api/v1/react-work-pages', apiPrefix = '/api/v1/workbench-apis';
   const mutate = (fn) => (req, res, next) => {
     req.context = { ...req.context, idempotencyKey: reactHash(`${req.context.idempotencyKey}:${req.context.analyticsScope.fingerprint}`) };
     return createMutatingRoute(idempotencyService, fn)(req, res, next);
   };
-  const apis = createRegisteredApiService({ db, analytics, authorize: core.authorize, now, env });
+  const apis = createRegisteredApiService({ db, analytics, authorize: core.authorize, now, env, liveAdapter });
   const pages = createReactPageService({ db, authorize: core.authorize, apis, now });
   const git = createGitDeliveryService({ db, env, authorize: core.authorize, ...(gitFetch ? { fetchImpl: gitFetch } : {}) });
   const admission = createWorkbenchAdmission({ db, actorLimit: 30, leaseMs: 120000 });

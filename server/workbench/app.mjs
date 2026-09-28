@@ -1,4 +1,6 @@
 import express from 'express';
+import { createLiveCredentialLease } from './live-credentials.mjs';
+import { createMyscubeLiveApiAdapter } from './myscube-live-api.mjs';
 import { randomUUID } from 'node:crypto';
 import { createIsolatedWorkbenchCore } from './core.mjs';
 import { createIdempotencyService } from '../bff/idempotency.mjs';
@@ -43,18 +45,23 @@ export function createWorkbenchApp(options) {
   const core = createIsolatedWorkbenchCore({ db, env, now, readCode: options.readCode });
   const headersForTests = options.authMode === 'headers' && core.runtime.projectId.startsWith('demo-') && Boolean(process.env.FIRESTORE_EMULATOR_HOST);
   if (!headersForTests && typeof verifyToken !== 'function') throw new Error('An isolated identity verifier is required.');
+  const liveCredentials = createLiveCredentialLease({ verifyToken });
+  const liveAdapter = !headersForTests && (env.WORKBENCH_MYSCUBE_LIVE_ENABLED === 'true' || env.WORKBENCH_MYSCUBE_LIVE_ENABLED !== 'false' && !core.runtime.projectId.startsWith('demo-')) ? (options.liveAdapterFactory || createMyscubeLiveApiAdapter)({ env: { ...env, WORKBENCH_MYSCUBE_LIVE_ENABLED: 'true' }, credentialProvider: context => liveCredentials.get(context) }) : null;
   const app = express();
+  app.locals.clearLiveCredentials = () => liveCredentials.clear();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '1mb' }));
   app.get('/health', (_req, res) => res.json({ ok: true, service: 'myscube-workbench', projectId: core.runtime.projectId }));
   app.use('/api/v1', asyncHandler(async (req, res, next) => {
+    const credentialTicket = liveCredentials.begin();
     const claims = headersForTests ? { uid: req.header('x-actor-id') } : await verifyToken(req.header('authorization'));
     const tenantId = headersForTests ? req.header('x-tenant-id') : env.WORKBENCH_TENANT_ID;
     if (![claims?.uid, tenantId].every((value) => typeof value === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(value))) throw createHttpError(401, '다시 로그인해 주세요.', 'unauthorized');
     const member = (await db.doc(`orgs/${tenantId}/members/${claims.uid}`).get()).data();
     req.context = { tenantId, actorId: claims.uid, actorRole: member?.role, requestId: randomUUID(), idempotencyKey: req.header('idempotency-key') };
     try { await core.authorize(req.context); }
-    catch (error) { app.locals.remoteRuntime?.revokeOwner(req.context); throw error; }
+    catch (error) { liveCredentials.revoke(req.context); app.locals.remoteRuntime?.revokeOwner(req.context); throw error; }
+    if (liveAdapter && !headersForTests) liveCredentials.accept(req.context, req.header('authorization'), claims, credentialTicket);
     if (!['GET', 'HEAD'].includes(req.method) && !req.context.idempotencyKey) throw createHttpError(400, '요청 번호가 필요합니다.', 'idempotency_key_required');
     res.setHeader('Cache-Control', 'no-store');
     next();
@@ -64,7 +71,7 @@ export function createWorkbenchApp(options) {
   const idempotencyService = createIdempotencyService(db);
   const common = { db, now, asyncHandler, createMutatingRoute, idempotencyService };
   const analytics = options.analytics || createAnalyticsService({ db, now });
-  const reactStudio = mountReactStudio(app, { ...common, env, core, analytics, completionFactory: options.reactCompletionFactory, gitFetch: options.gitFetch });
+  const reactStudio = mountReactStudio(app, { ...common, env, core, analytics, completionFactory: options.reactCompletionFactory, gitFetch: options.gitFetch, liveAdapter });
   if (env.WORKBENCH_REMOTE_RUNTIME_ENABLED === 'true' && !headersForTests && (env.WORKBENCH_REMOTE_RUNTIME_DRIVER !== 'docker-host' || env.K_SERVICE)) throw new Error('Remote React requires an approved independent Docker host; Cloud Run cannot run this broker.');
   app.locals.remoteRuntime = mountRemotePreview(app, { ...common, env, core, ...reactStudio, brokerFactory: options.remoteBrokerFactory || createRemoteRuntimeBroker });
   const htmlStudio = mountHtmlStudio(app, { ...common, env, core, analytics, completionFactory: options.htmlCompletionFactory });

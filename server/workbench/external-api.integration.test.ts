@@ -2,12 +2,13 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { Firestore } from '@google-cloud/firestore';
 import { createRegisteredApiService } from './registered-apis.mjs';
+import { createAnalyticsService } from './analytics-service.mjs';
 import { createExternalApiAdapter } from './external-api.mjs';
 
 const suite = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
 suite('external API registry with durable immutable receipts', () => {
   const db = new Firestore({ projectId: 'demo-external-registry' });
-  const context = { tenantId: 'external-qa', actorId: 'admin', actorRole: 'admin', idempotencyKey: 'stable-request-key', analyticsScope: { datasetIds: [], fingerprint: 'scope-1' } };
+  const context = { tenantId: 'external-qa', actorId: 'admin', actorRole: 'admin', idempotencyKey: 'stable-request-key', analyticsScope: { datasetIds: [], fingerprint: 'a'.repeat(64) } };
   const root = db.doc(`orgs/${context.tenantId}`);
   const parameters = { month: { type: 'string', required: true, label: '조회 월', example: '2026-09' } };
   const endpoint = { id: 'approved-receipts', version: 1, name: '승인된 입금 API', description: '입금 조회', url: 'https://approved.example/receipts', allowedTenants: [context.tenantId], parameters,
@@ -17,7 +18,7 @@ suite('external API registry with durable immutable receipts', () => {
   let authorized = true; let response: any = { amount: null };
   const authorize = async () => { if (!authorized) throw Object.assign(new Error('revoked'), { statusCode: 403 }); };
   const adapter = createExternalApiAdapter({ env, resolveDns: async () => [{ address: '8.8.8.8', family: 4 }], transport: async () => response });
-  const service = () => createRegisteredApiService({ db, authorize, analytics: { queryPlan: () => { throw new Error('must not reach analytics'); } }, externalAdapter: adapter });
+  const service = () => createRegisteredApiService({ db, authorize, analytics: { ...createAnalyticsService({ db }), queryPlan: () => { throw new Error('must not reach analytics'); } }, externalAdapter: adapter });
   beforeEach(async () => { await db.recursiveDelete(root); authorized = true; response = { amount: null }; env.WORKBENCH_EXTERNAL_ENDPOINTS = JSON.stringify([endpoint]); });
   afterAll(async () => { await db.recursiveDelete(root); await db.terminate(); });
   it('atomically saves a definition and operation receipt, then replays the exact version without another API', async () => {
@@ -27,7 +28,7 @@ suite('external API registry with durable immutable receipts', () => {
     expect((await service().list(context)).items).toHaveLength(1);
     const key = createHash('sha256').update(context.idempotencyKey).digest('hex');
     const receipt = (await root.collection('workbench_mutation_results').doc(key).get()).data();
-    expect(receipt).toMatchObject({ kind: 'registered-api', apiId: first.id, version: 1, actorId: 'admin', scopeFingerprint: 'scope-1' });
+    expect(receipt).toMatchObject({ kind: 'registered-api', apiId: first.id, version: 1, actorId: 'admin', scopeFingerprint: 'a'.repeat(64) });
     expect(await service().mutationResult(context)).toEqual(first);
     await expect(service().save(context, null, { ...input, definition: { ...input.definition, name: 'changed' } })).rejects.toMatchObject({ code: 'registered_api_operation_conflict' });
     await expect(service().mutationResult({ ...context, actorId: 'another' })).rejects.toMatchObject({ code: 'registered_api_operation_forbidden' });

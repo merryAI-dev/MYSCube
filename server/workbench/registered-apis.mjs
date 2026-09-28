@@ -51,8 +51,15 @@ export function resolveApiPlan(template, input) {
   return walk(template);
 }
 
-export function createRegisteredApiService({ db, analytics, authorize, env = process.env, externalAdapter, now = () => new Date().toISOString() }) {
-  const external = externalAdapter || createExternalApiAdapter({ env, now });
+export function createRegisteredApiService({ db, analytics, authorize, env = process.env, externalAdapter, liveAdapter, now = () => new Date().toISOString() }) {
+  const configuredExternal = externalAdapter || createExternalApiAdapter({ env, now });
+  const adapterFor = id => id.startsWith('myscube-') ? liveAdapter : configuredExternal;
+  const availableAdapter = id => { const adapter = adapterFor(id); if (!adapter) throw createHttpError(503, 'MYSCube 실시간 연결이 활성화되지 않았습니다.', 'myscube_live_disabled'); return adapter; };
+  const external = {
+    list: context => ({ items: [...configuredExternal.list(context).items.filter(item => !item.id.startsWith('myscube-')), ...(liveAdapter ? liveAdapter.list(context).items : [])] }),
+    get: (context, id, version) => availableAdapter(id).get(context, id, version),
+    invoke: (context, id, version, input, options) => availableAdapter(id).invoke(context, id, version, input, options),
+  };
   const collection = (context) => db.collection(`orgs/${context.tenantId}/workbench_api_owners/${hash(context.actorId)}/apis`);
   const guard = async (context) => { await authorize(context); if (context.actorRole !== 'admin') throw createHttpError(403, '관리자 본인의 등록 API만 이용할 수 있습니다.', 'registered_api_forbidden'); };
   const assertStored = (item) => {
@@ -142,9 +149,13 @@ export function createRegisteredApiService({ db, analytics, authorize, env = pro
       try {
         const result = plan ? await analytics.queryPlan(context, plan, { signal }) : await external.invoke(context, item.definition.endpointId, item.definition.endpointVersion, input, { signal, authorize: guard });
         await get(context, id, version);
-        const response = { apiId: id, apiVersion: version, ...(plan ? { evidenceId: result.evidenceId, columns: result.columns, rows: result.rows, metadata: result.metadata, semantic: result.semantic, truncated: result.truncated } : result) };
+        const recorded = plan ? null : await analytics.recordApiEvidence(context, { apiId: id, apiVersion: version, definitionHash: item.definitionHash, endpointHash: item.endpointHash,
+          input, data: result.data, metadata: result.metadata, truncated: result.truncated, queriedAt: now() });
+        if (recorded) await get(context, id, version);
+        const evidenceId = result.evidenceId || recorded?.evidenceId;
+        const response = { ...(evidenceId ? { evidenceId } : {}), apiId: id, apiVersion: version, ...(plan ? { evidenceId: result.evidenceId, columns: result.columns, rows: result.rows, metadata: result.metadata, semantic: result.semantic, truncated: result.truncated } : result) };
         if (Buffer.byteLength(JSON.stringify(response)) > 256000) throw createHttpError(413, '조회 결과가 너무 큽니다. API 조회 범위를 줄여 주세요.', 'registered_api_result_large');
-        await invocation.update({ state: 'completed', completedAt: now(), ...(result.evidenceId ? { evidenceId: result.evidenceId } : { endpointId: item.definition.endpointId, endpointVersion: item.definition.endpointVersion }) });
+        await invocation.update({ state: 'completed', completedAt: now(), ...(evidenceId ? { evidenceId } : {}), ...(!plan ? { endpointId: item.definition.endpointId, endpointVersion: item.definition.endpointVersion } : {}) });
         return response;
       } catch (error) { await invocation.update({ state: 'failed', completedAt: now(), errorCode: error.code || 'query_failed' }); throw error; }
     },

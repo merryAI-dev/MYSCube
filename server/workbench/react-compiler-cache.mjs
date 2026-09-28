@@ -17,7 +17,8 @@ export function snapshotReactCompilerInput(source, apis) {
   const copied = JSON.parse(raw);
   const normalized = copied.map(api => {
     if (!api || typeof api !== 'object' || Array.isArray(api)) throw new Error('api_type_schema_invalid');
-    const { id, version, responseKind, responseSchema, ...flattened } = api;
+    // Registry provenance belongs to the caller, not the flattened compiler definition.
+    const { id, version, responseKind, responseSchema, definitionHash, endpointHash, ...flattened } = api;
     const definition = Object.hasOwn(api, 'definition') ? api.definition : flattened;
     if (!definition || typeof definition !== 'object' || Array.isArray(definition)) throw new Error('api_type_schema_invalid');
     return { id, version, definition, responseKind: responseKind || definition.kind, responseSchema: responseSchema ?? null };

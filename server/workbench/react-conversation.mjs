@@ -83,7 +83,7 @@ export function createReactConversationService({ db, now = () => new Date().toIS
           signal.throwIfAborted();
         };
         await authorizeApis();
-        if (input.mode !== 'analysis') for (const ref of refs) { const api = await apis.get(context, ref.id, ref.version); selected.push({ id: api.id, version: api.version, ...api.definition, responseKind: api.responseKind || api.definition.kind, responseSchema: api.responseSchema || null }); }
+        if (input.mode !== 'analysis') for (const ref of refs) { const api = await apis.get(context, ref.id, ref.version); selected.push({ id: api.id, version: api.version, ...api.definition, definitionHash: api.definitionHash, endpointHash: api.endpointHash || null, responseKind: api.responseKind || api.definition.kind, responseSchema: api.responseSchema || null }); }
         await db.runTransaction(async (tx) => {
           const [usage, active] = await tx.getAll(budget, lock); const value = usage.data() || { count: 0, actors: {} };
           if (value.count >= 20 || (value.actors?.[owner] || 0) >= 5) throw createHttpError(429, '오늘 AI 요청 한도에 도달했습니다. 저장된 대화와 직접 편집은 계속 이용할 수 있습니다.', 'react_daily_limit');
@@ -107,7 +107,11 @@ export function createReactConversationService({ db, now = () => new Date().toIS
             workContext: analysisContext, pendingClarification: pending, complete: measuredComplete, analytics, qa,
             dateBasis: begun.serverState.dateBasis, selectedDateBasis: begun.selectedDateBasis, onQuery: ({ datasetId, dateBasisProvenance: provenance }) => { lastQueryDataset = datasetId; if (provenance) dateBasisProvenance.push(provenance); },
             authorize: input.mode === 'auto' ? authorizeApis : authorize, bindHtml: resolveHtmlBindings, signal, now,
-            ...(input.mode === 'auto' ? { currentSource: source, registeredApis: selected, screenBuilder: async ({ request, purpose, bindings, evidence, businessContext }) => {
+            ...(input.mode === 'auto' ? { currentSource: source, registeredApis: selected, invokeRegisteredApi: async (step, apiSignal) => {
+              const output = await apis.invoke(context, step.apiId, step.apiVersion, step.input, { signal: apiSignal });
+              await authorizeApis();
+              return analytics.evidence(context, output.evidenceId);
+            }, screenBuilder: async ({ request, purpose, bindings, evidence, businessContext }) => {
               let verified = [];
               if (purpose === 'connected') {
                 verified = validateReactScreenBindings({ bindings, evidence, apis: selected, catalog: await analytics.catalog(context) });

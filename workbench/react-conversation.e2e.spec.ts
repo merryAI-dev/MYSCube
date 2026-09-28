@@ -35,7 +35,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => { for (const item of [server, runtime]) if (item) await new Promise<void>((resolve) => item.close(() => resolve())); if (db) { await db.recursiveDelete(db.doc(`orgs/${tenantId}`)); await db.terminate(); } });
 test.beforeEach(async ({ page }) => { await page.route('**/api/**', async (route) => { const url = new URL(route.request().url()); const response = await route.fetch({ url: `${base}${url.pathname}${url.search}`, headers: { ...route.request().headers(), 'x-tenant-id': tenantId, 'x-actor-id': actorId } }); await route.fulfill({ response }); }); });
 
-test('clarification preserves the live preview; reload follows persisted source context and applies a proposal only explicitly', async ({ page }) => {
+test('clarification preserves the live preview; reopened context mismatch requires explicit proposal review', async ({ page }) => {
   await page.goto('/?mode=react'); await page.getByRole('button', { name: '원문·파일', exact: true }).click();
   await expect(page.getByLabel('React 원문')).not.toHaveValue('');
   await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await page.getByLabel('React 원문').fill(original);
@@ -85,7 +85,7 @@ test('a late source proposal cannot replace a newly selected editor page', async
 test('current permission denial removes saved conversation evidence and the live frame while preserving the editor', async ({ page }) => {
   await page.goto('/'); await page.getByRole('button', { name: '원문·파일', exact: true }).click(); await expect(page.getByLabel('React 원문')).not.toHaveValue('');
   await page.getByLabel('React 원문').fill(original); await page.getByRole('button', { name: '미리보기 적용' }).click(); await expect(page.frameLocator('[data-testid="react-preview-committed"]').getByText('저장 전 편집 원문')).toBeVisible();
-  await page.getByLabel('업무 요청').fill('카드로 보여 주세요'); await page.getByRole('button', { name: '보내기', exact: true }).click(); await expect(page.getByRole('button', { name: '검토한 변경 적용', exact: true })).toBeVisible();
+  await page.getByLabel('업무 요청').fill('카드로 보여 주세요'); await page.getByRole('button', { name: '보내기', exact: true }).click(); await expect(page.frameLocator('[data-testid="react-preview-committed"]').getByText('카드로 만든 후속 제안')).toBeVisible();
   const sourceBefore = await page.getByLabel('React 원문').inputValue();
   await db.doc(`orgs/${tenantId}/members/${actorId}`).update({ status: 'INACTIVE' });
   try {

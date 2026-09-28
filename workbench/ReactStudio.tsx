@@ -1,5 +1,5 @@
 import { demo } from './client';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ReactPreview } from './ReactPreview';
 import { ApiRegistryPanel } from './ApiRegistryPanel';
 import { BoundEvidence } from './BoundEvidence';
@@ -21,6 +21,7 @@ export function ReactStudio() {
   const runtimeAvailable = Boolean(capabilities?.remoteRuntime || capabilities?.runtimeUrl);
   const proposalTarget = state.target;
   const artifact = execution.artifact;
+  useEffect(() => { if (execution.preparing) setView('preview'); }, [execution.sequence]);
   return <div className="studio react-studio">
     <header className="studio-header"><div className="brand"><span className="eyebrow">MYSCube · AXR STUDIO</span><h1>나의 업무 공간</h1><p>자료를 묻고, 필요한 화면을 함께 만드세요.</p></div>
       <div className="header-actions"><a className="quiet" href="/?mode=operations" target="_blank" rel="noopener noreferrer">운영 기록 ↗</a><a className="quiet" href="/?mode=html">기존 HTML 화면</a><span role="status" className="save-state">{busy ? '처리 중…' : dirty ? '저장하지 않은 변경' : saved ? `저장됨 · 버전 ${saved.version}` : '새 화면'}</span>
@@ -48,7 +49,8 @@ export function ReactStudio() {
         </div>
         <div hidden={view !== 'source'}><ReactWorkspaceEditor state={state} dispatch={dispatch} disabled={false} focusLocation={focusLocation} /></div>
       </section>
-      <aside className="studio-rail">{capabilities && <ReactConversationPanel onPermissionError={studio.rejectUnauthorized} modelEnabled={Boolean(capabilities.modelEnabled)} busy={busy} currentSource={source} apis={selected}
+      <aside className="studio-rail">{capabilities && <ReactConversationPanel onPermissionError={studio.rejectUnauthorized} modelEnabled={Boolean(capabilities.modelEnabled)} busy={busy || execution.preparing} currentSource={source} apis={selected}
+        onGenerated={(value, request) => dispatch({ type: 'generated-preview', value, target: proposalTarget, requestIdentity: request.identity, requestId: request.id })}
         onProposal={value => dispatch({ type: 'propose', value, target: proposalTarget })} onRestoreContext={value => { if (!studio.mayLeave()) return false; dispatch({ type: 'context', source: value.source, apis: value.apis }); dispatch({ type: 'message', message: '대화 당시 편집 내용과 연결 자료 버전을 불러왔습니다. 저장 전 내용을 확인해 주세요.' }); return true; }} />}
         {state.proposal && <section className="side-panel proposal-panel"><h2>변경 내용 검토</h2><ReactProposalReview state={state} dispatch={dispatch} disabled={busy} /></section>}
         <details className="side-panel studio-tools"><summary>연결 자료 · {selected.length}개</summary><p className="subtle">선택한 API 버전만 이 화면에서 조회할 수 있습니다.</p>

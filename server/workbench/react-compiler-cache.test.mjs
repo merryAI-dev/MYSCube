@@ -27,6 +27,20 @@ describe('bounded completed compiler artifact storage and exact input identity',
     expect(key(fixtureSource(), [untyped])).not.toBe(original);
     expect(() => snapshotReactCompilerInput(fixtureSource(), [{ ...api, definition: null }])).toThrow();
   });
+  it('normalizes only top-level registry provenance across conversation and registry API representations', () => {
+    const source = fixtureSource(), metadata = { definitionHash: 'd'.repeat(64), endpointHash: 'e'.repeat(64) };
+    const record = { ...structuredClone(api), ...metadata };
+    const flattened = { id: api.id, version: api.version, ...structuredClone(api.definition), responseKind: api.responseKind, responseSchema: structuredClone(api.responseSchema), ...metadata };
+    const snapshot = snapshotReactCompilerInput(source, [record]);
+    expect(snapshotReactCompilerInput(source, [flattened])).toBe(snapshot);
+    expect(snapshotReactCompilerInput(source, [{ ...flattened, definitionHash: 'f'.repeat(64), endpointHash: null }])).toBe(snapshot);
+    expect(JSON.parse(snapshot).apis).toEqual([api]);
+    expect(key(source, [flattened])).toBe(key(source, [record]));
+    flattened.responseSchema.properties.total.type = 'string'; expect(key(source, [flattened])).not.toBe(key(source, [record]));
+    expect(key(source, [{ ...api, definition: { ...api.definition, definitionHash: 'nested-policy' } }])).not.toBe(key(source, [api]));
+    expect(key(source, [{ ...flattened, futurePolicy: 'must-remain-in-definition' }])).not.toBe(key(source, [flattened]));
+    expect(JSON.parse(snapshotReactCompilerInput(source, [{ ...record, parameters: { forged: { type: 'string' } } }])).apis[0].definition).toEqual(api.definition);
+  });
   it('misses edited files, title, entry, legacy identity, every API contract dimension and compiler identity', () => {
     const source = fixtureSource(), original = key(source);
     const changed = structuredClone(source); changed.workspace.files['App.tsx'] += '\n'; expect(key(changed)).not.toBe(original);
