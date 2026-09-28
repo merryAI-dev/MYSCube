@@ -95,13 +95,26 @@ export function summarizeClientError(event) {
 }
 const phases = new Set(['run_start', 'run_result', 'hermes_tool_start', 'hermes_tool_result', 'hermes_tool_failure', 'model_failure', 'answer_review', 'usage']);
 const states = new Set(['queued', 'running', 'sending', 'succeeded', 'delivery_unknown', 'failed']);
+const deliveryMethods = new Set(['chat.postMessage', 'chat.postEphemeral', 'chat.update']);
+const deliveryCodes = new Set(['transport_error', 'invalid_response', 'unavailable', 'invalid_arguments', 'invalid_arg_name',
+  'invalid_blocks', 'invalid_blocks_format', 'msg_too_long', 'rate_limited', 'cant_update_message', 'message_not_found', 'channel_not_found', 'not_in_channel',
+  'missing_scope', 'invalid_auth', 'account_inactive', 'token_revoked', 'ratelimited', 'request_timeout',
+  'service_unavailable', 'internal_error', 'fatal_error', 'user_not_found']);
 const instant = (value) => typeof value === 'string' && /^20\d{2}-\d{2}-\d{2}T[\d:.]+Z$/.test(value) && Number.isFinite(Date.parse(value)) ? value : null;
+const summarizedDelivery = (value) => value && typeof value === 'object' ? {
+  method: deliveryMethods.has(value.method) ? value.method : null,
+  code: deliveryCodes.has(value.code) ? value.code : null,
+  httpStatus: Number.isInteger(value.httpStatus) && value.httpStatus >= 100 && value.httpStatus <= 599 ? value.httpStatus : null,
+  definitive: value.definitive === true,
+  recordedAt: instant(value.recordedAt),
+} : null;
 
 export function summarizeDiagnostic(job, records) {
   const traceValid = job.traceAnchor ? verifyAgentTrace(records, job.traceAnchor) : null;
   return {
     createdAt: instant(job.createdAt), answeredAt: instant(job.answeredAt),
     deliveryState: states.has(job.status) ? job.status : 'unknown',
+    delivery: summarizedDelivery(job.deliveryFailure), receipt: summarizedDelivery(job.receiptFailure),
     experiment: ['hermes', 'baseline'].includes(job.experimentVariant) ? job.experimentVariant : 'unknown',
     traceValid,
     failures: (Array.isArray(job.audit) ? job.audit : []).filter((entry) => entry.type === 'failure')
@@ -176,6 +189,8 @@ export function renderDiagnostics(result) {
       lines.push(`- 발생 ${item.occurredAt || '시각 미확인'} · 수집 ${item.receivedAt || '시각 미확인'} · 오류 코드 ${item.code || '미확인'} · HTTP ${item.httpStatus ?? '미확인'}`, item.diagnosis.message);
     } else {
       lines.push(`- 접수 ${item.createdAt || '시각 미확인'} · 응답 ${item.answeredAt || '시각 미확인'} · ${states[item.deliveryState] || '확인 불가'}`,
+        ...(item.delivery ? [`답변 전달: ${item.delivery.method || '방법 미확인'} · ${item.delivery.code || '코드 미확인'} · HTTP ${item.delivery.httpStatus ?? '미확인'} · ${item.delivery.definitive ? '명시적 거부' : '전달 여부 미확인'}`] : []),
+        ...(item.receipt ? [`진행 표시 갱신: ${item.receipt.code || '코드 미확인'} · ${item.receipt.definitive ? '명시적 거부' : '갱신 여부 미확인'}`] : []),
         `감사 기록 검증: ${item.traceValid === true ? '통과' : item.traceValid === false ? '실패' : '근거 없음'}`,
         `저장된 오류 코드: ${item.failures.join(', ') || '기록 없음'}`,
         ...item.steps.map((step) => `  ${step.at || '시각 미확인'} · ${step.tool || step.phase} · ${step.code || step.outcome || '오류 코드 없음'}`));

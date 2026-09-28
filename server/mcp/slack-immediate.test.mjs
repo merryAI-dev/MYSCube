@@ -66,9 +66,10 @@ it('delivers corrected status directly, updates progress, and drains a reply que
   expect(reads).toBe(2);
   expect(completeFactory).not.toHaveBeenCalled();
   expect(readSnapshot).not.toHaveBeenCalled();
-  const answers = posts.filter((post) => post.method === 'chat.update' && post.text.includes('[정산 완료 여부]'));
+  const answers = posts.filter((post) => post.method === 'chat.postMessage' && post.text.includes('[정산 완료 여부]'));
   expect(posts.some((post) => post.method === 'chat.update' && post.text.startsWith('⏳'))).toBe(true);
   expect(answers).toHaveLength(2);
+  expect(answers.every((answer) => !Object.hasOwn(answer, 'ts') && answer.thread_ts === '1790565660.1')).toBe(true);
   expect(answers[0].text).toContain('1주차: 승인 완료 1개');
   expect(answers[1].text).toContain('주정산: 2026-10');
   expect(answers[0].text).not.toMatch(/입금|출금|원\(KRW\)/);
