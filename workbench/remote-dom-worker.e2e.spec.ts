@@ -13,9 +13,11 @@ test.beforeAll(async()=>{directory=await mkdtemp(join(tmpdir(),'axr-dom-browser-
 test.afterAll(async()=>{await rm(directory,{recursive:true,force:true});});
 test('actual compiled React worker → HTTP bridge → native controls/IME/validation; no Docker isolation claim', async({page})=>{
   const children: ChildProcessWithoutNullStreams[]=[];let denied=false;
+  let frameCalls=0,closeCalls=0;
+  const routeErrors:string[]=[],pageErrors:string[]=[];page.on('pageerror',error=>pageErrors.push(error.name));
   let holdInputAck: Promise<void> | null = null;
   const requests: any[]=[];let sessionId='';
-  const context={tenantId:'synthetic',actorId:'browser-fixture',analyticsScope:{fingerprint:'fixture'}};
+  const context={tenantId:'synthetic',actorId:`browser-fixture-${randomUUID()}`,analyticsScope:{fingerprint:'fixture'}};
   const worker=fileURLToPath(new URL('../server/workbench/remote-runtime/worker.mjs',import.meta.url));
   const broker=createRemoteRuntimeBroker({authorize:async()=>{if(denied)throw Object.assign(new Error('조회 권한이 변경되었습니다.'),{statusCode:403});},callApi:async()=>({}),spawnDocker:(args:string[])=>{
     const child=args[0]==='run'?spawn(process.execPath,['--input-type=module','-e',`import{runRendererWorker}from${JSON.stringify(worker)};await runRendererWorker({packageFile:${JSON.stringify(packages)}})`],{stdio:['pipe','pipe','pipe']}):spawn(process.execPath,['-e',''],{stdio:['pipe','pipe','pipe']});children.push(child);return child;
@@ -33,7 +35,13 @@ test('actual compiled React worker → HTTP bridge → native controls/IME/valid
       if(denied)return reply({message:'조회 권한이 변경되었습니다.'},403);
       const event=route.request().postDataJSON();requests.push(event);const result={sessionId,frame:await broker.event(context,sessionId,event),expiresAt:'2099-01-01T00:00:00.000Z',evidence:{}};if(event.type==='input'&&holdInputAck)await holdInputAck;return reply(result);
     }
-    if(path.endsWith(`/remote/${sessionId}`))return method==='DELETE'?reply(await broker.close(context,sessionId).catch(()=>({closed:true}))):reply({sessionId,frame:await broker.frame(context,sessionId),expiresAt:'2099-01-01T00:00:00.000Z',evidence:{}});
+    if(path.endsWith(`/remote/${sessionId}`)){
+      if(denied)return reply({message:'조회 권한이 변경되었습니다.'},403);
+      if(method==='DELETE'){closeCalls++;return reply(await broker.close(context,sessionId).catch(()=>({closed:true})));}
+      frameCalls++;
+      try{return reply({sessionId,frame:await broker.frame(context,sessionId),expiresAt:'2099-01-01T00:00:00.000Z',evidence:{}});}
+      catch(error){routeErrors.push(error instanceof Error?error.name:'UnknownError');return route.abort();}
+    }
     return reply({items:[],truncated:false});
   });
   try{
@@ -61,6 +69,18 @@ test('actual compiled React worker → HTTP bridge → native controls/IME/valid
     holdInputAck=new Promise<void>(resolve=>{releaseInput=resolve;});await input.fill('pause');await expect.poll(()=>requests.some(v=>v.type==='input'&&v.value==='pause')).toBe(true);await input.fill('resumed');releaseInput();holdInputAck=null;await expect(page.getByTestId('remote-react-frame')).toBeVisible();await expect(input).toHaveValue('resumed');expect(requests.some(v=>v.type==='input'&&v.value==='resumed')).toBe(false);
     await page.setViewportSize({width:1280,height:900});await expect(view.getByRole('status')).toHaveText('결과 resumed|true|b|1|2|SE');await expect(input).toHaveValue('resumed');
     denied=true;await view.getByRole('button',{name:'확인'}).click();await expect(page.getByTestId('remote-dom-frame')).toHaveCount(0);await expect(page.getByLabel('React 원문')).toHaveValue(source);
+    const beforeDenied={frameCalls,closeCalls};
+    const lateStatuses=await page.evaluate(async id=>{
+      const statuses:number[]=[];
+      for(const method of ['GET','DELETE']){
+        try{statuses.push((await fetch(`/api/v1/react-work-pages/remote/${id}`,{method,signal:AbortSignal.timeout(3000)})).status);}
+        catch{statuses.push(0);}
+      }
+      return statuses;
+    },sessionId);
+    expect.soft(lateStatuses).toEqual([403,403]);
+    expect.soft({frameCalls,closeCalls}).toEqual(beforeDenied);
+    expect.soft(routeErrors).toEqual([]);expect(pageErrors).toEqual([]);
   }finally{
     broker.shutdown();await Promise.all(children.map(child=>child.exitCode!==null?Promise.resolve():new Promise<void>(resolve=>{child.once('close',()=>resolve());setTimeout(()=>{child.kill('SIGKILL');resolve();},2000).unref();})));
   }

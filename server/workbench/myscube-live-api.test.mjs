@@ -157,6 +157,23 @@ describe('fixed MYSCube read adapter', () => {
     clock = 25000; timers.shift().callback(); transport.mockResolvedValue(page());
     await expect(adapter.invoke(context, 'myscube-projects', 1, {}, { authorize })).resolves.toHaveProperty('data');
   });
+  it.each([401, 403, 400, 404, 429, 500])('releases completed HTTP %s responses so two denials cannot block a third caller', async statusCode => {
+    const schedule = vi.fn(), transport = vi.fn().mockRejectedValue(Object.assign(new Error('completed response'), { statusCode }));
+    const { adapter, authorize } = setup({ schedule, transport });
+    for (const actorId of ['first', 'second', 'third']) {
+      const error = await adapter.invoke({ ...context, actorId }, 'myscube-cashflow-evidence', 1, { yearMonth: '2026-09' }, { authorize }).catch(error => error);
+      expect(error.code).not.toBe('myscube_live_busy'); expect(error.details).toBeUndefined();
+    }
+    expect(transport).toHaveBeenCalledTimes(3); expect(schedule).not.toHaveBeenCalled();
+  });
+  it.each([502, 503, 504, undefined])('retains the upstream budget for gateway/network status %s', async statusCode => {
+    const schedule = vi.fn(), transport = vi.fn().mockRejectedValue(Object.assign(new Error('upstream uncertain'), { statusCode }));
+    const { adapter, authorize } = setup({ schedule, transport, monotonicNow: () => 0 });
+    const error = await adapter.invoke(context, 'myscube-cashflow-evidence', 1, { yearMonth: '2026-09' }, { authorize }).catch(error => error);
+    expect(error.details).toMatchObject({ sourceWorkMayContinue: true, retryAfterMs: 25000 });
+    expect(schedule).toHaveBeenCalledWith(expect.any(Function), 25000);
+    await expect(adapter.invoke(context, 'myscube-projects', 1, {}, { authorize })).rejects.toMatchObject({ code: 'myscube_live_busy' });
+  });
   it('releases successful cashflow without imposing the failure cooldown', async () => {
     const schedule = vi.fn(), raw = await nativeCashflow(); const { adapter, authorize } = setup({ schedule, transport: async () => raw });
     for (let i = 0; i < 2; i++) await expect(adapter.invoke(context, 'myscube-cashflow-evidence', 1, { yearMonth: '2026-09' }, { authorize })).resolves.toHaveProperty('data');
