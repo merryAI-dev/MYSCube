@@ -19,7 +19,7 @@ export const CODE_EVIDENCE = [
   {
     "topic": "sheet_validation",
     "path": "server/bff/routes/jvm-weekly-api.mjs",
-    "sourceSha256": "f9205ee7b08d002befc3e1d5d4946fb69c9b99878f336f6b150070220005344d",
+    "sourceSha256": "e62d48e5c876f7ed8d8aa29ab910fd546baeb8667ede37b2233fe1e0cec2f487",
     "startLine": 2762,
     "endLine": 2775,
     "excerpt": "  if (projectionRows.length !== 19 || actualRows.length !== 19) {\n    blockers.push({\n      code: 'SHEET_CONTROL_TOTAL_INCOMPLETE',\n      message: 'Projection/Actual BO control total이 불완전합니다. 시트값을 다시 불러와 주세요.',\n    });\n  } else if (\n    typeof controls?.deposit?.matches !== 'boolean'\n    || rows.some((row) => typeof row?.matches !== 'boolean')\n  ) {\n    blockers.push({\n      code: 'SHEET_CONTROL_TOTAL_INVALID',\n      message: 'Projection/Actual BO control total 검산값이 올바르지 않습니다. 시트값을 다시 불러와 주세요.',\n    });\n  }"

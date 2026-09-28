@@ -23,6 +23,12 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 afterEach(() => vi.useRealTimers());
 
 describe('bounded company cashflow summary', () => {
+  it('constructs the unused route without touching the database or weakening worker auth gates', () => {
+    const db = { doc: vi.fn(() => { throw new Error('database access before request'); }) };
+    expect(() => createCompanySummaryAdmission({ db })).not.toThrow();
+    expect(() => createCompanyCashflowSummary({ db, readSnapshot: vi.fn() })).not.toThrow();
+    expect(db.doc).not.toHaveBeenCalled();
+  });
   it('uses native monthly values, preserves zero/null and never invents month from weeks', async () => {
     const readSnapshot = vi.fn(async ({ params }) => snapshot(params.projectId, 0, 99));
     const result = await createCompanyCashflowSummary({ db: fakeDb(), readSnapshot })(context, { yearMonth: '2026-09' });

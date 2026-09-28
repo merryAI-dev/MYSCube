@@ -20,8 +20,8 @@ const busy = () => createHttpError(429, '전사 조회가 진행 중입니다. �
 const monotonicWall = () => { const wall = Date.now(); const start = performance.now(); return () => wall + performance.now() - start; };
 
 export function createCompanySummaryAdmission({ db, clock = monotonicWall() }) {
-  const ref = db.doc(COMPANY_SUMMARY_ADMISSION_PATH);
   return { async acquire(context, signal) {
+    const ref = db.doc(COMPANY_SUMMARY_ADMISSION_PATH);
     const token = randomUUID();
     const actor = hash(`${context.tenantId}\0${context.actorId}`);
     await db.runTransaction(async (tx) => {
