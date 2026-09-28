@@ -22,10 +22,23 @@
 
 실행 전 점검에서 기존 AXR 서비스 active, 현재 설치 경로 `0dc6fe797713043a7bdb747b6a2eb9da14da082c`, 운영 설정·nginx·설치 영수증 해시와 이미지 ID를 직접 읽었다. 기존 CI `36367946418`과 Workbench CI `36367946417`은 성공했으나 PR 기반 검사이므로 새 배포의 exact-source push CI를 별도로 실행한다.
 
-실제 새 SHA, 워크플로 결과, 공개 HTTPS 확인과 설치 영수증은 실행 후 기록한다. 이 문서 작성 시점에는 새 버전 배포가 완료되지 않았다.
+2026-09-28 12:23 KST에 소스 `93d138186bf1c2459b86343f00e213174a0de8d5`의 독립 AXR 배포가 완료됐다. 아래 결과는 실제 운영 확인이다.
 
 사전 검증: 업그레이드·초기 설치·TLS 관련 75/75, exact-source CI 승인/거부 독립 반증 7/7, JavaScript·YAML·실행 셸 구문 검사를 통과했다. 실제 VM은 base systemd unit 3개가 기존 릴리스와 일치하고, 앱의 역방향 의존성은 `multi-user.target`만 있으며 nginx도 AXR 한 사이트뿐임을 읽기 전용으로 확인했다. 이 결과는 실제 배포 실행 성공을 대신하지 않는다.
 
 첫 실행 `36370729012`는 소스 `2c1a01baecfd3f8e7658b5bef2b938b230547646`의 CI 두 개(Workbench 1,208개 테스트·84개 브라우저 검사 포함), 실제 운영용 이미지 검사와 WIF 인증을 통과했다. 그러나 IAP SCP 전송에서 약 4분간 41MB만 전달돼 앱 교체 전에 취소했다. 기존 앱과 데이터는 유지됐다.
 
 대용량 이미지 묶음은 VM이 같은 리전의 고정 비공개 GCS 경로에서 직접 받도록 바꿨다. CI의 단기 배포 토큰은 SSH 표준입력으로만 전달하고 파일·환경변수·명령 인자에 저장하지 않는다. 새 IAM 권한은 추가하지 않는다. 작은 검증 코드 압축 파일만 IAP로 전달하며 실행 전 SHA256을 확인한다. 다운로드에서도 외부에서 고정한 manifest 해시, 개별 파일 크기·해시, 소스·플랫폼·분류를 검사하고 기존 JS 전체 검증기를 다시 통과해야 설치할 수 있다. 실제 SSH 표준입력 전달은 비밀값 없는 표식으로 확인했다.
+
+## 완료 결과 — 2026-09-28
+
+- [AXR 배포 36372301863](https://github.com/merryAI-dev/MYSCube/actions/runs/36372301863): SUCCESS. [동일 소스 일반 CI](https://github.com/merryAI-dev/MYSCube/actions/runs/36372301743), [Workbench CI](https://github.com/merryAI-dev/MYSCube/actions/runs/36372301783) 모두 SUCCESS. Workbench 테스트 1,208개와 브라우저 84개 통과.
+- 설치 경로의 소스 SHA, 설치 영수증, 완료 journal, Docker 앱·렌더러 이미지 ID를 독립 QA가 실제 VM에서 대조했다. 앱 enabled/active, 정리 타이머 active, 남은 관리 대상 렌더러 0개다. 운영 환경·nginx·기존 systemd unit 3개 해시는 변경되지 않았다.
+- 실제 호스트의 네이티브 React/Tailwind 컴파일·합성 DuckDB·Docker 격리 검사 후 공개했다. HTTPS `/health` 200, 비로그인 보호 API 401을 CI와 독립 QA가 각각 확인했다.
+- AXR Firestore 페이지 3개·저장 버전 179개의 문서 식별자·선택 메타데이터·문서 수정 시각 지문이 배포 전후 동일했다. 전체 문서 본문을 재수집한 검사는 아니며, 이 배포는 원본 업무 DB를 변경하지 않았다.
+- 운영 주소의 데스크톱 1440×1000·모바일 390×844 로그인 화면을 Playwright로 열고 스크린샷을 육안 확인했다. 두 화면 모두 200, 로그인 버튼 노출, pageerror 0, 가로 넘침 없음이다. 실제 사용자 OAuth 완료 후 업무 질의는 이번 확인에 포함하지 않았다.
+- 다음 문서 커밋으로 재배포되지 않도록 `AXR_HOST_DEPLOY_ENABLED=false`로 복귀했다. 다음 배포 전에는 현재 설치 영수증을 새 기준으로 확인해야 한다. 기존 `axr-current-pins.json`은 이번 업그레이드 직전 버전을 기록한 파일이며 그대로 재사용하면 차단된다.
+
+운영 주소: https://axr.myscguard.app
+
+배포 성공은 모델 정확도·성능·운영 Git 수용 검증 완료와 다르다. 품질 점수 80/100과 남은 수용 항목을 유지한다.
