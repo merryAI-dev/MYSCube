@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { runAcceptance } from './run-acceptance.mjs';
+import { createConversationService } from '../conversations.mjs';
 import { ACCEPTANCE_CASES, EVALUATION_PRESETS } from './acceptance-cases.mjs';
 
 const suite = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
@@ -13,10 +14,13 @@ suite('frozen evaluation runner provenance and reporting', () => {
     const directory = await mkdtemp(join(tmpdir(), 'axr-c4-harness-'));
     let report: any;
     const investigationResults: string[] = [];
+    const followupHistory: any[] = [];
+    const followupQuestions = new Set(ACCEPTANCE_CASES.flatMap(item => item.turns.slice(1).map(turn => turn.message)));
     try {
       report = await runAcceptance({ db, outputDirectory: directory, sourceSha: '1'.repeat(40), model: 'fixture-only', render: false,
         complete: async ({ messages }: any) => {
           const latest = messages.at(-1).content;
+          if (followupQuestions.has(latest)) followupHistory.push(messages.filter((item: any) => item.role === 'assistant'));
           if (latest === ACCEPTANCE_CASES.at(-1)!.turns[0].message) return { tool_calls: [{ function: { name: 'workbench_step', arguments: JSON.stringify({ action: 'investigate',
             interpretation: { summary: '합성 로그 확인', context: { datasetIds: [], filters: {}, evidenceIds: [] }, ambiguities: [] }, input: { question: '합성 오류의 근거 확인', area: 'approval' } }) } }] };
           if (latest.startsWith('로그/코드 근거')) investigationResults.push(latest);
@@ -42,9 +46,45 @@ suite('frozen evaluation runner provenance and reporting', () => {
       expect(investigationResults[0]).not.toContain('oracle');
       expect(investigationResults[0]).not.toContain(EVALUATION_PRESETS['injected-log'].oracle);
       expect(report).not.toHaveProperty('passedCases');
+      expect(followupHistory).toHaveLength(3);
+      for (const messages of followupHistory) expect(messages).toEqual([{ role: 'assistant', content: '정확도를 검증하지 않는 fixture 응답입니다.' }]);
+      const conversations = createConversationService({ db });
+      for (const value of report.caseResults) {
+        const saved = await conversations.get({ tenantId: value.tenantId, actorId: 'synthetic-c4', actorRole: 'admin' }, value.conversationId);
+        expect(saved.active).toBeNull();
+        expect(saved.turns).toHaveLength(value.turns.length);
+        expect(saved.turns.every((turn: any) => turn.state === 'completed' && turn.result.scopeFingerprint)).toBe(true);
+        for (const [index, turn] of value.turns.entries()) {
+          expect(turn.conversation.state).toBe('completed');
+          expect(turn.conversation.historyTurnIds).toHaveLength(index);
+        }
+      }
     } finally {
       if (report) for (const value of report.caseResults) await db.recursiveDelete(db.doc(`orgs/${value.tenantId}`));
       await db.terminate(); await rm(directory, { recursive: true, force: true });
     }
   }, 60000);
+  it('persists model failures and releases synthetic conversation leases', async () => {
+    const db = new Firestore({ projectId: 'demo-workbench-c4-harness-failure' });
+    const directory = await mkdtemp(join(tmpdir(), 'axr-c4-failure-'));
+    let report: any;
+    try {
+      report = await runAcceptance({ db, outputDirectory: directory, sourceSha: '2'.repeat(40), model: 'fixture-only', render: false,
+        complete: async () => { throw Object.assign(new Error('private provider details'), { code: 'fixture_model_failed' }); } });
+      const conversations = createConversationService({ db });
+      expect(report.caseResults).toHaveLength(20);
+      for (const value of report.caseResults) {
+        expect(value.executionStatus).toBe('failed');
+        const saved = await conversations.get({ tenantId: value.tenantId, actorId: 'synthetic-c4', actorRole: 'admin' }, value.conversationId);
+        expect(saved.active).toBeNull();
+        expect(saved.turns).toHaveLength(1);
+        expect(saved.turns[0]).toMatchObject({ state: 'failed', error: { code: 'fixture_model_failed' } });
+        expect(JSON.stringify(saved)).not.toContain('private provider details');
+      }
+    } finally {
+      if (report) for (const value of report.caseResults) await db.recursiveDelete(db.doc(`orgs/${value.tenantId}`));
+      await db.terminate(); await rm(directory, { recursive: true, force: true });
+    }
+  }, 60000);
+
 });

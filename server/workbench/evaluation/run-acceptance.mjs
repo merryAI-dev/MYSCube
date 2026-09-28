@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Firestore } from '@google-cloud/firestore';
 import { ACCEPTANCE_SUITE, ACCEPTANCE_CASES, EVALUATION_PRESETS, buildEvaluationDatasets } from './acceptance-cases.mjs';
 import { createAnalyticsService } from '../analytics-service.mjs';
+import { createConversationService } from '../conversations.mjs';
 import { createHtmlCompletion } from '../html-completion.mjs';
 import { runConversationTurn } from '../conversation-agent.mjs';
 import { generateReactPage } from '../react-pages.mjs';
@@ -30,6 +31,7 @@ export async function runAcceptance({ db, complete, outputDirectory, sourceSha, 
   const startedAt = new Date().toISOString();
   const report = { suite: ACCEPTANCE_SUITE, suiteHash: digest(ACCEPTANCE_CASES), runId, sourceSha, model, startedAt,
     environment: { model: executionManifest ? 'actual configured model' : 'fixture harness validation', database: db.projectId, syntheticDataOnly: true, renderer: render ? 'Docker' : 'disabled' }, executionManifest,
+    conversationPersistence: 'actual synthetic-tenant conversation service; daily admission and user OAuth are not evaluated',
     actualUserAuthentication: false, productionBusinessReads: 0, productionBusinessWrites: 0, caseResults: [], status: 'review_required' };
   await mkdir(outputDirectory, { recursive: true, mode: 0o700 });
   const write = async () => writeFile(resolve(outputDirectory, 'report.json'), JSON.stringify(report, null, 2), { mode: 0o600 });
@@ -44,9 +46,10 @@ export async function runAcceptance({ db, complete, outputDirectory, sourceSha, 
     const preset = EVALUATION_PRESETS[scenario.apiPreset];
     const apis = preset ? [{ id: '11111111-1111-4111-8111-111111111111', version: 1, ...preset.definition, responseKind: preset.definition.kind }] : [];
     const currentSource = EVALUATION_PRESETS[scenario.editorPreset] || EVALUATION_PRESETS['counter-layout'];
-    let workContext = {}, pendingClarification = null;
-    const history = [];
-    const caseReport = { id: scenario.id, expected: scenario.turns.map((turn) => turn.expected), tenantId, turns: [], executionStatus: 'running' };
+    const conversations = createConversationService({ db, now });
+    const session = await conversations.create(context, { title: `C4 ${scenario.id}` });
+    let conversationVersion = session.version;
+    const caseReport = { id: scenario.id, expected: scenario.turns.map((turn) => turn.expected), tenantId, conversationId: session.id, turns: [], executionStatus: 'running' };
     report.caseResults.push(caseReport);
     for (const [index, turn] of scenario.turns.entries()) {
       const trace = [], queries = [], runtimeCalls = [], stages = [];
@@ -61,8 +64,14 @@ export async function runAcceptance({ db, complete, outputDirectory, sourceSha, 
       const observedAnalytics = { ...analytics, queryPlan: async (...args) => {
         const result = await analytics.queryPlan(...args); queries.push(result); return result;
       } };
-      let broker;
+      let broker, begun;
       try {
+        begun = await conversations.beginTurn(context, session.id, { expectedVersion: conversationVersion, requestId: `${scenario.id}-${index}`, message: turn.message, scopeFingerprint: context.analyticsScope.fingerprint });
+        if (begun.mode !== 'started') throw Object.assign(new Error('Evaluation turn unexpectedly replayed'), { code: 'evaluation_turn_not_started' });
+        const changedScope = begun.workContext?.scopeFingerprint && begun.workContext.scopeFingerprint !== context.analyticsScope.fingerprint;
+        const { scopeFingerprint: _scope, react: _react, lastMode: _mode, ...workContext } = changedScope ? {} : begun.workContext || {};
+        const history = changedScope ? [] : begun.history;
+        const pendingClarification = changedScope ? null : begun.pendingClarification;
         const result = await runConversationTurn({ context, message: turn.message, history, workContext, pendingClarification, currentSource,
           complete: measuredComplete, analytics: observedAnalytics, authorize, signal, now, registeredApis: apis,
           qa: async () => {
@@ -105,11 +114,14 @@ export async function runAcceptance({ db, complete, outputDirectory, sourceSha, 
           }
           await broker.close(context, session.sessionId);
         }
-        workContext = result.context;
-        pendingClarification = result.clarification || null;
-        history.push({ role: 'user', content: turn.message }, { role: 'assistant', content: JSON.stringify(publicResult) });
+        await authorize(context); signal.throwIfAborted();
+        const saved = await conversations.completeTurn(context, session.id, { turnId: begun.turnId, result: { ...publicResult, scopeFingerprint: context.analyticsScope.fingerprint,
+          context: { ...result.context, scopeFingerprint: context.analyticsScope.fingerprint } } });
+        conversationVersion = saved.version;
+        turnReport.conversation = { turnId: begun.turnId, version: saved.version, state: saved.turn.state, historyTurnIds: begun.historyTurnIds, historyTruncated: begun.historyTruncated };
         caseReport.turns.push(turnReport);
       } catch (error) {
+        if (begun?.mode === 'started') await conversations.failTurn(context, session.id, { turnId: begun.turnId, error: { code: safeError(error).code, message: safeError(error).message } });
         caseReport.turns.push({ index, message: turn.message, trace, queries, runtimeCalls, error: safeError(error), elapsedMs: Math.round(performance.now() - start) });
         caseReport.executionStatus = 'failed';
         break;
