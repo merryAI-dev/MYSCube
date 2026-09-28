@@ -5,7 +5,7 @@ import { RecoveryPanel } from './RecoveryPanel';
 type Parameter = { type: 'string' | 'integer' | 'number' | 'boolean'; required?: boolean; label?: string; example?: unknown };
 type Definition = { name: string; description: string; enabled: boolean; parameters: Record<string, Parameter> } & ({ kind: 'analytics-copy'; plan: Record<string, unknown> } | { kind: 'external-read'; endpointId: string; endpointVersion: number });
 type Endpoint = { id: string; version: number; name: string; description: string; parameters: Record<string, Parameter>; responseSchema: Record<string, unknown> };
-type RegisteredApi = { id: string; version: number; definition: Definition };
+type RegisteredApi = { id: string; version: number; builtIn?: boolean; definition: Definition };
 type Dataset = { datasetId: string; definition?: { id?: string; version?: string; label?: string; meaning?: string; fields?: Record<string, { label?: string; meaning?: string }>; metrics?: Record<string, { label?: string; meaning?: string }> }; semanticDefinitionVersion?: string; asOf?: string; capturedAt?: string };
 type Catalog = { items: Dataset[]; unavailable?: Array<{ datasetId: string; message?: string }> };
 const json = (value: unknown) => JSON.stringify(value, null, 2);
@@ -155,8 +155,9 @@ export function ApiRegistryPanel({ onChanged }: { onChanged?: () => void }) {
     {notice && <p className="conversation-disabled" role="status">{notice}</p>}
     {loaded && kind === 'analytics-copy' && !catalog.items.length && <p className="bound-evidence-warning">연결 가능한 분석 사본이 없습니다. 등록 화면의 예시는 실제 조회 자료가 아닙니다. 사본이 준비된 뒤 저장·테스트해 주세요.</p>}
     {catalog.unavailable?.length ? <details><summary>현재 사용할 수 없는 사본 {catalog.unavailable.length}개</summary>{catalog.unavailable.map((item) => <p className="subtle" key={item.datasetId}>{item.datasetId} · {item.message || '정의 또는 조회 상태를 확인해 주세요.'}</p>)}</details> : null}
-    {items.length ? <label>등록한 연결<select aria-label="등록한 API 연결" style={fieldStyle} disabled={Boolean(busy)} value={selected?.id || ''} onChange={(event) => { if (abandon()) { install(items.find((item) => item.id === event.target.value) || null); setError(''); setNotice(''); } }}><option value="">새 연결 작성</option>{items.map((item) => <option key={item.id} value={item.id}>{item.definition.name} · v{item.version} · {item.definition.enabled ? '사용 중' : '중지'}</option>)}</select></label> : loaded ? <p className="subtle">아직 등록한 연결이 없습니다. 아래에서 첫 연결을 만들 수 있습니다.</p> : null}
-    <fieldset disabled={Boolean(busy)}>
+    {items.length ? <label>등록한 연결<select aria-label="등록한 API 연결" style={fieldStyle} disabled={Boolean(busy)} value={selected?.id || ''} onChange={(event) => { if (abandon()) { install(items.find((item) => item.id === event.target.value) || null); setError(''); setNotice(''); } }}><option value="">새 연결 작성</option>{items.map((item) => <option key={item.id} value={item.id}>{item.definition.name} · {item.builtIn ? '기본 제공' : `v${item.version} · ${item.definition.enabled ? '사용 중' : '중지'}`}</option>)}</select></label> : loaded ? <p className="subtle">아직 등록한 연결이 없습니다. 아래에서 첫 연결을 만들 수 있습니다.</p> : null}
+    {selected?.builtIn && <p className="subtle">기본 제공 MYSCube 연결입니다. 로그인한 본인의 MYSCube 권한으로 조회하며 수정할 수 없습니다. 아래에서 테스트 조회는 할 수 있습니다.</p>}
+    <fieldset disabled={Boolean(busy) || Boolean(selected?.builtIn)}>
       <label>연결 종류<select aria-label="연결 종류" style={fieldStyle} value={kind} onChange={(event) => edit(() => { setKind(event.target.value as typeof kind); setEndpointKey(''); })}><option value="analytics-copy">분석 사본 조회</option><option value="external-read" disabled={!endpoints.length}>승인된 외부 API{!endpoints.length ? ' · 연결 준비 중' : ''}</option></select></label>
       <label>연결 이름<input maxLength={80} value={name} placeholder="예: 주정산 상태 확인" onChange={(event) => edit(() => setName(event.target.value))} /></label>
       <label>조회 설명<textarea rows={3} maxLength={1000} value={description} placeholder="무엇을 어떤 기준으로 확인하는 연결인지 적어 주세요." onChange={(event) => edit(() => setDescription(event.target.value))} /></label>

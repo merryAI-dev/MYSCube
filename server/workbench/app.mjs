@@ -46,7 +46,10 @@ export function createWorkbenchApp(options) {
   const headersForTests = options.authMode === 'headers' && core.runtime.projectId.startsWith('demo-') && Boolean(process.env.FIRESTORE_EMULATOR_HOST);
   if (!headersForTests && typeof verifyToken !== 'function') throw new Error('An isolated identity verifier is required.');
   const liveCredentials = createLiveCredentialLease({ verifyToken });
-  const liveAdapter = !headersForTests && env.WORKBENCH_MYSCUBE_LIVE_ENABLED === 'true' ? (options.liveAdapterFactory || createMyscubeLiveApiAdapter)({ env, credentialProvider: context => liveCredentials.get(context) }) : null;
+  // On by default for the real host; 'false' is the kill switch and any malformed value fails closed.
+  const liveSwitch = env.WORKBENCH_MYSCUBE_LIVE_ENABLED;
+  const liveEnabled = liveSwitch === 'true' || (liveSwitch === undefined && !core.runtime.projectId.startsWith('demo-'));
+  const liveAdapter = !headersForTests && liveEnabled ? (options.liveAdapterFactory || createMyscubeLiveApiAdapter)({ env, enabled: true, credentialProvider: context => liveCredentials.get(context) }) : null;
   const app = express();
   app.locals.clearLiveCredentials = () => liveCredentials.clear();
   app.disable('x-powered-by');

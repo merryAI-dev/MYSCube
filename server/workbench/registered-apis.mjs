@@ -21,6 +21,11 @@ const saveInput = z.object({ expectedVersion: z.number().int().nonnegative(), de
 const parse = (schema, input) => { const result = schema.safeParse(input); if (!result.success) throw createHttpError(400, 'API 이름·조회 정의·입력 항목과 저장 버전을 확인해 주세요.', 'registered_api_invalid'); return result.data; };
 const checkId = (id) => parse(z.string().uuid(), id);
 
+export function builtInApiId(endpointId, endpointVersion) {
+  const value = hash(`myscube-builtin:${endpointId}:${endpointVersion}`);
+  return `${value.slice(0, 8)}-${value.slice(8, 12)}-5${value.slice(13, 16)}-${(8 | (Number.parseInt(value[16], 16) & 3)).toString(16)}${value.slice(17, 20)}-${value.slice(20, 32)}`;
+}
+
 export function validateApiInput(parameters, input) {
   if (!input || Array.isArray(input) || typeof input !== 'object' || JSON.stringify(input).length > 32000 || Object.keys(input).some((key) => !Object.hasOwn(parameters, key))) throw createHttpError(400, '등록한 API 입력 항목만 전달해 주세요.', 'registered_api_input_invalid');
   for (const [key, parameter] of Object.entries(parameters)) {
@@ -60,7 +65,11 @@ export function createRegisteredApiService({ db, analytics, authorize, env = pro
     get: (context, id, version) => availableAdapter(id).get(context, id, version),
     invoke: (context, id, version, input, options) => availableAdapter(id).invoke(context, id, version, input, options),
   };
-  const collection = (context) => db.collection(`orgs/${context.tenantId}/workbench_api_owners/${hash(context.actorId)}/apis`);
+  // Server-fixed MYSCube reads run with each user's own token, so every admin gets them without per-account registration.
+  const builtIns = (context) => (liveAdapter ? liveAdapter.list(context).items : []).map((endpoint) => {
+    const definition = { name: endpoint.name.slice(0, 80), description: endpoint.description.slice(0, 1000), enabled: true, parameters: endpoint.parameters, kind: 'external-read', endpointId: endpoint.id, endpointVersion: endpoint.version };
+    return { id: builtInApiId(endpoint.id, endpoint.version), version: 1, builtIn: true, definition, definitionHash: hash(definition), endpointHash: endpoint.contractHash, updatedAt: null };
+  });  const collection = (context) => db.collection(`orgs/${context.tenantId}/workbench_api_owners/${hash(context.actorId)}/apis`);
   const guard = async (context) => { await authorize(context); if (context.actorRole !== 'admin') throw createHttpError(403, '관리자 본인의 등록 API만 이용할 수 있습니다.', 'registered_api_forbidden'); };
   const assertStored = (item) => {
     if (!item || hash(item.definition) !== item.definitionHash) throw createHttpError(409, '등록 API 버전이 없거나 저장 내용이 일치하지 않습니다.', 'registered_api_version_invalid');
@@ -77,6 +86,13 @@ export function createRegisteredApiService({ db, analytics, authorize, env = pro
   };
   const get = async (context, id, version) => {
     await guard(context);
+    const builtIn = builtIns(context).find((item) => item.id === id);
+    if (builtIn) {
+      if (version !== undefined && parse(z.number().int().positive(), version) !== builtIn.version) throw createHttpError(409, '기본 제공 연결의 버전을 확인해 주세요.', 'registered_api_version_invalid');
+      const result = describe(context, builtIn);
+      await guard(context);
+      return result;
+    }
     const ref = collection(context).doc(checkId(id));
     const latest = assertStored((await ref.get()).data());
     if (!latest.definition.enabled) throw createHttpError(409, '이 API의 사용이 중지되었습니다. 다른 API를 선택해 주세요.', 'registered_api_disabled');
@@ -101,7 +117,8 @@ export function createRegisteredApiService({ db, analytics, authorize, env = pro
     async list(context) {
       await guard(context);
       const records = await collection(context).orderBy('updatedAt', 'desc').limit(101).get();
-      const items = records.docs.slice(0, 100).map((record) => assertStored(record.data())).filter((item) => item.definition.kind === 'external-read' ? external.list(context).items.some((endpoint) => endpoint.id === item.definition.endpointId && endpoint.version === item.definition.endpointVersion) : context.analyticsScope.datasetIds.includes(item.definition.plan.datasetId)).map((item) => describe(context, item));
+      const stored = records.docs.slice(0, 100).map((record) => assertStored(record.data())).filter((item) => item.definition.kind === 'external-read' ? external.list(context).items.some((endpoint) => endpoint.id === item.definition.endpointId && endpoint.version === item.definition.endpointVersion) : context.analyticsScope.datasetIds.includes(item.definition.plan.datasetId)).map((item) => describe(context, item));
+      const items = [...builtIns(context).map((item) => describe(context, item)), ...stored];
       await guard(context); return { items, truncated: records.size > 100 };
     },
     async save(context, id, input) {
@@ -115,7 +132,7 @@ export function createRegisteredApiService({ db, analytics, authorize, env = pro
         return describe(context, assertStored((await read(collection(context).doc(receipt.apiId).collection('versions').doc(String(receipt.version)))).data()));
       };
       if (operation) { const receipt = (await operation.get()).data(); if (receipt) { const result = await replay(receipt, (target) => target.get()); await guard(context); return result; } }
-      const examples = Object.fromEntries(Object.entries(request.definition.parameters).map(([key, value]) => [key, value.example]));
+      if (builtIns(context).some((item) => item.id === id)) throw createHttpError(409, '기본 제공 연결은 수정할 수 없습니다.', 'registered_api_builtin_readonly');      const examples = Object.fromEntries(Object.entries(request.definition.parameters).map(([key, value]) => [key, value.example]));
       validateApiInput(request.definition.parameters, examples);
       let endpointHash;
       if (request.definition.kind === 'external-read') {

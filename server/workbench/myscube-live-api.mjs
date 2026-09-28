@@ -141,7 +141,7 @@ export async function requestMyscubeLiveJson(options, requestImpl = https.reques
     throw cause;
   } finally { if (closed) await closed; }
 }
-export function createMyscubeLiveApiAdapter({ env = process.env, credentialProvider, resolveDns = lookup, transport = requestMyscubeLiveJson, now = () => new Date().toISOString(), monotonicNow = () => performance.now(), schedule = (callback, delay) => setTimeout(callback, delay) } = {}) {
+export function createMyscubeLiveApiAdapter({ env = process.env, enabled = env.WORKBENCH_MYSCUBE_LIVE_ENABLED === 'true', credentialProvider, resolveDns = lookup, transport = requestMyscubeLiveJson, now = () => new Date().toISOString(), monotonicNow = () => performance.now(), schedule = (callback, delay) => setTimeout(callback, delay) } = {}) {
   const enabledDefinitions = env.WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED === 'true' ? [...definitions, COMPANY_SUMMARY_ENDPOINT] : definitions;
   let active = 0, lastClock = 0; const actors = new Set(), admitted = [];
   const clock = () => { const value = monotonicNow(); if (!Number.isFinite(value)) throw new Error('Invalid monotonic clock.'); lastClock = Math.max(lastClock, value); return lastClock; };
@@ -151,7 +151,7 @@ export function createMyscubeLiveApiAdapter({ env = process.env, credentialProvi
     if (admitted.length >= 60 || admitted.filter(item => item.key === key).length >= 12) fail(429, 'myscube_live_rate_limited', 'MYSCube 조회 횟수가 한도에 도달했습니다. 잠시 후 수동으로 다시 조회해 주세요.');
     admitted.push({ at, key });
   };
-  const allowed = context => env.WORKBENCH_MYSCUBE_LIVE_ENABLED === 'true' && context?.tenantId === 'mysc' && context.actorRole === 'admin' && typeof context.actorId === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(context.actorId);
+  const allowed = context => enabled === true && context?.tenantId === 'mysc' && context.actorRole === 'admin' && typeof context.actorId === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(context.actorId);
   const definition = (context, id, version) => { const value = enabledDefinitions.find(value => value.id === id && value.version === version); if (!allowed(context) || !value) fail(403, 'myscube_live_forbidden', '현재 계정에서 사용할 수 없는 MYSCube 연결입니다.'); return value; };
   const publicDefinition = value => ({ ...structuredClone(value), contractHash: createHash('sha256').update(JSON.stringify(value)).digest('hex') });
   return {

@@ -23,17 +23,18 @@ suite('explicit live activation and credential saturation through authenticated 
     await batch.commit();
   };
   afterAll(async () => { await db.recursiveDelete(db.doc('orgs/mysc')); await db.terminate(); });
-  it.each([undefined, 'false', '', 'TRUE', 'true'])('activates only for explicit true, preserving the original env (%s)', async flag => {
+  it.each([undefined, 'false', '', 'TRUE', 'true'])('is on unless switched off, fails closed on malformed values and preserves the original env (%s)', async flag => {
     await seed(1);
     const configured = { ...env, ...(flag === undefined ? {} : { WORKBENCH_MYSCUBE_LIVE_ENABLED: flag }) };
     const factory = vi.fn(options => createMyscubeLiveApiAdapter(options));
     const app = createWorkbenchApp({ db, env: configured, verifyToken, liveAdapterFactory: factory });
+    const active = flag === undefined || flag === 'true';
     try {
       const response = await request(app).get('/api/v1/workbench-apis/endpoints').set(headers('actor-0'));
       expect(response.status).toBe(200);
-      expect(response.body.items.filter((item: any) => item.id.startsWith('myscube-'))).toHaveLength(flag === 'true' ? 2 : 0);
-      expect(factory).toHaveBeenCalledTimes(flag === 'true' ? 1 : 0);
-      if (flag === 'true') expect(factory.mock.calls[0][0].env).toBe(configured);
+      expect(response.body.items.filter((item: any) => item.id.startsWith('myscube-'))).toHaveLength(active ? 2 : 0);
+      expect(factory).toHaveBeenCalledTimes(active ? 1 : 0);
+      if (active) expect(factory.mock.calls[0][0].env).toBe(configured);
     } finally { app.locals.clearLiveCredentials(); }
   });
   it('allows persisted conversation and source saves for the 101st caller without evicting existing credentials', async () => {
