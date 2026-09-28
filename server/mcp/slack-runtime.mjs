@@ -40,6 +40,35 @@ function answerBlocks(text) {
   }));
 }
 
+class SlackDeliveryError extends Error {
+  constructor({ method, code, httpStatus = null, definitive = false, retryAfterSeconds = null }) {
+    super(`slack_${code}`);
+    this.name = 'SlackDeliveryError';
+    this.method = method;
+    this.code = code;
+    this.httpStatus = httpStatus;
+    this.definitive = definitive;
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
+const slackErrorCodes = new Set(['invalid_arguments', 'invalid_arg_name', 'invalid_blocks', 'msg_too_long',
+  'invalid_blocks_format', 'rate_limited',
+  'cant_update_message', 'message_not_found', 'channel_not_found', 'not_in_channel', 'missing_scope',
+  'invalid_auth', 'account_inactive', 'token_revoked', 'ratelimited', 'request_timeout',
+  'service_unavailable', 'internal_error', 'fatal_error', 'user_not_found']);
+const safeSlackCode = (value) => typeof value === 'string' && slackErrorCodes.has(value) ? value : 'unavailable';
+const deliveryFailure = (error, method) => ({
+  method: error instanceof SlackDeliveryError ? error.method : method,
+  code: error instanceof SlackDeliveryError ? error.code : 'transport_error',
+  httpStatus: error instanceof SlackDeliveryError ? error.httpStatus : null,
+  definitive: error instanceof SlackDeliveryError && error.definitive,
+  retryAfterSeconds: error instanceof SlackDeliveryError ? error.retryAfterSeconds : null,
+  recordedAt: new Date().toISOString(),
+});
+const retryablePayloadRejection = (error) => error instanceof SlackDeliveryError && error.definitive
+  && ['invalid_arguments', 'invalid_arg_name', 'invalid_blocks', 'invalid_blocks_format'].includes(error.code);
+
 export function verifySettlementWorkerToken({ authorization = '', secret = '', disabled = false }) {
   if (disabled || !secret || !authorization.startsWith('Bearer ')) return false;
   return timingSafeEqual(createHash('sha256').update(authorization.slice(7)).digest(), createHash('sha256').update(secret).digest());
@@ -61,12 +90,27 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
   const tenantId = 'mysc';
   async function slack(method, body, timeoutMs = 10000) {
     const readUser = method === 'users.info';
-    const response = await fetchImpl(`https://slack.com/api/${method}${readUser ? `?${new URLSearchParams(body)}` : ''}`, {
-      method: readUser ? 'GET' : 'POST', headers: { authorization: `Bearer ${env.SLACK_ALERT_BOT_TOKEN}`, ...(!readUser ? { 'content-type': 'application/json' } : {}) },
-      ...(!readUser ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(timeoutMs),
-    });
-    const result = await response.json();
-    if (!response.ok || !result.ok) throw new Error(`slack_${['missing_scope', 'invalid_auth', 'not_in_channel', 'ratelimited', 'user_not_found'].includes(result.error) ? result.error : 'unavailable'}`);
+    let response;
+    try {
+      response = await fetchImpl(`https://slack.com/api/${method}${readUser ? `?${new URLSearchParams(body)}` : ''}`, {
+        method: readUser ? 'GET' : 'POST', headers: { authorization: `Bearer ${env.SLACK_ALERT_BOT_TOKEN}`, ...(!readUser ? { 'content-type': 'application/json' } : {}) },
+        ...(!readUser ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(timeoutMs),
+      });
+    } catch {
+      throw new SlackDeliveryError({ method, code: 'transport_error' });
+    }
+    let result;
+    try { result = await response.json(); }
+    catch { throw new SlackDeliveryError({ method, code: 'invalid_response', httpStatus: response.status }); }
+    if (!response.ok || !result.ok) {
+      const code = safeSlackCode(result.error);
+      const ambiguous = code === 'unavailable' || ['internal_error', 'fatal_error', 'request_timeout', 'service_unavailable'].includes(code)
+        || response.status === 408 || response.status >= 500;
+      const retryAfter = Number(response.headers.get('retry-after'));
+      throw new SlackDeliveryError({ method, code, httpStatus: response.status,
+        definitive: !ambiguous && (response.ok || (response.status >= 400 && response.status < 500)),
+        retryAfterSeconds: Number.isSafeInteger(retryAfter) && retryAfter >= 0 && retryAfter <= 3600 ? retryAfter : null });
+    }
     return result;
   }
   async function contextFor(job) {
@@ -91,15 +135,41 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
   }
   async function finishProgress(job, status) {
     if (job.teamId !== teamId || job.channelId !== channelId || !/^\d{1,12}\.\d{1,6}$/.test(job.progressTs || '')) return;
-    try {
-      const current = await readProgressJob(db, job.id);
-      if (status === 'delivery_unknown' && current?.answerDelivery !== 'private') return;
-      if (current?.status !== status || current?.leaseId !== job.leaseId) return;
+    let failure;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let current;
+      try { current = await readProgressJob(db, job.id); }
+      catch { return null; }
+      if (current?.status !== status || current?.leaseId !== job.leaseId) return null;
       const text = status === 'succeeded'
-        ? '요청 처리가 끝났습니다. 자세한 안내는 요청자에게만 표시됩니다.'
-        : '⚠️ 처리 또는 응답 전달 상태를 확인하지 못했습니다. 정산 완료 여부와는 무관하며, 관리자에게 이 스레드 확인을 요청해주세요.';
-      await slack('chat.update', { channel: job.channelId, ts: job.progressTs, text, blocks: [], parse: 'none' }, 800);
-    } catch { /* Progress delivery is best effort; never resend the business answer here. */ }
+        ? current.answerDelivery === 'private'
+          ? '요청 처리가 끝났습니다. 자세한 안내는 요청자에게만 표시됩니다.'
+          : '✅ 요청 처리가 끝났습니다. 결과는 아래 답변에서 확인해주세요.'
+        : status === 'failed'
+          ? '⚠️ 답변 전달이 Slack에서 거부되었습니다. 정산 완료 여부와는 무관하며, 관리자에게 이 스레드 확인을 요청해주세요.'
+          : '⚠️ 답변 전달 여부를 확인하지 못했습니다. 정산 완료 여부와는 무관하며, 관리자에게 이 스레드 확인을 요청해주세요.';
+      try {
+        await slack('chat.update', attempt ? { channel: job.channelId, ts: job.progressTs, text }
+          : { channel: job.channelId, ts: job.progressTs, text, blocks: [], parse: 'none' }, 3000);
+        failure = null;
+        break;
+      } catch (error) {
+        failure = deliveryFailure(error, 'chat.update');
+        if (failure.definitive && !retryablePayloadRejection(error)) break;
+        if (failure.code === 'ratelimited') break;
+      }
+    }
+    try {
+      await db.runTransaction(async (tx) => {
+        const ref = db.doc(`settlement_agent_jobs/${job.id}`);
+        const current = (await tx.get(ref)).data();
+        if (current?.status !== status || current?.leaseId !== job.leaseId) return;
+        tx.update(ref, failure ? { receiptStatus: 'failed', receiptFailure: failure,
+          receiptRepairAttempts: Math.min(3, (Number.isSafeInteger(current.receiptRepairAttempts) ? current.receiptRepairAttempts : 0) + 1) }
+          : { receiptStatus: 'succeeded', receiptFailure: null, receiptUpdatedAt: new Date().toISOString() });
+      });
+    } catch { /* Receipt observability must not change the terminal business delivery state. */ }
+    return failure;
   }
   async function process(job) {
     const experiment = selectSlackHarness(job.question, job.turns);
@@ -121,7 +191,6 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     };
     let answer;
     let answerStatus;
-    let canReplaceReceipt = true;
     try {
       const actor = await contextFor(job);
       progress.show('INTERPRET_REQUEST');
@@ -259,7 +328,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           ? '이번 달 에이전트 사용 한도에 도달했어요. MYSCube에서 직접 확인하시거나 관리자에게 문의해주세요.'
           : '조회 도중 처리를 마치지 못했어요. 정산이 미완료라는 뜻은 아닙니다. 사업과 기간을 좁혀 다시 요청해주세요. 같은 문제가 반복되면 이 스레드를 관리자에게 공유해주세요.';
     } finally {
-      ({ canReplaceReceipt } = await progress.close());
+      await progress.close();
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
     const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
@@ -269,27 +338,58 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       { type: 'button', action_id: 'settlement_scope_yes', text: { type: 'plain_text', text: '예 · 범위가 맞아요' }, value: job.id },
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
-    const updateProgress = publicAnswer && canReplaceReceipt && /^\d{1,12}\.\d{1,6}$/.test(job.progressTs || '');
-    await updateClaimedJob({ db, job, patch: { status: 'sending', answerDelivery: publicAnswer ? (updateProgress ? 'update' : 'public') : 'private', answer: text, scopes, audit, experimentVariant: experiment.variant,
+    const answerDelivery = publicAnswer ? 'public' : 'private';
+    const method = publicAnswer ? 'chat.postMessage' : 'chat.postEphemeral';
+    await updateClaimedJob({ db, job, patch: { status: 'sending', answerDelivery, deliveryMethod: method, answer: text, scopes, audit, experimentVariant: experiment.variant,
       reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
       answeredAt: new Date().toISOString() } });
+    const body = {
+      channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
+      text: slackText(text), blocks,
+    };
+    let result;
+    let fallbackFailure;
     try {
-      const result = await slack(publicAnswer ? (updateProgress ? 'chat.update' : 'chat.postMessage') : 'chat.postEphemeral', {
-        ...(updateProgress ? { ts: job.progressTs } : {}),
-        channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
-        text: slackText(text), blocks, parse: 'none', unfurl_links: false, unfurl_media: false,
-      });
-      await updateClaimedJob({ db, job, patch: { status: 'succeeded', answerTs: publicAnswer ? result.ts : result.message_ts } });
-      if (!publicAnswer) await finishProgress(job, 'succeeded');
-    } catch {
-      await updateClaimedJob({ db, job, patch: { status: 'delivery_unknown' } });
-      await finishProgress(job, 'delivery_unknown');
+      try { result = await slack(method, body); }
+      catch (error) {
+        if (!retryablePayloadRejection(error)) throw error;
+        fallbackFailure = deliveryFailure(error, method);
+        result = await slack(method, { channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}),
+          thread_ts: job.threadTs, text: slackText(text) });
+      }
+      const answerTs = publicAnswer ? result.ts : result.message_ts;
+      if (!/^\d{1,12}\.\d{1,6}$/.test(answerTs || '')) throw new SlackDeliveryError({ method, code: 'invalid_response' });
+    } catch (error) {
+      const failure = deliveryFailure(error, method);
+      const status = failure.definitive ? 'failed' : 'delivery_unknown';
+      await updateClaimedJob({ db, job, patch: { status, deliveryFailure: failure } });
+      await finishProgress(job, status);
+      return;
     }
+    await updateClaimedJob({ db, job, patch: { status: 'succeeded', answerTs: publicAnswer ? result.ts : result.message_ts,
+      ...(fallbackFailure ? { deliveryFallback: fallbackFailure } : {}) } });
+    await finishProgress(job, 'succeeded');
+  }
+  async function repairTerminalReceipts() {
+    try {
+      const recent = await db.collection('settlement_agent_jobs').orderBy('createdAt', 'desc').limit(20).get();
+      const repairable = recent.docs.filter((doc) => {
+        const value = doc.data();
+        return value?.teamId === teamId && value.channelId === channelId
+          && ['succeeded', 'delivery_unknown', 'failed'].includes(value.status)
+          && ['chat.postMessage', 'chat.postEphemeral'].includes(value.deliveryMethod)
+          && value.receiptStatus !== 'succeeded' && value.receiptFailure?.definitive !== true
+          && (!Number.isSafeInteger(value.receiptRepairAttempts) || value.receiptRepairAttempts < 3)
+          && /^\d{1,12}\.\d{1,6}$/.test(value.progressTs || '');
+      }).slice(0, 5);
+      for (const doc of repairable) await finishProgress({ ...doc.data(), id: doc.id }, doc.data().status);
+    } catch { /* Receipt repair is best effort and must never block queued business work. */ }
   }
   return async ({ jobId } = {}) => {
     if (env.BFF_WORKERS_ENABLED === 'false' || env.BFF_MAINTENANCE_READ_ONLY === 'true' || env.BFF_SCHEDULER_OWNER === 'disabled') return { processed: 0 };
     if (!env.SLACK_ALERT_BOT_TOKEN) throw new Error('slack_not_configured');
     const started = Date.now();
+    if (!jobId) await repairTerminalReceipts();
     const pending = jobId ? { docs: [await db.doc(`settlement_agent_jobs/${jobId}`).get()] }
       : await db.collection('settlement_agent_jobs').where('status', 'in', ['queued', 'running', 'sending']).orderBy('createdAt', 'asc').limit(10).get();
     let processed = 0;

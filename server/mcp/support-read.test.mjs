@@ -85,10 +85,25 @@ describe('read-only support harness', () => {
   it('renders observed diagnostic fields without guessing missing timestamps or causes', () => {
     const rendered = renderDiagnostics({ queriedAt: '2026-09-28T01:00:00Z', source: 'persisted_agent_jobs_and_verified_trace',
       warning: '기록 없음은 오류 없음의 증거가 아닙니다.', items: [{ createdAt: null, answeredAt: null,
-        deliveryState: 'delivery_unknown', traceValid: false, failures: ['member_unverified'], steps: [] }] });
+        deliveryState: 'delivery_unknown', delivery: { method: 'chat.postMessage', code: 'internal_error', httpStatus: 200, definitive: false },
+        receipt: { method: 'chat.update', code: 'transport_error', httpStatus: null, definitive: false },
+        traceValid: false, failures: ['member_unverified'], steps: [] }] });
     expect(rendered).toContain('전달 여부 미확인');
     expect(rendered).toContain('시각 미확인');
     expect(rendered).toContain('member_unverified');
     expect(rendered).toContain('검증: 실패');
+    expect(rendered).toContain('chat.postMessage · internal_error · HTTP 200 · 전달 여부 미확인');
+    expect(rendered).toContain('진행 표시 갱신: transport_error');
+  });
+
+  it('exposes only allowlisted Slack delivery diagnostics', () => {
+    const value = summarizeDiagnostic({ status: 'delivery_unknown', deliveryFailure: {
+      method: 'chat.postMessage', code: 'internal_error', httpStatus: 200, definitive: false,
+      recordedAt: '2026-09-28T06:34:00.000Z', token: 'xoxb-secret', response: 'private body',
+    }, receiptFailure: { method: 'evil.method', code: 'secret_code', httpStatus: 999, definitive: true } }, []);
+    expect(value.delivery).toEqual({ method: 'chat.postMessage', code: 'internal_error', httpStatus: 200,
+      definitive: false, recordedAt: '2026-09-28T06:34:00.000Z' });
+    expect(value.receipt).toEqual({ method: null, code: null, httpStatus: null, definitive: true, recordedAt: null });
+    expect(JSON.stringify(value)).not.toMatch(/xoxb|private body|secret_code|evil\.method/);
   });
 });
