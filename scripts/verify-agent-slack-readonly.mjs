@@ -7,7 +7,7 @@ import { HERMES_READ_TOOLS } from '../server/mcp/hermes-harness.mjs';
 const args = process.argv.slice(2);
 const harness = args.find((arg) => arg.startsWith('--harness='))?.slice(10) || 'hermes-readonly-v1';
 const requiredTool = args.find((arg) => arg.startsWith('--tool='))?.slice(7);
-assert(['hermes-readonly-v1', 'settlement-read-v2'].includes(harness));
+assert(['hermes-readonly-v1', 'settlement-read-v2', 'settlement-status-direct-v1'].includes(harness));
 assert(!requiredTool || HERMES_READ_TOOLS.includes(requiredTool));
 assert(args.filter((arg) => arg.startsWith('--')).every((arg) => arg.startsWith('--harness=') || arg.startsWith('--tool=')));
 const ids = args.filter((arg) => !arg.startsWith('--'));

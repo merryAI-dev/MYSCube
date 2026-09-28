@@ -42,7 +42,7 @@ export const SUPPORT_KNOWLEDGE = Object.freeze([
     sources: ['server/mcp/slack-runtime.mjs', 'server/mcp/hermes-harness.mjs', 'server/mcp/grounded-answer.mjs', 'server/mcp/agent-trace.mjs'] },
 ]);
 
-const tools = new Set(['cashflow_status', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief', 'agent_diagnostics', 'system_knowledge']);
+const tools = new Set(['cashflow_status', 'settlement_status_report', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief', 'agent_diagnostics', 'system_knowledge']);
 const codes = new Set(SUPPORT_KNOWLEDGE.flatMap((entry) => entry.codes || []));
 export function safeDiagnosticCode(error) {
   const code = typeof error?.code === 'string' ? error.code : error?.message;

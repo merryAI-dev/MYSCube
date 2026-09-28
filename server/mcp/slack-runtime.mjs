@@ -14,6 +14,8 @@ import { createAccountingTools } from './accounting-read.mjs';
 import { createAccountingReportTool } from './accounting-report.mjs';
 import { createAccountingComparisonTool } from './accounting-compare.mjs';
 import { createCfoBriefTool } from './cfo-brief.mjs';
+import { resolveSettlementRequest, settlementRequestTools } from './settlement-request.mjs';
+import { createSettlementStatusTool } from './settlement-status-report.mjs';
 import { createSupportTools } from './support-read.mjs';
 
 export function slackText(text) {
@@ -88,7 +90,8 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
   }
   async function process(job) {
     const experiment = selectSlackHarness(job.question, job.turns);
-    const useHermes = experiment.variant === 'hermes';
+    const request = resolveSettlementRequest(experiment.question);
+    const useHermes = experiment.variant === 'hermes' && !request?.direct;
     const scopes = [];
     const audit = [];
     const projectNames = new Map();
@@ -105,13 +108,15 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       const actor = await contextFor(job);
       await record({ type: 'run_start', actorId: actor.actorId, actorRole: actor.actorRole,
         readPrincipal: 'myscube-settlement-agent', permissionPolicy: 'mysc-designated-channel-company-settlement-read-v1',
-        question: job.question, model: 'gemini-3.6-flash', experiment: experiment.variant,
-        harness: useHermes ? 'hermes-readonly-v1' : 'settlement-read-v2' });
+        question: job.question, model: request?.direct ? null : 'gemini-3.6-flash', experiment: experiment.variant,
+        harness: request?.direct ? 'settlement-status-direct-v1' : useHermes ? 'hermes-readonly-v1' : 'settlement-read-v2' });
       if (useHermes && !env.SETTLEMENT_HERMES_URL) throw new Error('hermes_not_configured');
       const previousAnswerId = job.turns?.at(-1)?.jobId || null;
       await record({ type: 'conversation_feedback', ...observeConversationFeedback({ text: job.question, previousAnswerId }) });
-      if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
-      await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
+      if (!request?.direct) {
+        if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
+        await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
+      }
       const tools = settlementTools({ projectNames, readStatus: async (input) => {
         const context = await readContextFor(job);
         const names = await db.getAll(...input.projectIds.map((id) => db.doc(`orgs/${tenantId}/projects/${id}`)), { fieldMask: ['name'] });
@@ -161,6 +166,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         readSnapshot: async (request) => readSnapshot({ ...request, context: await readContextFor(job) }),
       }));
       if (readSnapshot) tools.push(createAccountingReportTool({ db, authorize: () => readContextFor(job), readSnapshot, record }));
+      tools.push(createSettlementStatusTool({ db, authorize: () => readContextFor(job), readOverview, record }));
       tools.push(...createSupportTools({ db, job, authorize: () => contextFor(job), revision: env.VERCEL_GIT_COMMIT_SHA }));
       tools.push({ name: 'agent_capabilities', description: '데이터 조감도/catalog: 조회 가능한 데이터·필드·도구·제한을 확인합니다. 어떤 데이터가 있는지 묻거나 필요한 도구를 모를 때 사용하세요. 이미 아는 조회에 매번 호출할 필요는 없습니다. 사업명 검색으로 권한을 추정하지 않습니다.',
         schema: z.object({}).strict(), execute: async () => { await contextFor(job); return {
@@ -186,21 +192,30 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           return { items: matches.slice(0, 20), truncated: result.docs.length === 1000 || matches.length > 20 };
         }, render: (result) => `조회할 사업을 확인했어요${result.truncated ? ' (일부 검색 결과)' : ''}.\n${result.items.map((item) => `- ${item.name}`).join('\n') || '일치하는 사업이 없습니다. 사업명을 다시 알려주세요.'}`,
       });
-      const complete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
-        onUsage: async (usage) => record({ type: 'usage', phase: 'answer', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
-      });
-      const runAgent = useHermes ? hermesRunner : runSettlementAgent;
-      const result = await runAgent({ env, question: experiment.question, history: (job.turns || []).flatMap((turn) => [
-        { role: 'user', content: selectSlackHarness(turn.question).question }, { role: 'assistant', content: turn.answer },
-      ]), tools, complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
-        loadFeedback: async (scope) => {
-          scope = { ...scope, experimentVariant: experiment.variant };
-          const key = feedbackScopeKey(job, scope);
-          if (!scopes.some((item) => item.key === key)) scopes.push({ key, scope });
-          const prior = (await db.doc(`settlement_agent_feedback/${key}`).get()).data();
-          return (prior?.votes || []).map(({ id, value }) => ({ id, value }));
-        }, record,
-      });
+      let result;
+      if (request?.direct) {
+        const tool = tools.find((tool) => tool.name === 'settlement_status_report');
+        const input = tool.schema.parse(request.input);
+        const evidence = await tool.execute(input, { signal: AbortSignal.timeout(100000) });
+        await record({ type: 'tool_result', tool: tool.name, input, result: evidence });
+        result = { status: evidence.complete ? 'answered' : 'partial', answer: [request.notice, tool.render(evidence)].filter(Boolean).join('\n\n') };
+      } else {
+        const complete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
+          onUsage: async (usage) => record({ type: 'usage', phase: 'answer', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
+        });
+        const runAgent = useHermes ? hermesRunner : runSettlementAgent;
+        result = await runAgent({ env, question: experiment.question, history: (job.turns || []).flatMap((turn) => [
+          { role: 'user', content: selectSlackHarness(turn.question).question }, { role: 'assistant', content: turn.answer },
+        ]), tools: settlementRequestTools(tools, request), complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
+          loadFeedback: async (scope) => {
+            scope = { ...scope, experimentVariant: experiment.variant };
+            const key = feedbackScopeKey(job, scope);
+            if (!scopes.some((item) => item.key === key)) scopes.push({ key, scope });
+            const prior = (await db.doc(`settlement_agent_feedback/${key}`).get()).data();
+            return (prior?.votes || []).map(({ id, value }) => ({ id, value }));
+          }, record,
+        });
+      }
       await contextFor(job);
       await record({ type: 'run_result', status: result.status, answer: result.answer, answerPolicy: 'server_evidence_only' });
       answerStatus = result.status;
@@ -218,7 +233,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           : '조회 도중 처리를 마치지 못했어요. 정산이 미완료라는 뜻은 아닙니다. 사업과 기간을 좁혀 다시 요청해주세요. 같은 문제가 반복되면 이 스레드를 관리자에게 공유해주세요.';
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
+    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
     const blocks = answerBlocks(text);
     const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     if (publicAnswer && answerStatus === 'answered' && scopes.length) blocks.push({ type: 'context', elements: [{ type: 'plain_text', text: '정정할 내용은 댓글로 편하게 알려주세요. 아래 조회 범위 평가는 선택사항입니다.' }] }, { type: 'actions', elements: [
@@ -229,7 +244,9 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
       answeredAt: new Date().toISOString() } });
     try {
-      const result = await slack(publicAnswer ? 'chat.postMessage' : 'chat.postEphemeral', {
+      const updateProgress = publicAnswer && /^\d{1,12}\.\d{1,6}$/.test(job.progressTs || '');
+      const result = await slack(publicAnswer ? (updateProgress ? 'chat.update' : 'chat.postMessage') : 'chat.postEphemeral', {
+        ...(updateProgress ? { ts: job.progressTs } : {}),
         channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
         text: slackText(text), blocks, parse: 'none', unfurl_links: false, unfurl_media: false,
       });
@@ -238,11 +255,15 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       await updateClaimedJob({ db, job, patch: { status: 'delivery_unknown' } });
     }
   }
-  return async () => {
+  return async ({ jobId } = {}) => {
+    if (env.BFF_WORKERS_ENABLED === 'false' || env.BFF_MAINTENANCE_READ_ONLY === 'true' || env.BFF_SCHEDULER_OWNER === 'disabled') return { processed: 0 };
     if (!env.SLACK_ALERT_BOT_TOKEN) throw new Error('slack_not_configured');
-    const pending = await db.collection('settlement_agent_jobs').where('status', 'in', ['queued', 'running', 'sending']).orderBy('createdAt', 'asc').limit(10).get();
+    const started = Date.now();
+    const pending = jobId ? { docs: [await db.doc(`settlement_agent_jobs/${jobId}`).get()] }
+      : await db.collection('settlement_agent_jobs').where('status', 'in', ['queued', 'running', 'sending']).orderBy('createdAt', 'asc').limit(10).get();
     let processed = 0;
     for (const doc of pending.docs) {
+      if (!doc.data()) continue;
       if (doc.data().status === 'sending' && doc.data().leaseUntil < Date.now()) {
         await db.runTransaction(async (tx) => {
           const current = (await tx.get(doc.ref)).data();
@@ -254,7 +275,20 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         continue;
       }
       const job = await claimSlackJob({ db, jobId: doc.id });
-      if (job) { await process(job); processed++; }
+      if (job) {
+        await process(job); processed++;
+        if (job.conversationId) {
+          // Continue queued replies while there is room for another bounded run in this invocation.
+          while (processed < 10 && Date.now() - started < 110000) {
+            const thread = (await db.doc(`settlement_agent_threads/${job.conversationId}`).get()).data();
+            const nextId = thread?.queue[0];
+            if (!nextId) break;
+            const next = await claimSlackJob({ db, jobId: nextId });
+            if (!next) break;
+            await process(next); processed++;
+          }
+        }
+      }
       if (processed >= 1) break;
     }
     return { processed };
