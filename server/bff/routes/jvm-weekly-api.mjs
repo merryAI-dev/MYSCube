@@ -6556,6 +6556,7 @@ export function mountJvmWeeklyApiRoutes(app, {
       throw createHttpError(400, 'rangeStart must be before or equal to rangeEnd.', 'cashflow_range_invalid');
     }
     const projectId = encodeURIComponent(readOptionalText(req.params.projectId));
+    req.signal?.throwIfAborted();
     const result = await proxyJavaWeeklyRequest({
       context: req.context,
       method: 'GET',

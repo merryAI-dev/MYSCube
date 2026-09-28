@@ -1,3 +1,4 @@
+import { mountCompanyCashflowSummary } from './company-cashflow-summary.mjs';
 import { mountInsightCashflowReport } from './insight-cashflow-report.mjs';
 import { createWorkbenchAdmission, workbenchAdmissionMiddleware } from './workbench-admission.mjs';
 import { mountQaEvidenceRoutes } from './qa-evidence.mjs';
@@ -1792,6 +1793,7 @@ export function createBffApp(options = {}) {
       res.json({ ok: true, ...await runSettlementWorker() });
     }));
   }
+  mountCompanyCashflowSummary(app, { db, now, asyncHandler, readSnapshot: jvmReadPort.readCashflowSnapshot });
   mountInsightCashflowReport(app, { db, now, asyncHandler, readSnapshot: jvmReadPort.readCashflowSnapshot, release: env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA });
   mountQaEvidenceRoutes(app, { db, now, asyncHandler, readCode: options.workbenchReadCode });
   mountPersonalWorkPageRoutes(app, { db, now, asyncHandler, createMutatingRoute, idempotencyService });
