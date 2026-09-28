@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { createSupportTools, summarizeDiagnostic, summarizeClientError } from './support-read.mjs';
+import { createSupportTools, summarizeDiagnostic, summarizeClientError, renderDiagnostics } from './support-read.mjs';
 import { createAgentTrace } from './agent-trace.mjs';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
+import { CODE_EVIDENCE } from './code-evidence.generated.mjs';
+import { buildCodeEvidence } from '../../scripts/generate-agent-code-evidence.mjs';
 
 describe('read-only support harness', () => {
   it('keeps client-reported errors bounded and excludes payloads and identity', () => {
@@ -55,18 +57,38 @@ describe('read-only support harness', () => {
     await expect(tools[0].execute({ topic: 'all' })).rejects.toThrow('member_inactive');
   });
 
-  it('keeps static knowledge distinct from observed incidents', async () => {
+  it('serves exact source excerpts rather than model-authored code explanations', async () => {
     const [knowledge] = createSupportTools({ authorize: async () => {}, revision: 'secret' });
     const result = await knowledge.execute({ topic: 'sheet_validation' });
+    expect(result.authority).toBe('build_verified_source_excerpts');
     expect(result.deploymentRevision).toBeNull();
-    expect(result.entries).toHaveLength(1);
     expect(result.warning).toContain('현재 장애의 증거가 아닙니다');
-    expect(result.entries[0].facts.join(' ')).toContain('Projection과 Actual 금액이 다르다는 의미가 아닙니다');
-    for (const source of result.entries[0].sources) expect(existsSync(source.split('#')[0])).toBe(true);
-    const code = readFileSync('server/bff/routes/jvm-weekly-api.mjs', 'utf8');
-    expect(code).toContain('projectionRows.length !== 19 || actualRows.length !== 19');
-    expect(code).toContain("typeof controls?.deposit?.matches !== 'boolean'");
-    expect(result.entries[0].facts.join(' ')).toContain('시트 셀을 TRUE/FALSE로 바꾸라는 뜻이 아닙니다');
-    expect(readFileSync('server/bff/cashflow-sheet-snapshot.mjs', 'utf8')).toContain('matches: value === null || computed === null ? null : value === computed');
+    expect(result.entries[0].facts).toBeUndefined();
+    for (const source of result.entries[0].sources) {
+      expect(source.excerpt).toBe(readFileSync(source.path, 'utf8').split('\n').slice(source.startLine - 1, source.endLine).join('\n'));
+      expect(source.sourceSha256).toMatch(/^[a-f0-9]{64}$/);
+    }
+    const rendered = knowledge.render(result);
+    expect(rendered).toContain('typeof controls?.deposit?.matches');
+    expect(rendered).toContain('matches: value === null || computed === null ? null : value === computed');
+    expect(rendered).toContain(result.warning);
+    expect(rendered).toContain('server/bff/cashflow-sheet-snapshot.mjs:');
+  });
+
+  it('fails the CI gate if source bytes or extracted code drift from the shipped artifact', () => {
+    expect(CODE_EVIDENCE).toEqual(buildCodeEvidence());
+    const mutated = buildCodeEvidence((path) => readFileSync(path, 'utf8') + '\n// source changed');
+    expect(mutated).not.toEqual(CODE_EVIDENCE);
+    expect(() => buildCodeEvidence(() => 'unrecognized source')).toThrow('anchor mismatch');
+  });
+
+  it('renders observed diagnostic fields without guessing missing timestamps or causes', () => {
+    const rendered = renderDiagnostics({ queriedAt: '2026-09-28T01:00:00Z', source: 'persisted_agent_jobs_and_verified_trace',
+      warning: '기록 없음은 오류 없음의 증거가 아닙니다.', items: [{ createdAt: null, answeredAt: null,
+        deliveryState: 'delivery_unknown', traceValid: false, failures: ['member_unverified'], steps: [] }] });
+    expect(rendered).toContain('전달 여부 미확인');
+    expect(rendered).toContain('시각 미확인');
+    expect(rendered).toContain('member_unverified');
+    expect(rendered).toContain('검증: 실패');
   });
 });

@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import * as z from 'zod/v4';
 import { runSettlementAgent } from './settlement-agent.mjs';
 import { createSettlementReportTools, reportEvidence, renderSettlementReport } from './settlement-reporting.mjs';
-import { loadPreviousReportSnapshots, reviewGroundedAnswer } from './grounded-answer.mjs';
+import { loadPreviousReportSnapshots } from './grounded-answer.mjs';
 
 const report = { kind: 'month_incomplete', yearMonth: '2026-09', monthCloseTargetYearMonth: '2026-08',
   queriedAt: '2026-09-14T06:20:00.000Z', coverage: 'accessible_registered_projects', checked: 4, complete: true,
@@ -34,48 +34,29 @@ describe('flexible Slack answers with server-owned facts', () => {
     expect(fallback).toContain('사업명 목록은 생략');
   });
 
-  it('delivers API-generated prose and emoji rather than replacing it with the fixed renderer', async () => {
-    const generated = '📌 8월 월결산을 CIC별로 정리했어요.\nCIC1 · 강신일(봄날): 2026 CMK — ⏳ 요청 전';
+  it('discards fabricated prose even when a supplied reviewer approves it', async () => {
+    const fabricated = '999개 승인 완료. 매출 하락 원인은 횡령이며 지급을 실행했습니다.';
     const complete = vi.fn().mockResolvedValueOnce(call('settlement_report', { ...query, presentation: { groupBy: ['cic'] } }))
-      .mockResolvedValueOnce({ content: generated });
+      .mockResolvedValueOnce({ content: fabricated });
     const reviewAnswer = vi.fn().mockResolvedValue(approved);
-    const result = await runSettlementAgent({ question: '월결산만 CIC별로 리포팅해줘', tools: makeTools(), complete, reviewAnswer });
-    expect(result).toEqual({ status: 'answered', answer: generated });
-    expect(reviewAnswer.mock.calls[0][0].evidence[0].result.groups[0]).toMatchObject({ name: 'CIC1', count: 1 });
-    expect(complete.mock.calls[1][0].messages.some((message) => message.role === 'system' && message.content.includes('이모지'))).toBe(true);
+    const result = await runSettlementAgent({ question: '월결산 CIC별 보고', tools: makeTools(), complete, reviewAnswer });
+    expect(result.status).toBe('answered');
+    expect(result.answer).toContain('CIC1: 1개 사업');
+    expect(result.answer).not.toMatch(/999|횡령|지급을 실행/);
+    expect(reviewAnswer).not.toHaveBeenCalled();
   });
 
-  it('corrects only the format using a monthly snapshot, without adding weekly results or refreshing the timestamp', async () => {
+  it('reformats authorized stored evidence without refreshing or synthesizing facts', async () => {
     const readReport = vi.fn();
     const saveReport = vi.fn();
+    const tools = makeTools({ readReport, saveReport });
     const complete = vi.fn().mockResolvedValueOnce(call('reformat_report', { kind: 'month_incomplete', presentation: { groupBy: ['cic'] } }))
-      .mockResolvedValueOnce({ content: '📌 CIC별로 다시 정리했어요. 기존 조회 자료 기준입니다.' });
-    const reviewAnswer = vi.fn().mockResolvedValue(approved);
-    const tools = makeTools({ readReport, saveReport, loadPreviousReports: async () => [
-      { query, report }, { query: { ...query, kind: 'week_overdue' }, report: { ...report, kind: 'week_overdue' } },
-    ] });
-    const result = await runSettlementAgent({ question: '피드백: 지금 CIC별로 정리하달라고 했는데, 월결산 대상으로만 나왔어. 답변 형식 오류',
-      history: [{ role: 'user', content: '월결산만 CIC별로 정리해서 리포팅하듯이 이야기해줘' }, { role: 'assistant', content: '이전 평면 목록' }],
-      tools, complete, reviewAnswer });
-    expect(result.status).toBe('answered');
+      .mockResolvedValueOnce({ content: '모두 완료입니다.' });
+    const result = await runSettlementAgent({ question: 'CIC별로 다시', tools, complete });
+    expect(result.answer).toContain('정산을 새로 조회한 결과가 아니라');
+    expect(result.answer).toContain('CIC1: 1개 사업');
     expect(readReport).not.toHaveBeenCalled();
-    expect(saveReport).toHaveBeenCalledTimes(1);
-    const snapshots = reviewAnswer.mock.calls[0][0].evidence[0].result.snapshots;
-    expect(snapshots).toHaveLength(1);
-    expect(snapshots[0].report.queriedAt).toBe(report.queriedAt);
-    expect(snapshots[0].report.groups[1].name).toBe('CIC4');
-  });
-
-  it('repairs unsupported prose once and never posts the rejected draft', async () => {
-    const complete = vi.fn().mockResolvedValueOnce(call('settlement_report', query))
-      .mockResolvedValueOnce({ content: '✅ 999개 사업 승인 완료' }).mockResolvedValueOnce({ content: '🔎 확인이 필요한 사업이 있습니다.' });
-    const reviewAnswer = vi.fn().mockResolvedValueOnce({ supported: false, addressesRequest: false, issues: ['999와 완료는 근거 없음'] })
-      .mockResolvedValueOnce(approved);
-    const record = vi.fn();
-    const result = await runSettlementAgent({ question: '월결산 현황', tools: makeTools(), complete, reviewAnswer, record });
-    expect(result.answer).toBe('🔎 확인이 필요한 사업이 있습니다.');
-    expect(complete.mock.calls[2][0].messages.at(-1).role).toBe('user');
-    expect(record.mock.calls.some(([event]) => event.type === 'answer_review' && event.method === 'model_assessment_not_proof')).toBe(true);
+    expect(saveReport.mock.calls[0][0].report.queriedAt).toBe(report.queriedAt);
   });
 
   it('preserves earlier leader-only scope on a grouping-only correction', async () => {
@@ -88,52 +69,32 @@ describe('flexible Slack answers with server-owned facts', () => {
     expect(evidence.snapshots[0].report.presentation).toEqual({ groupBy: ['cic'], detail: 'compact', leaderOnly: true });
   });
 
-  it('never reports success when the model fails to produce final prose', async () => {
+  it('does not require model prose or a model reviewer for a verified answer', async () => {
     const complete = vi.fn().mockResolvedValueOnce(call('settlement_report', query)).mockResolvedValue({ content: '' });
-    const result = await runSettlementAgent({ question: 'CIC별 요약', tools: makeTools(), complete, reviewAnswer: async () => approved });
-    expect(result.status).toBe('partial');
-    expect(result.answer).toContain('형식의 답변을 작성하지 못해');
-  });
-
-  it('reserves the final step for prose and allows feedback observation only once without privatizing a valid answer', async () => {
-    const complete = vi.fn().mockResolvedValueOnce(call('settlement_report', query))
-      .mockResolvedValueOnce(call('observe_feedback', {})).mockResolvedValueOnce({ content: '📌 CIC별로 다시 정리했어요.' });
-    const record = vi.fn();
-    const result = await runSettlementAgent({ question: '형식 오류, CIC별로', maxSteps: 3,
-      tools: [...makeTools(), { name: 'observe_feedback', observationOnly: true, schema: z.object({}),
-        execute: async () => { throw new Error('unverified_quote'); } }], complete, record, reviewAnswer: async () => approved });
+    const reviewAnswer = vi.fn(async () => { throw new Error('review unavailable'); });
+    const result = await runSettlementAgent({ question: '월결산 현황', tools: makeTools(), complete, reviewAnswer });
     expect(result.status).toBe('answered');
-    expect(complete.mock.calls[2][0].tools).toEqual([]);
-    expect(record.mock.calls.some(([event]) => event.outcome === 'rejected')).toBe(false);
+    expect(result.answer).toContain('조회 4개 사업');
+    expect(reviewAnswer).not.toHaveBeenCalled();
   });
 
-  it('rejects internal IDs before invoking the semantic reviewer', async () => {
-    const complete = vi.fn();
-    const result = await reviewGroundedAnswer({ complete, question: '목록', answer: '사업 ID p1772676088818',
-      evidence: [{ result: { projectId: 'p1772676088818' } }] });
-    expect(result.supported).toBe(false);
-    expect(complete).not.toHaveBeenCalled();
-  });
-
-  it('falls back to verified rows and partial warnings when independent review fails', async () => {
+  it('retains partial data warnings regardless of confident model conclusions', async () => {
     const complete = vi.fn().mockResolvedValueOnce(call('settlement_report', { ...query, presentation: { groupBy: ['cic'] } }))
-      .mockResolvedValue({ content: '✅ 모두 승인 완료' });
-    const result = await runSettlementAgent({ question: 'CIC별 현황', maxSteps: 3,
-      tools: makeTools({ readReport: async () => ({ ...report, complete: false }) }), complete,
-      reviewAnswer: async () => { throw new Error('review unavailable'); } });
-    expect(result.status).toBe('partial');
+      .mockResolvedValue({ content: '모두 승인 완료' });
+    const result = await runSettlementAgent({ question: 'CIC별 현황',
+      tools: makeTools({ readReport: async () => ({ ...report, complete: false }) }), complete });
     expect(result.answer).not.toContain('모두 승인 완료');
-    expect(result.answer).toContain('CIC1: 1개 사업');
     expect(result.answer).toContain('전체 결과가 아닙니다');
   });
 
-  it('passes exact evidence and current request to the independent reviewer and rejects malformed judgments', async () => {
-    const complete = vi.fn().mockResolvedValueOnce({ content: JSON.stringify(approved) }).mockResolvedValueOnce({ content: 'sure' });
-    const args = { complete, question: '월결산만 CIC별로', answer: '📌 요약', evidence: [{ report }] };
-    expect(await reviewGroundedAnswer(args)).toEqual(approved);
-    expect(complete.mock.calls[0][0].tools).toEqual([]);
-    expect(JSON.parse(complete.mock.calls[0][0].messages.at(-1).content)).toMatchObject({ evidence: [{ report }], question: args.question });
-    await expect(reviewGroundedAnswer(args)).rejects.toThrow();
+  it('requires evidence and a valid renderer, even with a permissive reviewer', async () => {
+    const noEvidence = await runSettlementAgent({ question: '완료됐어?', tools: [], complete: async () => ({ content: '완료' }), reviewAnswer: async () => approved });
+    expect(noEvidence.status).toBe('unverified');
+    const broken = { name: 'broken', schema: z.object({}), execute: async () => ({ money: 100 }), render: () => { throw new Error('broken'); } };
+    const complete = vi.fn().mockResolvedValueOnce(call('broken', {})).mockResolvedValue({ content: '지급 완료 999원' });
+    const result = await runSettlementAgent({ question: '지급 확인', tools: [broken], complete });
+    expect(result.status).toBe('unverified');
+    expect(result.answer).not.toContain('999');
   });
 
   it('reauthorizes snapshot reuse and rejects cross-user, deleted-project and malformed snapshot sources', async () => {

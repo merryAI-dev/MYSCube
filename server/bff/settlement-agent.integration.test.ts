@@ -79,14 +79,14 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
             submittedAt: '2026-09-01T01:23:00Z', approvedAt: '2026-09-02T02:34:00Z', approverDeadlineAt: '2026-09-02T00:00:00Z',
           });
         }
-        if (turn === 5) {
+        if (turn === 4) {
           expect(messages.filter((m: any) => m.role === 'user').map((m: any) => m.content)).toEqual([`2026-09 사업-${id} 조회`, '그 사업 다시 확인해줘']);
           return { tool_calls: [{ id: 'c', function: { name: 'cashflow_status', arguments: JSON.stringify({ yearMonth: '2026-09', projectIds: [projectId] }) } }] };
         }
         if (turn === 1) return { tool_calls: [{ id: 'a', function: { name: 'project_search', arguments: JSON.stringify({ query: id }) } }] };
         if (turn === 2) return { tool_calls: [{ id: 'b', function: { name: 'cashflow_status', arguments: JSON.stringify({ yearMonth: '2026-09', projectIds: [projectId] }) } }] };
-        if (turn === 7) return { tool_calls: [{ id: 'd', function: { name: 'settlement_report', arguments: JSON.stringify({ yearMonth: '2026-09', kind: 'month_incomplete', projectIds: [projectId] }) } }] };
-        if (turn === 9) return { tool_calls: [{ id: 'e', function: { name: 'reformat_report', arguments: JSON.stringify({ kind: 'month_incomplete', presentation: { groupBy: ['cic'] } }) } }] };
+        if (turn === 6) return { tool_calls: [{ id: 'd', function: { name: 'settlement_report', arguments: JSON.stringify({ yearMonth: '2026-09', kind: 'month_incomplete', projectIds: [projectId] }) } }] };
+        if (turn === 8) return { tool_calls: [{ id: 'e', function: { name: 'reformat_report', arguments: JSON.stringify({ kind: 'month_incomplete', presentation: { groupBy: ['cic'] } }) } }] };
         if (turn >= 8) return { content: `📌 CIC1 월결산 보고\n사업-${id} · ⏳ 승인 대기\n등록 사업 기준입니다. 정산 의무 대상 미준수 명단은 아닙니다.` };
         return { content: turn === 3 ? '허위 모델 답변: 999개 반려' : '✅ 월결산: 확정\n요청하신 사업의 월결산이 확정됐어요.' };
       },
@@ -136,7 +136,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     expect(reformatted.reportSnapshots[0].sourceJobId).toBe(reportRef.id);
     expect(reformatted.reportSnapshots[0].presentation.groupBy).toEqual(['cic']);
     expect(deliveries[3].user).toBeUndefined();
-    expect(deliveries[3].text).toContain('📌 CIC1 월결산 보고');
+    expect(deliveries[3].text).toContain('CIC1: 1개 사업');
     expect(deliveries[3].text).not.toContain('주간 승인');
     expect(lookups).toBe(3);
     expect((await db.doc(`orgs/mysc/projects/${projectId}`).get()).data()).toEqual({ name: `사업-${id}`, cic: 'CIC1' });

@@ -1,5 +1,6 @@
 import * as z from 'zod/v4';
 import { verifyAgentTrace } from './agent-trace.mjs';
+import { CODE_EVIDENCE } from './code-evidence.generated.mjs';
 
 // Reviewed code knowledge, not executable instructions or unrestricted repository access.
 export const SUPPORT_KNOWLEDGE = Object.freeze([
@@ -41,7 +42,7 @@ export const SUPPORT_KNOWLEDGE = Object.freeze([
     sources: ['server/mcp/slack-runtime.mjs', 'server/mcp/hermes-harness.mjs', 'server/mcp/grounded-answer.mjs', 'server/mcp/agent-trace.mjs'] },
 ]);
 
-const tools = new Set(['cashflow_status', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'accounting_report', 'agent_diagnostics', 'system_knowledge']);
+const tools = new Set(['cashflow_status', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief', 'agent_diagnostics', 'system_knowledge']);
 const codes = new Set(SUPPORT_KNOWLEDGE.flatMap((entry) => entry.codes || []));
 export function safeDiagnosticCode(error) {
   const code = typeof error?.code === 'string' ? error.code : error?.message;
@@ -122,11 +123,16 @@ export function createSupportTools({ db, job, authorize, revision = '' }) {
   return [{ name: 'system_knowledge',
     description: '배포 코드 기반 동작·데이터 경로·시트 검증 오류와 QA 해석 지식을 검색합니다. 실제 장애 발생 여부는 agent_diagnostics 또는 회계 조회 근거로 확인하세요. 문서의 원인 후보를 실제 원인으로 단정하지 마세요. 수정·삭제 기능은 없습니다.',
     schema: z.object({ topic: z.enum(['accounting', 'sheet_validation', 'agent_runtime', 'connectivity', 'all']) }).strict(),
-    execute: async ({ topic }) => { await authorize(); return { authority: 'reviewed_code_knowledge',
+    execute: async ({ topic }) => { await authorize(); return { authority: 'build_verified_source_excerpts',
       deploymentRevision: /^[a-f0-9]{40}$/.test(revision) ? revision : null,
-      entries: structuredClone(SUPPORT_KNOWLEDGE.filter((entry) => topic === 'all' || entry.topic === topic)),
+      entries: SUPPORT_KNOWLEDGE.filter((entry) => topic === 'all' || entry.topic === topic).map(({ topic, title }) => ({
+        topic, title, sources: structuredClone(CODE_EVIDENCE.filter((source) => source.topic === topic)),
+      })),
       warning: '동작 설명이며 현재 장애의 증거가 아닙니다. 소스 전체·비밀값·임의 파일은 제공하지 않습니다.' }; },
-    render: (result) => result.entries.map((entry) => `${entry.title}\n${entry.facts.join('\n')}`).join('\n\n'),
+    render: (result) => [result.warning, `배포 버전: ${result.deploymentRevision || '확인 불가'}`,
+      ...result.entries.flatMap((entry) => [entry.title, ...entry.sources.map((source) =>
+        `${source.path}:${source.startLine}-${source.endLine} · SHA-256 ${source.sourceSha256}\n\`\`\`\n${source.excerpt}\n\`\`\``)]),
+    ].join('\n\n'),
   }, { name: 'agent_diagnostics',
     description: 'current_thread/ channel_recent는 에이전트 실행 단계·오류·QA 검토·토큰 기록, platform_recent는 MYSCube에서 수집된 최근 화면 오류 메타데이터를 읽습니다. 사용자정보·원문·비밀값은 제외합니다. Cloud Logging 전체가 아닙니다.',
     schema: z.object({ scope: z.enum(['current_thread', 'channel_recent', 'platform_recent']), limit: z.number().int().min(1).max(10).default(5) }).strict(),
@@ -158,6 +164,22 @@ export function createSupportTools({ db, job, authorize, revision = '' }) {
         truncated: page.docs.length === 50 || matching.length > limit,
         warning: '최근 최대 50개 작업 안에서 조회한 일부 기록입니다. 기록 없음은 오류 없음의 증거가 아닙니다. 금액·상태 변경 및 작업 재실행은 하지 않습니다.' };
     },
-    render: (result) => `최근 실행 기록 ${result.items.length}건을 확인했습니다. ${result.warning}`,
+    render: renderDiagnostics,
   }];
+}
+
+export function renderDiagnostics(result) {
+  const states = { queued: '접수됨', running: '조회 중', sending: '전달 중', succeeded: '전달 완료', delivery_unknown: '전달 여부 미확인', failed: '처리 실패', unknown: '확인 불가' };
+  const lines = [`최근 실행 기록 ${result.items.length}건 · 조회 ${result.queriedAt}`, result.warning];
+  for (const item of result.items) {
+    if (result.source === 'client_reported_error_metadata') {
+      lines.push(`- 발생 ${item.occurredAt || '시각 미확인'} · 수집 ${item.receivedAt || '시각 미확인'} · 오류 코드 ${item.code || '미확인'} · HTTP ${item.httpStatus ?? '미확인'}`, item.diagnosis.message);
+    } else {
+      lines.push(`- 접수 ${item.createdAt || '시각 미확인'} · 응답 ${item.answeredAt || '시각 미확인'} · ${states[item.deliveryState] || '확인 불가'}`,
+        `감사 기록 검증: ${item.traceValid === true ? '통과' : item.traceValid === false ? '실패' : '근거 없음'}`,
+        `저장된 오류 코드: ${item.failures.join(', ') || '기록 없음'}`,
+        ...item.steps.map((step) => `  ${step.at || '시각 미확인'} · ${step.tool || step.phase} · ${step.code || step.outcome || '오류 코드 없음'}`));
+    }
+  }
+  return lines.join('\n');
 }

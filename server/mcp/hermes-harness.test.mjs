@@ -13,7 +13,7 @@ function scenario(reply, overrides = {}) {
   socket.close = vi.fn(() => socket.emit('close'));
   const execute = vi.fn(async () => ({ rows: [{ name: 'AXR', state: 'SUBMITTED' }] }));
   const read = { name: 'settlement_report', description: '정산 조회',
-    schema: z.object({ yearMonth: z.string() }).strict(), execute };
+    schema: z.object({ yearMonth: z.string() }).strict(), execute, render: (result) => `${result.rows[0].name}: 승인 대기` };
   const record = vi.fn(async () => {});
   const reviewAnswer = vi.fn(async () => ({ supported: true, addressesRequest: true, issues: [] }));
   const getToken = vi.fn(async () => 'test-identity-token');
@@ -31,10 +31,9 @@ it('executes only the fixed validated read capability and reviews exact source e
     if (message.type === 'start') emit(socket, call());
     if (message.type === 'tool_result') emit(socket, final());
   });
-  expect(await run.promise).toEqual({ status: 'answered', answer: final().answer });
+  expect(await run.promise).toEqual({ status: 'answered', answer: 'AXR: 승인 대기' });
   expect(run.execute).toHaveBeenCalledTimes(1);
-  expect(run.reviewAnswer.mock.calls[0][0].evidence).toEqual([{ tool: 'settlement_report',
-    input: { yearMonth: '2026-09' }, result: { rows: [{ name: 'AXR', state: 'SUBMITTED' }] } }]);
+  expect(run.reviewAnswer).not.toHaveBeenCalled();
   expect(run.connect.mock.calls[0][0]).toMatchObject({ url: 'wss://hermes-test.run.app/run',
     headers: { Authorization: 'Bearer test-identity-token' } });
   expect(JSON.stringify(run.record.mock.calls)).not.toContain('test-identity-token');
@@ -54,7 +53,7 @@ it('trims oldest whole history pairs instead of rejecting a valid long reporting
   }, { question: '아까 그 월결산을 조직장별로 바꿔줘', history });
   expect((await run.promise).status).toBe('answered');
   expect(sentHistory).toEqual(latest);
-  expect(run.reviewAnswer.mock.calls[0][0].history).toEqual(latest);
+  expect(run.reviewAnswer).not.toHaveBeenCalled();
   expect(history).toEqual(original);
 });
 
@@ -127,31 +126,31 @@ it('does not start a read after the transport closes during its audit await', as
   expect(run.execute).not.toHaveBeenCalled();
 });
 
-it('never returns a draft rejected by the grounded reviewer', async () => {
-  const run = scenario((message, socket) => {
-    if (message.type === 'start') emit(socket, call());
-    if (message.type === 'tool_result') emit(socket, final({ answer: '999개 사업 승인 완료' }));
-  }, { reviewAnswer: async () => ({ supported: false, addressesRequest: false, issues: ['unverified'] }) });
-  await expect(run.promise).rejects.toThrow('hermes_answer_unverified');
-});
-
-it('revises a rejected draft once with the same evidence and no additional tools', async () => {
-  for (const accepted of [true, false]) {
-    const complete = vi.fn(async () => ({ content: '📌 확인된 자료만 안내합니다.' }));
-    const reviewAnswer = vi.fn().mockResolvedValueOnce({ supported: false, addressesRequest: false, issues: ['내부 식별자 제거'] })
-      .mockResolvedValue({ supported: accepted, addressesRequest: accepted, issues: [] });
+it('discards invented prose regardless of reviewer verdict and never invokes a repair model', async () => {
+  for (const supported of [true, false]) {
+    const complete = vi.fn(async () => ({ content: '지급 완료 999원' }));
+    const reviewAnswer = vi.fn(async () => ({ supported, addressesRequest: true, issues: [] }));
     const run = scenario((message, socket) => {
       if (message.type === 'start') emit(socket, call());
-      if (message.type === 'tool_result') emit(socket, final());
+      if (message.type === 'tool_result') emit(socket, final({ answer: '999개 승인 완료. 원인은 횡령. 지급 실행 완료.' }));
     }, { complete, reviewAnswer });
-    if (accepted) expect((await run.promise).answer).toBe('📌 확인된 자료만 안내합니다.');
-    else await expect(run.promise).rejects.toThrow('hermes_answer_unverified');
-    expect(complete).toHaveBeenCalledTimes(1);
-    expect(complete.mock.calls[0][0].tools).toEqual([]);
-    expect(run.execute).toHaveBeenCalledTimes(1);
-    expect(reviewAnswer).toHaveBeenCalledTimes(2);
-    expect(reviewAnswer.mock.calls[1][0].evidence).toEqual(reviewAnswer.mock.calls[0][0].evidence);
+    expect((await run.promise).answer).toBe('AXR: 승인 대기');
+    expect(complete).not.toHaveBeenCalled();
+    expect(reviewAnswer).not.toHaveBeenCalled();
   }
+});
+
+it('refuses a model-only final with no actual read evidence', async () => {
+  const run = scenario((message, socket) => { if (message.type === 'start') emit(socket, final()); });
+  expect((await run.promise).status).toBe('unverified');
+  expect(run.execute).not.toHaveBeenCalled();
+});
+
+it('uses raw tool values for rendering and returns clarification without model prose', async () => {
+  const run = scenario((message, socket) => { if (message.type === 'start') emit(socket, call({ name: 'clarify_request', arguments: {} })); },
+    { tools: [{ name: 'clarify_request', schema: z.object({}), requiresReply: true, execute: async () => ({ text: '기간을 알려주세요.' }),
+      modelResult: () => ({ text: 'model representation' }), render: (raw) => raw.text }] });
+  expect(await run.promise).toEqual({ status: 'needs_clarification', answer: '기간을 알려주세요.' });
 });
 
 it('finishes grounded review when the service closes normally after its final frame', async () => {

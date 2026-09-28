@@ -97,3 +97,26 @@ it('classifies observed failures without leaking messages or guessing unknown ca
     expect(JSON.stringify(classifyReadError(error))).not.toContain('secret');
   }
 });
+
+it('ranks only known differences and negative balances with bounded lists and distinct identities', async () => {
+  const { analyzeAccountingRows } = await import('./accounting-report.mjs');
+  const rows = Array.from({ length: 7 }, (_, index) => ({ projectId: `p${index}`, name: '동명 사업', cic: 'CIC',
+    difference: { inflow: index % 2 ? -index : index }, actual: { cumulativeBalance: -index } }));
+  rows.push({ projectId: 'missing', name: '미확인', status: 'FAILED' });
+  const result = analyzeAccountingRows(rows);
+  expect(result.largestDifferences.inflow).toMatchObject({ count: 6, comparable: 7, unknown: 1, truncated: true });
+  expect(result.largestDifferences.inflow.items.map((item) => item.value)).toEqual([6, -5, 4, -3, 2]);
+  expect(result.negativeBalances.actual).toMatchObject({ count: 6, known: 7, unknown: 1, truncated: true });
+  expect(result.negativeBalances.actual.items[0]).toMatchObject({ projectId: 'p6', value: -6 });
+  expect(result.negativeBalances.projection).toMatchObject({ count: 0, known: 0, unknown: 8, items: [] });
+  const run = setup(103);
+  const first = await run.tool.execute({ yearMonth: '2026-09' }, { signal: AbortSignal.timeout(5000) });
+  expect(first.analysis.largestDifferences.inflow.comparable).toBe(100);
+  expect(run.tool.render(first)).toContain('전체 합계·순위가 아닙니다');
+  const last = await run.tool.execute({ yearMonth: '2026-09', cursor: first.nextCursor }, { signal: AbortSignal.timeout(5000) });
+  expect(last.analysis.largestDifferences.inflow.comparable).toBe(103);
+  expect(last.analysis.largestDifferences.inflow.count).toBe(0);
+  expect(run.tool.render(last)).toContain('입금 1,030원');
+  expect(run.tool.render(last)).toContain('비교 가능 103개');
+  expect(run.readSnapshot).toHaveBeenCalledTimes(103);
+});

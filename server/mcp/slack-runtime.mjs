@@ -8,10 +8,12 @@ import { readSettlementAgentReport } from '../bff/settlement-agent-query.mjs';
 import { createAgentTrace } from './agent-trace.mjs';
 import { observeConversationFeedback, validateSemanticFeedback } from './conversation-feedback.mjs';
 import { createSettlementReportTools } from './settlement-reporting.mjs';
-import { loadPreviousReportSnapshots, reviewGroundedAnswer } from './grounded-answer.mjs';
+import { loadPreviousReportSnapshots } from './grounded-answer.mjs';
 import { runHermesAgent } from './hermes-harness.mjs';
 import { createAccountingTools } from './accounting-read.mjs';
 import { createAccountingReportTool } from './accounting-report.mjs';
+import { createAccountingComparisonTool } from './accounting-compare.mjs';
+import { createCfoBriefTool } from './cfo-brief.mjs';
 import { createSupportTools } from './support-read.mjs';
 
 export function slackText(text) {
@@ -152,6 +154,12 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         await contextFor(job);
         return result;
       } }));
+      if (readSnapshot) tools.push(createCfoBriefTool({ authorize: () => contextFor(job), record,
+        readSnapshot: async (request) => readSnapshot({ ...request, context: await readContextFor(job) }),
+      }));
+      if (readSnapshot) tools.push(createAccountingComparisonTool({ authorize: () => contextFor(job),
+        readSnapshot: async (request) => readSnapshot({ ...request, context: await readContextFor(job) }),
+      }));
       if (readSnapshot) tools.push(createAccountingReportTool({ db, authorize: () => readContextFor(job), readSnapshot, record }));
       tools.push(...createSupportTools({ db, job, authorize: () => contextFor(job), revision: env.VERCEL_GIT_COMMIT_SHA }));
       tools.push({ name: 'agent_capabilities', description: '데이터 조감도/catalog: 조회 가능한 데이터·필드·도구·제한을 확인합니다. 어떤 데이터가 있는지 묻거나 필요한 도구를 모를 때 사용하세요. 이미 아는 조회에 매번 호출할 필요는 없습니다. 사업명 검색으로 권한을 추정하지 않습니다.',
@@ -162,12 +170,12 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
             { name: '주정산', authority: 'JVM', fields: ['주차별 상태', '실무자 제출 시각', '조직장 승인 시각', '마감 시각'], tools: ['cashflow_status', 'settlement_report'], note: '운영 주기월 기준. 기록이 없으면 시각을 추정하지 않습니다.' },
             { name: '월결산', authority: 'JVM', fields: ['상태', '정합성', '미완료 사업', 'CIC·조직장별 집계'], tools: ['cashflow_status', 'settlement_report'], note: '대상월은 운영 주기월의 직전 월입니다.' },
             { name: '이전 조회 결과', authority: '권한 재검증된 대화 스냅샷', fields: ['원래 조회 시각', '조회 범위', 'CIC·조직장별 재구성'], tools: ['reformat_report'], note: '형식 변경 시 재사용합니다. 최신 데이터라고 표시하지 않습니다.' },
-            ...(readSnapshot ? [{ name: '회계 원장', authority: 'JVM', fields: ['전체 사업·CIC별 P/A 조회·원화 합계', 'Projection·Actual 항목별 금액', '주차별 입금·출금·누적잔액', '원장 버전', '고정 시트 좌표'], tools: ['accounting_read', 'accounting_report'], note: '원장 단위는 내규상 KRW입니다. 시트에서 JVM에 반영된 금액이며 Google Sheets 실시간 값은 아닙니다.' }] : []),
+            ...(readSnapshot ? [{ name: '회계 원장', authority: 'JVM', fields: ['전체 사업·CIC별 P/A 조회·원화 합계', 'Projection·Actual 항목별 금액', '주차별 입금·출금·누적잔액', '원장 버전', '고정 시트 좌표', '항목별 계획 대비 실적 차이', '음수 잔액·미기록 주차', '조회 범위 내 사업별 차액 순위', '선택 사업 기간 비교·후속 조치안', 'CFO 브리핑·변동 사업 추가 분석'], tools: ['accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief'], note: '원장 단위는 내규상 KRW입니다. 시트에서 JVM에 반영된 금액이며 Google Sheets 실시간 값은 아닙니다.' }] : []),
             { name: '오류·QA 진단', authority: '저장된 에이전트 실행 기록과 검토된 코드 설명', fields: ['실행 단계', '오류 코드', '답변 검토', '조회 경로·조치 안내'], tools: ['agent_diagnostics', 'system_knowledge'], note: '전체 서버 로그가 아니며, 코드 설명은 실제 장애 발생 증거와 구분합니다.' },
           ],
           tools: tools.filter((tool) => !tool.observationOnly).map(({ name, description }) => ({ name, description })),
           limits: ['다른 Slack 채널의 대화는 조회하지 않습니다.', '승인·금액·파일 변경과 삭제는 할 수 없습니다.', '정산 의무 대상·종료 제외 정책은 아직 연결되지 않았습니다.', '시트 원문·수식을 직접 읽거나 시트를 새로 동기화하지 않습니다. JVM 반영 금액은 accounting_read로 조회합니다.', '임의 코드 실행·파일 접근·비밀값·전체 Cloud Logging 조회는 제공하지 않습니다.'],
-        }; }, render: (result) => [`현재 ${result.channel} 채널에서 요청을 받고 있어요.`, ...result.capabilities.map((value) => `- ${value}`), ...result.limits].join('\n') });
+        }; }, render: (result) => [`현재 ${result.channel} 채널에서 요청을 받고 있어요.`, ...result.capabilities.map((value) => `- ${value}`), ...result.dataSources.map((source) => `- ${source.name}: ${source.fields.join(' · ')}. ${source.note}`), ...result.limits].join('\n') });
       tools.push({ name: 'project_search', description: '사업명을 검색해 정산 조회에 사용할 프로젝트 ID를 확인합니다. 결과가 잘렸으면 전체 목록이 아닙니다.',
         schema: z.object({ query: z.string().trim().min(1).max(100) }).strict(),
         execute: async ({ query }) => {
@@ -181,14 +189,10 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       const complete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
         onUsage: async (usage) => record({ type: 'usage', phase: 'answer', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
       });
-      const reviewComplete = completeFactory({ apiKey: env.SETTLEMENT_AGENT_GEMINI_API_KEY, maxInputTokens: 16000,
-        onUsage: async (usage) => record({ type: 'usage', phase: 'review', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
-      });
       const runAgent = useHermes ? hermesRunner : runSettlementAgent;
       const result = await runAgent({ env, question: experiment.question, history: (job.turns || []).flatMap((turn) => [
         { role: 'user', content: selectSlackHarness(turn.question).question }, { role: 'assistant', content: turn.answer },
       ]), tools, complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
-        reviewAnswer: (input) => reviewGroundedAnswer({ ...input, complete: reviewComplete }),
         loadFeedback: async (scope) => {
           scope = { ...scope, experimentVariant: experiment.variant };
           const key = feedbackScopeKey(job, scope);
@@ -198,7 +202,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         }, record,
       });
       await contextFor(job);
-      await record({ type: 'run_result', status: result.status, answer: result.answer });
+      await record({ type: 'run_result', status: result.status, answer: result.answer, answerPolicy: 'server_evidence_only' });
       answerStatus = result.status;
       answer = result.answer;
     } catch (error) {

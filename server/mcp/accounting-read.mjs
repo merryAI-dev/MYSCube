@@ -89,7 +89,13 @@ export function accountingEvidence(snapshot, rawInput, retrievedAt = new Date().
   ]));
   const difference = {
     derivedBy: 'BFF_FROM_JVM', direction: 'ACTUAL_MINUS_PROJECTION',
-    weeks: modes.projection.map((week, index) => ({ weekNo: week.weekNo, ...delta(week.totals, modes.actual[index].totals) })),
+    weeks: modes.projection.map((week, index) => ({ weekNo: week.weekNo, ...delta(week.totals, modes.actual[index].totals),
+      ...(input.detail === 'lines' ? { lines: week.lines.map((line, lineIndex) => ({
+        lineId: line.lineId, label: line.label,
+        amount: line.amount === null || modes.actual[index].lines[lineIndex].amount === null
+          ? null : amount(modes.actual[index].lines[lineIndex].amount - line.amount),
+      })) } : {}),
+    })),
     ...(!input.weekNo ? { monthlyTotals: delta(monthlyTotals.projection, monthlyTotals.actual) } : {}),
   };
   return {
@@ -108,14 +114,38 @@ export function accountingEvidence(snapshot, rawInput, retrievedAt = new Date().
         appliedSourceRevision: text(mirror.appliedSourceRevision, 128), appliedTargetRevision: text(mirror.appliedTargetRevision, 128),
         matchesJvmRevision: Boolean(mirror.appliedTargetRevision && mirror.appliedTargetRevision === snapshot.targetRevision) } },
     availability: month ? 'AVAILABLE' : 'NOT_RECORDED',
-    totalsScope: 'RECORDED_JVM_LINES', ...(!input.weekNo ? { monthlyTotals } : {}), ...modes, difference, warnings,
+    totalsScope: 'RECORDED_JVM_LINES', ...(!input.weekNo ? { monthlyTotals } : {}), ...modes, difference,
+    observations: Object.fromEntries(['projection', 'actual'].map((mode) => [mode, {
+      negativeBalanceWeeks: modes[mode].filter((week) => week.totals.cumulativeBalance !== null && week.totals.cumulativeBalance < 0).map((week) => week.weekNo),
+      unrecordedWeeks: modes[mode].filter((week) => week.availability === 'NOT_RECORDED').map((week) => week.weekNo),
+    }])), warnings,
   };
+}
+
+export function renderAccountingEvidence(result) {
+  const money = (value) => value === null ? '미확인' : `${value.toLocaleString('ko-KR')}원`;
+  const totals = (value) => `입금 ${money(value.inflow)} · 출금 ${money(value.outflow)} · 누적잔액 ${money(value.cumulativeBalance)}`;
+  const lines = [`📊 ${result.projectName || '선택 사업'} · ${result.yearMonth}${result.weekNo ? ` ${result.weekNo}주차` : ''} · 원(KRW)`, '차이 = 실적(A) − 계획(P). 기록된 원장 항목 기준입니다.'];
+  if (result.monthlyTotals) lines.push(`월 계획: ${totals(result.monthlyTotals.projection)}`, `월 실적: ${totals(result.monthlyTotals.actual)}`, `월 차이: ${totals(result.difference.monthlyTotals)}`);
+  for (const [index, week] of result.projection.entries()) {
+    const actual = result.actual[index];
+    lines.push(`${week.weekNo}주차 (${week.start} ~ ${week.end})`, `계획: ${totals(week.totals)}`, `실적: ${totals(actual.totals)}`, `차이: ${totals(result.difference.weeks[index])}`);
+    if (result.detail === 'lines') for (const [lineIndex, line] of week.lines.entries()) {
+      lines.push(`- ${line.label}: 계획 ${money(line.amount)} / 실적 ${money(actual.lines[lineIndex].amount)} / 차이 ${money(result.difference.weeks[index].lines[lineIndex].amount)}`);
+    }
+  }
+  for (const [mode, label] of [['projection', '계획'], ['actual', '실적']]) {
+    const observation = result.observations[mode];
+    if (observation.negativeBalanceWeeks.length) lines.push(`${label} 누적잔액 음수: ${observation.negativeBalanceWeeks.join('·')}주차 (원인과 지급 가능 여부는 확인되지 않았습니다.)`);
+    if (observation.unrecordedWeeks.length) lines.push(`${label} 미기록: ${observation.unrecordedWeeks.join('·')}주차`);
+  }
+  return [...lines, `자료 조회 시각: ${result.source.retrievedAt}`, ...result.warnings].join('\n');
 }
 
 export function createAccountingTools({ readSnapshot }) {
   return [{
     name: 'accounting_read',
-    description: '한 사업의 월/주차 Projection·Actual 입출금과 누적잔액을 JVM에서 조회합니다. 전사 전체 사업은 accounting_report를 사용하세요. 기본 summary는 주별 합계, 항목별 금액은 detail=lines. 금액은 MYSC 내규상 KRW(원화)입니다. currentWeek는 한국시간 현재 재무 주차입니다. 캡처 버전 일치는 현재 시트의 최신 반영 증거가 아닙니다. 원장 해시는 요청하지 않으면 노출하지 마세요.',
+    description: '한 사업의 월/주차 Projection·Actual 입출금과 누적잔액을 JVM에서 조회합니다. 전사 전체 사업은 accounting_report를 사용하세요. 기본 summary는 주별 합계, 항목별 금액과 항목별 실적−계획 차이는 detail=lines. observations는 음수 누적잔액과 미기록 주차이며 원인 진단이 아닙니다. 금액은 MYSC 내규상 KRW(원화)입니다. currentWeek는 한국시간 현재 재무 주차입니다. 캡처 버전 일치는 현재 시트의 최신 반영 증거가 아닙니다. 원장 해시는 요청하지 않으면 노출하지 마세요.',
     schema: accountingInput,
     async execute(input, { signal } = {}) {
       const parsed = accountingInput.parse(input);
@@ -125,6 +155,6 @@ export function createAccountingTools({ readSnapshot }) {
       return accountingEvidence(snapshot, parsed);
     },
     modelResult: (result) => result,
-    render: (result) => `📊 ${result.projectName || '선택 사업'} · ${result.yearMonth}${result.weekNo ? ` ${result.weekNo}주차` : ''}\n금액 자료 ${result.availability === 'AVAILABLE' ? '조회 완료' : '확인 불가'} · 단위 원(KRW). 원본 시트의 실시간 갱신 여부·셀 입력 상태는 확인되지 않았습니다.`,
+    render: renderAccountingEvidence,
   }];
 }
