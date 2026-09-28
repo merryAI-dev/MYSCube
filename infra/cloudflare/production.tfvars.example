@@ -65,3 +65,6 @@ vercel_apps = [
 # Retired legacy hosts are not recreated by the production example.
 extra_web_records = []
 legacy_redirects = []
+
+# AXR workbench host egress IP. Confirm the actual egress (VM external IP vs Cloud NAT) before apply.
+axr_workbench_egress_ips = ["34.64.247.190"]

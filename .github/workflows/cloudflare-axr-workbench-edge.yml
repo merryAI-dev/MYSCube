@@ -1,0 +1,66 @@
+name: Cloudflare AXR Workbench Edge
+
+on:
+  workflow_dispatch:
+    inputs:
+      egress_ips:
+        description: 'AXR workbench egress IPv4 addresses, comma separated (verified egress, not ingress)'
+        type: string
+        required: true
+      apply:
+        description: 'Add the scoped identity rule. Unchecked only prints the rendered rule and current rule refs.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-custom-waf
+  cancel-in-progress: false
+
+jobs:
+  edge:
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Render rule and list current custom rules
+        env:
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          AXR_WORKBENCH_EGRESS_IPS: ${{ inputs.egress_ips }}
+        run: |
+          node --input-type=module <<'JS'
+          import { axrWorkbenchScopeExpression } from './scripts/configure-axr-workbench-edge.mjs';
+          const { CLOUDFLARE_API_KEY: key, CLOUDFLARE_EMAIL: email, CLOUDFLARE_ZONE_ID: zone, AXR_WORKBENCH_EGRESS_IPS: ips } = process.env;
+          console.log(axrWorkbenchScopeExpression(ips.split(',').map((ip) => ip.trim()).filter(Boolean)));
+          if (!key || !email || !/^[a-f0-9]{32}$/.test(zone || '')) throw new Error('Cloudflare credentials unavailable');
+          const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${zone}/rulesets/phases/http_request_firewall_custom/entrypoint`, {
+            headers: { 'X-Auth-Key': key, 'X-Auth-Email': email }, signal: AbortSignal.timeout(15000),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.success) throw new Error(`Cloudflare read failed: ${response.status}`);
+          console.log(JSON.stringify(result.result.rules.map(({ ref, action, enabled, expression }) => ({ ref, action, enabled, expression })), null, 2));
+          JS
+      - name: Apply scoped AXR workbench identity rule
+        if: inputs.apply
+        env:
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          AXR_WORKBENCH_EGRESS_IPS: ${{ inputs.egress_ips }}
+        run: node scripts/configure-axr-workbench-edge.mjs
+      - name: Preserve pre-change firewall backup
+        if: always() && inputs.apply
+        uses: actions/upload-artifact@v4
+        with:
+          name: axr-workbench-edge-before
+          path: axr-workbench-edge-before.json
+          retention-days: 30
+          if-no-files-found: ignore
