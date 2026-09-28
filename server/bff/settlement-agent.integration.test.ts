@@ -10,7 +10,7 @@ import { buildJavaWeeklyTrustedHeaders } from './java-weekly-auth.mjs';
 describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker persistence', () => {
   it('runs search and canonical status lookup, publicly replies, keeps errors private and reloads feedback', async () => {
     const db = createFirestoreDb({ projectId: 'demo-agent-runtime', appName: 'agent-runtime-test' });
-    const id = createHash('sha256').update(`job-${Date.now()}`).digest('hex');
+    const id = '999' + createHash('sha256').update(`job-${Date.now()}`).digest('hex').slice(3);
     const memberId = `actor-${id}`;
     const projectId = `project-${id}`;
     const slackUserId = 'UAGENTTEST';
@@ -35,6 +35,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     const deliveries: any[] = [];
     let lookups = 0;
     let turn = 0;
+    const unsupportedDraft = '허위 모델 답변: 999개 반려';
     const status = (period: string) => ({ period, status: period === 'MONTH' ? 'LOCKED' : 'COMPLETED', revision: 1,
       submittedAt: '2026-09-01T01:23:00Z', submittedBy: '', approvedAt: '2026-09-02T02:34:00Z', approvedBy: '', deadlineAt: '2026-09-01T00:00:00Z', approverDeadlineAt: '2026-09-02T00:00:00Z' });
     const overview = { version: '5', yearMonth: '2026-09', monthCloseTargetYearMonth: '2026-08', monthCloseTargetLabel: '8월', errors: [], items: [{ projectId,
@@ -69,7 +70,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
       completeFactory: () => async ({ messages }: any) => {
         if (messages[0].content.startsWith('정산 답변의 독립 검토자')) {
           const { answer } = JSON.parse(messages.at(-1).content);
-          const supported = !answer.includes('999');
+          const supported = answer !== unsupportedDraft;
           return { content: JSON.stringify({ supported, addressesRequest: supported, issues: supported ? [] : ['근거 없는 수치'] }) };
         }
         turn++;
@@ -88,7 +89,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
         if (turn === 7) return { tool_calls: [{ id: 'd', function: { name: 'settlement_report', arguments: JSON.stringify({ yearMonth: '2026-09', kind: 'month_incomplete', projectIds: [projectId] }) } }] };
         if (turn === 9) return { tool_calls: [{ id: 'e', function: { name: 'reformat_report', arguments: JSON.stringify({ kind: 'month_incomplete', presentation: { groupBy: ['cic'] } }) } }] };
         if (turn >= 8) return { content: `📌 CIC1 월결산 보고\n사업-${id} · ⏳ 승인 대기\n등록 사업 기준입니다. 정산 의무 대상 미준수 명단은 아닙니다.` };
-        return { content: turn === 3 ? '허위 모델 답변: 999개 반려' : '✅ 월결산: 확정\n요청하신 사업의 월결산이 확정됐어요.' };
+        return { content: turn === 3 ? unsupportedDraft : '✅ 월결산: 확정\n요청하신 사업의 월결산이 확정됐어요.' };
       },
     });
     await worker();
@@ -105,6 +106,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     const trace = (await firstRef.collection('trace').orderBy('sequence').get()).docs.map((doc) => doc.data());
     expect(verifyAgentTrace(trace, saved.traceAnchor)).toBe(true);
     expect(trace.some((row) => row.event.type === 'tool_result')).toBe(true);
+    expect(trace.some((row) => row.event.type === 'answer_review' && row.event.draft === unsupportedDraft && row.event.review.supported === false)).toBe(true);
     await worker();
     expect(deliveries).toHaveLength(2);
     expect(lookups).toBe(2);
