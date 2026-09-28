@@ -1,15 +1,21 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { RemoteDomFrameSchema, RemoteDomFallbackFrameSchema } from '../shared/workbench-remote-dom.mjs';
 import { bindDomAction, domIdentity, type DomFrame, type DomEvent, type DomAction, type InputDraft, type DomControl, type DomFallbackFrame } from './remote-dom-input';
 import { createDomRenderer, REMOTE_DOM_DOCUMENT } from './remote-dom-renderer';
 
-type Props = { frame: DomFrame; disabled?: boolean; suspended?: boolean; onEvent: (event: DomEvent) => Promise<DomFrame | DomFallbackFrame>; onError?: (reason: unknown) => void; onResync?: () => Promise<DomFrame>; onInputState?: (busy: boolean) => void };
-export function RemoteDomSurface({ frame, disabled = false, suspended = false, onEvent, onError, onResync, onInputState }: Props) {
-  const iframe = useRef<HTMLIFrameElement>(null), callbacks = useRef({ onEvent, onError, onResync, disabled, suspended, onInputState });
-  callbacks.current = { onEvent, onError, onResync, disabled, suspended, onInputState };
+type Props = { frame: DomFrame; disabled?: boolean; suspended?: boolean; isInteractionBlocked?: () => boolean; onEvent: (event: DomEvent) => Promise<DomFrame | DomFallbackFrame>; onError?: (reason: unknown) => void; onResync?: () => Promise<DomFrame>; onInputState?: (busy: boolean) => void };
+export function RemoteDomSurface({ frame, disabled = false, suspended = false, isInteractionBlocked, onEvent, onError, onResync, onInputState }: Props) {
+  const iframe = useRef<HTMLIFrameElement>(null), callbacks = useRef({ onEvent, onError, onResync, disabled, suspended, isInteractionBlocked, onInputState });
+  callbacks.current = { onEvent, onError, onResync, disabled, suspended, isInteractionBlocked, onInputState };
   const [loaded, setLoaded] = useState(0), [notice, setNotice] = useState(''), [pending, setPending] = useState(0), [failed, setFailed] = useState(false);
   const accept = useRef<(frame: DomFrame) => void>(() => {}), resync = useRef<() => void>(() => {}), suspend = useRef<() => void>(() => {});
   const identity = domIdentity(frame), currentFrame = useRef(frame); currentFrame.current = frame;
+  const nativeBlocked = Boolean(isInteractionBlocked?.());
+  useLayoutEffect(() => {
+    const element = iframe.current; if (!element) return;
+    element.inert = nativeBlocked;
+    if (element.contentDocument?.body) element.contentDocument.body.inert = nativeBlocked;
+  }, [loaded, nativeBlocked]);
   useEffect(() => {
     const frameDocument = iframe.current?.contentDocument;
     if (!frameDocument || !loaded) return;
@@ -41,7 +47,7 @@ export function RemoteDomSurface({ frame, disabled = false, suspended = false, o
     }
     accept.current = next => { try { receive(next); void pump(); } catch (reason) { fail(reason); } };
     renderer.apply(latest, drafts);
-    const allowed = () => alive && !blocked && !pausedForFallback && !callbacks.current.disabled && !callbacks.current.suspended;
+    const allowed = () => alive && !blocked && !pausedForFallback && !callbacks.current.disabled && !callbacks.current.suspended && !callbacks.current.isInteractionBlocked?.();
     const nodeOf = (target: EventTarget | null) => target && 'nodeType' in target && (target as Node).nodeType === 1 ? target as HTMLElement : null;
     const idOf = (element: Element | null) => element?.getAttribute('data-remote-node');
     function readControl(element: HTMLElement): DomControl | undefined {
@@ -136,7 +142,7 @@ export function RemoteDomSurface({ frame, disabled = false, suspended = false, o
       enqueue({ type: 'scroll', nodeId, top: element.scrollTop, left: element.scrollLeft });
     });
     resync.current = () => {
-      if (!callbacks.current.onResync || sending || !window.confirm('아직 반영을 확인하지 못한 입력을 버리고 원격 화면의 현재 값을 불러올까요?')) return;
+      if (!callbacks.current.onResync || sending || callbacks.current.isInteractionBlocked?.() || !window.confirm('아직 반영을 확인하지 못한 입력을 버리고 원격 화면의 현재 값을 불러올까요?')) return;
       void callbacks.current.onResync().then(next => {
         if (!alive) return;
         const checked = RemoteDomFrameSchema.parse(next); if (domIdentity(checked) !== identity) throw new Error('실행 화면이 바뀌었습니다.');
@@ -148,8 +154,8 @@ export function RemoteDomSurface({ frame, disabled = false, suspended = false, o
   }, [identity, loaded]);
   useEffect(() => { try { if (suspended) suspend.current(); else accept.current(frame); } catch (reason) { setFailed(true); setNotice('실행 화면의 내용을 안전하게 확인하지 못했습니다. 마지막 정상 화면을 유지합니다.'); callbacks.current.onError?.(reason); } }, [frame, suspended, disabled]);
   return <section aria-label="접근 가능한 원격 실행 화면">
-    <iframe ref={iframe} srcDoc={REMOTE_DOM_DOCUMENT} sandbox="allow-same-origin" referrerPolicy="no-referrer" title="업무 실행 화면" data-testid="remote-dom-frame" onLoad={() => setLoaded(value => value + 1)} style={{ display: 'block', width: '100%', height: frame.height, border: 0 }} />
-    <p role="status" className="subtle">{notice || (pending ? `입력 ${pending}건을 확인하고 있습니다.` : '표의 글자를 선택하고 입력칸과 버튼을 직접 사용할 수 있습니다.')}</p>
-    {failed && onResync && <button className="quiet" onClick={() => resync.current()}>원격 상태 다시 불러오기</button>}
+    <iframe ref={iframe} srcDoc={REMOTE_DOM_DOCUMENT} sandbox="allow-same-origin" referrerPolicy="no-referrer" title="업무 실행 화면" aria-disabled={disabled} data-testid="remote-dom-frame" onLoad={() => setLoaded(value => value + 1)} style={{ display: 'block', width: '100%', height: frame.height, border: 0 }} />
+    <p role="status" className="subtle">{notice || (disabled ? '화면을 확인하는 동안 입력과 글자 선택을 잠시 멈췄습니다. 마지막 정상 화면은 유지됩니다.' : pending ? `입력 ${pending}건을 확인하고 있습니다.` : '표의 글자를 선택하고 입력칸과 버튼을 직접 사용할 수 있습니다.')}</p>
+    {failed && onResync && <button className="quiet" disabled={isInteractionBlocked?.()} onClick={() => resync.current()}>원격 상태 다시 불러오기</button>}
   </section>;
 }
