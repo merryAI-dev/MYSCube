@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const ANALYTICS_ENGINE_VERSION = 'duckdb-1.5.5-r.5-policy-v1';
+export const ANALYTICS_CLOCK_SKEW_MS = 60_000;
 export const ANALYTICS_LIMITS = Object.freeze({ datasets: 20, columns: 64, rows: 20000, datasetBytes: 5_000_000, queryBytes: 6_000_000, sqlChars: 16000, resultRows: 500, resultBytes: 500_000, timeoutMs: 3000 });
 export const identifier = /^[a-z][a-z0-9_]{0,62}$/;
 export const sha256 = (value) => createHash('sha256').update(value, 'utf8').digest('hex');

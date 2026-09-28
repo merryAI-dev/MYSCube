@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import { createHttpError } from '../bff/bff-utils.mjs';
-import { compileSemanticQuery } from './semantic-query.mjs';
+import { compileAnalyticsPlan } from './analytics-plan.mjs';
 import { resolveApiPlan, validateApiInput } from './registered-apis.mjs';
 import { ReactScreenBindingSchema, ScreenQueryExpectationSchema } from '../../shared/workbench-screen-bindings.mjs';
 export { ReactScreenBindingSchema } from '../../shared/workbench-screen-bindings.mjs';
@@ -27,7 +27,7 @@ export function validateReactScreenBindings({ bindings, evidence, apis, catalog 
     const plan = resolveSelectedApiPlan({ ...binding, apis });
     const item = evidence.find((value) => value.evidenceId === binding.evidenceId);
     if (!item?.semantic?.appliedPlan) throw mismatch('화면에 연결할 자료의 조회 조건이 없습니다. 필요한 자료를 먼저 조회해 주세요.');
-    const compiled = compileSemanticQuery({ plan, catalogItems: catalog.items });
+    const compiled = compileAnalyticsPlan({ plan, catalogItems: catalog.items });
     if (canonical(compiled.datasetVersions) !== canonical(item.datasetVersions)) throw mismatch('조회 후 분석 자료의 버전이 달라졌습니다. 최신 자료를 다시 확인한 뒤 화면에 연결해 주세요.');
     if (planIdentity(compiled.appliedPlan) !== planIdentity(item.semantic.appliedPlan)
       || canonical(compiled.definitionVersions) !== canonical(item.semantic.definitionVersions)) {

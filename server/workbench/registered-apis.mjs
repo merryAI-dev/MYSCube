@@ -2,7 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import * as z from 'zod/v4';
 import { createHttpError } from '../bff/bff-utils.mjs';
 import { createExternalApiAdapter } from './external-api.mjs';
-import { compileSemanticQuery } from './semantic-query.mjs';
+import { compileAnalyticsPlan } from './analytics-plan.mjs';
 import { operationReceiptMetadata } from './operation-scopes.mjs';
 
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -119,7 +119,7 @@ export function createRegisteredApiService({ db, analytics, authorize, env = pro
         const plan = resolveApiPlan(request.definition.plan, examples);
         if (typeof request.definition.plan.datasetId !== 'string') throw createHttpError(400, '조회 자료는 입력값이 아닌 고정된 자료를 선택해 주세요.', 'registered_api_invalid');
         const catalog = await analytics.catalog(context);
-        compileSemanticQuery({ plan, catalogItems: catalog.items });
+        compileAnalyticsPlan({ plan, catalogItems: catalog.items });
       }
       const ref = collection(context).doc(id ? checkId(id) : randomUUID());
       await guard(context);

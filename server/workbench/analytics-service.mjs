@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import * as z from 'zod/v4';
-import { ANALYTICS_ENGINE_VERSION, ANALYTICS_LIMITS, analyticsError, assertIdentifier, jsonBytes, sha256 } from './analytics-contract.mjs';
+import { ANALYTICS_ENGINE_VERSION, ANALYTICS_LIMITS, ANALYTICS_CLOCK_SKEW_MS, analyticsError, assertIdentifier, jsonBytes, sha256 } from './analytics-contract.mjs';
 import { executeAnalyticsQuery } from './analytics-engine.mjs';
 import { resolveSemanticCatalog, validateSemanticDataset } from './semantic-catalog.mjs';
-import { compileSemanticQuery, SemanticQueryPlanSchema } from './semantic-query.mjs';
+import { compileAnalyticsPlan, AnalyticsQueryPlanSchema } from './analytics-plan.mjs';
+import { TableQueryPolicySchema, bindTableQuery, buildTableQueryGuide } from './table-query.mjs';
 
 const iso = z.string().datetime();
 const name = z.string().regex(/^[a-z][a-z0-9_]{0,62}$/);
@@ -13,7 +14,7 @@ const datasetInput = z.object({
   datasetId: name,
   manifest: z.object({ sourceRevision: z.string().min(1).max(200), asOf: iso, capturedAt: iso, completeness: z.enum(['complete', 'partial', 'unknown']),
     coverage: z.object({ description: z.string().min(1).max(1000), periodStart: z.string().max(40).optional(), periodEnd: z.string().max(40).optional(), expectedRows: z.number().int().min(0).max(100_000_000).optional() }).strict(),
-    semanticDefinitionId: name.optional(), semanticDefinitionVersion: z.string().min(1).max(80).optional(),
+    semanticDefinitionId: name.optional(), semanticDefinitionVersion: z.string().min(1).max(80).optional(), tableQuery: TableQueryPolicySchema.optional(),
     timeCoverage: z.object({ yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), weekNos: z.array(z.number().int().min(1).max(5)).min(1).max(5) }).strict().optional(),
     label: z.string().max(100).optional(), semantics: z.string().max(2000).optional(), grain: z.string().max(300).optional(),
   }).strict(),
@@ -59,6 +60,7 @@ function normalizeDataset(input) {
   }
   const normalized = { ...dataset, rows };
   if (jsonBytes(normalized) > ANALYTICS_LIMITS.datasetBytes) throw analyticsError(413, 'analytics_dataset_too_large', '자료 하나의 5MB 한도를 넘었습니다. 분석 기간이나 열 범위를 나누어 주세요.');
+  if (normalized.manifest.tableQuery) bindTableQuery({ datasetId: normalized.datasetId, schema: normalized.schema, ...normalized.manifest });
   validateSemanticDataset(normalized);
   return normalized;
 }
@@ -181,7 +183,7 @@ export function createAnalyticsService({ db, now = () => new Date().toISOString(
       const grant = scope(context);
       const dataset = normalizeDataset(input);
       if (!grant.allowed.has(dataset.datasetId)) throw analyticsError(403, 'analytics_dataset_forbidden', '이 자료를 분석 사본에 등록할 권한이 없습니다.');
-      if (Date.parse(dataset.manifest.capturedAt) > Date.parse(now()) + 60000) throw analyticsError(400, 'analytics_capture_in_future', '자료를 복사한 시각이 현재보다 뒤에 있습니다. 복사 정보를 확인해 주세요.');
+      if (Date.parse(dataset.manifest.capturedAt) > Date.parse(now()) + ANALYTICS_CLOCK_SKEW_MS) throw analyticsError(400, 'analytics_capture_in_future', '자료를 복사한 시각이 현재보다 뒤에 있습니다. 복사 정보를 확인해 주세요.');
       const contentHash = sha256(JSON.stringify(dataset));
       const version = contentHash;
       const chunks = splitRows(dataset.rows);
@@ -206,13 +208,13 @@ export function createAnalyticsService({ db, now = () => new Date().toISOString(
       const ids = [...grant.allowed].sort();
       const records = ids.length ? await db.getAll(...ids.map((id) => grant.ref.collection('datasets').doc(id))) : [];
       const items = records.filter((doc) => doc.exists).map((doc) => metadata(assertManifest(assertOwner(doc.data(), grant))));
-      return { scopeFingerprint: grant.fingerprint, engineVersion: ANALYTICS_ENGINE_VERSION, items, semantic: resolveSemanticCatalog({ catalogItems: items }), missingDatasetIds: ids.filter((id, i) => !records[i].exists), limits: ANALYTICS_LIMITS };
+      return { scopeFingerprint: grant.fingerprint, engineVersion: ANALYTICS_ENGINE_VERSION, items, semantic: resolveSemanticCatalog({ catalogItems: items }), tables: buildTableQueryGuide({ catalogItems: items }), missingDatasetIds: ids.filter((id, i) => !records[i].exists), limits: ANALYTICS_LIMITS };
     },
     async query(context, input, { signal } = {}) {
       return executeQuery(context, input, { signal });
     },
     async queryPlan(context, input, { datasetVersions, signal } = {}) {
-      const plan = parse(SemanticQueryPlanSchema, input);
+      const plan = parse(AnalyticsQueryPlanSchema, input);
       const grant = scope(context);
       if (!grant.allowed.has(plan.datasetId)) throw analyticsError(403, 'analytics_dataset_forbidden', '이 자료를 조회할 권한이 없습니다.');
       if (datasetVersions && (Object.keys(datasetVersions).length !== 1 || !digest.safeParse(datasetVersions[plan.datasetId]).success)) throw analyticsError(400, 'analytics_input_invalid', '조회할 자료와 고정 버전을 함께 확인해 주세요.');
@@ -221,7 +223,7 @@ export function createAnalyticsService({ db, now = () => new Date().toISOString(
       const record = await ref.get();
       if (!record.exists) throw analyticsError(404, 'analytics_dataset_missing', '분석용 사본이 아직 준비되지 않았거나 지정한 버전이 없습니다.');
       const item = metadata(assertManifest(assertOwner(record.data(), grant)));
-      const compiled = compileSemanticQuery({ plan, catalogItems: [item] });
+      const compiled = compileAnalyticsPlan({ plan, catalogItems: [item] });
       const { sql, datasetVersions: versions, ...semantic } = compiled;
       return executeQuery(context, { sql, datasetVersions: versions }, { signal, semantic });
     },
