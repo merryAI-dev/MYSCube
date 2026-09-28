@@ -150,7 +150,7 @@ export function createAnalyticsService({ db, now = () => new Date().toISOString(
       if (rows.length !== value.rowCount || sha256(JSON.stringify(normalized)) !== value.contentHash || value.contentHash !== value.version || !coverageMatches) throw analyticsError(409, 'analytics_copy_corrupt', '분석 사본의 버전과 내용이 일치하지 않습니다. 자료를 다시 복사해 주세요.');
       datasets.push(normalized);
     }
-    const result = await execute({ sql: request.sql, datasets }, { signal });
+    const result = await execute({ sql: request.sql, datasets }, { signal, actorKey: sha256(JSON.stringify([context.tenantId, context.actorId])) });
     const usedVersions = versions.filter((value) => result.usedDatasetIds.includes(value.datasetId));
     const datasetVersions = Object.fromEntries(usedVersions.map((value) => [value.datasetId, value.version]));
     const queryHash = sha256(JSON.stringify({ sql: request.sql, datasetVersions, engineVersion: ANALYTICS_ENGINE_VERSION, scopeFingerprint: grant.fingerprint, ...(semantic ? { semantic } : {}) }));
