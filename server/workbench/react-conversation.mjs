@@ -7,26 +7,31 @@ import { runConversationTurn } from './conversation-agent.mjs';
 import { withConversationDeadline } from './execution-deadline.mjs';
 import { resolveHtmlBindings } from './html-bindings.mjs';
 import { generateReactPage, parseReact, reactHash, reactSourceHash, ReactSourceSchema, ReactApiRefsSchema } from './react-pages.mjs';
+import { DateColumnSelectionSchema, dateBasisForScope, dateBasisDisplay, publicDateClarification, publicDateResult, publicDateTurn } from './date-column-choice.mjs';
 
 export const ReactConversationInput = z.object({ expectedVersion: z.number().int().nonnegative(), requestId: z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/),
-  message: z.string().trim().min(1).max(4000), mode: z.enum(['react', 'analysis', 'auto']).default('react'), currentSource: ReactSourceSchema.optional(), apis: ReactApiRefsSchema.optional(), clarificationId: z.string().uuid().optional() }).strict();
+  message: z.string().trim().min(1).max(4000), mode: z.enum(['react', 'analysis', 'auto']).default('react'), currentSource: ReactSourceSchema.optional(), apis: ReactApiRefsSchema.optional(), clarificationId: z.string().uuid().optional(), selection: DateColumnSelectionSchema.optional() }).strict()
+  .refine(input => !input.selection || input.mode !== 'react' && (!input.clarificationId || input.clarificationId === input.selection.clarificationId));
 const errorText = (error) => ({ code: typeof error.code === 'string' && /^[a-zA-Z0-9_]{1,100}$/.test(error.code) ? error.code : 'react_conversation_failed', message: error.expose ? error.message.slice(0, 1000) : '요청을 완료하지 못했습니다. 기존 대화와 편집 내용은 유지됩니다.' });
 const safeTokens = (value) => Number.isSafeInteger(value) && value >= 0 ? value : null;
 
 export function createReactConversationService({ db, now = () => new Date().toISOString(), authorize, apis, analytics, qa, env, completionFactory, deadlineMs = 110000 }) {
   const conversations = createConversationService({ db, now });
   const guard = async (context) => { await authorize(context); if (context.actorRole !== 'admin') throw createHttpError(403, '관리자 본인의 제작 대화만 이용할 수 있습니다.', 'react_admin_required'); };
-  const redact = (context, turn) => turn.result && turn.result.scopeFingerprint !== context.analyticsScope.fingerprint
-    ? { ...turn, result: { type: 'answer', status: 'answered', answer: '조회 권한 범위가 바뀌어 이전 자료와 소스 제안은 표시하지 않습니다. 현재 권한으로 새 대화를 시작해 주세요.' } } : turn;
-  const publicSession = (context, value) => {
-    const { workContext, pendingClarification, ...session } = value;
+  const redact = (context, turn) => publicDateTurn(turn.result && turn.result.scopeFingerprint !== context.analyticsScope.fingerprint
+    ? { ...turn, result: { type: 'answer', status: 'answered', answer: '조회 권한 범위가 바뀌어 이전 자료와 소스 제안은 표시하지 않습니다. 현재 권한으로 새 대화를 시작해 주세요.' } } : turn);
+  const publicSession = (context, value, display) => {
+    const { workContext, pendingClarification, serverState: _state, ...session } = value;
     const allowed = workContext?.scopeFingerprint === context.analyticsScope.fingerprint;
     return { ...session, turns: value.turns.map((turn) => redact(context, turn)),
       reactContext: allowed && workContext.react ? workContext.react : null,
       lastMode: allowed ? workContext.lastMode || 'analysis' : 'react',
-      pendingClarification: allowed ? pendingClarification || null : null };
+      ...display, pendingClarification: allowed && (pendingClarification?.kind !== 'date_column' || pendingClarification.issued?.scopeFingerprint === context.analyticsScope.fingerprint) ? publicDateClarification(pendingClarification) || null : null };
   };
-  const get = async (context, id) => { await guard(context); const result = await conversations.get(context, id); await guard(context); return publicSession(context, result); };
+  const get = async (context, id) => { await guard(context); const result = await conversations.get(context, id);
+    const basis = dateBasisForScope(result.serverState?.dateBasis, context);
+    const display = basis ? dateBasisDisplay(basis, context, (await analytics.catalog(context)).items) : {};
+    await guard(context); return publicSession(context, result, display); };
   return {
     get,
     async list(context) { await guard(context); const result = await conversations.list(context); await guard(context); return { ...result, items: result.items.map(({ id, title, version, updatedAt, createdAt, lastState }) => ({ id, title, version, updatedAt, createdAt, lastState })) }; },
@@ -35,15 +40,19 @@ export function createReactConversationService({ db, now = () => new Date().toIS
       await guard(context);
       if (env.WORKBENCH_AI_ENABLED !== 'true' || !env.WORKBENCH_GEMINI_API_KEY) throw createHttpError(503, 'AI 연결 설정 전입니다. 저장된 대화와 직접 편집은 계속 이용할 수 있습니다.', 'react_model_unconfigured');
       const input = parseReact(ReactConversationInput, raw);
+      const dateCatalogItems = input.selection ? (await analytics.catalog(context)).items : undefined;
+      if (input.selection) await guard(context);
       const begun = await conversations.beginTurn(context, id, { expectedVersion: input.expectedVersion, requestId: input.requestId, message: input.message,
-        sourceHash: reactHash(JSON.stringify({ mode: input.mode, currentSource: input.currentSource || null, apis: input.apis || null, clarificationId: input.clarificationId || null })), scopeFingerprint: context.analyticsScope.fingerprint });
+        sourceHash: reactHash(JSON.stringify({ mode: input.mode, currentSource: input.currentSource || null, apis: input.apis || null, clarificationId: input.clarificationId || null })), scopeFingerprint: context.analyticsScope.fingerprint,
+        ...(input.selection ? { selection: input.selection } : {}) }, { dateCatalogItems });
       if (begun.mode === 'in_progress') throw createHttpError(409, '이 대화의 요청을 처리 중입니다. 잠시 후 저장된 대화를 확인해 주세요.', 'conversation_in_progress');
       if (begun.mode !== 'started') { await guard(context); const turn = redact(context, begun.turn); return { turnId: begun.turnId, version: begun.version, turn, result: turn.result, replayed: true }; }
       const runId = randomUUID(), owner = reactHash(context.actorId), model = env.WORKBENCH_HTML_MODEL || 'gemini-3.6-flash';
       const lock = db.doc(`orgs/${context.tenantId}/html_generation_locks/active`), budget = db.doc(`orgs/${context.tenantId}/html_generation_usage/${now().slice(0, 10)}`);
       const record = db.doc(`orgs/${context.tenantId}/react_generation_runs/${runId}`);
       const started = performance.now(), stages = [], tokens = { inputTokens: null, outputTokens: null, thoughtTokens: null, totalTokens: null };
-      let acquired = false, recorded = false;
+      let acquired = false, recorded = false, lastQueryDataset;
+      const dateBasisProvenance = [];
       const signal = AbortSignal.timeout(Math.min(deadlineMs, 110000));
       const onStage = (stage) => { if (stages.length < 30) stages.push(stage); };
       const onUsage = async (usage) => { for (const [name, field] of [['inputTokens', 'promptTokenCount'], ['outputTokens', 'candidatesTokenCount'], ['thoughtTokens', 'thoughtsTokenCount'], ['totalTokens', 'totalTokenCount']]) {
@@ -57,7 +66,8 @@ export function createReactConversationService({ db, now = () => new Date().toIS
         const source = changedScope ? undefined : input.currentSource || react?.source;
         const refs = changedScope ? [] : input.apis || react?.apis || [];
         const reactContext = source || refs.length ? { ...(source ? { source, sourceHash: reactSourceHash(source) } : {}), apis: refs, ...(react?.lastProposal ? { lastProposal: react.lastProposal } : {}) } : null;
-        const pending = changedScope || (input.mode !== 'auto' && (begun.pendingClarification?.mode || 'analysis') !== input.mode) ? null : begun.pendingClarification;
+        const pending = changedScope || (begun.pendingClarification?.kind !== 'date_column' && input.mode !== 'auto' && (begun.pendingClarification?.mode || 'analysis') !== input.mode)
+          || begun.pendingClarification?.kind === 'date_column' && begun.pendingClarification.issued?.scopeFingerprint !== context.analyticsScope.fingerprint ? null : begun.pendingClarification;
         if (input.clarificationId && pending?.id !== input.clarificationId) throw createHttpError(409, '이전 확인 질문의 답변입니다. 최신 대화를 다시 열어 현재 질문에 답해 주세요.', 'react_clarification_stale');
         const selected = [];
         let screenCheck = null;
@@ -95,6 +105,7 @@ export function createReactConversationService({ db, now = () => new Date().toIS
           const analysisStart = performance.now(); let analysis;
           try { analysis = await withConversationDeadline(() => runConversationTurn({ context, message: input.message, history: changedScope ? [] : begun.history,
             workContext: analysisContext, pendingClarification: pending, complete: measuredComplete, analytics, qa,
+            dateBasis: begun.serverState.dateBasis, selectedDateBasis: begun.selectedDateBasis, onQuery: ({ datasetId, dateBasisProvenance: provenance }) => { lastQueryDataset = datasetId; if (provenance) dateBasisProvenance.push(provenance); },
             authorize: input.mode === 'auto' ? authorizeApis : authorize, bindHtml: resolveHtmlBindings, signal, now,
             ...(input.mode === 'auto' ? { currentSource: source, registeredApis: selected, screenBuilder: async ({ request, purpose, bindings, evidence, businessContext }) => {
               let verified = [];
@@ -119,11 +130,15 @@ export function createReactConversationService({ db, now = () => new Date().toIS
         await authorizeApis();
         result.mode = input.mode; result.scopeFingerprint = context.analyticsScope.fingerprint;
         result.context.scopeFingerprint = context.analyticsScope.fingerprint;
+        const basis = dateBasisForScope(begun.serverState.dateBasis, context);
+        if (basis && dateBasisProvenance.some(provenance => result.evidence?.some(item => item.evidenceId === provenance.evidenceId))) Object.assign(result, dateBasisDisplay(basis, context, (await analytics.catalog(context)).items));
+        await guard(context); signal.throwIfAborted();
         result.telemetry = { model, ...tokens, stages, elapsedMs: Math.round(performance.now() - started) };
-        const saved = await conversations.completeTurn(context, id, { turnId: begun.turnId, result });
+        if (dateBasisProvenance.length) result.dateBasisProvenance = dateBasisProvenance;
+        const saved = await conversations.completeTurn(context, id, { turnId: begun.turnId, result, ...(lastQueryDataset ? { clearDateBasisForDataset: lastQueryDataset } : {}) });
         await guard(context); signal.throwIfAborted();
         await record.update({ state: 'completed', resultType: result.type, completedAt: now(), ...result.telemetry });
-        return { ...saved, turnId: begun.turnId, result };
+        return { ...saved, turn: redact(context, saved.turn), turnId: begun.turnId, result: publicDateResult(result) };
       } catch (error) {
         await conversations.failTurn(context, id, { turnId: begun.turnId, error: errorText(error) });
         if (recorded) await record.update({ state: 'failed', completedAt: now(), code: errorText(error).code, ...tokens, stages, elapsedMs: Math.round(performance.now() - started) });

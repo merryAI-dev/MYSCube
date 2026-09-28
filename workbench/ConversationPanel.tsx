@@ -5,11 +5,13 @@ type Source = { title: string; html: string };
 type EvidenceColumn = { name: string; type?: string; label?: string };
 type Evidence = { evidenceId: string; columns: EvidenceColumn[]; rows: unknown[]; metadata?: Record<string, unknown>; sql?: string; normalizedSql?: string; coverage?: Record<string, unknown> | unknown[] };
 type Proposal = { title: string; html: string; [key: string]: unknown };
-type Clarification = { id: string; question: string; options?: Array<{ id: string; label: string }>; reason?: string };
-type TurnResult = { status: 'answered' | 'clarification_required' | 'preview_ready'; answer: string; evidence?: Evidence[]; clarification?: Clarification; proposal?: Proposal };
+type DateBasis = { datasetId: string; field: string; label: string };
+type Selection = { clarificationId: string; optionId: string };
+type Clarification = { id: string; kind?: 'date_column'; question: string; options?: Array<{ id: string; label: string }>; reason?: string };
+type TurnResult = { dateBasis?: DateBasis; dateBasisNotice?: string; status: 'answered' | 'clarification_required' | 'preview_ready'; answer: string; evidence?: Evidence[]; clarification?: Clarification; proposal?: Proposal };
 type TurnError = { code: string; message: string };
 type Turn = { id: string; sequence: number; state: 'pending' | 'completed' | 'failed'; message: string; result?: TurnResult; error?: TurnError; createdAt: string };
-type Session = { id: string; title: string; version: number; updatedAt?: string; turns?: Turn[]; truncated?: boolean; historyNotice?: string };
+type Session = { dateBasis?: DateBasis; dateBasisNotice?: string; pendingClarification?: Clarification | null; id: string; title: string; version: number; updatedAt?: string; turns?: Turn[]; truncated?: boolean; historyNotice?: string };
 
 export type ConversationPanelProps = {
   modelEnabled: boolean;
@@ -51,13 +53,13 @@ function EvidenceView({ evidence }: { evidence: Evidence[] }) {
   </section>)}</div>;
 }
 
-function TurnView({ turn, disabled, clarificationActive, onProposal, onClarification }: { turn: Turn; disabled: boolean; clarificationActive: boolean; onProposal: (proposal: Proposal) => void; onClarification: (option: string) => void }) {
+function TurnView({ turn, disabled, clarificationActive, onProposal, onClarification }: { turn: Turn; disabled: boolean; clarificationActive: boolean; onProposal: (proposal: Proposal) => void; onClarification: (option: string, selection?: Selection) => void }) {
   const result = turn.result;
   return <article className="conversation-turn"><p className="turn-question">{turn.message}</p>
     {turn.state === 'pending' && <p className="turn-pending" role="status">질문을 확인하고 있습니다.</p>}
     {turn.state === 'failed' && <p className="conversation-error" role="alert"><strong>{turn.error?.code || '요청 실패'}</strong> · {turn.error?.message || '요청을 처리하지 못했습니다. 기존 대화와 작업 내용은 유지합니다.'}</p>}
-    {turn.state === 'completed' && result && <div className="turn-answer"><p>{result.answer}</p>{result.evidence && <EvidenceView evidence={result.evidence} />}
-      {result.clarification && <section className="clarification" aria-label="추가 확인"><p><strong>{result.clarification.question}</strong>{result.clarification.reason ? <small>{result.clarification.reason}</small> : null}{!clarificationActive ? <small>이전 확인 질문입니다. 최신 질문 또는 입력창을 사용해 주세요.</small> : !result.clarification.options?.length ? <small>아래 입력창에 답변을 직접 작성해 주세요.</small> : null}</p>{result.clarification.options?.length ? <div className="clarification-options">{result.clarification.options.map((option) => <button key={option.id} className="quiet compact" disabled={disabled || !clarificationActive} onClick={() => onClarification(option.label)}>{option.label}</button>)}</div> : null}</section>}
+    {turn.state === 'completed' && result && <div className="turn-answer"><p>{result.answer}</p>{result.dateBasis && <p className="subtle">이 답변의 날짜 기준: {result.dateBasis.label}</p>}{result.dateBasisNotice && <p className="notice">{result.dateBasisNotice}</p>}{result.evidence && <EvidenceView evidence={result.evidence} />}
+      {result.clarification && <section className="clarification" aria-label="추가 확인"><p><strong>{result.clarification.question}</strong>{result.clarification.reason ? <small>{result.clarification.reason}</small> : null}{!clarificationActive ? <small>이전 확인 질문입니다. 최신 질문 또는 입력창을 사용해 주세요.</small> : !result.clarification.options?.length ? <small>아래 입력창에 답변을 직접 작성해 주세요.</small> : null}</p>{result.clarification.options?.length ? <div className="clarification-options">{result.clarification.options.map((option) => <button key={option.id} className="quiet compact" disabled={disabled || !clarificationActive} onClick={() => onClarification(option.label, result.clarification!.kind === 'date_column' ? { clarificationId: result.clarification!.id, optionId: option.id } : undefined)}>{option.label}</button>)}</div> : null}</section>}
       {result.proposal && <button className="quiet compact" disabled={disabled} onClick={() => onProposal(result.proposal!)}>제안 소스 검토하기</button>}
     </div>}
   </article>;
@@ -77,7 +79,7 @@ export function ConversationPanel({ modelEnabled, busy = false, currentSource, o
     catch (reason) { setError(reason instanceof Error ? reason.message : '새 대화를 만들지 못했습니다.'); return null; }
     finally { setLoading(false); }
   };
-  const send = async (providedMessage?: string) => {
+  const send = async (providedMessage?: string, selection?: Selection) => {
     const input = (providedMessage || message).trim();
     if (!input || disabled) return;
     if (!modelEnabled) { setError('AI 연결 설정 전입니다. 메시지는 저장하거나 처리하지 않았습니다. HTML을 직접 편집해 주세요.'); return; }
@@ -86,17 +88,19 @@ export function ConversationPanel({ modelEnabled, busy = false, currentSource, o
     if (!active) return;
     setLoading(true); setError('');
     try {
-      await workbenchRequest(`/workbench-conversations/${active.id}/turns`, 'POST', { expectedVersion: active.version, requestId: crypto.randomUUID(), message: input, currentSource });
+      await workbenchRequest(`/workbench-conversations/${active.id}/turns`, 'POST', { expectedVersion: active.version, requestId: crypto.randomUUID(), message: input, currentSource, ...(selection ? { selection } : {}) });
       await hydrate(active.id);
       await refreshList();
       setMessage('');
-    } catch (reason) { setError(reason instanceof Error ? reason.message : '대화 요청을 처리하지 못했습니다. 기존 소스와 대화는 유지합니다.'); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : '대화 요청을 처리하지 못했습니다. 기존 소스와 대화는 유지합니다.'); if ([401, 403].includes(Number((reason as { status?: number })?.status))) { setSession(null); setSessions([]); } else await hydrate(active.id).catch(() => {}); }
     finally { setLoading(false); }
   };
   return <section className="conversation-panel" aria-label="업무 대화"><div className="section-heading"><div><p className="section-kicker">CONVERSATION</p><h2>업무 대화</h2></div><button className="quiet compact" disabled={disabled} onClick={() => void create()}>새 대화</button></div><p className="subtle">질문을 이어서 남기면, 확인 근거와 필요한 추가 질문을 같은 대화에서 확인할 수 있습니다.</p>
     {!modelEnabled && <p className="conversation-disabled" role="status">AI 연결 설정 전입니다. 대화는 저장·실행되지 않으며 HTML 직접 편집과 미리보기는 계속 이용할 수 있습니다.</p>}
+    {session?.dateBasisNotice && <p className="notice" role="status">{session.dateBasisNotice}</p>}
+    {session?.dateBasis && <p className="notice" role="status">선택한 날짜 기준: {session.dateBasis.label}. 같은 자료의 후속 질문에도 적용합니다.</p>}
     {error && <p className="conversation-error" role="alert">{error}</p>}
-    <div className="conversation-layout"><nav className="conversation-list" aria-label="대화 목록">{sessions.length === 0 && <p className="subtle">새 대화를 시작하면 최근 대화가 여기에 표시됩니다.</p>}{sessions.map((item) => <button key={item.id} className={session?.id === item.id ? 'selected' : ''} disabled={disabled} onClick={() => void open(item.id)}><strong>{item.title || '새 대화'}</strong><small>{formatTime(item.updatedAt)}</small></button>)}</nav><div className="conversation-thread">{session?.turns?.length ? session.turns.map((turn, index, turns) => <TurnView key={turn.id} turn={turn} disabled={disabled} clarificationActive={index === turns.length - 1 && turn.state === 'completed' && turn.result?.status === 'clarification_required'} onProposal={onProposal} onClarification={(option) => void send(option)} />) : <p className="conversation-empty">{session ? '첫 질문을 입력해 주세요.' : '새 대화를 시작하거나 질문을 입력해 주세요.'}</p>}{session?.truncated && <p className="subtle">{session.historyNotice || '최근 20개 대화 턴만 표시합니다. 이전 내용은 대화 기록에 안전하게 보관됩니다.'}</p>}</div></div>
+    <div className="conversation-layout"><nav className="conversation-list" aria-label="대화 목록">{sessions.length === 0 && <p className="subtle">새 대화를 시작하면 최근 대화가 여기에 표시됩니다.</p>}{sessions.map((item) => <button key={item.id} className={session?.id === item.id ? 'selected' : ''} disabled={disabled} onClick={() => void open(item.id)}><strong>{item.title || '새 대화'}</strong><small>{formatTime(item.updatedAt)}</small></button>)}</nav><div className="conversation-thread">{session?.turns?.length ? session.turns.map((turn, index, turns) => <TurnView key={turn.id} turn={turn} disabled={disabled} clarificationActive={index === turns.length - 1 && turn.state === 'completed' && turn.result?.status === 'clarification_required' && (turn.result.clarification?.kind !== 'date_column' || session.pendingClarification?.id === turn.result.clarification.id)} onProposal={onProposal} onClarification={(option, selection) => void send(option, selection)} />) : <p className="conversation-empty">{session ? '첫 질문을 입력해 주세요.' : '새 대화를 시작하거나 질문을 입력해 주세요.'}</p>}{session?.truncated && <p className="subtle">{session.historyNotice || '최근 20개 대화 턴만 표시합니다. 이전 내용은 대화 기록에 안전하게 보관됩니다.'}</p>}</div></div>
     <div className="conversation-compose"><textarea aria-label="업무 대화 입력" value={message} disabled={disabled || !modelEnabled} onChange={(event) => setMessage(event.target.value)} placeholder="예: 9월 주정산을 하지 않은 곳을 CIC별로 보여줘" /><button disabled={disabled || !message.trim() || !modelEnabled} onClick={() => void send()}>{loading ? '확인 중…' : '질문 보내기'}</button></div>
   </section>;
 }

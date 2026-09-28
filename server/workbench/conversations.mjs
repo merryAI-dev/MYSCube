@@ -1,12 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import * as z from 'zod/v4';
 import { createHttpError } from '../bff/bff-utils.mjs';
+import { DateColumnSelectionSchema, anchorDateColumnChoice, selectDateColumnChoice } from './date-column-choice.mjs';
 
 const scopeId = /^[a-zA-Z0-9][a-zA-Z0-9._:@-]{0,199}$/;
 const uuid = z.string().uuid();
 const createInput = z.object({ title: z.string().trim().min(1).max(80).optional() }).strict();
 const beginInput = z.object({ expectedVersion: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER - 2),
-  requestId: z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/), message: z.string().trim().min(1).max(4000), sourceHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), scopeFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict();
+  requestId: z.string().regex(/^[a-zA-Z0-9._:-]{1,128}$/), message: z.string().trim().min(1).max(4000), sourceHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), scopeFingerprint: z.string().regex(/^[a-f0-9]{64}$/).optional(), selection: DateColumnSelectionSchema.optional() }).strict();
 const resultInput = z.object({ answer: z.string().min(1).max(12000), status: z.string().min(1).max(80) }).passthrough();
 const failureInput = z.object({ code: z.string().regex(/^[a-zA-Z0-9_]{1,100}$/), message: z.string().min(1).max(1000) }).strict();
 const expiredError = { code: 'conversation_turn_expired', message: '이전 요청의 처리 시간이 지나 완료하지 못했습니다. 내용을 확인한 뒤 새 요청으로 다시 시도해 주세요.' };
@@ -73,7 +74,12 @@ export function createConversationService({ db, now = () => new Date().toISOStri
     const next = { ...session, version: value.version, updatedAt: at, active: null, lastTurnId: turn.id, lastState: value.state };
     if (value.state === 'completed') {
       if (value.result.context) next.workContext = value.result.context;
-      next.pendingClarification = value.result.clarification || null;
+      const pending = value.result.clarification?.kind === 'date_column' ? value.result.clarification
+        : session.pendingClarification?.kind === 'date_column' ? session.pendingClarification : value.result.clarification || null;
+      next.pendingClarification = anchorDateColumnChoice(pending, { sessionId: ref.id, turnId: turn.id, version: value.version,
+        scopeFingerprint: pending === session.pendingClarification ? pending?.issued?.scopeFingerprint : value.result.scopeFingerprint });
+    } else if (session.pendingClarification?.kind === 'date_column') {
+      next.pendingClarification = anchorDateColumnChoice(session.pendingClarification, { sessionId: ref.id, turnId: turn.id, version: value.version, scopeFingerprint: session.pendingClarification.issued.scopeFingerprint });
     }
     tx.set(ref, next);
     return next;
@@ -116,7 +122,7 @@ export function createConversationService({ db, now = () => new Date().toISOStri
       if (!value) throw createHttpError(404, '저장된 대화 항목을 찾을 수 없습니다.', 'conversation_turn_not_found');
       return value;
     },
-    async beginTurn(context, id, input) {
+    async beginTurn(context, id, input, { dateCatalogItems } = {}) {
       const request = parse(beginInput, input);
       const ref = sessionRef(context, id);
       const fingerprint = hash(JSON.stringify(request));
@@ -154,13 +160,19 @@ export function createConversationService({ db, now = () => new Date().toISOStri
           priorTurns.push(ended);
         }
         const turnId = randomUUID();
+        const pendingClarification = session.pendingClarification || null;
+        const selectedDateBasis = request.selection ? selectDateColumnChoice({ pending: pendingClarification, selection: request.selection, context,
+          sessionId: id, version: session.version, turnId, at, catalogItems: dateCatalogItems }) : null;
+        if (selectedDateBasis) session = { ...session, pendingClarification: null, serverState: { ...session.serverState, dateBasis: selectedDateBasis } };
         const leaseExpiresAt = new Date(Date.parse(at) + 120_000).toISOString();
         const turn = { id: turnId, requestId: request.requestId, fingerprint, message: request.message, state: 'pending', sequence: session.version + 1,
-          baseVersion: session.version, version: null, createdAt: at, createdBy: context.actorId, leaseExpiresAt, completedAt: null };
+          baseVersion: session.version, version: null, createdAt: at, createdBy: context.actorId, leaseExpiresAt, completedAt: null,
+          ...(selectedDateBasis ? { selection: selectedDateBasis } : {}) };
         tx.create(ref.collection('turns').doc(turnId), turn);
         tx.create(requestRef(ref, request.requestId), { turnId, fingerprint, state: 'pending', version: null });
         tx.set(ref, { ...session, updatedAt: at, active: { turnId, expiresAt: leaseExpiresAt } });
-        return { mode: 'started', turnId, version: session.version, leaseExpiresAt, workContext: session.workContext || {}, pendingClarification: session.pendingClarification || null, ...history(priorTurns, session.version, request.scopeFingerprint) };
+        return { mode: 'started', turnId, version: session.version, leaseExpiresAt, workContext: session.workContext || {}, pendingClarification,
+          serverState: session.serverState || {}, selectedDateBasis, ...history(priorTurns, session.version, request.scopeFingerprint) };
       });
     },
     async completeTurn(context, id, input) {
@@ -184,7 +196,13 @@ export function createConversationService({ db, now = () => new Date().toISOStri
         const at = now();
         const expired = Date.parse(turn.leaseExpiresAt) <= Date.parse(at);
         const value = finishValue(turn, expired ? 'failed' : 'completed', session.version + 1, at, expired ? { error: expiredError } : { result, resultHash });
-        const next = writeFinished(tx, ref, session, turn, value, at);
+        const clearFor = input.clearDateBasisForDataset;
+        if (clearFor !== undefined && (typeof clearFor !== 'string' || !/^[a-z][a-z0-9_]{0,62}$/.test(clearFor))) throw createHttpError(400, '조회한 자료의 기준을 확인해 주세요.', 'conversation_date_basis_invalid');
+        const nextSession = !expired && clearFor ? { ...session,
+          ...(session.serverState?.dateBasis?.datasetId !== clearFor ? { serverState: { ...session.serverState, dateBasis: null } } : {}),
+          ...(session.pendingClarification?.kind === 'date_column' && session.pendingClarification.dateColumn?.datasetId !== clearFor ? { pendingClarification: null } : {}),
+        } : session;
+        const next = writeFinished(tx, ref, nextSession, turn, value, at);
         return { turn: value, version: next.version, replayed: false, expired };
       });
       if (outcome.expired) throw createHttpError(409, expiredError.message, expiredError.code);
