@@ -34,7 +34,7 @@ export function mountRemotePreview(app, { db, env, core, pages, apis, asyncHandl
     const lease = await admission.acquire(req.context);
     try {
       const selectedApis = await pages.validateApis(req.context, input.apis);
-      const artifact = await compileReactPreview(input.source, { apis: selectedApis });
+      const artifact = await compileReactPreview(input.source, { apis: selectedApis, cacheContext: req.context });
       await checked(req);
       const context = { ...req.context, remoteEvidence: {} };
       const value = await broker.create(context, { artifact, sourceHash: artifact.sourceHash, apiBindings: input.apis, viewport: input.viewport, viewMode: input.viewMode, previousSessionId: input.previousSessionId });

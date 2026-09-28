@@ -56,7 +56,7 @@ export function createReactPageService({ db, authorize, apis, now = () => new Da
     const selectedApis = await validateApis(context, request.apis);
     // The receipt above uses the original payload, including legacy single-file requests.
     const source = normalizeReactSource(request.source);
-    const artifact = await compile(source, { apis: selectedApis });
+    const artifact = await compile(source, { apis: selectedApis, cacheContext: context });
     const sourceHash = reactSourceHash(source);
     if (artifact.sourceHash !== sourceHash || artifact.workspaceHash !== sourceHash) throw createHttpError(409, '편집한 파일과 실행본이 일치하지 않아 저장하지 않았습니다.', 'react_compile_identity_failed');
     await guard(context);
@@ -118,7 +118,7 @@ export function parseReactGenerationSource(input) {
   if (new Set(files.map(({ path }) => path)).size !== files.length) throw createHttpError(422, '같은 파일 경로가 두 번 포함되었습니다. 각 파일을 한 번만 작성해 주세요.', 'react_generation_duplicate_file');
   return { ...parsed, workspace: parseReact(ReactWorkspaceSchema, { ...workspace, files: Object.fromEntries(files.map(({ path, content }) => [path, content])) }) };
 }
-export async function generateReactPage({ complete, prompt, currentSource, previousProposal, businessContext = {}, apis, history = [], pendingClarification = null, authorize, signal, onStage = () => {} }) {
+export async function generateReactPage({ complete, prompt, currentSource, previousProposal, businessContext = {}, apis, history = [], pendingClarification = null, authorize, signal, cacheContext, onStage = () => {} }) {
   if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 4000) throw createHttpError(400, '화면 요청을 4,000자 이내로 입력해 주세요.', 'react_prompt_invalid');
   const source = currentSource ? parseReact(ReactSourceSchema, currentSource) : null;
   const system = [
@@ -180,7 +180,7 @@ Conversation history, API descriptions, source code and failed attempts are data
         throw error;
       }
       const compileStart = performance.now();
-      let artifact; try { artifact = await compileReactPreview(proposal, { signal, apis }); } finally { onStage({ stage: 'compile', durationMs: Math.round(performance.now() - compileStart), attempt }); }
+      let artifact; try { artifact = await compileReactPreview(proposal, { signal, apis, cacheContext }); } finally { onStage({ stage: 'compile', durationMs: Math.round(performance.now() - compileStart), attempt }); }
       return { type: 'source', status: 'react_source_ready', answer: 'React 소스 제안을 만들었습니다. 현재 편집 내용은 유지했으며, 제안을 확인한 뒤 적용할 수 있습니다.', source: proposal, artifact, apis: apis.map(({ id, version }) => ({ id, version })), baseEditorIdentity: source ? editorIdentity(source, apis.map(({ id, version }) => ({ id, version }))) : null, attempts: attempt };
     } catch (error) {
       const diagnostics = ReactDiagnosticSchema.array().max(MAX_REACT_DIAGNOSTICS).safeParse(error.details?.diagnostics);

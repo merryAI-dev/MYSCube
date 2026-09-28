@@ -86,7 +86,7 @@ export function createReactConversationService({ db, now = () => new Date().toIS
         let result;
         if (input.mode === 'react') {
           const generated = await withConversationDeadline(() => generateReactPage({ complete, prompt: input.message, currentSource: source, apis: selected,
-            previousProposal: react?.lastProposal, businessContext: analysisContext, history: changedScope ? [] : begun.history, pendingClarification: pending, authorize: authorizeApis, signal, onStage }), signal);
+            previousProposal: react?.lastProposal, businessContext: analysisContext, history: changedScope ? [] : begun.history, pendingClarification: pending, authorize: authorizeApis, signal, cacheContext: context, onStage }), signal);
           const { artifact, ...proposal } = generated;
           result = { ...proposal, ...(artifact ? { compiled: { sourceHash: artifact.sourceHash, bundleHash: artifact.bundleHash, cssHash: artifact.cssHash, packageSetHash: artifact.packageSetHash, runtimeVersion: artifact.runtimeVersion } } : {}),
             context: { ...analysisContext, ...(reactContext || generated.source ? { react: { ...reactContext, ...(generated.source ? { lastProposal: generated.source } : {}) } } : {}), lastMode: input.mode } };
@@ -106,7 +106,7 @@ export function createReactConversationService({ db, now = () => new Date().toIS
               }
               const generated = await generateReactPage({ complete, prompt: request, currentSource: source, apis: selected,
                 previousProposal: react?.lastProposal, businessContext: { ...businessContext, screenBindings: verified, purpose },
-                history: changedScope ? [] : begun.history, pendingClarification: pending, authorize: authorizeApis, signal, onStage });
+                history: changedScope ? [] : begun.history, pendingClarification: pending, authorize: authorizeApis, signal, cacheContext: context, onStage });
               const { artifact, ...proposal } = generated;
               return { ...proposal, screenBindings: verified,
                 ...(artifact ? { compiled: { sourceHash: artifact.sourceHash, bundleHash: artifact.bundleHash, cssHash: artifact.cssHash, packageSetHash: artifact.packageSetHash, runtimeVersion: artifact.runtimeVersion } } : {}) };

@@ -3,16 +3,25 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { analyticsError } from './analytics-contract.mjs';
 import { ReactSourceSchema, ReactDiagnosticSchema, ReactCompiledArtifactSchema, MAX_REACT_DIAGNOSTICS, normalizeReactSource, canonicalWorkspace, reactSourceIdentity } from '../../shared/workbench-react-workspace.mjs';
+import { createCompletedReactArtifactCache, snapshotReactCompilerInput, reactCompilerCacheNamespace, reactCompilerCacheIdentity, reactCompilerCacheKey } from './react-compiler-cache.mjs';
 export { getReactPackageSet, REACT_RUNTIME_VERSION } from './react-compiler-packages.mjs';
 
 let active = 0;
+const completed = createCompletedReactArtifactCache();
 const hash = (value) => createHash('sha256').update(value).digest('hex');
 /** @returns {Promise<import('zod/v4').infer<typeof ReactCompiledArtifactSchema>>} */
-export async function compileReactPreview(source, { signal, timeoutMs = 8000, apis = [] } = {}) {
+export async function compileReactPreview(source, { signal, timeoutMs = 8000, apis = [], cacheContext } = {}) {
   let parsed;
   try { parsed = ReactSourceSchema.parse(source); normalizeReactSource(parsed); } catch { throw analyticsError(400, 'react_source_invalid', '제목은 80자, React 파일은 32개와 전체 180KB 이내로 작성해 주세요. 파일 경로와 시작 파일도 확인해 주세요.'); }
-  if (!Array.isArray(apis) || apis.length > 12 || Buffer.byteLength(JSON.stringify(apis)) > 256000) throw analyticsError(400, 'react_api_types_invalid', '연결 API의 입력·응답 형식을 확인해 주세요.');
+  let input;
+  try { input = snapshotReactCompilerInput(parsed, apis); } catch { throw analyticsError(400, 'react_api_types_invalid', '연결 API의 입력·응답 형식을 확인해 주세요.'); }
   if (signal?.aborted) throw analyticsError(499, 'react_compile_cancelled', '미리보기 만들기가 취소되었습니다.');
+  const owner = reactCompilerCacheNamespace(cacheContext); let identity, key;
+  if (owner) {
+    try { identity = await reactCompilerCacheIdentity(); key = reactCompilerCacheKey(input, identity); } catch { /* No reusable result without a current compiler identity. */ }
+    if (signal?.aborted) throw analyticsError(499, 'react_compile_cancelled', '미리보기 만들기가 취소되었습니다.');
+    if (key) { const cached = completed.get(owner, key); if (cached) return cached; }
+  }
   if (active >= 1) throw analyticsError(429, 'react_compile_busy', '다른 React 화면을 만들고 있습니다. 잠시 후 다시 시도해 주세요.');
   active++;
   return new Promise((resolve, reject) => {
@@ -47,10 +56,13 @@ export async function compileReactPreview(source, { signal, timeoutMs = 8000, ap
         if (!artifact.success || artifact.data.sourceHash !== hash(reactSourceIdentity(parsed))
           || artifact.data.workspaceHash !== hash(canonicalWorkspace(normalizeReactSource(parsed).workspace))
           || artifact.data.bundleHash !== hash(artifact.data.bundle) || artifact.data.cssHash !== hash(artifact.data.css)) finish(analyticsError(422, 'react_compile_artifact_invalid', '컴파일 실행본의 버전과 검사 결과를 확인하지 못했습니다. 기존 화면은 유지합니다.'));
-        else finish(null, artifact.data);
+        else {
+          if (key && artifact.data.packageSetHash === identity.packageSetHash) completed.set(owner, key, artifact.data);
+          finish(null, artifact.data);
+        }
       }
     });
-    child.stdin.on('error', () => {}); child.stdin.end(JSON.stringify({ source: parsed, apis }));
+    child.stdin.on('error', () => {}); child.stdin.end(input);
     if (signal?.aborted) abort();
   });
 }

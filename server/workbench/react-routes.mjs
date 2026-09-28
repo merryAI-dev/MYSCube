@@ -69,7 +69,7 @@ export function mountReactStudio(app, { db, now, env, core, analytics, asyncHand
     if (!runtime) throw createHttpError(503, '별도 React 실행 공간이 연결되지 않았습니다. 소스 편집과 저장은 사용할 수 있습니다.', 'react_runtime_unconfigured');
     const input = parseReact(ReactPreviewRequestSchema, request.body);
     const selectedApis = await pages.validateApis(request.context, input.apis);
-    const artifact = await compileReactPreview(input.source, { apis: selectedApis });
+    const artifact = await compileReactPreview(input.source, { apis: selectedApis, cacheContext: request.context });
     await core.authorize(request.context);
     const executionId = randomUUID();
     await db.doc(`orgs/${request.context.tenantId}/react_executions/${executionId}`).create({ owner: request.context.actorId, apis: input.apis, sourceHash: reactSourceHash(input.source), scopeFingerprint: request.context.analyticsScope.fingerprint, createdAt: now(), expiresAt: new Date(Date.parse(now()) + 30 * 60000).toISOString() });
@@ -102,7 +102,7 @@ export function mountReactStudio(app, { db, now, env, core, analytics, asyncHand
         await record.update({ inputTokens, outputTokens });
       } });
       const signal = AbortSignal.timeout(110000);
-      const result = await withConversationDeadline(() => generateReactPage({ complete, prompt: input.prompt, currentSource: input.source, apis: selected.map((api) => ({ id: api.id, version: api.version, ...api.definition, responseSchema: api.responseSchema || null, responseKind: api.responseKind || api.definition.kind })), authorize: async () => { await core.authorize(req.context); await pages.validateApis(req.context, input.apis); }, signal, onStage: (stage) => stages.push(stage) }), signal);
+      const result = await withConversationDeadline(() => generateReactPage({ complete, prompt: input.prompt, currentSource: input.source, apis: selected.map((api) => ({ id: api.id, version: api.version, ...api.definition, responseSchema: api.responseSchema || null, responseKind: api.responseKind || api.definition.kind })), authorize: async () => { await core.authorize(req.context); await pages.validateApis(req.context, input.apis); }, signal, cacheContext: req.context, onStage: (stage) => stages.push(stage) }), signal);
       await core.authorize(req.context); await pages.validateApis(req.context, input.apis);
       await record.update({ state: 'completed', resultType: result.type, outputHash: result.source ? reactSourceHash(result.source) : null, completedAt: now(), inputTokens, outputTokens, stages, elapsedMs: Math.round(performance.now() - started) });
       return { status: 200, body: result };
