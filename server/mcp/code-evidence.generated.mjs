@@ -51,7 +51,7 @@ export const CODE_EVIDENCE = [
   {
     "topic": "agent_runtime",
     "path": "server/mcp/hermes-harness.mjs",
-    "sourceSha256": "4be8585d2c378d46ebdc3527f481b8f13a70125e73b2af673f6def5dd6c1fb1d",
+    "sourceSha256": "2bd04aec231cea6efff04ab5a521bd6960c3e21fd9dc5591f4ab0499d1450ced",
     "startLine": 122,
     "endLine": 126,
     "excerpt": "        await record({ type: 'answer_policy', policy: 'server_evidence_only', harness: 'hermes', renderedResults: answers.length });\n        const partial = failed || message.partial === true;\n        if (!answers.length) { finish(null, { status: failed ? 'partial' : 'unverified', answer: '조회 근거를 확인하지 못했습니다. 사업과 기간을 확인해 다시 요청해주세요.' }); return; }\n        finish(null, { status: partial ? 'partial' : 'answered', answer: [...answers,\n          ...(partial ? ['🔎 일부 처리를 마치지 못해 전체 결과가 아닙니다.'] : [])].join('\\n\\n') });"

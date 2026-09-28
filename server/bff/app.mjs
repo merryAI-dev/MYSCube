@@ -917,10 +917,17 @@ export function createBffApp(options = {}) {
   }
 
   app.disable('x-powered-by');
+  let runSettlementWorker;
   const settlementAgentEnabled = env.SETTLEMENT_AGENT_ENABLED === 'true';
   if (settlementAgentEnabled) {
     const slackConfig = { db, secret: env.SLACK_SIGNING_SECRET, teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6' };
-    app.post('/api/slack/events', express.raw({ type: 'application/json', limit: '32kb' }), createSlackIngress({ ...slackConfig, botToken: env.SLACK_ALERT_BOT_TOKEN }));
+    app.post('/api/slack/events', express.raw({ type: 'application/json', limit: '32kb' }), createSlackIngress({ ...slackConfig, botToken: env.SLACK_ALERT_BOT_TOKEN,
+      defer: options.waitUntil || ((promise) => { void promise; }),
+      onQueued: async (jobId) => {
+        if (workerAuthPolicy.schedulerOwner === 'disabled' || maintenanceReadOnly || readOptionalText(env.BFF_WORKERS_ENABLED).toLowerCase() === 'false') return;
+        await runSettlementWorker({ jobId });
+      },
+    }));
     app.post('/api/slack/interactions', express.raw({ type: 'application/x-www-form-urlencoded', limit: '32kb' }), createFeedbackIngress(slackConfig));
   }
   app.use(express.json({ limit: process.env.BFF_JSON_LIMIT || '25mb' }));
@@ -1776,7 +1783,7 @@ export function createBffApp(options = {}) {
     mcpOAuthService,
   });
   if (settlementAgentEnabled) {
-    const runSettlementWorker = createSlackWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview, readSnapshot: jvmReadPort.readCashflowSnapshot });
+    runSettlementWorker = createSlackWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview, readSnapshot: jvmReadPort.readCashflowSnapshot });
     app.get('/api/internal/workers/settlement-agent/run', asyncHandler(async (req, res) => {
       if (!verifySettlementWorkerToken({ authorization: req.header('authorization'), secret: env.SETTLEMENT_AGENT_WORKER_SECRET,
         disabled: workerAuthPolicy.schedulerOwner === 'disabled' || maintenanceReadOnly || readOptionalText(env.BFF_WORKERS_ENABLED).toLowerCase() === 'false' })) {

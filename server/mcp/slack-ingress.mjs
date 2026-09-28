@@ -8,7 +8,7 @@ export function verifySlackRequest({ body, timestamp, signature, secret, now = D
   return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 }
 
-export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR6', botToken, fetchImpl = fetch, now = () => Date.now() }) {
+export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR6', botToken, fetchImpl = fetch, now = () => Date.now(), onQueued, defer }) {
   if (!teamId || !secret) throw new Error('Slack workspace and signing secret are required');
   return async function ingest(req, res) {
     const started = performance.now();
@@ -46,21 +46,34 @@ export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR
           status: 'queued', createdAt: new Date(queuedAt).toISOString(), attempts: 0 });
         return 'created';
       });
-      const receiptTimeout = Math.min(800, Math.floor(2400 - (performance.now() - started)));
-      if (accepted === 'created' && botToken && receiptTimeout > 0) {
-        try {
-          const receipt = await fetchImpl('https://slack.com/api/chat.postMessage', {
-            method: 'POST', headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },
-            signal: AbortSignal.timeout(receiptTimeout),
-            body: JSON.stringify({ channel: channelId, thread_ts: threadTs,
-              text: `안녕하세요 <@${event.user}>님! 요청을 접수했어요. 순서대로 조회해볼게요. 결과는 이곳에 이어서 알려드릴게요.`,
-            }),
-          });
-          if (!receipt.ok || !(await receipt.json()).ok) throw new Error('receipt_failed');
-        } catch {
-          // The durable job must still run when this best-effort receipt cannot be delivered.
-          console.warn('[settlement-agent] receipt_unavailable', key.slice(0, 8));
+      const followUp = async () => {
+        const receiptTimeout = Math.min(800, Math.floor(2400 - (performance.now() - started)));
+        if (accepted === 'created' && botToken && receiptTimeout > 0) {
+          try {
+            const receipt = await fetchImpl('https://slack.com/api/chat.postMessage', {
+              method: 'POST', headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },
+              signal: AbortSignal.timeout(receiptTimeout),
+              body: JSON.stringify({ channel: channelId, thread_ts: threadTs,
+                text: `<@${event.user}> 요청을 접수했습니다. 자료를 확인하고 이 메시지에 결과를 표시할게요.`,
+              }),
+            });
+            const result = await receipt.json();
+            if (!receipt.ok || !result.ok) throw new Error('receipt_failed');
+            if (typeof result.ts === 'string') await db.runTransaction(async (tx) => {
+              const ref = db.doc(`settlement_agent_jobs/${key}`);
+              if ((await tx.get(ref)).data()?.status === 'queued') tx.update(ref, { progressTs: result.ts });
+            });
+          } catch {
+            console.warn('[settlement-agent] receipt_unavailable', key.slice(0, 8));
+          }
         }
+        if (accepted === 'created' && onQueued) await onQueued(key);
+      };
+      if (accepted === 'created') {
+        if (defer) {
+          try { defer(Promise.resolve().then(followUp).catch(() => console.warn('[settlement-agent] immediate_run_unavailable', key.slice(0, 8)))); }
+          catch { console.warn('[settlement-agent] background_registration_unavailable', key.slice(0, 8)); }
+        } else await followUp();
       }
       return res.json({ ok: true, ...(!accepted ? { ignored: true } : {}) });
     } catch (error) {

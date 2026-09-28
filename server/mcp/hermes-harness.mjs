@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 import { fetchGoogleIdentityToken, resolveJavaWeeklyApiServiceAccountJson } from '../bff/java-weekly-auth.mjs';
 import { classifyReadError } from './support-read.mjs';
 
-export const HERMES_READ_TOOLS = Object.freeze(['cashflow_status', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief', 'agent_diagnostics', 'system_knowledge']);
+export const HERMES_READ_TOOLS = Object.freeze(['cashflow_status', 'settlement_status_report', 'settlement_report', 'reformat_report', 'agent_capabilities', 'project_search', 'clarify_request', 'accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief', 'agent_diagnostics', 'system_knowledge']);
 
 async function openSocket({ url, headers, signal }) {
   const socket = new WebSocket(url, { headers, maxPayload: 200000, handshakeTimeout: 15000, followRedirects: false });

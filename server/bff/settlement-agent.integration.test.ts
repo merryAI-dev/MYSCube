@@ -91,9 +91,9 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
         return { content: turn === 3 ? '허위 모델 답변: 999개 반려' : '✅ 월결산: 확정\n요청하신 사업의 월결산이 확정됐어요.' };
       },
     });
-    await worker();
-    expect(lookups).toBe(1);
-    expect(deliveries).toHaveLength(1);
+    await Promise.all([worker({ jobId: firstRef.id }), worker()]);
+    expect(lookups).toBe(2);
+    expect(deliveries).toHaveLength(2);
     expect(deliveries[0].user).toBeUndefined();
     expect(deliveries[0].channel).toBe('C0BQ6980HR6');
     expect(deliveries[0].thread_ts).toBeDefined();

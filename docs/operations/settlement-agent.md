@@ -2,7 +2,7 @@
 
 2026-09-28 코드 계약: 기본 실행기와 Hermes 모두 최종 답변을 서버 renderer로만 생성한다. 모델의 자유 서술과 검토 모델의 승인으로 최종 답변을 대체할 수 없다. 이전 배포 이력은 [연구 초안의 구현·배포 원장](../architecture/2026-09-14-evidence-grounded-agent-paper.md)을 참고한다.
 
-Slack → Vercel BFF 서명 검증 → Firestore job·공개 접수 안내 → Google Cloud Scheduler(매분) → Vercel BFF worker → Gemini 도구 선택 → 코드 입력 검증 → 기존 BFF `readWeeklyOverview` → JVM → 코드 renderer → 원래 질문의 공개 스레드 응답.
+Slack → Vercel BFF 서명 검증 → Firestore job 저장 → Vercel waitUntil로 접수 안내·워커 즉시 실행 → 명확한 상태 요청은 직접 조회 / 나머지는 Gemini 도구 선택 → 코드 입력 검증 → 기존 BFF `readWeeklyOverview` → JVM → 코드 renderer → 접수 메시지를 결과로 갱신. 매분 스케줄러는 누락·중단된 작업의 복구 경로로 유지한다.
 
 기존 Vercel·Firestore를 재사용한다. 별도 Cloud Run·노트북 프로세스·로컬 OAuth는 필요 없다. worker는 HTTP 응답 전에 실행을 마친다. 기존 주정산 공지는 변경하지 않는다.
 
@@ -122,3 +122,13 @@ GCP `inner-platform-live-20260316/us-central1/myscube-settlement-agent`는 `scri
 ## 폐기 도메인과 배포 검증 (2026-09-28)
 
 운영자가 `soc.myscguard.app`의 의도적인 폐기를 확인했다. 기본 edge smoke의 legacy redirect 대상과 Cloudflare production 설정 예시에서 이 호스트를 제외한다. 활성 호스트의 Cloudflare 경유, 공격 경로 차단, Vercel 직접 origin의 리다이렉트·보호·삭제 검증은 유지한다. 별도의 활성 legacy redirect가 필요하면 기존 `CLOUDFLARE_EDGE_LEGACY_REDIRECTS` 설정으로 명시한다.
+
+
+## 즉시 응답과 상태 전용 경로 (2026-09-28)
+
+- 프로덕션 `api/bff.js`가 `@vercel/functions`의 `waitUntil`을 BFF에 전달한다. 서명 검증과 작업 저장 후 Slack ACK는 모델 응답을 기다리지 않는다. 접수 메시지와 실행은 등록된 백그라운드 작업에서 이어진다. 플랫폼 콜드 스타트나 DB/Slack/JVM 응답 시간까지 0으로 보장하는 것은 아니다.
+- 즉시 경로와 매분 복구 경로는 같은 트랜잭션 claim/lease를 사용한다. 동일 스레드는 순서대로 처리하며, 먼저 끝낸 워커가 대기 댓글을 이어서 실행한다(최대 10건, 다음 작업 시작은 110초 이내). 발송 결과 불명확 작업은 자동 재발송하지 않는다. 워커 비활성·유지보수·scheduler disabled는 즉시 경로에도 적용된다.
+- `전체 등록된 사업의 9월 주정산 결과를 여부만 이야기해줘`처럼 범위와 기간이 명확한 상태 요청은 `settlement_status_report`를 직접 실행한다. 현재 KST 연도를 기본값으로 쓰면 답변에 밝힌다. 모델·원장 금액 분석을 호출하거나 유료 모델 예산을 예약하지 않는다. 직접 해석 범위 밖의 상태 요청도 회계 도구를 실행 목록에서 제거한다. 최신 사용자 요청의 상태 의도가 이전 CFO 문맥보다 우선한다.
+- `CFO 브리핑 해줘`의 기본 동작은 전체 등록 사업의 현재 KST 운영월 주정산 및 직전 월 월결산 현황이다. 기본값을 답변 첫머리에 명시한다. 명시적인 금액 비교·선택 사업 CFO 분석은 기존 도구를 사용한다.
+- 상태 도구는 삭제되지 않은 접근 가능 등록 사업을 100개씩 최대 1,000개 읽고, 승인 완료/승인 대기/업데이트 대기/확인 필요를 구분한다. 상태가 누락되거나 정합성이 맞지 않거나 조회에 실패하면 완료나 0으로 채우지 않는다. 조회 한도와 Slack 표시 한도는 별개로 밝히며, 긴 목록은 전체 집계와 표시/미표시 건수를 함께 표시한다. 정산 의무 사업·과거 월말 상태 복원·기한 위반 판단은 아니다.
+- 검증: `slack-immediate.test.mjs`는 서명된 입력부터 ACK·즉시 실행·진행 메시지 갱신·후속 댓글 처리·저장 답변을 확인한다. Firestore emulator integration에서 즉시 워커와 복구 워커를 동시에 실행해 중복 조회·발송과 대화 순서를 검사한다. 운영에는 테스트 Slack 메시지를 자동 발송하지 않는다.
