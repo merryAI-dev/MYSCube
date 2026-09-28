@@ -118,3 +118,7 @@ GCP `inner-platform-live-20260316/us-central1/myscube-settlement-agent`는 `scri
 - 모델의 질문 해석과 조회 대상 선택까지 수학적으로 보증하는 것은 아니다. 출력에 선택한 사업·기간·누락 범위를 표시하고, 금액 산술·상태·행동 완료 여부를 모델이 추론할 경로를 차단한다.
 
 운영 검증 도구 `verify-agent-slack-readonly.mjs`는 이제 모델 reviewer 통과 대신 `run_result.answerPolicy=server_evidence_only`와 실제 도구 실행·trace 무결성을 확인한다.
+
+## 폐기 도메인과 배포 검증 (2026-09-28)
+
+운영자가 `soc.myscguard.app`의 의도적인 폐기를 확인했다. 기본 edge smoke의 legacy redirect 대상과 Cloudflare production 설정 예시에서 이 호스트를 제외한다. 활성 호스트의 Cloudflare 경유, 공격 경로 차단, Vercel 직접 origin의 리다이렉트·보호·삭제 검증은 유지한다. 별도의 활성 legacy redirect가 필요하면 기존 `CLOUDFLARE_EDGE_LEGACY_REDIRECTS` 설정으로 명시한다.
