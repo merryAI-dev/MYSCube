@@ -108,7 +108,7 @@ describe('CFO accounting comparison', () => {
     expect(result.status).toBe('partial');
     expect(result.answer).toContain('2026-08 → 2026-09');
     expect(result.answer).toContain('변화 30원');
-    expect(result.answer).toContain('확인된 일부 결과');
+    expect(result.answer).toContain('위 조회 결과는 유지되며');
     expect(readSnapshot).toHaveBeenCalledTimes(4);
   });
 });

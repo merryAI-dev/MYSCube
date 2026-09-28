@@ -1,3 +1,4 @@
+import { renderToolFailures, modelContinuationFailure } from './agent-failure-message.mjs';
 import * as z from 'zod/v4';
 import { readCashflowStatus, assertOverview } from './cashflow-status.mjs';
 import { fitFeedback } from './settlement-feedback.mjs';
@@ -74,7 +75,7 @@ export async function runSettlementAgent({
   ];
   const answers = [];
   let feedbackObserved = false;
-  let failed = false;
+  const failures = [];
   for (let step = 0; step < maxSteps; step += 1) {
     signal.throwIfAborted();
     let reply;
@@ -84,16 +85,16 @@ export async function runSettlementAgent({
     catch (error) {
       signal.throwIfAborted();
       await record({ type: 'model_failure', step, code: error?.message === 'input_budget_exceeded' ? 'input_budget_exceeded' : 'model_unavailable' });
-      if (answers.length) return { status: 'partial', answer: [...answers, '추가 응답 처리를 마치지 못했습니다. 위 내용은 확인된 일부 결과입니다.'].join('\n\n') };
+      if (answers.length) return { status: 'partial', answer: [...answers, ...(failures.length ? [renderToolFailures(failures)] : []), modelContinuationFailure].join('\n\n') };
       throw error;
     }
     signal.throwIfAborted();
     const calls = reply?.tool_calls;
     if (calls !== undefined && !Array.isArray(calls)) throw new Error('도구 호출 형식이 올바르지 않습니다.');
     if (!calls?.length) {
-      if (!answers.length) return { status: 'unverified', answer: '정산 정보를 확인하지 못했습니다. 조회할 사업과 기간을 알려주세요.' };
-      return { status: failed ? 'partial' : 'answered', answer: [
-        ...answers, ...(failed ? ['일부 조회가 실패했습니다. 전체 완료 여부를 판단할 수 없습니다.'] : [])].join('\n\n') };
+      if (!answers.length) return { status: 'unverified', answer: renderToolFailures(failures) || '정산 정보를 확인하지 못했습니다. 조회할 사업과 기간을 알려주세요.' };
+      return { status: failures.length ? 'partial' : 'answered', answer: [
+        ...answers, ...(failures.length ? [renderToolFailures(failures)] : [])].join('\n\n') };
     }
     if (!Array.isArray(calls) || calls.length > 5) throw new Error('도구 호출 한도를 초과했습니다.');
     messages.push({ role: 'assistant', content: null, tool_calls: calls });
@@ -102,6 +103,7 @@ export async function runSettlementAgent({
       const tool = registry.get(call?.function?.name);
       let result;
       let outcome = 'rejected';
+      let stage = 'input';
       try {
         if (!tool || typeof call.id !== 'string' || !availableTools.some((definition) => definition.function.name === tool.name)) throw new Error('Unknown tool');
         const input = tool.schema.parse(JSON.parse(call.function.arguments));
@@ -121,24 +123,31 @@ export async function runSettlementAgent({
         // Authorization/tenant/user binding belongs to the host closure, never tool arguments.
         const scope = { question: question.trim(), tool: tool.name, input: structuredClone(input) };
         if (Array.isArray(scope.input.projectIds)) scope.input.projectIds.sort();
+        stage = 'policy';
         const policy = fitFeedback(await loadFeedback(scope));
         signal.throwIfAborted();
+        stage = 'record';
         await record({ step, tool: tool.name, outcome: 'feedback_policy', scope, policy });
+        stage = 'policy';
         const confirmed = policy.needsClarification && await isScopeConfirmed(structuredClone(scope)) === true;
         signal.throwIfAborted();
+        stage = 'record';
         if (confirmed) await record({ step, tool: tool.name, outcome: 'scope_confirmed', scope });
         if (policy.needsClarification && !confirmed) return {
           status: 'needs_clarification', policy,
           answer: '이 조회 범위의 해석에 수정 피드백이 있습니다. 조회할 사업과 기간을 다시 확인해 주세요.',
         };
+        stage = 'execute';
         result = await tool.execute(input, { signal });
         signal.throwIfAborted();
+        stage = 'render';
         const modelResult = tool.modelResult ? tool.modelResult(result) : result;
         const content = JSON.stringify(modelResult);
         if (!content || content.length > 100_000) throw new Error('Result too large');
         if (typeof tool.render !== 'function') throw new Error('Verified renderer required');
         const rendered = tool.render(result);
         if (typeof rendered !== 'string' || !rendered.trim() || rendered.length > 100_000) throw new Error('Invalid rendered result');
+        stage = 'record';
         await record({ type: 'tool_result', step, tool: tool.name, input, result: modelResult });
         if (tool.requiresReply) return { status: 'needs_clarification', answer: rendered };
         if (!answers.includes(rendered)) answers.push(rendered);
@@ -146,16 +155,17 @@ export async function runSettlementAgent({
         messages.push({ role: 'tool', tool_call_id: call.id, content });
       } catch (error) {
         signal.throwIfAborted();
-        failed = true;
-        await record({ type: 'tool_failure', tool: tool?.name || 'unknown', code: safeDiagnosticCode(error) });
+        const failure = { tool: tool?.name || 'unknown', stage, category: classifyReadError(error).category };
+        failures.push(failure);
+        await record({ type: 'tool_failure', ...failure, code: safeDiagnosticCode(error) });
         messages.push({ role: 'tool', tool_call_id: String(call?.id || ''), content: JSON.stringify({ ...classifyReadError(error), error: '조회하지 못했습니다. 미완료나 금액 0으로 판단하지 마세요.' }) });
       }
       await record({ step, tool: tool?.name || 'unknown', outcome });
     }
     if (answers.length && calls.every((call) => registry.get(call?.function?.name)?.observationOnly)) {
-      return { status: failed ? 'partial' : 'answered', answer: [...answers,
-        ...(failed ? ['일부 조회가 실패했습니다. 전체 완료 여부를 판단할 수 없습니다.'] : [])].join('\n\n') };
+      return { status: failures.length ? 'partial' : 'answered', answer: [...answers,
+        ...(failures.length ? [renderToolFailures(failures)] : [])].join('\n\n') };
     }
   }
-  return { status: 'limited', answer: [...answers, '조회 단계 한도에 도달했습니다. 위 내용은 확인된 일부 결과이며 전체 요청이 처리되었다는 의미는 아닙니다. 사업과 기간을 좁혀 다시 질문해 주세요.'].join('\n\n') };
+  return { status: 'limited', answer: [...answers, ...(failures.length ? [renderToolFailures(failures)] : []), '조회 단계 한도에 도달했습니다. 위 내용은 확인된 일부 결과이며 전체 요청이 처리되었다는 의미는 아닙니다. 사업과 기간을 좁혀 다시 질문해 주세요.'].join('\n\n') };
 }

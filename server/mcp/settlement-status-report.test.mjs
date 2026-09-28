@@ -72,7 +72,7 @@ it('routes the reported correction independently of CFO history and defaults bar
   expect(request).toMatchObject({ direct: true, input: { kind: 'week', yearMonth: '2027-09' } });
   expect(request.notice).toContain('2027년');
   expect(resolveSettlementRequest('<@UBOT> CFO 브리핑 해줘', now)).toMatchObject({ direct: true, input: { kind: 'both', yearMonth: '2027-01' } });
-  for (const text of ['A사업 9월 주정산 여부만', '전체 사업 8월과 9월 주정산', 'CIC1 전체 사업 9월 주정산', '전체 사업 작년 9월 주정산', '전체 사업 9월 주정산 미완료만', '전체 사업의 9월 주정산 1~3주차 여부만', '전체 사업의 9월 주정산 승인 완료된 사업만']) {
+  for (const text of ['A사업 9월 주정산 여부만', '전체 사업 8월과 9월 주정산', 'CIC1 전체 사업 9월 주정산', '전체 사업 작년 9월 주정산', '전체 사업의 9월 주정산 1~3주차 여부만', '전체 사업의 9월 주정산 승인 완료된 사업만']) {
     expect(resolveSettlementRequest(text, now).direct).toBe(false);
   }
   expect(resolveSettlementRequest('전체 사업의 9월 주정산 여부만, 전체 말고 A사업', now)).toBeNull();
@@ -80,4 +80,85 @@ it('routes the reported correction independently of CFO history and defaults bar
   expect(resolveSettlementRequest('A사업과 B사업 8월과 9월을 비교해서 CFO 브리핑해줘', now)).toBeNull();
   const tools = ['accounting_report', 'cfo_brief', 'accounting_compare', 'cashflow_status', 'settlement_status_report'].map((name) => ({ name }));
   expect(settlementRequestTools(tools, request).map((tool) => tool.name)).toEqual(['cashflow_status', 'settlement_status_report']);
+});
+
+it('groups the production-shaped 70-project result by stored CIC with exact incomplete counts', async () => {
+  const { db, records } = memoryDb();
+  for (let i = 0; i < 70; i++) records.set(`orgs/mysc/projects/p${String(i).padStart(2, '0')}`, { name: `사업${i}`, cic: i < 8 ? ' CIC1 ' : 'CIC2' });
+  const tool = createSettlementStatusTool({ db, authorize: async () => context, readOverview: async (req) => {
+    const value = statusOverview(req);
+    value.items.forEach((item, i) => { item.settlementStatuses.items.find((s) => s.period === 'WEEK_4').status = i < 8 ? 'PENDING_APPROVAL' : 'WAITING_FOR_UPDATE'; });
+    return value;
+  } });
+  const result = await tool.execute({ kind: 'week', yearMonth: '2026-09', weekNo: 4, groupBy: 'cic', statusFilter: 'incomplete' }, { signal: signal() });
+  const text = tool.render(result);
+  expect(result.complete).toBe(true);
+  expect(text).toContain('4주차: 승인 대기 8개 · 업데이트 대기 62개');
+  expect(text).toContain('[CIC1] 8개 사업 · 미완료 8개 · 확인 필요 0개');
+  expect(text).toContain('[CIC2] 62개 사업 · 미완료 62개 · 확인 필요 0개');
+  expect(text.split('\n').filter((s) => s.startsWith('- '))).toHaveLength(70);
+});
+
+it('excludes completed projects but retains unknown separately without guessing CIC', async () => {
+  const { db, records } = memoryDb();
+  ['done', 'pending', 'unknown'].forEach((id) => records.set(`orgs/mysc/projects/${id}`, { name: id, cic: id === 'pending' ? 'CIC4' : 123 }));
+  const tool = createSettlementStatusTool({ db, authorize: async () => context, readOverview: async (req) => {
+    const value = statusOverview(req);
+    for (const item of value.items) {
+      if (item.projectId === 'unknown') item.settlementCycle.health = 'UNAVAILABLE';
+      if (item.projectId === 'pending') item.settlementStatuses.items.find((s) => s.period === 'WEEK_1').status = 'PENDING_APPROVAL';
+    }
+    return value;
+  } });
+  const result = await tool.execute({ kind: 'week', yearMonth: '2026-09', weekNo: 1, groupBy: 'cic', statusFilter: 'incomplete' }, { signal: signal() });
+  const text = tool.render(result);
+  expect(result.complete).toBe(false);
+  expect(text).not.toContain('- done:');
+  expect(text).toContain('[CIC 미지정] 1개 사업 · 미완료 0개 · 확인 필요 1개');
+  expect(text).toContain('- unknown: 1주 확인 필요');
+  expect(text).toContain('미완료 사업 1개 · 확인 필요 사업 1개');
+  const monthly = await tool.execute({ kind: 'month', yearMonth: '2026-08', groupBy: 'cic', statusFilter: 'incomplete', projectIds: ['done'] }, { signal: signal() });
+  expect(tool.render(monthly)).toContain('미완료·확인 필요 사업이 없습니다');
+  expect(monthly.complete).toBe(true);
+});
+
+it('routes explicit CIC grouping and incomplete requests while preserving restricted scopes', () => {
+  const now = new Date('2026-09-28T05:00:00Z');
+  expect(resolveSettlementRequest('전체 등록 사업의 8월 주정산 상태를 정리해서 답해주세요 CIC별로', now))
+    .toMatchObject({ direct: true, input: { yearMonth: '2026-08', groupBy: 'cic' } });
+  expect(resolveSettlementRequest('전체 등록 사업의 9월 4주차 주정산 미완료 기업만 리스트업 해줘 조직 구분인 CIC별로', now))
+    .toMatchObject({ direct: true, input: { yearMonth: '2026-09', weekNo: 4, groupBy: 'cic', statusFilter: 'incomplete' } });
+  expect(resolveSettlementRequest('CIC1 전체 사업 9월 주정산 미완료만 CIC별로', now).direct).toBe(false);
+  const request = resolveSettlementRequest('9월 4주차 주정산 미완료 기업만 리스트업 해줘 조직 구분인 CIC별로', now);
+  expect(request.direct).toBe(false);
+  expect(settlementRequestTools([{ name: 'settlement_report' }, { name: 'settlement_status_report' }], request)).toEqual([{ name: 'settlement_status_report' }]);
+});
+
+it('enforces explicit CIC and incomplete presentation in validated model arguments', () => {
+  const { db } = memoryDb();
+  const tool = createSettlementStatusTool({ db, authorize: async () => context, readOverview: statusOverview });
+  const request = resolveSettlementRequest('9월 4주차 주정산 미완료 기업만 리스트업 해줘 조직 구분인 CIC별로');
+  const [scoped] = settlementRequestTools([tool], request);
+  expect(scoped.schema.parse({ kind: 'week', yearMonth: '2026-09', weekNo: 4 }))
+    .toMatchObject({ groupBy: 'cic', statusFilter: 'incomplete' });
+  expect(() => scoped.schema.parse({ kind: 'week', yearMonth: '2026-09', statusFilter: 'all' })).toThrow();
+});
+
+
+it('does not force a presentation modifier when the request excludes or negates it', () => {
+  const { db } = memoryDb();
+  const tool = createSettlementStatusTool({ db, authorize: async () => context, readOverview: statusOverview });
+  for (const text of ['9월 주정산 미완료 제외하고 완료된 사업만', '9월 주정산 미완료 빼고', '9월 주정산 CIC별로 구분하지 말아줘']) {
+    const [scoped] = settlementRequestTools([tool], resolveSettlementRequest(text));
+    const input = scoped.schema.parse({ kind: 'week', yearMonth: '2026-09' });
+    expect(input.statusFilter).toBeUndefined();
+    expect(input.groupBy).toBeUndefined();
+  }
+});
+
+
+it('preserves monthly report snapshots and deadline reporting capabilities', () => {
+  const tools = [{ name: 'settlement_report' }, { name: 'settlement_status_report' }];
+  expect(settlementRequestTools(tools, resolveSettlementRequest('8월 월결산 미완료 목록을 알려줘'))).toEqual(tools);
+  expect(settlementRequestTools(tools, resolveSettlementRequest('9월 4주차 주정산 마감 기한 미완료'))).toEqual(tools);
 });

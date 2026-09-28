@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as z from 'zod/v4';
 import { runSettlementAgent, settlementTools } from './settlement-agent.mjs';
 
@@ -95,7 +95,8 @@ describe('settlement agent', () => {
       ] },
     });
     expect(result.status).toBe('partial');
-    expect(result.answer).toContain('일부 조회가 실패');
+    expect(result.answer).toContain('호출 입력을 확인하지 못해 실행하지 않았습니다');
+    expect(result.answer).not.toContain('일부 조회가 실패');
     expect(result.answer).not.toContain('모두 승인 완료');
     await expect(runSettlementAgent({ question: '조회', tools: [], complete: async () => ({ tool_calls: {} }) })).rejects.toThrow();
   });
@@ -116,4 +117,41 @@ describe('settlement agent', () => {
     controller.abort();
     await expect(runSettlementAgent({ question: '조회', tools: [], signal: controller.signal, complete: async () => { throw new Error('must not call'); } })).rejects.toThrow();
   });
+});
+
+it('distinguishes rejected report input from a successful status lookup and records the failure stage', async () => {
+  let step = 0;
+  const events = [];
+  const execute = vi.fn();
+  const result = await runSettlementAgent({ question: '9월 4주차 CIC별 미완료', record: async (e) => events.push(e),
+    tools: [
+      { name: 'settlement_report', schema: z.object({ cutoff: z.string() }).strict(), execute, render: () => '' },
+      { name: 'settlement_status_report', schema: z.object({}), execute: async () => ({ complete: true, checked: 70 }), render: () => '조회 70개 사업 · 요청 범위 조회 완료\n승인 대기 8개 · 업데이트 대기 62개' },
+    ], complete: async () => step++ ? {} : { tool_calls: [
+      { id: 'a', function: { name: 'settlement_report', arguments: '{}' } },
+      { id: 'b', function: { name: 'settlement_status_report', arguments: '{}' } },
+    ] },
+  });
+  expect(execute).not.toHaveBeenCalled();
+  expect(result.answer).toContain('조회 70개 사업 · 요청 범위 조회 완료');
+  expect(result.answer).toContain('정산 보고서: 호출 입력을 확인하지 못해 실행하지 않았습니다.');
+  expect(result.answer).not.toMatch(/일부 조회가 실패|전체 완료 여부를 판단/);
+  expect(events).toContainEqual(expect.objectContaining({ type: 'tool_failure', tool: 'settlement_report', stage: 'input' }));
+});
+
+it('keeps real execution and render failures distinct from model continuation failures', async () => {
+  for (const stage of ['execute', 'render', 'model']) {
+    let step = 0;
+    const result = await runSettlementAgent({ question: '상태', tools: [
+      { name: 'settlement_status_report', schema: z.object({}), execute: async () => ({}), render: () => '상태 조회 완료' },
+      { name: 'settlement_report', schema: z.object({}), execute: async () => { if (stage === 'execute') throw Error('network'); return {}; }, render: () => { throw Error('render'); } },
+    ], complete: async () => {
+      if (step++) { if (stage === 'model') throw Error('unavailable'); return {}; }
+      return { tool_calls: [{ id: 'a', function: { name: 'settlement_status_report', arguments: '{}' } },
+        ...(stage === 'model' ? [] : [{ id: 'b', function: { name: 'settlement_report', arguments: '{}' } }])] };
+    } });
+    expect(result.answer).toContain(stage === 'execute' ? '자료 조회·처리를 완료하지 못했습니다' : stage === 'render' ? '조회 결과를 답변으로 구성하지 못했습니다' : '추가 답변 처리를 완료하지 못했습니다');
+    expect(result.answer).toContain('상태 조회 완료');
+    expect(result.answer).not.toContain('전체 완료 여부를 판단');
+  }
 });
