@@ -7,6 +7,7 @@ import { createIsolatedWorkbenchCore } from './core.mjs';
 import { createAnalyticsService } from './analytics-service.mjs';
 import { createMyscubeLiveApiAdapter } from './myscube-live-api.mjs';
 import { createHttpError } from '../bff/bff-utils.mjs';
+import { builtInApiId } from './registered-apis.mjs';
 
 const suite = process.env.FIRESTORE_EMULATOR_HOST ? describe : describe.skip;
 suite('independent authenticated live API persistence and deferred renderer bridge', () => {
@@ -54,6 +55,21 @@ suite('independent authenticated live API persistence and deferred renderer brid
     await walk(db.doc(prefix)); const all = JSON.stringify({ persisted, output: output.body, api });
     for (const token of Object.values(tokens)) expect(all).not.toContain(token); expect(all).not.toContain('must-not-expose');
     const other = await request(app).post(`/api/v1/workbench-apis/${api.id}/test`).set(headers(tokens.other)).send({ version: 1, input: {} }); expect(other.status).toBeGreaterThanOrEqual(400); expect(sent).toHaveLength(1); expect(other.body).not.toHaveProperty('data');
+  });
+  it('gives every admin the server-fixed MYSCube reads without registration, using that admin\'s own credential', async () => {
+    const listed = await request(app).get('/api/v1/workbench-apis').set(headers(tokens.other)); expect(listed.status).toBe(200);
+    const builtIn = listed.body.items.find((item: any) => item.definition.endpointId === 'myscube-projects');
+    expect(builtIn).toMatchObject({ id: builtInApiId('myscube-projects', 1), version: 1, builtIn: true, responseKind: 'external-read', definition: { kind: 'external-read', enabled: true, endpointVersion: 1 } });
+    expect(listed.body.items.filter((item: any) => item.builtIn).map((item: any) => item.definition.endpointId)).toEqual(expect.arrayContaining(['myscube-projects', 'myscube-cashflow-evidence']));
+    const output = await request(app).post(`/api/v1/workbench-apis/${builtIn.id}/test`).set(headers(tokens.other)).send({ version: 1, input: { limit: 20 } });
+    expect(output.status).toBe(200); expect(sent).toHaveLength(1); expect(sent[0].headers.Authorization).toBe(tokens.other);
+    const context: any = { tenantId, actorId: 'other-admin', actorRole: 'admin' }; await core.authorize(context);
+    expect(await analytics.evidence(context, output.body.evidenceId)).toMatchObject({ kind: 'registered-api', apiId: builtIn.id, apiVersion: 1, definitionHash: builtIn.definitionHash, endpointHash: builtIn.endpointHash });
+    const edit = await request(app).put(`/api/v1/workbench-apis/${builtIn.id}`).set(headers(tokens.other)).send({ expectedVersion: 1, definition: { ...builtIn.definition, enabled: false } });
+    expect(edit.status).toBe(409); expect(edit.body.error || edit.body.code).toBe('registered_api_builtin_readonly');
+    expect((await request(app).post(`/api/v1/workbench-apis/${builtIn.id}/test`).set(headers(tokens.other)).send({ version: 2, input: {} })).status).toBe(409);
+    const stored = await register(); const both = await request(app).get('/api/v1/workbench-apis').set(headers());
+    expect(both.body.items.map((item: any) => item.id)).toEqual(expect.arrayContaining([builtIn.id, stored.id]));
   });
   it('uses a newer validated HTTP credential for the existing renderer callback and fails closed after revocation', async () => {
     const api = await register(), context: any = ctx(); await core.authorize(context); context.remoteEvidence = {};

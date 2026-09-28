@@ -84,6 +84,12 @@ describe('approved live connections default only to new untouched editors', () =
     expect(defaultReactApis([...defaults, liveApi('33333333-3333-4333-8333-333333333333', 'myscube-projects')])).toEqual([{ id: defaults[1].id, version: 3 }]);
     for (const definition of [{ ...defaults[0].definition, enabled: false }, { ...defaults[0].definition, kind: 'analytics-copy' }, { ...defaults[0].definition, endpointId: 'myscube-projects-extra' }, { ...defaults[0].definition, endpointVersion: 2 }]) expect(defaultReactApis([{ ...defaults[0], definition }])).toEqual([]);
   });
+  it('prefers the built-in connection over a stored registration of the same endpoint', () => {
+    const builtIn = { ...liveApi('55555555-5555-4555-8555-555555555555', 'myscube-projects'), version: 1, builtIn: true };
+    expect(defaultReactApis([...defaults, builtIn])).toEqual([{ id: builtIn.id, version: 1 }, { id: defaults[1].id, version: 3 }]);
+    expect(defaultReactApis([builtIn])).toEqual([{ id: builtIn.id, version: 1 }]);
+    expect(defaultReactApis([{ ...builtIn, definition: { ...builtIn.definition, enabled: false } }, defaults[0]])).toEqual([{ id: defaults[0].id, version: 3 }]);
+  });
   it('keeps pre-initialization user changes, saved empty selection, and restored selection', () => {
     const before = initialStudio(), edited = reduce(before, { type: 'title', value: 'already editing' });
     const late = reduce(edited, { type: 'initialize', ticket: ticketFor(before, 'initial'), capabilities: initial().capabilities, pages: [], apis: defaults });

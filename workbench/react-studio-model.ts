@@ -8,7 +8,7 @@ import type { RemoteDraft } from './RemoteReactPreview';
 export type Diagnostic = { file: string; line: number; column: number; message: string; code: string | number };
 export type EvidenceBindings = Record<string, { evidenceId: string; kind: 'table' }>;
 export type GitResult = z.infer<typeof ReactGitResultSchema>;
-export type RegisteredApi = ApiRef & { definition: { name: string; enabled: boolean; description: string; kind?: string; endpointId?: string; endpointVersion?: number } };
+export type RegisteredApi = ApiRef & { builtIn?: boolean; definition: { name: string; enabled: boolean; description: string; kind?: string; endpointId?: string; endpointVersion?: number } };
 export type Capabilities = { modelEnabled: boolean; gitEnabled: boolean; gitRepository: string | null; runtimeUrl: string | null; remoteRuntime?: boolean; runtimeMode: string; example: string };
 export type Ticket = { id: string; target: number; identity: string };
 type Candidate = Ticket & { key: number; source: ReactSource; apis: ApiRef[]; executionId?: string; expectedQueries: ScreenQueryExpectation[] };
@@ -22,7 +22,9 @@ const emptyExecution = () => ({ sequence: 0, mount: 0, candidate: null, visible:
 export const initialStudio = (): StudioState => ({ ...initialEditor(), capabilities: null, pages: [], history: [], registeredApis: [], newPageApis: [], newPagePristine: true, generatedRequest: null, task: null, error: '', message: '', diagnostics: [], git: null, execution: emptyExecution() });
 export function defaultReactApis(apis: RegisteredApi[]): ApiRef[] {
   const refs = ['myscube-projects', 'myscube-cashflow-evidence', 'myscube-company-cashflow-summary'].flatMap(endpointId => {
-    const matches = apis.filter(api => api.definition.enabled === true && api.definition.kind === 'external-read' && api.definition.endpointId === endpointId && api.definition.endpointVersion === 1);
+    const candidates = apis.filter(api => api.definition.enabled === true && api.definition.kind === 'external-read' && api.definition.endpointId === endpointId && api.definition.endpointVersion === 1);
+    const builtIn = candidates.filter(api => api.builtIn === true);
+    const matches = builtIn.length ? builtIn : candidates;
     return matches.length === 1 ? [{ id: matches[0].id, version: matches[0].version }] : [];
   });
   const parsed = ReactApiRefsSchema.safeParse(refs);
