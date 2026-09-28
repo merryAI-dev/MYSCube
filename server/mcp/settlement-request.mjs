@@ -27,8 +27,9 @@ export function resolveSettlementRequest(question, now = new Date()) {
   const weeks = [...text.matchAll(/(\d+)\s*주차/g)];
   const weekNo = weeks.length === 1 && Number(weeks[0][1]) >= 1 && Number(weeks[0][1]) <= 5 ? Number(weeks[0][1]) : undefined;
   const allProjects = bareCfo || /전체\s*(?:등록\s*(?:된\s*)?)?사업|전사/.test(text);
-  const groupBy = /(?:조직\s*구분인\s*)?CIC\s*별(?:로)?/i.test(text) ? 'cic' : undefined;
-  const statusFilter = /미완료/.test(text) ? 'incomplete' : undefined;
+  const positiveModifiers = !/제외|빼고|말아|않|아닌|아니/.test(text);
+  const groupBy = positiveModifiers && /(?:조직\s*구분인\s*)?CIC\s*별(?:로)?/i.test(text) ? 'cic' : undefined;
+  const statusFilter = positiveModifiers && /미완료/.test(text) ? 'incomplete' : undefined;
   const directText = text.replace(/(?:조직\s*구분인\s*)?CIC\s*별(?:로)?/gi, '').replace(/미완료/g, '').trim();
   const needsDeadline = /마감|기한|까지|제출.*시|승인.*시/.test(text);
   const ambiguous = /제외|빼고|중에서|담당|CIC|센터|팀|작년|내년|지난해|다음해|지난\s*주|이번\s*주|마감|기한|까지|미완료|미승인|승인\s*완료|완료된|대기\s*(?:중|인)|[~～–—]|\d\s*-\s*\d(?!\d)/i.test(directText)

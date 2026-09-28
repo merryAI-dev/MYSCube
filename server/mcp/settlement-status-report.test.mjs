@@ -143,3 +143,15 @@ it('enforces explicit CIC and incomplete presentation in validated model argumen
     .toMatchObject({ groupBy: 'cic', statusFilter: 'incomplete' });
   expect(() => scoped.schema.parse({ kind: 'week', yearMonth: '2026-09', statusFilter: 'all' })).toThrow();
 });
+
+
+it('does not force a presentation modifier when the request excludes or negates it', () => {
+  const { db } = memoryDb();
+  const tool = createSettlementStatusTool({ db, authorize: async () => context, readOverview: statusOverview });
+  for (const text of ['9월 주정산 미완료 제외하고 완료된 사업만', '9월 주정산 미완료 빼고', '9월 주정산 CIC별로 구분하지 말아줘']) {
+    const [scoped] = settlementRequestTools([tool], resolveSettlementRequest(text));
+    const input = scoped.schema.parse({ kind: 'week', yearMonth: '2026-09' });
+    expect(input.statusFilter).toBeUndefined();
+    expect(input.groupBy).toBeUndefined();
+  }
+});
