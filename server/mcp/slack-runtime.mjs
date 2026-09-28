@@ -15,6 +15,7 @@ import { createAccountingReportTool } from './accounting-report.mjs';
 import { createAccountingComparisonTool } from './accounting-compare.mjs';
 import { createCfoBriefTool } from './cfo-brief.mjs';
 import { resolveSettlementRequest, settlementRequestTools } from './settlement-request.mjs';
+import { createSlackProgress, readProgressJob, toolProgressStage } from './slack-progress.mjs';
 import { createSettlementStatusTool } from './settlement-status-report.mjs';
 import { createSupportTools } from './support-read.mjs';
 
@@ -58,11 +59,11 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
   const teamId = 'T099F304GAY';
   const channelId = 'C0BQ6980HR6';
   const tenantId = 'mysc';
-  async function slack(method, body) {
+  async function slack(method, body, timeoutMs = 10000) {
     const readUser = method === 'users.info';
     const response = await fetchImpl(`https://slack.com/api/${method}${readUser ? `?${new URLSearchParams(body)}` : ''}`, {
       method: readUser ? 'GET' : 'POST', headers: { authorization: `Bearer ${env.SLACK_ALERT_BOT_TOKEN}`, ...(!readUser ? { 'content-type': 'application/json' } : {}) },
-      ...(!readUser ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(10000),
+      ...(!readUser ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(timeoutMs),
     });
     const result = await response.json();
     if (!response.ok || !result.ok) throw new Error(`slack_${['missing_scope', 'invalid_auth', 'not_in_channel', 'ratelimited', 'user_not_found'].includes(result.error) ? result.error : 'unavailable'}`);
@@ -88,6 +89,18 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       actorName: '정산 에이전트', authSource: 'settlement_agent_read', requestId: job.id,
       requestedByActorId: requester.actorId };
   }
+  async function finishProgress(job, status) {
+    if (job.teamId !== teamId || job.channelId !== channelId || !/^\d{1,12}\.\d{1,6}$/.test(job.progressTs || '')) return;
+    try {
+      const current = await readProgressJob(db, job.id);
+      if (status === 'delivery_unknown' && current?.answerDelivery !== 'private') return;
+      if (current?.status !== status || current?.leaseId !== job.leaseId) return;
+      const text = status === 'succeeded'
+        ? '요청 처리가 끝났습니다. 자세한 안내는 요청자에게만 표시됩니다.'
+        : '⚠️ 처리 또는 응답 전달 상태를 확인하지 못했습니다. 정산 완료 여부와는 무관하며, 관리자에게 이 스레드 확인을 요청해주세요.';
+      await slack('chat.update', { channel: job.channelId, ts: job.progressTs, text, blocks: [], parse: 'none' }, 800);
+    } catch { /* Progress delivery is best effort; never resend the business answer here. */ }
+  }
   async function process(job) {
     const experiment = selectSlackHarness(job.question, job.turns);
     const request = resolveSettlementRequest(experiment.question);
@@ -96,16 +109,22 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     const audit = [];
     const projectNames = new Map();
     const reportSnapshots = [];
+    const progress = createSlackProgress({ job, db, send: (body) => slack('chat.update', body, 800) });
     const trace = createAgentTrace({ db, jobId: job.id, leaseId: job.leaseId });
     const record = async (event) => {
       const receipt = await trace(event);
+      if (event.type === 'cfo_workflow_stage' && event.outcome === 'STARTED') {
+        progress.show(event.name === 'INSPECT_CURRENT_VARIANCE' ? 'INSPECT_VARIANCE' : 'COMPARE_PERIODS');
+      }
       audit.push({ type: event.type || 'tool_event', ...(event.tool ? { tool: event.tool } : {}),
         ...(event.outcome ? { outcome: event.outcome } : {}), ...receipt });
     };
     let answer;
     let answerStatus;
+    let canReplaceReceipt = true;
     try {
       const actor = await contextFor(job);
+      progress.show('INTERPRET_REQUEST');
       await record({ type: 'run_start', actorId: actor.actorId, actorRole: actor.actorRole,
         readPrincipal: 'myscube-settlement-agent', permissionPolicy: 'mysc-designated-channel-company-settlement-read-v1',
         question: job.question, model: request?.direct ? null : 'gemini-3.6-flash', experiment: experiment.variant,
@@ -166,7 +185,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         readSnapshot: async (request) => readSnapshot({ ...request, context: await readContextFor(job) }),
       }));
       if (readSnapshot) tools.push(createAccountingReportTool({ db, authorize: () => readContextFor(job), readSnapshot, record }));
-      tools.push(createSettlementStatusTool({ db, authorize: () => readContextFor(job), readOverview, record }));
+      tools.push(createSettlementStatusTool({ db, authorize: () => readContextFor(job), readOverview, record, onProgress: (stage) => progress.show(stage) }));
       tools.push(...createSupportTools({ db, job, authorize: () => contextFor(job), revision: env.VERCEL_GIT_COMMIT_SHA }));
       tools.push({ name: 'agent_capabilities', description: '데이터 조감도/catalog: 조회 가능한 데이터·필드·도구·제한을 확인합니다. 어떤 데이터가 있는지 묻거나 필요한 도구를 모를 때 사용하세요. 이미 아는 조회에 매번 호출할 필요는 없습니다. 사업명 검색으로 권한을 추정하지 않습니다.',
         schema: z.object({}).strict(), execute: async () => { await contextFor(job); return {
@@ -192,6 +211,13 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           return { items: matches.slice(0, 20), truncated: result.docs.length === 1000 || matches.length > 20 };
         }, render: (result) => `조회할 사업을 확인했어요${result.truncated ? ' (일부 검색 결과)' : ''}.\n${result.items.map((item) => `- ${item.name}`).join('\n') || '일치하는 사업이 없습니다. 사업명을 다시 알려주세요.'}`,
       });
+      for (const tool of tools) {
+        const execute = tool.execute;
+        tool.execute = async (...args) => {
+          progress.show(toolProgressStage[tool.name]);
+          return execute(...args);
+        };
+      }
       let result;
       if (request?.direct) {
         const tool = tools.find((tool) => tool.name === 'settlement_status_report');
@@ -216,6 +242,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           }, record,
         });
       }
+      progress.show('PREPARE_ANSWER');
       await contextFor(job);
       await record({ type: 'run_result', status: result.status, answer: result.answer, answerPolicy: 'server_evidence_only' });
       answerStatus = result.status;
@@ -231,6 +258,8 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         : error.message === 'budget_exhausted'
           ? '이번 달 에이전트 사용 한도에 도달했어요. MYSCube에서 직접 확인하시거나 관리자에게 문의해주세요.'
           : '조회 도중 처리를 마치지 못했어요. 정산이 미완료라는 뜻은 아닙니다. 사업과 기간을 좁혀 다시 요청해주세요. 같은 문제가 반복되면 이 스레드를 관리자에게 공유해주세요.';
+    } finally {
+      ({ canReplaceReceipt } = await progress.close());
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
     const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
@@ -240,19 +269,21 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       { type: 'button', action_id: 'settlement_scope_yes', text: { type: 'plain_text', text: '예 · 범위가 맞아요' }, value: job.id },
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
-    await updateClaimedJob({ db, job, patch: { status: 'sending', answer: text, scopes, audit, experimentVariant: experiment.variant,
+    const updateProgress = publicAnswer && canReplaceReceipt && /^\d{1,12}\.\d{1,6}$/.test(job.progressTs || '');
+    await updateClaimedJob({ db, job, patch: { status: 'sending', answerDelivery: publicAnswer ? (updateProgress ? 'update' : 'public') : 'private', answer: text, scopes, audit, experimentVariant: experiment.variant,
       reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
       answeredAt: new Date().toISOString() } });
     try {
-      const updateProgress = publicAnswer && /^\d{1,12}\.\d{1,6}$/.test(job.progressTs || '');
       const result = await slack(publicAnswer ? (updateProgress ? 'chat.update' : 'chat.postMessage') : 'chat.postEphemeral', {
         ...(updateProgress ? { ts: job.progressTs } : {}),
         channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
         text: slackText(text), blocks, parse: 'none', unfurl_links: false, unfurl_media: false,
       });
       await updateClaimedJob({ db, job, patch: { status: 'succeeded', answerTs: publicAnswer ? result.ts : result.message_ts } });
+      if (!publicAnswer) await finishProgress(job, 'succeeded');
     } catch {
       await updateClaimedJob({ db, job, patch: { status: 'delivery_unknown' } });
+      await finishProgress(job, 'delivery_unknown');
     }
   }
   return async ({ jobId } = {}) => {
@@ -272,6 +303,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
             tx.update(doc.ref, { status: 'delivery_unknown' });
           }
         });
+        await finishProgress({ ...doc.data(), id: doc.id }, 'delivery_unknown');
         continue;
       }
       const job = await claimSlackJob({ db, jobId: doc.id });
@@ -289,6 +321,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           }
         }
       }
+      if (!job) await finishProgress({ ...doc.data(), id: doc.id }, 'failed');
       if (processed >= 1) break;
     }
     return { processed };

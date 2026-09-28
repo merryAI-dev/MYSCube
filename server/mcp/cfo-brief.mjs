@@ -29,6 +29,7 @@ export function createCfoBriefTool({ readSnapshot, authorize, record = async () 
         ...comparison.drivers.cumulativeBalance.items.map((row) => row.projectId),
       ])];
       const investigations = [];
+      await stage('INSPECT_CURRENT_VARIANCE', 'STARTED');
       for (const projectId of candidates.slice(0, 3)) {
         signal?.throwIfAborted();
         await authorize();
