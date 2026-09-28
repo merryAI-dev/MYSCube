@@ -51,6 +51,8 @@ jobs:
           DOCKER_BINARY=$(command -v docker)
           if [ "$DOCKER_BINARY" != /usr/local/bin/docker ]; then sudo install -m 0755 "$DOCKER_BINARY" /usr/local/bin/docker; fi
           test "$(/usr/local/bin/docker --host unix:///var/run/docker.sock version --format '{{.Server.Version}}')" = 29.8.1
+      - name: Verify authenticated artifact transport
+        run: python3 -B server/workbench/deployment/fetch-host-bundle.test.py
       - name: Build the exact reviewed production app and renderer pair
         env:
           AUTH_API_KEY: ${{ vars.AXR_AUTH_API_KEY }}
@@ -76,7 +78,12 @@ jobs:
           test "$(git ls-remote origin refs/heads/feat/axr-isolated-workbench-complete | cut -f1)" = "$RELEASE_SHA"
           gcloud storage cp --if-generation-match=0 "$RUNNER_TEMP/axr-bundle/manifest.json" "$RUNNER_TEMP/axr-bundle/app.docker.tar" "$RUNNER_TEMP/axr-bundle/renderer.docker.tar" "gs://myscube-axr-releases-20260924/releases/$RELEASE_SHA/"
           gcloud compute ssh axr-workbench-01 --project=myscube-axr-prod-20260924 --zone=asia-northeast3-a --tunnel-through-iap --ssh-key-expire-after=2h --command="umask 077; mkdir /var/tmp/axr-ci-$RELEASE_SHA"
-          gcloud compute scp --recurse --compress --project=myscube-axr-prod-20260924 --zone=asia-northeast3-a --tunnel-through-iap "$RUNNER_TEMP/axr-bundle" "$RUNNER_TEMP/axr-source.tar" "axr-workbench-01:/var/tmp/axr-ci-$RELEASE_SHA/"
+          gcloud compute scp --compress --project=myscube-axr-prod-20260924 --zone=asia-northeast3-a --tunnel-through-iap "$RUNNER_TEMP/axr-source.tar" "axr-workbench-01:/var/tmp/axr-ci-$RELEASE_SHA/"
+          MANIFEST_HASH=$(jq -er .manifestSha256 "$RUNNER_TEMP/axr-bundle-result.json")
+          SOURCE_HASH=$(sha256sum "$RUNNER_TEMP/axr-source.tar" | cut -d' ' -f1)
+          [[ "$MANIFEST_HASH" =~ ^[a-f0-9]{64}$ && "$SOURCE_HASH" =~ ^[a-f0-9]{64}$ ]]
+          gcloud compute ssh axr-workbench-01 --project=myscube-axr-prod-20260924 --zone=asia-northeast3-a --tunnel-through-iap --command="echo '$SOURCE_HASH  /var/tmp/axr-ci-$RELEASE_SHA/axr-source.tar' | sha256sum --check --status && tar --no-same-owner -xf /var/tmp/axr-ci-$RELEASE_SHA/axr-source.tar -C /var/tmp/axr-ci-$RELEASE_SHA"
+          gcloud auth print-access-token | gcloud compute ssh axr-workbench-01 --project=myscube-axr-prod-20260924 --zone=asia-northeast3-a --tunnel-through-iap --ssh-flag=-T --command="python3 /var/tmp/axr-ci-$RELEASE_SHA/server/workbench/deployment/fetch-host-bundle.py --source-sha $RELEASE_SHA --manifest-sha256 $MANIFEST_HASH --directory /var/tmp/axr-ci-$RELEASE_SHA/axr-bundle"
       - name: Apply the reviewed upgrade on AXR only
         run: |
           set -euo pipefail
