@@ -1,5 +1,5 @@
 import { demo } from './client';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ReactPreview } from './ReactPreview';
 import { ApiRegistryPanel } from './ApiRegistryPanel';
 import { BoundEvidence } from './BoundEvidence';
@@ -9,6 +9,7 @@ import { RemoteReactPreview } from './RemoteReactPreview';
 import { draftIdentity } from './react-workspace-editor';
 import { ReactWorkspaceEditor, ReactProposalReview } from './ReactWorkspaceEditor';
 import { useReactStudio } from './useReactStudio';
+import { isReactStarterExample } from './example-source';
 const date = (value: string) => new Date(value).toLocaleString('ko-KR');
 
 export function ReactStudio() {
@@ -21,6 +22,9 @@ export function ReactStudio() {
   const runtimeAvailable = Boolean(capabilities?.remoteRuntime || capabilities?.runtimeUrl);
   const proposalTarget = state.target;
   const artifact = execution.artifact;
+  const exampleSource = isReactStarterExample(source, capabilities?.example);
+  const savedExample = saved && isReactStarterExample(saved.source, capabilities?.example);
+  const connections = useRef<HTMLDetailsElement>(null);
   useEffect(() => { if (execution.preparing) setView('preview'); }, [execution.sequence]);
   return <div className="studio react-studio">
     <header className="studio-header"><div className="brand"><span className="eyebrow">MYSCube · AXR STUDIO</span><h1>나의 업무 공간</h1><p>자료를 묻고, 필요한 화면을 함께 만드세요.</p></div>
@@ -42,6 +46,13 @@ export function ReactStudio() {
         {!pages.length && <p className="subtle">저장한 화면과 이전 버전을 이곳에서 다시 열 수 있습니다.</p>}{pages.map(item => <button className={`page-item ${item.id === saved?.id ? 'selected' : ''}`} key={item.id} disabled={busy} onClick={() => studio.open(item.id)}><strong>{item.source.title}</strong><small>버전 {item.version} · {date(item.updatedAt)}</small></button>)}
       </aside>
       <main className="studio-main"><section className="canvas-panel"><div className="canvas-toolbar"><div><h2>{source.title || '새 업무 화면'}</h2><span className="subtle">{execution.preparing ? '새 화면 확인 중…' : execution.visible ? '마지막으로 확인한 실행 화면' : '대화로 시작하거나 원문을 편집하세요'}</span></div><nav className="canvas-tabs" aria-label="화면 보기"><button className={view === 'preview' ? 'active' : ''} onClick={() => setView('preview')}>미리보기</button><button className={view === 'source' ? 'active' : ''} onClick={() => setView('source')}>원문·파일</button></nav></div>
+        {exampleSource && <section className="source-example-notice" role="note" aria-label="예제 화면 안내">
+          <strong>현재 원문은 실제 자료가 아닌 기본 예제입니다.</strong>
+          <p>{savedExample ? '저장된 원문도 기본 예제와 같습니다. 저장만으로 실제 자료가 연결되지는 않습니다.' : '현재 원문은 실행을 확인하는 기본 예제입니다.'}</p>
+          {selected.length > 0 ? <p>API {selected.length}개를 선택했지만, 이 예제에는 자료를 조회하는 동작이 없습니다. 대화에서 선택한 자료로 필요한 화면을 만들어 달라고 요청해 주세요.</p>
+            : apis.some(api => api.definition.enabled) ? <><p>등록된 API가 있지만 현재 화면에는 선택된 API가 없습니다. 사용할 자료를 선택한 뒤, 대화에서 실제 자료로 필요한 화면을 요청해 주세요.</p><button className="quiet compact" onClick={() => { if (connections.current) { connections.current.open = true; connections.current.querySelector('summary')?.focus(); connections.current.scrollIntoView({ block: 'nearest' }); } }}>연결 자료 선택하기</button></>
+              : <p>연결할 자료를 ‘API 등록·관리’에서 확인한 뒤, 대화에서 필요한 업무 화면을 요청해 주세요.</p>}
+        </section>}
         {execution.visible && execution.visible.identity !== draftIdentity(source, selected) && <p className="notice">현재 편집 내용과 실행 중인 버전이 다릅니다. ‘미리보기 적용’으로 확인해 주세요.</p>}
         <div hidden={view !== 'preview'} className="studio-preview-stage">
           {capabilities?.remoteRuntime ? <RemoteReactPreview key={`${state.target}:${execution.mount}`} draft={execution.remoteDraft} onPermissionError={studio.rejectUnauthorized} canCommit={studio.canCommit} onResult={result => dispatch({ type: 'execution-result', id: result.key, status: result.status, message: result.message })} /> : capabilities?.runtimeUrl ? <ReactPreview key={`${state.target}:${execution.mount}`} artifact={artifact} runtimeUrl={capabilities.runtimeUrl} canCommit={studio.canCommit} onApiCall={(apiId, input) => artifact?.executionId ? studio.callApi(artifact.executionId, apiId, input) : Promise.reject(new Error('실행 내용을 확인해 주세요.'))} onResult={result => { if (result.executionId) dispatch({ type: 'execution-result', id: result.executionId, status: result.status, message: result.message }); }} /> : <div className="preview-empty"><strong>어떤 업무를 도와드릴까요?</strong><span>오른쪽에서 자료를 묻거나 필요한 화면을 설명해 주세요.</span></div>}
@@ -53,7 +64,7 @@ export function ReactStudio() {
         onGenerated={(value, request) => dispatch({ type: 'generated-preview', value, target: proposalTarget, requestIdentity: request.identity, requestId: request.id })}
         onProposal={value => dispatch({ type: 'propose', value, target: proposalTarget })} onRestoreContext={value => { if (!studio.mayLeave()) return false; dispatch({ type: 'context', source: value.source, apis: value.apis }); dispatch({ type: 'message', message: '대화 당시 편집 내용과 연결 자료 버전을 불러왔습니다. 저장 전 내용을 확인해 주세요.' }); return true; }} />}
         {state.proposal && <section className="side-panel proposal-panel"><h2>변경 내용 검토</h2><ReactProposalReview state={state} dispatch={dispatch} disabled={busy} /></section>}
-        <details className="side-panel studio-tools"><summary>연결 자료 · {selected.length}개</summary><p className="subtle">선택한 API 버전만 이 화면에서 조회할 수 있습니다.</p>
+        <details ref={connections} className="side-panel studio-tools"><summary>연결 자료 · {selected.length}개</summary><p className="subtle">선택한 API 버전만 이 화면에서 조회할 수 있습니다.</p>
           {!apis.length && <p className="subtle">등록된 API가 없습니다. ‘API 등록·관리’에서 먼저 등록해 주세요.</p>}
           {apis.map(api => <label className="reference" key={api.id}><input type="checkbox" disabled={!api.definition.enabled && !selected.some(item => item.id === api.id)} checked={selected.some(item => item.id === api.id)} onChange={event => dispatch({ type: 'apis', value: event.target.checked ? [...selected, { id: api.id, version: api.version }] : selected.filter(item => item.id !== api.id) })} /><span>{api.definition.name} · 버전 {selected.find(item => item.id === api.id)?.version || api.version}{!api.definition.enabled && ' · 사용 중지'}<small>{api.definition.description}</small></span></label>)}
           {selected.filter(ref => !apis.some(api => api.id === ref.id)).map(ref => <p className="error" key={ref.id}>이전에 연결한 API를 현재 권한으로 확인할 수 없습니다. <button onClick={() => dispatch({ type: 'apis', value: selected.filter(item => item.id !== ref.id) })}>연결 해제</button></p>)}
