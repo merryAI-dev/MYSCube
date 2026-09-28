@@ -53,8 +53,9 @@ async function setup(page: Page, liveDefaults = false) {
 async function generate(page: Page, message = '화면을 만들어 주세요') { await page.getByLabel('업무 요청').fill(message); await page.getByRole('button', { name: '보내기', exact: true }).click(); }
 
 test('a fresh multi-file generation and followup automatically display exactly one candidate each without save or proposal clicks', async ({ page }) => {
-  const state = await setup(page); await generate(page);
+  const state = await setup(page); await expect(page.getByRole('note', { name: '예제 화면 안내' })).toBeVisible(); expect(state.creates).toHaveLength(0); expect(state.saves).toBe(0); await generate(page);
   await expect(page.frameLocator('iframe').getByRole('heading', { name: '자동 생성 1' })).toBeVisible();
+  await expect(page.getByRole('note', { name: '예제 화면 안내' })).toHaveCount(0);
   expect(state.creates).toHaveLength(1); expect(Object.keys(state.creates[0].source.workspace.files)).toHaveLength(2); expect(state.saves).toBe(0);
   await expect(page.getByRole('button', { name: '검토한 변경 적용', exact: true })).toHaveCount(0);
   await expect(page.getByText('저장하지 않은 변경', { exact: true })).toBeVisible();
