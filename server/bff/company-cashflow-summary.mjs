@@ -171,7 +171,8 @@ export function createCompanyCashflowSummary({ db, readSnapshot, now = () => new
               : mode === 'difference' ? row.evidence.difference.monthlyTotals : row.evidence.monthlyTotals[mode]])) : null,
             missingWeeks: row.evidence ? Object.fromEntries(['projection', 'actual'].map((mode) => [mode, row.evidence[mode].filter((week) => week.availability !== 'AVAILABLE').map((week) => week.weekNo)])) : null })),
           calendarAuthority: 'BFF_FIXED_FINANCE_CALENDAR', fieldStateAvailability: 'NOT_EXPOSED', liveSheetVerified: false,
-          limitations: ['부분값(partialValue)은 확인된 사업만 포함하며 전사 총액이 아닙니다. 미확인·실패는 0원이 아닙니다.',
+          limitations: ['모든 사업의 저장 집계값 조회 완료는 입력 완료나 빈 셀·명시적 0의 상태 검증을 뜻하지 않습니다.',
+            '부분값(partialValue)은 확인된 사업만 포함하며 전사 총액이 아닙니다. 미확인·실패는 0원이 아닙니다.',
             '사업 목록은 최대 200개이며 20초 뒤 새 사업 조회를 시작하지 않습니다. 전체 조회 완료를 보장하지 않습니다.',
             '각 사업은 서로 다른 시점의 JVM 원장입니다. 동시점 확정 결산·은행 잔고나 현재 Sheets 값을 검증한 결과가 아닙니다.',
             '주차 날짜는 BFF 고정 재무 달력 기준입니다. 원본 시트 날짜를 직접 확인한 결과가 아닙니다.'] };
