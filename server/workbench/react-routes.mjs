@@ -3,6 +3,7 @@ import * as z from 'zod/v4';
 import { createHttpError } from '../bff/bff-utils.mjs';
 import { createWorkbenchAdmission } from '../bff/workbench-admission.mjs';
 import { createRegisteredApiService } from './registered-apis.mjs';
+import { registeredApiBudgetMs } from './registered-api-budget.mjs';
 import { createReactPageService, generateReactPage, parseReact, reactHash, reactSourceHash, ReactSourceSchema, ReactApiRefsSchema, REACT_EXAMPLE } from './react-pages.mjs';
 import { compileReactPreview } from './react-compiler.mjs';
 import { createHtmlCompletion } from './html-completion.mjs';
@@ -44,7 +45,8 @@ export function mountReactStudio(app, { db, now, env, core, analytics, asyncHand
   app.post(`${apiPrefix}/:id/test`, asyncHandler(async (req, res) => res.json(await limited(async (request) => {
     const body = parseReact(z.object({ version: z.number().int().positive(), input: z.record(z.string(), z.unknown()) }).strict(), request.body);
     if (env.WORKBENCH_READS_ENABLED === 'false') throw createHttpError(503, '분석 조회를 잠시 중지했습니다.', 'workbench_reads_disabled');
-    return apis.invoke(request.context, request.params.id, body.version, body.input, { signal: AbortSignal.timeout(10000) });
+    const api = await apis.get(request.context, request.params.id, body.version);
+    return apis.invoke(request.context, request.params.id, body.version, body.input, { signal: AbortSignal.timeout(registeredApiBudgetMs(api, env)) });
   })(req))));
   app.get(`${prefix}/capabilities`, asyncHandler(async (_req, res) => res.json({ modelEnabled, gitEnabled, gitRepository: gitEnabled ? env.WORKBENCH_GIT_REPOSITORY : null,
     runtimeUrl: runtime?.url || null, remoteRuntime, runtimeMode: remoteRuntime ? 'remote-container' : runtime?.local ? 'local-test' : 'not-configured', example: REACT_EXAMPLE })));

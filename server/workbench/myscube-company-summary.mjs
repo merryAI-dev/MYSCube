@@ -36,7 +36,7 @@ export function validateCompanySummary(raw, input) {
   const { catalog, counts, rows } = raw;
   if (raw.period.yearMonth !== input.yearMonth || raw.period.weekNo !== (input.weekNo ?? null)
     || catalog.eligibleCount !== rows.length || counts.eligible !== rows.length || catalog.enumeratedCount < rows.length || catalog.enumeratedCount > 200
-    || raw.catalogComplete !== catalog.complete || catalog.complete && (!catalog.stable || !instant(catalog.asOf))
+    || raw.catalogComplete !== catalog.complete || catalog.asOf !== null && !instant(catalog.asOf) || catalog.complete && (!catalog.stable || !instant(catalog.asOf))
     || catalog.knownTotal !== (catalog.complete ? rows.length : null) || !/^[a-f0-9]{64}$/.test(catalog.projectSetHash)
     || !instant(raw.readWindow.startedAt) || !instant(raw.readWindow.finishedAt) || Date.parse(raw.readWindow.startedAt) > Date.parse(raw.readWindow.finishedAt)) invalid();
   const ids = new Set();
