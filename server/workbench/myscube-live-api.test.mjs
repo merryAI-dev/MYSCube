@@ -84,6 +84,28 @@ describe('fixed MYSCube read adapter', () => {
     expect(result.data.rows[0].evidence.fieldStateAvailability).toBe('NOT_EXPOSED');
     expect(JSON.stringify(result)).not.toContain('secret upstream detail');
   });
+  it('compares calendar dates across every available project and does not infer a calendar from absent records', async () => {
+    for (const mismatch of [false, true]) {
+      const raw = await nativeCashflow();
+      const second = structuredClone(raw.rows[0]); second.projectId = 'second'; second.evidence.projectId = 'second';
+      if (mismatch) for (const mode of ['projection', 'actual']) second.evidence[mode][0].start = '2026-09-02';
+      raw.rows.push(second); raw.accessibleInPage++; raw.available++;
+      for (const mode of ['projection', 'actual', 'difference']) for (const field of ['inflow', 'outflow', 'cumulativeBalance']) {
+        const amount = raw.totals[mode][field];
+        if (second[mode][field] === null) amount.excluded++;
+        else { amount.included++; amount.value = (amount.value ?? 0) + second[mode][field]; }
+      }
+      const { adapter, authorize } = setup({ transport: async () => raw });
+      const result = await adapter.invoke(context, 'myscube-cashflow-evidence', 1, { yearMonth: '2026-09' }, { authorize });
+      expect(result.metadata.weekCalendarUniform).toBe(!mismatch);
+      expect(result.metadata.accessibleInPage).toBe(4);
+    }
+    const raw = await nativeCashflow(); raw.rows = []; raw.accessibleInPage = raw.available = raw.notRecorded = raw.failed = 0;
+    for (const mode of Object.values(raw.totals)) for (const field of Object.values(mode)) Object.assign(field, { value: null, included: 0, excluded: 0 });
+    const { adapter, authorize } = setup({ transport: async () => raw });
+    const result = await adapter.invoke(context, 'myscube-cashflow-evidence', 1, { yearMonth: '2026-09' }, { authorize });
+    expect(result.metadata.weekCalendarUniform).toBeNull();
+  });
   it('rejects cashflow wrong period, unsafe money, inconsistent weeks and false completeness', async () => {
     const base = await nativeCashflow();
     for (const change of [data => { data.yearMonth = '2026-10'; }, data => { data.rows[0].projection.inflow = Number.MAX_SAFE_INTEGER + 1; }, data => { data.rows[0].evidence.actual[0].weekNo = 5; }, data => { data.catalogComplete = false; }, data => { data.rows[0].evidence.source.liveSheetVerified = true; }, data => { data.rows[0].missingWeeks.projection = []; }]) {

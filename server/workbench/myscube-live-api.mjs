@@ -112,6 +112,11 @@ function cashflowPage(raw, input) {
   if (result.accessibleInPage !== rows.length || result.available !== rows.filter(row => row.status === 'AVAILABLE').length || result.notRecorded !== rows.filter(row => row.status === 'NOT_RECORDED').length || result.failed !== rows.filter(row => row.status === 'FAILED').length || result.catalogComplete !== (raw.nextAfter === null && !input.after)) invalid();
   return result;
 }
+function pageWeekCalendarUniform(data) {
+  const calendars = data.rows.filter(row => row.status === 'AVAILABLE').map(row =>
+    JSON.stringify(row.evidence.actual.map(({ weekNo, start, end }) => [weekNo, start, end]).sort((a, b) => a[0] - b[0])));
+  return calendars.length ? calendars.every(calendar => calendar === calendars[0]) : null;
+}
 function bounded(promise, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => reject(createHttpError(504, 'MYSCube 조회 시간이 한도를 넘었습니다.', 'myscube_live_timeout'));
@@ -188,7 +193,7 @@ export function createMyscubeLiveApiAdapter({ env = process.env, credentialProvi
         validateExternalResponse(selected.responseSchema, data);
         checkDeadline();
         const limitations = id === 'myscube-projects' ? ['이번 페이지의 사업 원문만 조회했습니다. 휴지통 항목도 포함하며 상태 코드로 활성·승인 여부를 추정하지 않습니다.', 'document_id와 document_updated_at은 API 미제공으로 null입니다. project_id는 API 응답 id로 원본 문서 식별자와 저장값을 구분할 수 없습니다.', '계약기간은 계약서 날짜이며 입금기간이 아닙니다.'] : [...data.limitations];
-        return { data, metadata: { source: selected.name, endpointId: id, endpointVersion: version, asOf: now(), sourceKind: 'myscube-live', resultScope: id === 'myscube-projects' ? 'THIS_PAGE_ONLY' : data.totalsScope, limitations }, truncated: (id === 'myscube-projects' ? data.nextCursor : data.nextAfter) !== null };
+        return { data, metadata: { source: selected.name, endpointId: id, endpointVersion: version, asOf: now(), sourceKind: 'myscube-live', ...(id === 'myscube-cashflow-evidence' ? { catalogComplete: data.catalogComplete, accessibleInPage: data.accessibleInPage, weekCalendarUniform: pageWeekCalendarUniform(data) } : {}), resultScope: id === 'myscube-projects' ? 'THIS_PAGE_ONLY' : data.totalsScope, limitations }, truncated: (id === 'myscube-projects' ? data.nextCursor : data.nextAfter) !== null };
       } catch (cause) {
         upstreamMayContinue = combined.aborted || !Number.isInteger(cause?.statusCode) || [502, 503, 504].includes(cause.statusCode);
         let error;

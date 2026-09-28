@@ -80,8 +80,8 @@ test('live API host evidence uses actual persisted October input and warns again
   const context: any = { tenantId, actorId, actorRole: 'admin' }; await core.authorize(context);
   const apiId = crypto.randomUUID(), definitionHash = 'a'.repeat(64), endpointHash = 'b'.repeat(64);
   const makeEvidence = (yearMonth: string) => analytics.recordApiEvidence(context, { apiId, apiVersion: 1, definitionHash, endpointHash,
-    input: { yearMonth }, data: { yearMonth, rows: [{ projection: null, actual: 0, status: 'FAILED' }] },
-    metadata: { source: '합성 MYSCube 실시간 근거', resultScope: 'THIS_PAGE_ONLY', asOf: now(), limitations: ['이번 페이지 결과이며 전체 사업 합계가 아닙니다.', '실패·누락은 0원이 아닙니다.'] }, truncated: true, queriedAt: now() });
+    input: { yearMonth }, data: { yearMonth, catalogComplete: false, accessibleInPage: 1, rows: [{ projection: null, actual: 0, status: 'FAILED' }] },
+    metadata: { weekCalendarUniform: false, source: '합성 MYSCube 실시간 근거', resultScope: 'THIS_PAGE_ONLY', asOf: now(), limitations: ['이번 페이지 결과이며 전체 사업 합계가 아닙니다.', '실패·누락은 0원이 아닙니다.'] }, truncated: true, queriedAt: now() });
   const october = await makeEvidence('2026-10'), september = await makeEvidence('2026-09');
   const received: string[] = [];
   await page.route('**/api/**', async route => {
@@ -107,6 +107,9 @@ test('live API host evidence uses actual persisted October input and warns again
   await expect(host).toContainText('yearMonth: 2026-10'); await expect(host).not.toContainText('yearMonth: 2026-09');
   await expect(host).toContainText('THIS_PAGE_ONLY'); await expect(host).toContainText('실패·누락은 0원이 아닙니다');
   await expect(host).not.toContainText('이 결과의 조회 기준을 확인하지 못했습니다');
+  await expect(host.getByTestId('page-only-scope')).toContainText('이번 페이지 1개 사업 합계');
+  await expect(host.getByTestId('page-only-scope')).toContainText('전사 합계는 확인 필요');
+  await expect(host.getByTestId('week-calendar-mismatch')).toContainText('합산할 수 없습니다');
   expect(received).toContain(october.evidenceId);
   await page.evaluate(() => (window as any).showSeptember());
   await expect(host).toContainText('yearMonth: 2026-09'); await expect(host).not.toContainText('yearMonth: 2026-10');
