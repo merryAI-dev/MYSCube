@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import https from 'node:https';
 import { EventEmitter } from 'node:events';
-import { createMyscubeLiveApiAdapter, MYSCUBE_LIVE_ORIGIN, requestMyscubeLiveJson } from './myscube-live-api.mjs';
+import { createMyscubeLiveApiAdapter, MYSCUBE_LIVE_ORIGIN, MYSCUBE_LIVE_USER_AGENT, requestMyscubeLiveJson } from './myscube-live-api.mjs';
 import { createCashflowEvidenceQuery } from '../bff/cashflow-evidence-query.mjs';
 import { createExternalApiAdapter } from './external-api.mjs';
 
@@ -58,7 +58,7 @@ describe('fixed MYSCube read adapter', () => {
     expect(JSON.stringify(result)).not.toMatch(/private@example|private-number|synthetic-only-token/);
     expect(result.metadata).toMatchObject({ sourceKind: 'myscube-live', resultScope: 'THIS_PAGE_ONLY', asOf: time });
     expect(result.truncated).toBe(false); expect(authorize).toHaveBeenCalledTimes(3);
-    expect(transport.mock.calls[0][0]).toMatchObject({ maxBytes: 256000, address: '8.8.8.8', family: 4, headers: { Authorization: 'Bearer synthetic-only-token', 'x-tenant-id': 'mysc' } });
+    expect(transport.mock.calls[0][0]).toMatchObject({ maxBytes: 256000, address: '8.8.8.8', family: 4, headers: { Authorization: 'Bearer synthetic-only-token', 'x-tenant-id': 'mysc', 'User-Agent': MYSCUBE_LIVE_USER_AGENT } });
     expect(transport.mock.calls[0][0].url.href).toBe(`${MYSCUBE_LIVE_ORIGIN}/api/v1/projects?limit=20`);
   });
   it('keeps one bounded page and encodes cursors without accepting URL, auth or extra query keys', async () => {
@@ -181,7 +181,7 @@ describe('actual local HTTPS fixture through the fixed adapter transport', () =>
     folder = await mkdtemp(join(tmpdir(), 'axr-myscube-live-'));
     execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', '/CN=myscube.myscguard.app', '-addext', 'subjectAltName=DNS:myscube.myscguard.app', '-keyout', join(folder, 'key.pem'), '-out', join(folder, 'cert.pem')], { stdio: 'ignore' });
     ca = await readFile(join(folder, 'cert.pem')); server = https.createServer({ key: await readFile(join(folder, 'key.pem')), cert: ca }, (req, res) => {
-      calls.push({ method: req.method, url: req.url, auth: req.headers.authorization, tenant: req.headers['x-tenant-id'] }); reply(req, res);
+      calls.push({ method: req.method, url: req.url, auth: req.headers.authorization, tenant: req.headers['x-tenant-id'], userAgent: req.headers['user-agent'] }); reply(req, res);
     }).listen(0, '127.0.0.1'); await new Promise(resolve => server.once('listening', resolve)); port = server.address().port;
   });
   afterAll(async () => { server?.closeAllConnections(); if (server) await new Promise(resolve => server.close(resolve)); if (folder) await rm(folder, { recursive: true, force: true }); });
@@ -191,7 +191,7 @@ describe('actual local HTTPS fixture through the fixed adapter transport', () =>
   }) });
   it('reads projected GET JSON with validated TLS hostname and no credential in the result', async () => {
     reply = (_req, res) => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(page())); };
-    expect((await fixture().invoke()).data.items[0].project_id).toBe('p1'); expect(calls.at(-1)).toEqual({ method: 'GET', url: '/api/v1/projects?limit=20', auth: 'Bearer synthetic-only-token', tenant: 'mysc' });
+    expect((await fixture().invoke()).data.items[0].project_id).toBe('p1'); expect(calls.at(-1)).toEqual({ method: 'GET', url: '/api/v1/projects?limit=20', auth: 'Bearer synthetic-only-token', tenant: 'mysc', userAgent: MYSCUBE_LIVE_USER_AGENT });
   });
   it('preserves real upstream 401/403 status and never exposes HTML bodies or follows redirects', async () => {
     for (const status of [401, 403, 302, 500]) {

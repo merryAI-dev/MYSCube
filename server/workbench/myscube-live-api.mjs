@@ -6,6 +6,8 @@ import { createHttpError } from '../bff/bff-utils.mjs';
 import { isPublicExternalAddress, requestPinnedExternalJson, validateExternalResponse } from './external-api.mjs';
 
 export const MYSCUBE_LIVE_ORIGIN = 'https://myscube.myscguard.app';
+// Cloudflare blocks an empty User-Agent (mysc_explicit_automation_client_block); the edge scopes this identity to the AXR egress IP.
+export const MYSCUBE_LIVE_USER_AGENT = 'MYSCube-AXR-Workbench/1.0';
 const MAX_BYTES = 256000;
 const object = properties => ({ type: 'object', additionalProperties: false, required: Object.keys(properties), properties });
 const text = (maxLength = 1000, nullable = false) => ({ type: 'string', maxLength, ...(nullable ? { nullable: true } : {}) });
@@ -179,7 +181,7 @@ export function createMyscubeLiveApiAdapter({ env = process.env, credentialProvi
         for (const [name, value] of Object.entries(params)) url.searchParams.set(name, String(value));
         checkDeadline();
         networkSettled = false;
-        networkPromise = Promise.resolve().then(() => { checkDeadline(); dispatchedAt = clock(); return transport({ url, ...addresses[0], headers: { Accept: 'application/json', 'Accept-Encoding': 'identity', Authorization: authorization, 'x-tenant-id': context.tenantId }, signal: combined, maxBytes: MAX_BYTES }); });
+        networkPromise = Promise.resolve().then(() => { checkDeadline(); dispatchedAt = clock(); return transport({ url, ...addresses[0], headers: { Accept: 'application/json', 'Accept-Encoding': 'identity', 'User-Agent': MYSCUBE_LIVE_USER_AGENT, Authorization: authorization, 'x-tenant-id': context.tenantId }, signal: combined, maxBytes: MAX_BYTES }); });
         networkPromise.then(() => { networkSettled = true; }, () => { networkSettled = true; });
         const raw = await bounded(networkPromise, combined);
         await check();
