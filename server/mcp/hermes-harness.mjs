@@ -1,3 +1,4 @@
+import { renderToolFailures, modelContinuationFailure } from './agent-failure-message.mjs';
 import WebSocket from 'ws';
 import * as z from 'zod/v4';
 import { fetchGoogleIdentityToken, resolveJavaWeeklyApiServiceAccountJson } from '../bff/java-weekly-auth.mjs';
@@ -46,7 +47,7 @@ export async function runHermesAgent({ question, history = [], tools, signal = A
   signal = AbortSignal.any([signal, disconnected.signal]);
   const answers = [];
   const seen = new Set();
-  let failed = false;
+  const failures = [];
   let terminal = false;
   let finalQueued = false;
   let queued = 0;
@@ -86,31 +87,37 @@ export async function runHermesAgent({ question, history = [], tools, signal = A
           seen.add(message.id);
           const tool = registry.get(message.name);
           if (!tool) throw new Error('hermes_tool_denied');
-          const input = tool.schema.parse(message.arguments);
-          const scope = { question: question.trim(), tool: tool.name, input: structuredClone(input) };
-          if (Array.isArray(scope.input.projectIds)) scope.input.projectIds.sort();
-          await loadFeedback(scope);
-          signal.throwIfAborted();
-          await record({ type: 'hermes_tool_start', tool: tool.name, input });
-          signal.throwIfAborted();
           let result;
+          let stage = 'input';
           try {
+            const input = tool.schema.parse(message.arguments);
+            stage = 'policy';
+            const scope = { question: question.trim(), tool: tool.name, input: structuredClone(input) };
+            if (Array.isArray(scope.input.projectIds)) scope.input.projectIds.sort();
+            await loadFeedback(scope);
+            signal.throwIfAborted();
+            stage = 'record';
+            await record({ type: 'hermes_tool_start', tool: tool.name, input });
+            signal.throwIfAborted();
+            stage = 'execute';
             const value = await tool.execute(input, { signal });
             signal.throwIfAborted();
+            stage = 'render';
             result = tool.modelResult ? tool.modelResult(value) : value;
             if (!result || Buffer.byteLength(JSON.stringify(result)) > 100000) throw new Error('hermes_result_too_large');
             if (typeof tool.render !== 'function') throw new Error('hermes_renderer_missing');
             const rendered = tool.render(value);
             if (typeof rendered !== 'string' || !rendered.trim() || rendered.length > 100000) throw new Error('hermes_render_invalid');
+            stage = 'record';
             await record({ type: 'hermes_tool_result', tool: tool.name, input, result });
             if (tool.requiresReply) { finish(null, { status: 'needs_clarification', answer: rendered }); return; }
             if (!answers.includes(rendered)) answers.push(rendered);
           } catch (error) {
             signal.throwIfAborted();
-            failed = true;
             const failure = classifyReadError(error);
+            failures.push({ tool: tool.name, stage, category: failure.category });
             result = { ...failure, error: failure.code || 'lookup_failed' };
-            await record({ type: 'hermes_tool_failure', tool: tool.name, code: result.error });
+            await record({ type: 'hermes_tool_failure', tool: tool.name, stage, category: failure.category, code: result.error });
           }
           if (!terminal) socket.send(JSON.stringify({ type: 'tool_result', id: message.id, result }));
           return;
@@ -120,10 +127,11 @@ export async function runHermesAgent({ question, history = [], tools, signal = A
         if (['input', 'output', 'thinking'].some((key) => !Number.isSafeInteger(usage[key]) || usage[key] < 0)) throw new Error('hermes_usage_invalid');
         await record({ type: 'usage', phase: 'hermes', input: usage.input, output: usage.output, thinking: usage.thinking });
         await record({ type: 'answer_policy', policy: 'server_evidence_only', harness: 'hermes', renderedResults: answers.length });
-        const partial = failed || message.partial === true;
-        if (!answers.length) { finish(null, { status: failed ? 'partial' : 'unverified', answer: '조회 근거를 확인하지 못했습니다. 사업과 기간을 확인해 다시 요청해주세요.' }); return; }
+        const partial = failures.length > 0 || message.partial === true;
+        if (!answers.length) { finish(null, { status: failures.length ? 'partial' : 'unverified', answer: renderToolFailures(failures) || '조회 근거를 확인하지 못했습니다. 사업과 기간을 확인해 다시 요청해주세요.' }); return; }
         finish(null, { status: partial ? 'partial' : 'answered', answer: [...answers,
-          ...(partial ? ['🔎 일부 처리를 마치지 못해 전체 결과가 아닙니다.'] : [])].join('\n\n') });
+          ...(failures.length ? [renderToolFailures(failures)] : []),
+          ...(message.partial === true ? [modelContinuationFailure] : [])].join('\n\n') });
       }).catch((error) => finish(error));
     });
     if (signal.aborted) abort();

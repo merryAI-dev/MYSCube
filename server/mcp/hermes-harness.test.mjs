@@ -73,8 +73,9 @@ it('never advertises or executes write tools even if a caller supplies them', as
 it('rejects authority fields smuggled through model arguments before executing reads', async () => {
   const run = scenario((message, socket) => {
     if (message.type === 'start') emit(socket, call({ arguments: { yearMonth: '2026-09', actorRole: 'admin', tenantId: 'other' } }));
+    if (message.type === 'tool_result') emit(socket, final());
   });
-  await expect(run.promise).rejects.toThrow();
+  expect((await run.promise).answer).toContain('호출 입력을 확인하지 못해 실행하지 않았습니다');
   expect(run.execute).not.toHaveBeenCalled();
 });
 
@@ -197,4 +198,21 @@ it('does not let usage metadata overwrite audit event type or phase', async () =
   });
   await run.promise.catch(() => {});
   expect(run.record.mock.calls.some(([event]) => event.type === 'forged_event' || event.phase === 'forged_phase')).toBe(false);
+});
+
+it('preserves verified results after an invalid report call with a scoped failure notice', async () => {
+  let calls = 0;
+  const run = scenario((message, socket) => {
+    if (message.type === 'start') emit(socket, call({ arguments: {} }));
+    if (message.type === 'tool_result') {
+      if (!calls++) emit(socket, call({ id: 'read2' }));
+      else emit(socket, final());
+    }
+  });
+  const result = await run.promise;
+  expect(result.status).toBe('partial');
+  expect(result.answer).toContain('AXR: 승인 대기');
+  expect(result.answer).toContain('정산 보고서: 호출 입력을 확인하지 못해 실행하지 않았습니다');
+  expect(result.answer).not.toMatch(/전체 결과가 아닙니다|일부 조회가 실패/);
+  expect(run.record.mock.calls.flat()).toContainEqual(expect.objectContaining({ type: 'hermes_tool_failure', stage: 'input' }));
 });

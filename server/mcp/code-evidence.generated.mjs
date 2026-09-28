@@ -43,17 +43,17 @@ export const CODE_EVIDENCE = [
   {
     "topic": "agent_runtime",
     "path": "server/mcp/settlement-agent.mjs",
-    "sourceSha256": "1568d01d6ec038227eaa62bc6ae0b91036d1bf88eb00927f48f6ca06c245b93e",
-    "startLine": 93,
-    "endLine": 97,
-    "excerpt": "    if (!calls?.length) {\n      if (!answers.length) return { status: 'unverified', answer: '정산 정보를 확인하지 못했습니다. 조회할 사업과 기간을 알려주세요.' };\n      return { status: failed ? 'partial' : 'answered', answer: [\n        ...answers, ...(failed ? ['일부 조회가 실패했습니다. 전체 완료 여부를 판단할 수 없습니다.'] : [])].join('\\n\\n') };\n    }"
+    "sourceSha256": "93a7ea16c25847767058cc3227062d8eee4aa5f03c7f0353c4985a2d6aa64108",
+    "startLine": 94,
+    "endLine": 98,
+    "excerpt": "    if (!calls?.length) {\n      if (!answers.length) return { status: 'unverified', answer: renderToolFailures(failures) || '정산 정보를 확인하지 못했습니다. 조회할 사업과 기간을 알려주세요.' };\n      return { status: failures.length ? 'partial' : 'answered', answer: [\n        ...answers, ...(failures.length ? [renderToolFailures(failures)] : [])].join('\\n\\n') };\n    }"
   },
   {
     "topic": "agent_runtime",
     "path": "server/mcp/hermes-harness.mjs",
-    "sourceSha256": "2bd04aec231cea6efff04ab5a521bd6960c3e21fd9dc5591f4ab0499d1450ced",
-    "startLine": 122,
-    "endLine": 126,
-    "excerpt": "        await record({ type: 'answer_policy', policy: 'server_evidence_only', harness: 'hermes', renderedResults: answers.length });\n        const partial = failed || message.partial === true;\n        if (!answers.length) { finish(null, { status: failed ? 'partial' : 'unverified', answer: '조회 근거를 확인하지 못했습니다. 사업과 기간을 확인해 다시 요청해주세요.' }); return; }\n        finish(null, { status: partial ? 'partial' : 'answered', answer: [...answers,\n          ...(partial ? ['🔎 일부 처리를 마치지 못해 전체 결과가 아닙니다.'] : [])].join('\\n\\n') });"
+    "sourceSha256": "8d1f9f72634e26b56f906b0fe88b0b92128fc04fb5a545a3586a59808e46e1b9",
+    "startLine": 129,
+    "endLine": 133,
+    "excerpt": "        await record({ type: 'answer_policy', policy: 'server_evidence_only', harness: 'hermes', renderedResults: answers.length });\n        const partial = failures.length > 0 || message.partial === true;\n        if (!answers.length) { finish(null, { status: failures.length ? 'partial' : 'unverified', answer: renderToolFailures(failures) || '조회 근거를 확인하지 못했습니다. 사업과 기간을 확인해 다시 요청해주세요.' }); return; }\n        finish(null, { status: partial ? 'partial' : 'answered', answer: [...answers,\n          ...(failures.length ? [renderToolFailures(failures)] : []),"
   }
 ];
