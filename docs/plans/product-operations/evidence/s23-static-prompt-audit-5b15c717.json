@@ -1,0 +1,927 @@
+{
+  "sourceSha": "5b15c717c6b90f24c4ec1a0e142d28db093c0408",
+  "archiveSha256": "201dd7e4d69d8be7ed9f83e13180244fd974f3e6cb56fdc208d5a1b6b9c6a353",
+  "method": "Actual pinned runConversationTurn first complete boundary capture, no provider/network/database. Characters are JS UTF-16 code units, not tokens.",
+  "fixtures": [
+    {
+      "name": "empty",
+      "mode": "react",
+      "sections": {
+        "system": {
+          "characters": 8317,
+          "utf8Bytes": 12862
+        },
+        "toolWrapper": {
+          "characters": 18226,
+          "utf8Bytes": 18283
+        },
+        "toolSchema": {
+          "characters": 18100,
+          "utf8Bytes": 18100
+        },
+        "catalog": {
+          "characters": 846,
+          "utf8Bytes": 846
+        },
+        "catalogFields": {
+          "scopeFingerprint": {
+            "characters": 64,
+            "utf8Bytes": 64
+          },
+          "engineVersion": {
+            "characters": 26,
+            "utf8Bytes": 26
+          },
+          "items": {
+            "characters": 2,
+            "utf8Bytes": 2
+          },
+          "semantic": {
+            "characters": 29,
+            "utf8Bytes": 29
+          },
+          "tables": {
+            "characters": 462,
+            "utf8Bytes": 462
+          },
+          "missingDatasetIds": {
+            "characters": 2,
+            "utf8Bytes": 2
+          },
+          "limits": {
+            "characters": 157,
+            "utf8Bytes": 157
+          }
+        },
+        "semanticQueryGuide": {
+          "characters": 1105,
+          "utf8Bytes": 1105
+        },
+        "tableGuide": {
+          "characters": 462,
+          "utf8Bytes": 462
+        },
+        "actionContract": {
+          "characters": 594,
+          "utf8Bytes": 594
+        },
+        "registeredApis": {
+          "characters": 427,
+          "utf8Bytes": 447
+        },
+        "currentSourceMessage": {
+          "characters": 205,
+          "utf8Bytes": 257
+        },
+        "userMessage": {
+          "characters": 24,
+          "utf8Bytes": 58
+        },
+        "htmlReferenceChars": 0
+      },
+      "totalContentCharacters": 26772,
+      "requestJson": {
+        "characters": 27361,
+        "utf8Bytes": 32049
+      },
+      "branches": [
+        {
+          "action": "clarify",
+          "characters": 1774,
+          "utf8Bytes": 1774,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query",
+          "characters": 3441,
+          "utf8Bytes": 3441,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query_table",
+          "characters": 3303,
+          "utf8Bytes": 3303,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "investigate",
+          "characters": 2194,
+          "utf8Bytes": 2194,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "answer",
+          "characters": 1941,
+          "utf8Bytes": 1941,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query_api",
+          "characters": 2287,
+          "utf8Bytes": 2287,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "build_screen",
+          "characters": 3085,
+          "utf8Bytes": 3085,
+          "interpretationChars": 1611
+        }
+      ],
+      "exactDuplicates": {
+        "tableGuideExtraCopyCharacters": 491,
+        "semanticRepeatedMetadataCharacters": 0,
+        "interpretationExtraCopies": 6,
+        "interpretationExtraCharacters": 9666,
+        "timeParameterSchemaDuplicateCharacters": 166
+      },
+      "smallestProjection": {
+        "removedCharacters": 491,
+        "percentageOfSystem": 5.90357099915835,
+        "percentageOfTotalContent": 1.8340056775735842
+      },
+      "semanticDefinitionCharacters": []
+    },
+    {
+      "name": "empty",
+      "mode": "legacy_html",
+      "sections": {
+        "system": {
+          "characters": 15479,
+          "utf8Bytes": 22084
+        },
+        "toolWrapper": {
+          "characters": 15253,
+          "utf8Bytes": 15304
+        },
+        "toolSchema": {
+          "characters": 15126,
+          "utf8Bytes": 15126
+        },
+        "catalog": {
+          "characters": 846,
+          "utf8Bytes": 846
+        },
+        "catalogFields": {
+          "scopeFingerprint": {
+            "characters": 64,
+            "utf8Bytes": 64
+          },
+          "engineVersion": {
+            "characters": 26,
+            "utf8Bytes": 26
+          },
+          "items": {
+            "characters": 2,
+            "utf8Bytes": 2
+          },
+          "semantic": {
+            "characters": 29,
+            "utf8Bytes": 29
+          },
+          "tables": {
+            "characters": 462,
+            "utf8Bytes": 462
+          },
+          "missingDatasetIds": {
+            "characters": 2,
+            "utf8Bytes": 2
+          },
+          "limits": {
+            "characters": 157,
+            "utf8Bytes": 157
+          }
+        },
+        "semanticQueryGuide": {
+          "characters": 1105,
+          "utf8Bytes": 1105
+        },
+        "tableGuide": {
+          "characters": 462,
+          "utf8Bytes": 462
+        },
+        "actionContract": {
+          "characters": 481,
+          "utf8Bytes": 481
+        },
+        "registeredApis": {
+          "characters": 2,
+          "utf8Bytes": 2
+        },
+        "currentSourceMessage": {
+          "characters": 0,
+          "utf8Bytes": 0
+        },
+        "userMessage": {
+          "characters": 24,
+          "utf8Bytes": 58
+        },
+        "htmlReferenceChars": 8418
+      },
+      "totalContentCharacters": 30756,
+      "requestJson": {
+        "characters": 31477,
+        "utf8Bytes": 38167
+      },
+      "branches": [
+        {
+          "action": "clarify",
+          "characters": 1774,
+          "utf8Bytes": 1774,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query",
+          "characters": 3441,
+          "utf8Bytes": 3441,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query_table",
+          "characters": 3303,
+          "utf8Bytes": 3303,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "investigate",
+          "characters": 2194,
+          "utf8Bytes": 2194,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "answer",
+          "characters": 1941,
+          "utf8Bytes": 1941,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "render",
+          "characters": 2399,
+          "utf8Bytes": 2399,
+          "interpretationChars": 1611
+        }
+      ],
+      "exactDuplicates": {
+        "tableGuideExtraCopyCharacters": 491,
+        "semanticRepeatedMetadataCharacters": 0,
+        "interpretationExtraCopies": 5,
+        "interpretationExtraCharacters": 8055,
+        "timeParameterSchemaDuplicateCharacters": 166
+      },
+      "smallestProjection": {
+        "removedCharacters": 491,
+        "percentageOfSystem": 3.172039537437819,
+        "percentageOfTotalContent": 1.596436467681103
+      },
+      "semanticDefinitionCharacters": []
+    },
+    {
+      "name": "two_semantic",
+      "mode": "react",
+      "sections": {
+        "system": {
+          "characters": 27109,
+          "utf8Bytes": 35626
+        },
+        "toolWrapper": {
+          "characters": 18226,
+          "utf8Bytes": 18283
+        },
+        "toolSchema": {
+          "characters": 18100,
+          "utf8Bytes": 18100
+        },
+        "catalog": {
+          "characters": 16450,
+          "utf8Bytes": 20422
+        },
+        "catalogFields": {
+          "scopeFingerprint": {
+            "characters": 64,
+            "utf8Bytes": 64
+          },
+          "engineVersion": {
+            "characters": 26,
+            "utf8Bytes": 26
+          },
+          "items": {
+            "characters": 2263,
+            "utf8Bytes": 2343
+          },
+          "semantic": {
+            "characters": 13372,
+            "utf8Bytes": 17264
+          },
+          "tables": {
+            "characters": 462,
+            "utf8Bytes": 462
+          },
+          "missingDatasetIds": {
+            "characters": 2,
+            "utf8Bytes": 2
+          },
+          "limits": {
+            "characters": 157,
+            "utf8Bytes": 157
+          }
+        },
+        "semanticQueryGuide": {
+          "characters": 4293,
+          "utf8Bytes": 4293
+        },
+        "tableGuide": {
+          "characters": 462,
+          "utf8Bytes": 462
+        },
+        "actionContract": {
+          "characters": 594,
+          "utf8Bytes": 594
+        },
+        "registeredApis": {
+          "characters": 427,
+          "utf8Bytes": 447
+        },
+        "currentSourceMessage": {
+          "characters": 205,
+          "utf8Bytes": 257
+        },
+        "userMessage": {
+          "characters": 24,
+          "utf8Bytes": 58
+        },
+        "htmlReferenceChars": 0
+      },
+      "totalContentCharacters": 45564,
+      "requestJson": {
+        "characters": 48805,
+        "utf8Bytes": 57465
+      },
+      "branches": [
+        {
+          "action": "clarify",
+          "characters": 1774,
+          "utf8Bytes": 1774,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query",
+          "characters": 3441,
+          "utf8Bytes": 3441,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query_table",
+          "characters": 3303,
+          "utf8Bytes": 3303,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "investigate",
+          "characters": 2194,
+          "utf8Bytes": 2194,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "answer",
+          "characters": 1941,
+          "utf8Bytes": 1941,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query_api",
+          "characters": 2287,
+          "utf8Bytes": 2287,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "build_screen",
+          "characters": 3085,
+          "utf8Bytes": 3085,
+          "interpretationChars": 1611
+        }
+      ],
+      "exactDuplicates": {
+        "tableGuideExtraCopyCharacters": 491,
+        "semanticRepeatedMetadataCharacters": 2196,
+        "interpretationExtraCopies": 6,
+        "interpretationExtraCharacters": 9666,
+        "timeParameterSchemaDuplicateCharacters": 166
+      },
+      "smallestProjection": {
+        "removedCharacters": 2687,
+        "percentageOfSystem": 9.91183739717437,
+        "percentageOfTotalContent": 5.897199543499254
+      },
+      "semanticDefinitionCharacters": [
+        {
+          "id": "weekly_submission",
+          "characters": 3842,
+          "utf8Bytes": 5640
+        },
+        {
+          "id": "cashflow_inflow",
+          "characters": 7044,
+          "utf8Bytes": 9058
+        }
+      ]
+    },
+    {
+      "name": "two_semantic",
+      "mode": "legacy_html",
+      "sections": {
+        "system": {
+          "characters": 34271,
+          "utf8Bytes": 44848
+        },
+        "toolWrapper": {
+          "characters": 15253,
+          "utf8Bytes": 15304
+        },
+        "toolSchema": {
+          "characters": 15126,
+          "utf8Bytes": 15126
+        },
+        "catalog": {
+          "characters": 16450,
+          "utf8Bytes": 20422
+        },
+        "catalogFields": {
+          "scopeFingerprint": {
+            "characters": 64,
+            "utf8Bytes": 64
+          },
+          "engineVersion": {
+            "characters": 26,
+            "utf8Bytes": 26
+          },
+          "items": {
+            "characters": 2263,
+            "utf8Bytes": 2343
+          },
+          "semantic": {
+            "characters": 13372,
+            "utf8Bytes": 17264
+          },
+          "tables": {
+            "characters": 462,
+            "utf8Bytes": 462
+          },
+          "missingDatasetIds": {
+            "characters": 2,
+            "utf8Bytes": 2
+          },
+          "limits": {
+            "characters": 157,
+            "utf8Bytes": 157
+          }
+        },
+        "semanticQueryGuide": {
+          "characters": 4293,
+          "utf8Bytes": 4293
+        },
+        "tableGuide": {
+          "characters": 462,
+          "utf8Bytes": 462
+        },
+        "actionContract": {
+          "characters": 481,
+          "utf8Bytes": 481
+        },
+        "registeredApis": {
+          "characters": 2,
+          "utf8Bytes": 2
+        },
+        "currentSourceMessage": {
+          "characters": 0,
+          "utf8Bytes": 0
+        },
+        "userMessage": {
+          "characters": 24,
+          "utf8Bytes": 58
+        },
+        "htmlReferenceChars": 8418
+      },
+      "totalContentCharacters": 49548,
+      "requestJson": {
+        "characters": 52921,
+        "utf8Bytes": 63583
+      },
+      "branches": [
+        {
+          "action": "clarify",
+          "characters": 1774,
+          "utf8Bytes": 1774,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query",
+          "characters": 3441,
+          "utf8Bytes": 3441,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query_table",
+          "characters": 3303,
+          "utf8Bytes": 3303,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "investigate",
+          "characters": 2194,
+          "utf8Bytes": 2194,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "answer",
+          "characters": 1941,
+          "utf8Bytes": 1941,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "render",
+          "characters": 2399,
+          "utf8Bytes": 2399,
+          "interpretationChars": 1611
+        }
+      ],
+      "exactDuplicates": {
+        "tableGuideExtraCopyCharacters": 491,
+        "semanticRepeatedMetadataCharacters": 2196,
+        "interpretationExtraCopies": 5,
+        "interpretationExtraCharacters": 8055,
+        "timeParameterSchemaDuplicateCharacters": 166
+      },
+      "smallestProjection": {
+        "removedCharacters": 2687,
+        "percentageOfSystem": 7.840448192349217,
+        "percentageOfTotalContent": 5.4230241382094135
+      },
+      "semanticDefinitionCharacters": [
+        {
+          "id": "weekly_submission",
+          "characters": 3842,
+          "utf8Bytes": 5640
+        },
+        {
+          "id": "cashflow_inflow",
+          "characters": 7044,
+          "utf8Bytes": 9058
+        }
+      ]
+    },
+    {
+      "name": "two_semantic_one_table",
+      "mode": "react",
+      "sections": {
+        "system": {
+          "characters": 29725,
+          "utf8Bytes": 38532
+        },
+        "toolWrapper": {
+          "characters": 18226,
+          "utf8Bytes": 18283
+        },
+        "toolSchema": {
+          "characters": 18100,
+          "utf8Bytes": 18100
+        },
+        "catalog": {
+          "characters": 18237,
+          "utf8Bytes": 22447
+        },
+        "catalogFields": {
+          "scopeFingerprint": {
+            "characters": 64,
+            "utf8Bytes": 64
+          },
+          "engineVersion": {
+            "characters": 26,
+            "utf8Bytes": 26
+          },
+          "items": {
+            "characters": 3072,
+            "utf8Bytes": 3244
+          },
+          "semantic": {
+            "characters": 13521,
+            "utf8Bytes": 17507
+          },
+          "tables": {
+            "characters": 1291,
+            "utf8Bytes": 1343
+          },
+          "missingDatasetIds": {
+            "characters": 2,
+            "utf8Bytes": 2
+          },
+          "limits": {
+            "characters": 157,
+            "utf8Bytes": 157
+          }
+        },
+        "semanticQueryGuide": {
+          "characters": 4293,
+          "utf8Bytes": 4293
+        },
+        "tableGuide": {
+          "characters": 1291,
+          "utf8Bytes": 1343
+        },
+        "actionContract": {
+          "characters": 594,
+          "utf8Bytes": 594
+        },
+        "registeredApis": {
+          "characters": 427,
+          "utf8Bytes": 447
+        },
+        "currentSourceMessage": {
+          "characters": 205,
+          "utf8Bytes": 257
+        },
+        "userMessage": {
+          "characters": 24,
+          "utf8Bytes": 58
+        },
+        "htmlReferenceChars": 0
+      },
+      "totalContentCharacters": 48180,
+      "requestJson": {
+        "characters": 51867,
+        "utf8Bytes": 60817
+      },
+      "branches": [
+        {
+          "action": "clarify",
+          "characters": 1774,
+          "utf8Bytes": 1774,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query",
+          "characters": 3441,
+          "utf8Bytes": 3441,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query_table",
+          "characters": 3303,
+          "utf8Bytes": 3303,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "investigate",
+          "characters": 2194,
+          "utf8Bytes": 2194,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "answer",
+          "characters": 1941,
+          "utf8Bytes": 1941,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query_api",
+          "characters": 2287,
+          "utf8Bytes": 2287,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "build_screen",
+          "characters": 3085,
+          "utf8Bytes": 3085,
+          "interpretationChars": 1611
+        }
+      ],
+      "exactDuplicates": {
+        "tableGuideExtraCopyCharacters": 1320,
+        "semanticRepeatedMetadataCharacters": 2196,
+        "interpretationExtraCopies": 6,
+        "interpretationExtraCharacters": 9666,
+        "timeParameterSchemaDuplicateCharacters": 166
+      },
+      "smallestProjection": {
+        "removedCharacters": 3516,
+        "percentageOfSystem": 11.828427249789739,
+        "percentageOfTotalContent": 7.297633872976339
+      },
+      "semanticDefinitionCharacters": [
+        {
+          "id": "weekly_submission",
+          "characters": 3842,
+          "utf8Bytes": 5640
+        },
+        {
+          "id": "cashflow_inflow",
+          "characters": 7044,
+          "utf8Bytes": 9058
+        }
+      ]
+    },
+    {
+      "name": "two_semantic_one_table",
+      "mode": "legacy_html",
+      "sections": {
+        "system": {
+          "characters": 36887,
+          "utf8Bytes": 47754
+        },
+        "toolWrapper": {
+          "characters": 15253,
+          "utf8Bytes": 15304
+        },
+        "toolSchema": {
+          "characters": 15126,
+          "utf8Bytes": 15126
+        },
+        "catalog": {
+          "characters": 18237,
+          "utf8Bytes": 22447
+        },
+        "catalogFields": {
+          "scopeFingerprint": {
+            "characters": 64,
+            "utf8Bytes": 64
+          },
+          "engineVersion": {
+            "characters": 26,
+            "utf8Bytes": 26
+          },
+          "items": {
+            "characters": 3072,
+            "utf8Bytes": 3244
+          },
+          "semantic": {
+            "characters": 13521,
+            "utf8Bytes": 17507
+          },
+          "tables": {
+            "characters": 1291,
+            "utf8Bytes": 1343
+          },
+          "missingDatasetIds": {
+            "characters": 2,
+            "utf8Bytes": 2
+          },
+          "limits": {
+            "characters": 157,
+            "utf8Bytes": 157
+          }
+        },
+        "semanticQueryGuide": {
+          "characters": 4293,
+          "utf8Bytes": 4293
+        },
+        "tableGuide": {
+          "characters": 1291,
+          "utf8Bytes": 1343
+        },
+        "actionContract": {
+          "characters": 481,
+          "utf8Bytes": 481
+        },
+        "registeredApis": {
+          "characters": 2,
+          "utf8Bytes": 2
+        },
+        "currentSourceMessage": {
+          "characters": 0,
+          "utf8Bytes": 0
+        },
+        "userMessage": {
+          "characters": 24,
+          "utf8Bytes": 58
+        },
+        "htmlReferenceChars": 8418
+      },
+      "totalContentCharacters": 52164,
+      "requestJson": {
+        "characters": 55983,
+        "utf8Bytes": 66935
+      },
+      "branches": [
+        {
+          "action": "clarify",
+          "characters": 1774,
+          "utf8Bytes": 1774,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query",
+          "characters": 3441,
+          "utf8Bytes": 3441,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "query_table",
+          "characters": 3303,
+          "utf8Bytes": 3303,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "investigate",
+          "characters": 2194,
+          "utf8Bytes": 2194,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "answer",
+          "characters": 1941,
+          "utf8Bytes": 1941,
+          "interpretationChars": 1611
+        },
+        {
+          "action": "render",
+          "characters": 2399,
+          "utf8Bytes": 2399,
+          "interpretationChars": 1611
+        }
+      ],
+      "exactDuplicates": {
+        "tableGuideExtraCopyCharacters": 1320,
+        "semanticRepeatedMetadataCharacters": 2196,
+        "interpretationExtraCopies": 5,
+        "interpretationExtraCharacters": 8055,
+        "timeParameterSchemaDuplicateCharacters": 166
+      },
+      "smallestProjection": {
+        "removedCharacters": 3516,
+        "percentageOfSystem": 9.53181337598612,
+        "percentageOfTotalContent": 6.740280653324132
+      },
+      "semanticDefinitionCharacters": [
+        {
+          "id": "weekly_submission",
+          "characters": 3842,
+          "utf8Bytes": 5640
+        },
+        {
+          "id": "cashflow_inflow",
+          "characters": 7044,
+          "utf8Bytes": 9058
+        }
+      ]
+    }
+  ],
+  "checks": [
+    "Each captured prompt contains tableGuide exactly twice.",
+    "Each oneOf interpretation subtree byte-for-byte equal.",
+    "Projected semantic entries can reconstruct original semantic catalog entries exactly using catalog.items keyed by datasetId.",
+    "Actual prompt captured before any tool execution; no provider/db/network calls."
+  ],
+  "author": [
+    {
+      "name": "new",
+      "system": {
+        "characters": 7142,
+        "utf8Bytes": 7261
+      },
+      "toolWrapper": {
+        "characters": 2404,
+        "utf8Bytes": 2404
+      },
+      "userPayload": {
+        "characters": 125,
+        "utf8Bytes": 157
+      },
+      "requestJson": {
+        "characters": 9886,
+        "utf8Bytes": 10037
+      },
+      "newExamplePresent": true,
+      "fullCatalogPresent": false
+    },
+    {
+      "name": "edit",
+      "system": {
+        "characters": 6411,
+        "utf8Bytes": 6435
+      },
+      "toolWrapper": {
+        "characters": 2404,
+        "utf8Bytes": 2404
+      },
+      "userPayload": {
+        "characters": 302,
+        "utf8Bytes": 352
+      },
+      "requestJson": {
+        "characters": 9313,
+        "utf8Bytes": 9387
+      },
+      "newExamplePresent": false,
+      "fullCatalogPresent": false
+    }
+  ],
+  "sourcePins": {
+    "server/workbench/conversation-agent.mjs": "6a1d3ec9f746f777d3ef10190d4b7b2345fb3a66e634de4c71db305528e63df5",
+    "server/workbench/semantic-catalog.mjs": "903260ef6909519ef21b003ed013fe610742cbaf619a929ad00478909a4cbaf4",
+    "server/workbench/semantic-query-guide.mjs": "c074613a2be2b8af975080bbe663ac94cc06a9ef64e4abea5acdefe8588a54f0",
+    "server/workbench/table-query.mjs": "93d948723400b93fe0603307a598ec41205f2e218bb33a0eb30b14e32ca5e9e5",
+    "server/workbench/analytics-contract.mjs": "108368f0a54cee753e688920e2ee551e613be949464afc51236e0388c7d01246",
+    "server/workbench/react-pages.mjs": "518cb1025ab7308136dc5ef3c58c2dfcd50009f893e434d5f2d3b19dfb941b64",
+    "server/workbench/html-references.mjs": "dd488cee798d0baa08653ef45a884b9488da66974bbab756bef68c5fddebc4a7",
+    "server/workbench/cashflow-inflow-definition.mjs": "c0830d98467cf5f2fd817880e7805b5bad4454fb1913dc85cb4f295d3d90533b"
+  }
+}
