@@ -42,9 +42,7 @@ const directHosts = (process.env.CLOUDFLARE_EDGE_DIRECT_HOSTS || defaultDirectHo
   .split(",")
   .map((host) => host.trim())
   .filter(Boolean);
-const defaultLegacyRedirects = [
-  { host: "soc.myscguard.app", target: "https://myscube.myscguard.app/" },
-];
+const defaultLegacyRedirects = [];
 const legacyRedirects = (process.env.CLOUDFLARE_EDGE_LEGACY_REDIRECTS || defaultLegacyRedirects.map((item) => `${item.host}->${item.target}`).join(","))
   .split(",")
   .map((item) => item.trim())
