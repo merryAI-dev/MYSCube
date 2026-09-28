@@ -155,3 +155,10 @@ it('does not force a presentation modifier when the request excludes or negates 
     expect(input.groupBy).toBeUndefined();
   }
 });
+
+
+it('preserves monthly report snapshots and deadline reporting capabilities', () => {
+  const tools = [{ name: 'settlement_report' }, { name: 'settlement_status_report' }];
+  expect(settlementRequestTools(tools, resolveSettlementRequest('8월 월결산 미완료 목록을 알려줘'))).toEqual(tools);
+  expect(settlementRequestTools(tools, resolveSettlementRequest('9월 4주차 주정산 마감 기한 미완료'))).toEqual(tools);
+});

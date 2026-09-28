@@ -45,7 +45,7 @@ export function resolveSettlementRequest(question, now = new Date()) {
 
 export function settlementRequestTools(tools, request) {
   return request ? tools.filter((tool) => !financialTools.has(tool.name)
-    && (request.needsDeadline || tool.name !== 'settlement_report'))
+    && (request.kind !== 'week' || request.needsDeadline || tool.name !== 'settlement_report'))
     .map((tool) => tool.name === 'settlement_status_report' && tool.schema ? { ...tool, schema: tool.schema.extend({
       ...(request.groupBy ? { groupBy: z.literal(request.groupBy).default(request.groupBy) } : {}),
       ...(request.statusFilter ? { statusFilter: z.literal(request.statusFilter).default(request.statusFilter) } : {}),
