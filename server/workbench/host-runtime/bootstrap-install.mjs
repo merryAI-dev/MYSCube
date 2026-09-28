@@ -44,7 +44,7 @@ export function validateBootstrapConfiguration({ configuration, manifest, domain
   for (const key of ['WORKBENCH_MYSCUBE_LIVE_ENABLED', 'WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED']) {
     if (Object.hasOwn(configuration, key) && !['true', 'false'].includes(configuration[key])) fail('MYSCube connection switches must be literal true or false.');
   }
-  if (configuration.WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED === 'true' && configuration.WORKBENCH_MYSCUBE_LIVE_ENABLED !== 'true') fail('Company summary requires explicit MYSCube live activation.');
+  if (configuration.WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED === 'true' && configuration.WORKBENCH_MYSCUBE_LIVE_ENABLED === 'false') fail('Company summary requires MYSCube live connections to stay on.');
   resolveWorkbenchRuntime(configuration);
   if (manifest?.classification !== 'production_candidate' || manifest.platform?.os !== 'linux' || manifest.platform?.architecture !== 'amd64') fail('A production Linux amd64 release is required.');
   if (typeof domain !== 'string' || domain.length > 253 || !/^[a-z0-9]+(?:[.-][a-z0-9]+)*\.[a-z]{2,63}$/.test(domain) || /(?:^|\.)(invalid|test|localhost)$/.test(domain)) fail('An approved public TLS domain is required.');

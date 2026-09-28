@@ -25,8 +25,10 @@ describe('dedicated host bootstrap contracts (not real Linux acceptance)', () =>
     expect(validate(input)).toEqual(input);
     expect(renderRuntimeEnvironment(validate(input))).toContain(`WORKBENCH_MYSCUBE_LIVE_ENABLED="${value}"`);
   });
-  it('requires live activation before company summary and accepts explicit disabled switches', () => {
-    for (const live of [undefined, 'false']) expect(() => validate({ ...configuration(), ...(live === undefined ? {} : { WORKBENCH_MYSCUBE_LIVE_ENABLED: live }), WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED: 'true' })).toThrow(/requires explicit/);
+  it('refuses company summary while live connections are switched off and accepts explicit switches', () => {
+    expect(() => validate({ ...configuration(), WORKBENCH_MYSCUBE_LIVE_ENABLED: 'false', WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED: 'true' })).toThrow(/stay on/);
+    const defaultOn = { ...configuration(), WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED: 'true' };
+    expect(validate(defaultOn)).toEqual(defaultOn);
     for (const value of ['true', 'false']) {
       const input = { ...configuration(), WORKBENCH_MYSCUBE_LIVE_ENABLED: value, WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED: value };
       expect(validate(input)).toEqual(input);
