@@ -21,7 +21,7 @@ it('executes comparison, selects bounded investigations, reuses snapshots and ke
   expect(result.investigations[0].unknownCells).toBeGreaterThan(0);
   expect(result.actionStatus).toBe('PROPOSED_NOT_ASSIGNED');
   expect(result.stages.at(-1)).toMatchObject({ name: 'PROPOSE_FOLLOW_UP', outcome: 'SUCCEEDED', executedBusinessActions: 0 });
-  expect(record).toHaveBeenCalledTimes(4);
+  expect(record).toHaveBeenCalledTimes(5);
   expect(tool.render(result)).toContain('계획 0원 / 실적 20원 / 차이 20원');
   expect(tool.render(result)).toContain('저장·배정·실행되지 않았습니다');
   expect(tool.render(result)).not.toContain('source-revision');

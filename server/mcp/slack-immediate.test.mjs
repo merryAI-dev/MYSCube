@@ -66,7 +66,8 @@ it('delivers corrected status directly, updates progress, and drains a reply que
   expect(reads).toBe(2);
   expect(completeFactory).not.toHaveBeenCalled();
   expect(readSnapshot).not.toHaveBeenCalled();
-  const answers = posts.filter((post) => post.method === 'chat.update');
+  const answers = posts.filter((post) => post.method === 'chat.update' && post.text.includes('[정산 완료 여부]'));
+  expect(posts.some((post) => post.method === 'chat.update' && post.text.startsWith('⏳'))).toBe(true);
   expect(answers).toHaveLength(2);
   expect(answers[0].text).toContain('1주차: 승인 완료 1개');
   expect(answers[1].text).toContain('주정산: 2026-10');

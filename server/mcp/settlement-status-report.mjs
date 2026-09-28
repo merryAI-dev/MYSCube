@@ -48,7 +48,7 @@ export function renderSettlementStatus(result) {
   return lines.join('\n');
 }
 
-export function createSettlementStatusTool({ db, authorize, readOverview, record = async () => {} }) {
+export function createSettlementStatusTool({ db, authorize, readOverview, record = async () => {}, onProgress = () => {} }) {
   return { name: 'settlement_status_report', schema: settlementStatusInput,
     description: '전체 등록 사업 또는 선택 사업의 주정산·월결산 완료 여부만 새로 조회합니다. 금액 분석 없이 상태만 출력합니다. projectIds 생략은 전체 등록 사업입니다. week/both의 yearMonth는 주정산 운영월이며 both의 월결산은 직전 월입니다. month의 yearMonth는 월결산 대상월입니다. 주차 생략은 1~5주차이며 승인 완료·승인 대기·업데이트 대기·확인 필요를 구분합니다.',
     render: renderSettlementStatus,
@@ -65,6 +65,7 @@ export function createSettlementStatusTool({ db, authorize, readOverview, record
       do {
         signal.throwIfAborted();
         const context = await authorize();
+        onProgress('READ_PROJECTS');
         const member = (await db.doc(`orgs/${context.tenantId}/members/${context.actorId}`).get()).data();
         let query = db.collection(`orgs/${context.tenantId}/projects`).orderBy(FieldPath.documentId()).select('name', 'trashedAt');
         if (cursor) query = query.startAfter(cursor);
@@ -74,6 +75,7 @@ export function createSettlementStatusTool({ db, authorize, readOverview, record
           && isProjectInActorScope({ role: context.actorRole, members: [member], actorId: context.actorId, projectId: doc.id }));
         if (projects.length) {
           const projectIds = projects.map((doc) => doc.id);
+          onProgress('READ_SETTLEMENT');
           let overview;
           try { overview = assertOverview(await readOverview({ context, body: { yearMonth: cycleMonth, projectIds } }), { yearMonth: cycleMonth, projectIds }); }
           catch (error) {
