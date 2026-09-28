@@ -13,6 +13,14 @@ locals {
   }
 
   web_records = merge(local.vercel_records, local.extra_web_records)
+
+  axr_workbench_user_agent = "(lower(http.user_agent) contains \"myscube-axr-workbench\")"
+  axr_workbench_allowed = length(var.axr_workbench_egress_ips) == 0 ? "false" : join("", [
+    "(ip.src in {${join(" ", var.axr_workbench_egress_ips)}}",
+    " and http.host eq \"myscube.myscguard.app\"",
+    " and http.request.method eq \"GET\"",
+    " and http.request.uri.path in {\"/api/v1/projects\" \"/api/v1/cashflow-evidence\"})",
+  ])
 }
 
 resource "cloudflare_dns_record" "web" {
@@ -92,6 +100,12 @@ resource "cloudflare_ruleset" "custom_waf" {
   }
 
   rules = [
+    {
+      action      = "block"
+      expression  = "(${local.axr_workbench_user_agent} and not ${local.axr_workbench_allowed})"
+      description = "Allow the AXR workbench identity only from its egress IP on reviewed read paths"
+      ref         = "mysc_axr_workbench_identity_scope"
+    },
     {
       action      = "managed_challenge"
       expression  = var.admin_path_expression

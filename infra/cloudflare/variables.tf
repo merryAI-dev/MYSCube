@@ -73,6 +73,17 @@ variable "api_path_expression" {
   default     = "(starts_with(http.request.uri.path, \"/api\") or http.request.uri.path contains \"/cashflow-sheet-lab\")"
 }
 
+variable "axr_workbench_egress_ips" {
+  description = "Public egress IPs of the AXR workbench host. The MYSCube-AXR-Workbench User-Agent is blocked everywhere else; an empty list blocks it entirely."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for ip in var.axr_workbench_egress_ips : can(regex("^\\d{1,3}(\\.\\d{1,3}){3}$", ip)) && can(cidrhost("${ip}/32", 0))])
+    error_message = "axr_workbench_egress_ips must contain single IPv4 addresses."
+  }
+}
+
 variable "legacy_redirects" {
   description = "Legacy public hostnames that must redirect to the canonical Cloudflare hostname."
   type = list(object({
