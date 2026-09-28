@@ -66,3 +66,6 @@ BFF 실제 합성 실행 결과(월/주/부분 결과)를 fixture로 보존해 A
 - 신규 전사 API의 불확실 실패에 표시되는 최대360초 재시도 안내는 BFF 분산 admission의 복구 상한이다. AXR 자체가 완료된 전송의 자리를360초 고정 점유하는 정책이 아니다.
 - 월 응답 안의 주차별 세부 합계는 BFF 집계가 권위자다. AXR의 행별 재합산 검증은 선택한 조회 기간의 `periodTotals`와 최종 `totals`를 비교하며, 월 응답만으로 모든 주차 세부값을 독립 재계산했다고 주장하지 않는다.
 - 리뷰 PR의 대상은 AXR 작업 브랜치다. CI 두 워크플로의 pull_request 허용 대상을 이 브랜치까지 추가했으며 push·운영 배포 트리거는 변경하지 않았다.
+
+
+완전성 의미의 추가 검증: `complete=true`는 모든 대상 사업에서 저장된 집계 숫자를 받았다는 범위 표지다. JVM readModel은 셀 상태를 제공하지 않으며 일부 행만 기록되어도 다른 항목의 합산 결과가0일 수 있다(`accounting-read.mjs`의 `recorded` 판정, `WeeklyExpenseController.buildModeReadModel`, `CashflowWeekTotals.sumLines`). 모든 EMPTY가0으로 저장된다고 단정하는 것은 아니다. 그래서 완전/부분 결과 모두 호스트에 **저장된 집계값 기준 · 입력 상태 확인 필요** 안내를 강제하고, 모델이 보는 API 설명도 같은 의미로 제한한다. 기존 값이나 저장 로직을 변경하지 않는다.

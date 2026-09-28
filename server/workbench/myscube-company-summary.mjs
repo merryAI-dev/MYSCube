@@ -25,7 +25,7 @@ const schema = object({
 });
 export const COMPANY_SUMMARY_ENDPOINT = {
   id: 'myscube-company-cashflow-summary', version: 1, name: 'MYSCube 전사 월·주 현금흐름 집계',
-  description: '관리자 권한으로 등록 사업의 월 또는 주차별 저장 현금흐름을 조회합니다. complete=true인 금액만 전체 대상 합계이며 partialValue는 확인된 부분합입니다. 누락·시간 제한이 있으면 전사 총액은 확인 필요입니다. 현재 은행 잔고나 실시간 시트 잔고가 아닙니다.',
+  description: '관리자 권한으로 등록 사업의 월 또는 주차별 저장 현금흐름을 조회합니다. complete=true는 모든 대상의 저장 집계값을 받았다는 뜻이며 입력 완료나 빈 셀·명시적 0 검증을 뜻하지 않습니다. partialValue는 확인된 부분합입니다. 누락·시간 제한이 있으면 전사 총액은 확인 필요입니다. 현재 은행 잔고나 실시간 시트 잔고가 아닙니다.',
   parameters: { yearMonth: { type: 'string', required: true, label: '조회 월', example: '2026-09' }, weekNo: { type: 'integer', required: false, label: '주차(미선택 시 월 전체)', example: 1, enum: [1, 2, 3, 4, 5] } }, responseSchema: schema,
 };
 const invalid = () => { throw createHttpError(502, '전사 집계의 기간·포함 범위·완전성을 확인하지 못했습니다.', 'myscube_live_response_invalid'); };
