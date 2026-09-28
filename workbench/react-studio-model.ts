@@ -21,7 +21,7 @@ export type StudioState = EditorState & {
 const emptyExecution = () => ({ sequence: 0, mount: 0, candidate: null, visible: null, artifact: null, remoteDraft: null, bindings: {}, preparing: false });
 export const initialStudio = (): StudioState => ({ ...initialEditor(), capabilities: null, pages: [], history: [], registeredApis: [], newPageApis: [], newPagePristine: true, generatedRequest: null, task: null, error: '', message: '', diagnostics: [], git: null, execution: emptyExecution() });
 export function defaultReactApis(apis: RegisteredApi[]): ApiRef[] {
-  const refs = ['myscube-projects', 'myscube-cashflow-evidence'].flatMap(endpointId => {
+  const refs = ['myscube-projects', 'myscube-cashflow-evidence', 'myscube-company-cashflow-summary'].flatMap(endpointId => {
     const matches = apis.filter(api => api.definition.enabled === true && api.definition.kind === 'external-read' && api.definition.endpointId === endpointId && api.definition.endpointVersion === 1);
     return matches.length === 1 ? [{ id: matches[0].id, version: matches[0].version }] : [];
   });

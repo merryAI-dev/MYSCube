@@ -1,3 +1,4 @@
+import { COMPANY_SUMMARY_ENDPOINT, validateCompanySummary } from './myscube-company-summary.mjs';
 import { createHash } from 'node:crypto';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
@@ -139,6 +140,7 @@ export async function requestMyscubeLiveJson(options, requestImpl = https.reques
   } finally { if (closed) await closed; }
 }
 export function createMyscubeLiveApiAdapter({ env = process.env, credentialProvider, resolveDns = lookup, transport = requestMyscubeLiveJson, now = () => new Date().toISOString(), monotonicNow = () => performance.now(), schedule = (callback, delay) => setTimeout(callback, delay) } = {}) {
+  const enabledDefinitions = env.WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED === 'true' ? [...definitions, COMPANY_SUMMARY_ENDPOINT] : definitions;
   let active = 0, lastClock = 0; const actors = new Set(), admitted = [];
   const clock = () => { const value = monotonicNow(); if (!Number.isFinite(value)) throw new Error('Invalid monotonic clock.'); lastClock = Math.max(lastClock, value); return lastClock; };
   const admitRate = key => {
@@ -148,28 +150,31 @@ export function createMyscubeLiveApiAdapter({ env = process.env, credentialProvi
     admitted.push({ at, key });
   };
   const allowed = context => env.WORKBENCH_MYSCUBE_LIVE_ENABLED === 'true' && context?.tenantId === 'mysc' && context.actorRole === 'admin' && typeof context.actorId === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(context.actorId);
-  const definition = (context, id, version) => { const value = definitions.find(value => value.id === id && value.version === version); if (!allowed(context) || !value) fail(403, 'myscube_live_forbidden', '현재 계정에서 사용할 수 없는 MYSCube 연결입니다.'); return value; };
+  const definition = (context, id, version) => { const value = enabledDefinitions.find(value => value.id === id && value.version === version); if (!allowed(context) || !value) fail(403, 'myscube_live_forbidden', '현재 계정에서 사용할 수 없는 MYSCube 연결입니다.'); return value; };
   const publicDefinition = value => ({ ...structuredClone(value), contractHash: createHash('sha256').update(JSON.stringify(value)).digest('hex') });
   return {
-    list: context => ({ items: allowed(context) ? definitions.map(publicDefinition) : [] }),
+    list: context => ({ items: allowed(context) ? enabledDefinitions.map(publicDefinition) : [] }),
     get: (context, id, version) => publicDefinition(definition(context, id, version)),
     async invoke(context, id, version, input, { signal, authorize } = {}) {
       const selected = definition(context, id, version);
+      const companySummary = id === COMPANY_SUMMARY_ENDPOINT.id;
+      const timeoutMs = companySummary ? 55000 : 10000;
+      const sourceBudgetMs = companySummary ? 360000 : 25000;
       if (typeof authorize !== 'function') throw new Error('Live API requires an authorization callback.');
       if (!record(input) || Object.keys(input).some(key => !Object.hasOwn(selected.parameters, key))) fail(400, 'myscube_live_input_invalid', '등록된 조회 조건만 입력해 주세요.');
       const params = { ...input };
       if (id === 'myscube-projects') {
         params.limit ??= 20;
         if (!Number.isInteger(params.limit) || params.limit < 1 || params.limit > 20 || params.cursor !== undefined && !cursor(params.cursor)) fail(400, 'myscube_live_input_invalid', '사업 목록의 페이지 크기와 다음 위치를 확인해 주세요.');
-      } else if (typeof params.yearMonth !== 'string' || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(params.yearMonth) || params.after !== undefined && (!cursor(params.after) || params.after.length > 100)) fail(400, 'myscube_live_input_invalid', '조회 월과 다음 페이지 위치를 확인해 주세요.');
+      } else if (typeof params.yearMonth !== 'string' || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(params.yearMonth) || params.after !== undefined && (!cursor(params.after) || params.after.length > 100) || companySummary && params.weekNo !== undefined && (!Number.isInteger(params.weekNo) || params.weekNo < 1 || params.weekNo > 5)) fail(400, 'myscube_live_input_invalid', '조회 월과 다음 페이지 위치를 확인해 주세요.');
       if (typeof credentialProvider !== 'function') fail(503, 'myscube_live_credentials_unavailable', '현재 로그인으로 MYSCube를 연결할 준비가 되지 않았습니다.');
       const key = `${context.tenantId}:${context.actorId}`;
       if (active >= 2 || actors.has(key)) fail(429, 'myscube_live_busy', 'MYSCube 조회가 진행 중입니다. 완료한 뒤 다시 조회해 주세요.');
       admitRate(key);
       active++; actors.add(key);
       let networkPromise, networkSettled = true, dispatchedAt = null, upstreamMayContinue = false;
-      const deadline = clock() + 10000;
-      const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), 10000);
+      const deadline = clock() + timeoutMs;
+      const controller = new AbortController(); const timeout = setTimeout(() => controller.abort(), timeoutMs);
       const combined = AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]);
       const checkDeadline = () => { if (combined.aborted || clock() >= deadline) { controller.abort(); fail(504, 'myscube_live_timeout', 'MYSCube 조회 시간이 한도를 넘었습니다.'); } };
       const check = async () => { checkDeadline(); await bounded(Promise.resolve().then(() => authorize(context)), combined); checkDeadline(); definition(context, id, version); };
@@ -180,7 +185,7 @@ export function createMyscubeLiveApiAdapter({ env = process.env, credentialProvi
         const authorization = await bounded(Promise.resolve().then(() => credentialProvider(context)), combined);
         if (typeof authorization !== 'string' || authorization.length > 8192 || !/^Bearer [A-Za-z0-9._~-]+$/.test(authorization)) fail(401, 'myscube_live_credentials_unavailable', '로그인 정보를 다시 확인해 주세요.');
         await check();
-        const url = new URL(id === 'myscube-projects' ? '/api/v1/projects' : '/api/v1/cashflow-evidence', MYSCUBE_LIVE_ORIGIN);
+        const url = new URL(id === 'myscube-projects' ? '/api/v1/projects' : companySummary ? '/api/v1/company-cashflow-summary' : '/api/v1/cashflow-evidence', MYSCUBE_LIVE_ORIGIN);
         for (const [name, value] of Object.entries(params)) url.searchParams.set(name, String(value));
         checkDeadline();
         networkSettled = false;
@@ -189,11 +194,11 @@ export function createMyscubeLiveApiAdapter({ env = process.env, credentialProvi
         const raw = await bounded(networkPromise, combined);
         await check();
         if (Buffer.byteLength(JSON.stringify(raw)) > MAX_BYTES) fail(413, 'myscube_live_response_large', 'MYSCube 응답이 조회 용량 한도를 넘었습니다.');
-        const data = id === 'myscube-projects' ? projectPage(raw, params) : cashflowPage(raw, params);
+        const data = id === 'myscube-projects' ? projectPage(raw, params) : companySummary ? validateCompanySummary(raw, params) : cashflowPage(raw, params);
         validateExternalResponse(selected.responseSchema, data);
         checkDeadline();
         const limitations = id === 'myscube-projects' ? ['이번 페이지의 사업 원문만 조회했습니다. 휴지통 항목도 포함하며 상태 코드로 활성·승인 여부를 추정하지 않습니다.', 'document_id와 document_updated_at은 API 미제공으로 null입니다. project_id는 API 응답 id로 원본 문서 식별자와 저장값을 구분할 수 없습니다.', '계약기간은 계약서 날짜이며 입금기간이 아닙니다.'] : [...data.limitations];
-        return { data, metadata: { source: selected.name, endpointId: id, endpointVersion: version, asOf: now(), sourceKind: 'myscube-live', ...(id === 'myscube-cashflow-evidence' ? { catalogComplete: data.catalogComplete, accessibleInPage: data.accessibleInPage, weekCalendarUniform: pageWeekCalendarUniform(data) } : {}), resultScope: id === 'myscube-projects' ? 'THIS_PAGE_ONLY' : data.totalsScope, limitations }, truncated: (id === 'myscube-projects' ? data.nextCursor : data.nextAfter) !== null };
+        return { data, metadata: { source: selected.name, endpointId: id, endpointVersion: version, asOf: now(), sourceKind: 'myscube-live', ...(companySummary ? { catalogComplete: data.catalogComplete, weekCalendarUniform: data.weekCalendarUniform, companySummary: true } : {}), ...(id === 'myscube-cashflow-evidence' ? { catalogComplete: data.catalogComplete, accessibleInPage: data.accessibleInPage, weekCalendarUniform: pageWeekCalendarUniform(data) } : {}), resultScope: id === 'myscube-projects' ? 'THIS_PAGE_ONLY' : data.totalsScope, limitations }, truncated: companySummary ? data.totalsScope !== 'COMPLETE_REGISTERED_PROJECTS' : (id === 'myscube-projects' ? data.nextCursor : data.nextAfter) !== null };
       } catch (cause) {
         upstreamMayContinue = combined.aborted || !Number.isInteger(cause?.statusCode) || [502, 503, 504].includes(cause.statusCode);
         let error;
@@ -201,13 +206,13 @@ export function createMyscubeLiveApiAdapter({ env = process.env, credentialProvi
         else if ([401, 403].includes(cause?.statusCode)) error = createHttpError(cause.statusCode, 'MYSCube 인증 또는 접근 권한을 확인해 주세요.', 'myscube_live_authorization_denied');
         else if (typeof cause?.code === 'string' && cause.code.startsWith('myscube_live_') && cause.expose) error = cause;
         else error = createHttpError(502, 'MYSCube 조회를 완료하지 못했습니다. 원본 응답이나 인증 정보는 표시하지 않았습니다.', 'myscube_live_request_failed');
-        if (id === 'myscube-cashflow-evidence' && dispatchedAt !== null && upstreamMayContinue) error.details = { sourceKind: 'myscube-live', sourceWorkMayContinue: true, sourceBudgetMs: 25000, retryAfterMs: Math.max(0, Math.ceil(dispatchedAt + 25000 - clock())) };
+        if ((id === 'myscube-cashflow-evidence' || companySummary) && dispatchedAt !== null && upstreamMayContinue) error.details = { sourceKind: 'myscube-live', sourceWorkMayContinue: true, sourceBudgetMs, retryAfterMs: Math.max(0, Math.ceil(dispatchedAt + sourceBudgetMs - clock())) };
         throw error;
       } finally {
         clearTimeout(timeout);
         const release = () => { active--; actors.delete(key); };
         const releaseWhenSafe = () => {
-          const remaining = id === 'myscube-cashflow-evidence' && dispatchedAt !== null && upstreamMayContinue ? dispatchedAt + 25000 - clock() : 0;
+          const remaining = id === 'myscube-cashflow-evidence' && dispatchedAt !== null && upstreamMayContinue ? dispatchedAt + sourceBudgetMs - clock() : 0;
           if (remaining > 0) { schedule(releaseWhenSafe, Math.ceil(remaining))?.unref?.(); return; }
           release();
         };

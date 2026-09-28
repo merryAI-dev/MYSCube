@@ -45,7 +45,9 @@ function EvidenceTable({ evidence, index, expected }: { evidence: Evidence; inde
   const hasMissingAmounts = financial && evidence.rows.some((row) => columns.some((name) => amounts.has(name) && row[name] == null) || /^[1-9]\d*$/.test(String(row.missing_observation_count ?? row.missing_cells ?? '')));
   const match = expected ? compareScreenEvidence(expected, evidence) : null;
   const criteria = evidence.semantic?.appliedPlan;
-  const pageOnly = evidence.kind === 'registered-api' && (evidence.data?.catalogComplete === false || evidence.metadata?.catalogComplete === false || evidence.metadata?.resultScope === 'THIS_PAGE_ONLY');
+  const companySummary = evidence.kind === 'registered-api' && evidence.data?.scope === 'accessible_registered_projects';
+  const partialCompany = companySummary && evidence.data?.totalsScope !== 'COMPLETE_REGISTERED_PROJECTS';
+  const pageOnly = !companySummary && evidence.kind === 'registered-api' && (evidence.data?.catalogComplete === false || evidence.metadata?.catalogComplete === false || evidence.metadata?.resultScope === 'THIS_PAGE_ONLY');
   const pageCount = evidence.data?.accessibleInPage ?? evidence.metadata?.accessibleInPage;
   const pageScopeLabel = typeof pageCount === 'number' && Number.isSafeInteger(pageCount) && pageCount >= 0 ? `이번 페이지 ${pageCount}개 사업 합계` : '이번 페이지에 포함된 사업만의 조회 결과';
 
@@ -56,6 +58,7 @@ function EvidenceTable({ evidence, index, expected }: { evidence: Evidence; inde
     {match === 'data-updated' && <p className="notice">앞선 대화 이후 자료가 갱신되었습니다. 조회 조건은 같으며 아래 표는 새 자료를 기준으로 표시합니다.</p>}
     {criteria && <details open={match === 'criteria-changed'}><summary>실제로 조회한 기간과 조건</summary><dl className="bound-evidence-meta">{record(criteria.time) && <div><dt>기간</dt><dd>{text(criteria.time.yearMonth)} · {criteria.time.weekScope === 'all' ? '전체 주차' : `${text(criteria.time.weekNo)}주차`}</dd></div>}{Array.isArray(criteria.filters) && criteria.filters.filter(record).map((filter, itemIndex) => <div key={itemIndex}><dt>{labels[text(filter.field)] || text(filter.field)}</dt><dd>{comparisons[text(filter.op)] || text(filter.op)}{!['is_null', 'is_not_null'].includes(text(filter.op)) && <> · {Array.isArray(filter.value) ? filter.value.map((value) => valueLabels[text(value)] || text(value)).join(', ') : valueLabels[text(filter.value)] || text(filter.value)}</>}</dd></div>)}</dl></details>}
     {evidence.kind === 'registered-api' && <div className="bound-evidence-warning"><strong>등록 API 실제 조회 근거</strong><p>조회 조건: {Object.entries(evidence.input || {}).map(([key, value]) => `${key}: ${text(value)}`).join(' · ') || '기본 조회'}</p><p>표시 범위: {text(evidence.metadata?.resultScope)} · 확인 시각: {text(evidence.metadata?.asOf)}</p>{Array.isArray(evidence.metadata?.limitations) && evidence.metadata.limitations.map((value, i) => <p key={i}>{text(value)}</p>)}</div>}
+    {partialCompany && <p className="bound-evidence-warning" data-testid="partial-company-scope"><strong>전사 합계는 확인 필요입니다.</strong><br />조회되지 않았거나 금액을 확인하지 못한 사업이 있습니다. 확인된 부분합을 전사 총액으로 사용하지 마세요.</p>}
     {pageOnly && <p className="bound-evidence-warning" data-testid="page-only-scope"><strong>{pageScopeLabel}</strong><br />전사 합계는 확인 필요입니다. 다른 페이지의 사업과 조회 실패·미입력 항목은 이 금액에 포함되었다고 판단할 수 없습니다.</p>}
     {evidence.metadata?.weekCalendarUniform === false && <p className="bound-evidence-warning" data-testid="week-calendar-mismatch">사업마다 주차의 시작일·종료일이 다릅니다. 같은 주차 번호라도 합산할 수 없습니다. 날짜 기준을 확인해 주세요.</p>}
     <dl className="bound-evidence-meta">{Object.entries(metadataLabels).map(([name, label]) => <div key={name}><dt>{label}</dt><dd>{text(evidence.metadata?.[name])}</dd></div>)}</dl>

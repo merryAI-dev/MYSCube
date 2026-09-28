@@ -65,6 +65,13 @@ const liveApi = (id: string, endpointId: string): RegisteredApi => ({ id, versio
 const defaults = [liveApi(api.id, 'myscube-projects'), liveApi('22222222-2222-4222-8222-222222222222', 'myscube-cashflow-evidence')];
 const initialize = (state = initialStudio()) => reduce(state, { type: 'initialize', ticket: ticketFor(state, 'initialize'), capabilities: initial().capabilities, pages: [], apis: defaults });
 describe('approved live connections default only to new untouched editors', () => {
+  it('includes the company summary only when a unique enabled registered definition exists', () => {
+    const summary = liveApi('33333333-3333-4333-8333-333333333333', 'myscube-company-cashflow-summary');
+    expect(defaultReactApis([...defaults, summary])).toContainEqual({ id: summary.id, version: 3 });
+    expect(defaultReactApis([...defaults, summary, { ...summary, id: '44444444-4444-4444-8444-444444444444' }])).toEqual(defaultReactApis(defaults));
+    expect(defaultReactApis([...defaults, { ...summary, definition: { ...summary.definition, enabled: false } }])).toEqual(defaultReactApis(defaults));
+  });
+
   it('selects exactly the two unique enabled endpoints and treats initial selection as the clean baseline', () => {
     const state = initialize(); expect(state.apis).toEqual(defaults.map(({ id, version }) => ({ id, version }))); expect(studioDirty(state)).toBe(false);
     expect(state.execution.candidate).toBeNull(); expect(state.saved).toBeNull();
