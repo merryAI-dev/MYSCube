@@ -1,29 +1,6 @@
 {
   "sourceSha": "3b630560b9f9c6e9717193f79cd6f31bd9808bf2",
   "scope": "Actual isolated-host source candidate, Docker/CDP and product React view over localhost plus SSH IAP tunnel; synthetic identity, not OAuth or live TLS.",
-  "oracle": {
-    "cold": {
-      "count": 20,
-      "failures": 0,
-      "p95Ms": 5117.632124999989,
-      "maxMs": 6147.918250000001,
-      "pass": false
-    },
-    "update": {
-      "count": 20,
-      "failures": 0,
-      "p95Ms": 4619.674458000023,
-      "maxMs": 4631.362540999995,
-      "pass": false
-    },
-    "input": {
-      "count": 20,
-      "failures": 0,
-      "p95Ms": 422.13241699998616,
-      "maxMs": 903.47987499999,
-      "pass": true
-    }
-  },
   "phase": {
     "cold": {
       "endToEndMs": {
@@ -263,7 +240,8 @@
     "inspectedContainers": 43,
     "oomObserved": 0,
     "liveHealthChecks": 158,
-    "liveHealthFailures": 0
+    "liveHealthFailures": 0,
+    "liveHealthScope": "Existing isolated AXR app at localhost8791; not original MYSCube business flow"
   },
   "cleanup": {
     "reserved": 0,
@@ -291,5 +269,52 @@
     "myscube-g3-g4-host-browser-3b630560.json": "75981e8072328ef5ddf36c70ca81242ba9c6944f99e4b0ad9f9724b071633c36",
     "myscube-g3-g4-host-server-3b630560.json": "64ae26d49c34d49523370918a533b9868a9722091bbb43018bc91aec019ec877",
     "myscube-g3-g4-stats-destroy-correlation-3b630560.json": "9db8604756a15ec095476f9baf97d494819f4224b80955670b568c99b985dd51"
+  },
+  "reportedEndToEndHarnessSummary": {
+    "cold": {
+      "count": 20,
+      "failures": 0,
+      "p95Ms": 5117.632124999989,
+      "maxMs": 6147.918250000001,
+      "pass": false
+    },
+    "update": {
+      "count": 20,
+      "failures": 0,
+      "p95Ms": 4619.674458000023,
+      "maxMs": 4631.362540999995,
+      "pass": false
+    },
+    "input": {
+      "count": 20,
+      "failures": 0,
+      "p95Ms": 422.13241699998616,
+      "maxMs": 903.47987499999,
+      "pass": true
+    }
+  },
+  "oracle": {
+    "metric": "cold/update first usable DOM; input local action through remote ACK/DOM",
+    "cold": {
+      "count": 20,
+      "failures": 0,
+      "p95Ms": 3956,
+      "thresholdMs": 3000,
+      "pass": false
+    },
+    "update": {
+      "count": 20,
+      "failures": 0,
+      "p95Ms": 3450.9,
+      "thresholdMs": 1000,
+      "pass": false
+    },
+    "input": {
+      "count": 20,
+      "failures": 0,
+      "p95Ms": 422.13241699998616,
+      "thresholdMs": 500,
+      "pass": true
+    }
   }
 }
