@@ -7,6 +7,14 @@ export const REMOTE_RENDERER_LABEL_VALUE = 'v1';
 export const REMOTE_LIMITS = Object.freeze({ ttlMs: 300000, commandMs: 8000, apiMs: 10000, inputBytes: 400000, outputBytes: 900000, totalOutputBytes: 50000000, commands: 600, apiCalls: 60, pendingApi: 8, sessions: 4, actorSessions: 1 });
 export const digest = (value) => createHash('sha256').update(value).digest('hex');
 export function remoteError(code, message, statusCode = 400) { return Object.assign(new Error(message), { code, statusCode, expose: true }); }
+export function checkApiBudgets(value, apiIds) {
+  const invalid = () => { throw remoteError('remote_api_budget_invalid', '실행할 API의 조회 시간 설정을 확인해 주세요.'); };
+  if (!Array.isArray(apiIds) || apiIds.length > 12 || new Set(apiIds).size !== apiIds.length || apiIds.some(id => typeof id !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(id))) invalid();
+  if (value === undefined) return Object.freeze(Object.fromEntries(apiIds.map(id => [id, REMOTE_LIMITS.apiMs])));
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype || Object.keys(value).length !== apiIds.length
+    || Object.keys(value).some(id => !apiIds.includes(id)) || apiIds.some(id => !Object.hasOwn(value, id) || ![10000, 55000].includes(value[id]))) invalid();
+  return Object.freeze(Object.fromEntries(apiIds.map(id => [id, value[id]])));
+}
 export function checkArtifact(value) {
   try {
     const artifact = selectReactRuntimeArtifact(value);

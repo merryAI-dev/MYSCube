@@ -1,0 +1,542 @@
+{
+  "schemaVersion": 1,
+  "period": {
+    "yearMonth": "2026-09",
+    "weekNo": null
+  },
+  "amountCurrency": "KRW",
+  "scope": "accessible_registered_projects",
+  "totalsScope": "COMPLETE_REGISTERED_PROJECTS",
+  "catalogComplete": true,
+  "catalog": {
+    "asOf": "2026-09-28T06:56:17.841Z",
+    "limit": 200,
+    "enumeratedCount": 1,
+    "eligibleCount": 1,
+    "complete": true,
+    "stable": true,
+    "knownTotal": 1,
+    "projectSetHash": "6138f42087d188b9eae7b88b751e8e9ae7bf76e38dddd1caeaae945abdc7f380"
+  },
+  "readWindow": {
+    "startedAt": "2026-09-28T06:56:17.827Z",
+    "finishedAt": "2026-09-28T06:56:17.860Z",
+    "atomicSnapshot": false
+  },
+  "totals": {
+    "projection": {
+      "inflow": {
+        "value": 99,
+        "partialValue": 99,
+        "included": 1,
+        "excluded": 0,
+        "complete": true
+      },
+      "outflow": {
+        "value": 0,
+        "partialValue": 0,
+        "included": 1,
+        "excluded": 0,
+        "complete": true
+      },
+      "cumulativeBalance": {
+        "value": 99,
+        "partialValue": 99,
+        "included": 1,
+        "excluded": 0,
+        "complete": true
+      }
+    },
+    "actual": {
+      "inflow": {
+        "value": 99,
+        "partialValue": 99,
+        "included": 1,
+        "excluded": 0,
+        "complete": true
+      },
+      "outflow": {
+        "value": 0,
+        "partialValue": 0,
+        "included": 1,
+        "excluded": 0,
+        "complete": true
+      },
+      "cumulativeBalance": {
+        "value": 99,
+        "partialValue": 99,
+        "included": 1,
+        "excluded": 0,
+        "complete": true
+      }
+    },
+    "difference": {
+      "inflow": {
+        "value": 0,
+        "partialValue": 0,
+        "included": 1,
+        "excluded": 0,
+        "complete": true
+      },
+      "outflow": {
+        "value": 0,
+        "partialValue": 0,
+        "included": 1,
+        "excluded": 0,
+        "complete": true
+      },
+      "cumulativeBalance": {
+        "value": 0,
+        "partialValue": 0,
+        "included": 1,
+        "excluded": 0,
+        "complete": true
+      }
+    }
+  },
+  "weeks": [
+    {
+      "weekNo": 1,
+      "start": "2026-09-01",
+      "end": "2026-09-06",
+      "weekCalendarUniform": true,
+      "totals": {
+        "projection": {
+          "inflow": {
+            "value": 10,
+            "partialValue": 10,
+            "included": 1,
+            "excluded": 0,
+            "complete": true
+          },
+          "outflow": {
+            "value": 0,
+            "partialValue": 0,
+            "included": 1,
+            "excluded": 0,
+            "complete": true
+          },
+          "cumulativeBalance": {
+            "value": 10,
+            "partialValue": 10,
+            "included": 1,
+            "excluded": 0,
+            "complete": true
+          }
+        },
+        "actual": {
+          "inflow": {
+            "value": 10,
+            "partialValue": 10,
+            "included": 1,
+            "excluded": 0,
+            "complete": true
+          },
+          "outflow": {
+            "value": 0,
+            "partialValue": 0,
+            "included": 1,
+            "excluded": 0,
+            "complete": true
+          },
+          "cumulativeBalance": {
+            "value": 10,
+            "partialValue": 10,
+            "included": 1,
+            "excluded": 0,
+            "complete": true
+          }
+        },
+        "difference": {
+          "inflow": {
+            "value": 0,
+            "partialValue": 0,
+            "included": 1,
+            "excluded": 0,
+            "complete": true
+          },
+          "outflow": {
+            "value": 0,
+            "partialValue": 0,
+            "included": 1,
+            "excluded": 0,
+            "complete": true
+          },
+          "cumulativeBalance": {
+            "value": 0,
+            "partialValue": 0,
+            "included": 1,
+            "excluded": 0,
+            "complete": true
+          }
+        }
+      }
+    },
+    {
+      "weekNo": 2,
+      "start": "2026-09-07",
+      "end": "2026-09-13",
+      "weekCalendarUniform": true,
+      "totals": {
+        "projection": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        },
+        "actual": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        },
+        "difference": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        }
+      }
+    },
+    {
+      "weekNo": 3,
+      "start": "2026-09-14",
+      "end": "2026-09-20",
+      "weekCalendarUniform": true,
+      "totals": {
+        "projection": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        },
+        "actual": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        },
+        "difference": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        }
+      }
+    },
+    {
+      "weekNo": 4,
+      "start": "2026-09-21",
+      "end": "2026-09-27",
+      "weekCalendarUniform": true,
+      "totals": {
+        "projection": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        },
+        "actual": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        },
+        "difference": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        }
+      }
+    },
+    {
+      "weekNo": 5,
+      "start": "2026-09-28",
+      "end": "2026-09-30",
+      "weekCalendarUniform": true,
+      "totals": {
+        "projection": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        },
+        "actual": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        },
+        "difference": {
+          "inflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "outflow": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          },
+          "cumulativeBalance": {
+            "value": null,
+            "partialValue": null,
+            "included": 0,
+            "excluded": 1,
+            "complete": false
+          }
+        }
+      }
+    }
+  ],
+  "weekCalendarUniform": true,
+  "counts": {
+    "eligible": 1,
+    "available": 1,
+    "notRecorded": 0,
+    "failed": 0,
+    "outOfScope": 0,
+    "notAttempted": 0
+  },
+  "rows": [
+    {
+      "projectId": "synthetic-project-a",
+      "status": "AVAILABLE",
+      "weeklyYear": 2026,
+      "sourceRevision": "synthetic-v1",
+      "retrievedAt": "2026-09-28T06:56:17.844Z",
+      "periodTotals": {
+        "projection": {
+          "inflow": 99,
+          "outflow": 0,
+          "cumulativeBalance": 99
+        },
+        "actual": {
+          "inflow": 99,
+          "outflow": 0,
+          "cumulativeBalance": 99
+        },
+        "difference": {
+          "inflow": 0,
+          "outflow": 0,
+          "cumulativeBalance": 0
+        }
+      },
+      "missingWeeks": {
+        "projection": [
+          2,
+          3,
+          4,
+          5
+        ],
+        "actual": [
+          2,
+          3,
+          4,
+          5
+        ]
+      }
+    }
+  ],
+  "calendarAuthority": "BFF_FIXED_FINANCE_CALENDAR",
+  "fieldStateAvailability": "NOT_EXPOSED",
+  "liveSheetVerified": false,
+  "limitations": [
+    "부분값(partialValue)은 확인된 사업만 포함하며 전사 총액이 아닙니다. 미확인·실패는 0원이 아닙니다.",
+    "사업 목록은 최대 200개이며 20초 뒤 새 사업 조회를 시작하지 않습니다. 전체 조회 완료를 보장하지 않습니다.",
+    "각 사업은 서로 다른 시점의 JVM 원장입니다. 동시점 확정 결산·은행 잔고나 현재 Sheets 값을 검증한 결과가 아닙니다.",
+    "주차 날짜는 BFF 고정 재무 달력 기준입니다. 원본 시트 날짜를 직접 확인한 결과가 아닙니다."
+  ]
+}

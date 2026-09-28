@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 import { Firestore } from '@google-cloud/firestore';
 import { createWorkbenchApp } from '../server/workbench/app.mjs';
@@ -80,9 +81,11 @@ test('live API host evidence uses actual persisted October input and warns again
   const context: any = { tenantId, actorId, actorRole: 'admin' }; await core.authorize(context);
   const apiId = crypto.randomUUID(), definitionHash = 'a'.repeat(64), endpointHash = 'b'.repeat(64);
   const makeEvidence = (yearMonth: string) => analytics.recordApiEvidence(context, { apiId, apiVersion: 1, definitionHash, endpointHash,
-    input: { yearMonth }, data: { yearMonth, rows: [{ projection: null, actual: 0, status: 'FAILED' }] },
-    metadata: { source: '합성 MYSCube 실시간 근거', resultScope: 'THIS_PAGE_ONLY', asOf: now(), limitations: ['이번 페이지 결과이며 전체 사업 합계가 아닙니다.', '실패·누락은 0원이 아닙니다.'] }, truncated: true, queriedAt: now() });
+    input: { yearMonth }, data: { yearMonth, catalogComplete: false, accessibleInPage: 1, rows: [{ projection: null, actual: 0, status: 'FAILED' }] },
+    metadata: { weekCalendarUniform: false, source: '합성 MYSCube 실시간 근거', resultScope: 'THIS_PAGE_ONLY', asOf: now(), limitations: ['이번 페이지 결과이며 전체 사업 합계가 아닙니다.', '실패·누락은 0원이 아닙니다.'] }, truncated: true, queriedAt: now() });
   const october = await makeEvidence('2026-10'), september = await makeEvidence('2026-09');
+  const company = await analytics.recordApiEvidence(context, { apiId, apiVersion: 1, definitionHash, endpointHash, input: { yearMonth: '2026-09' }, data: { scope: 'accessible_registered_projects', catalogComplete: false, totalsScope: 'PARTIAL_REGISTERED_PROJECTS' }, metadata: { resultScope: 'PARTIAL_REGISTERED_PROJECTS' }, truncated: true, queriedAt: now() });
+  const completeCompany = await analytics.recordApiEvidence(context, { apiId, apiVersion: 1, definitionHash, endpointHash, input: { yearMonth: '2026-09' }, data: JSON.parse(readFileSync(new URL('../server/workbench/fixtures/company-summary/month.json', import.meta.url), 'utf8')), metadata: { resultScope: 'COMPLETE_REGISTERED_PROJECTS' }, truncated: false, queriedAt: now() });
   const received: string[] = [];
   await page.route('**/api/**', async route => {
     const req = route.request(), url = new URL(req.url());
@@ -92,7 +95,7 @@ test('live API host evidence uses actual persisted October input and warns again
   });
   await page.route('**/live-evidence-fixture', route => route.fulfill({ contentType: 'text/html', body: '<!doctype html><div id="fixture"></div>' }));
   await page.goto('/live-evidence-fixture');
-  await page.evaluate(async ({ apiId, definitionHash, endpointHash, october, september }) => {
+  await page.evaluate(async ({ apiId, definitionHash, endpointHash, october, september, company, completeCompany }) => {
     const refresh = await import('/@react-refresh' as string); refresh.default.injectIntoGlobalHook(window); (window as any).$RefreshReg$ = () => {}; (window as any).$RefreshSig$ = () => (type: any) => type;
     const main = await (await fetch('/main.tsx')).text();
     const React = (await import(main.match(/from "([^"]+\/react\.js[^"]*)"/)![1])).default, ReactDOM = (await import(main.match(/from "([^"]+\/react-dom_client\.js[^"]*)"/)![1])).default;
@@ -100,15 +103,27 @@ test('live API host evidence uses actual persisted October input and warns again
     const root = ReactDOM.createRoot(document.getElementById('fixture'));
     const expected = { apiId, apiVersion: 1, input: { yearMonth: '2026-09' }, evidenceId: september, datasetVersions: {}, definitionVersions: {}, plan: { kind: 'external-read', endpointId: 'myscube-cashflow-evidence', endpointVersion: 1, definitionHash, endpointHash, input: { yearMonth: '2026-09' } } };
     const render = (evidenceId: string) => root.render(React.createElement(BoundEvidence, { bindings: { [apiId]: { evidenceId } }, expectedQueries: [expected] }));
-    (window as any).showSeptember = () => render(september); render(october);
-  }, { apiId, definitionHash, endpointHash, october: october.evidenceId, september: september.evidenceId });
+    (window as any).showSeptember = () => render(september); (window as any).showCompany = () => render(company); (window as any).showCompleteCompany = () => render(completeCompany); render(october);
+  }, { apiId, definitionHash, endpointHash, october: october.evidenceId, september: september.evidenceId, company: company.evidenceId, completeCompany: completeCompany.evidenceId });
   const host = page.getByTestId('bound-evidence');
   await expect(host).toContainText('요청한 조회 조건과 실제 화면의 조회 조건이 다릅니다');
   await expect(host).toContainText('yearMonth: 2026-10'); await expect(host).not.toContainText('yearMonth: 2026-09');
   await expect(host).toContainText('THIS_PAGE_ONLY'); await expect(host).toContainText('실패·누락은 0원이 아닙니다');
   await expect(host).not.toContainText('이 결과의 조회 기준을 확인하지 못했습니다');
+  await expect(host.getByTestId('page-only-scope')).toContainText('이번 페이지 1개 사업 합계');
+  await expect(host.getByTestId('page-only-scope')).toContainText('전사 합계는 확인 필요');
+  await expect(host.getByTestId('week-calendar-mismatch')).toContainText('합산할 수 없습니다');
   expect(received).toContain(october.evidenceId);
   await page.evaluate(() => (window as any).showSeptember());
   await expect(host).toContainText('yearMonth: 2026-09'); await expect(host).not.toContainText('yearMonth: 2026-10');
   await expect(host.getByRole('alert')).toHaveCount(0); expect(received).toContain(september.evidenceId);
+  await page.evaluate(() => (window as any).showCompany());
+  await expect(host.getByTestId('partial-company-scope')).toContainText('전사 합계는 확인 필요');
+  await expect(host.getByTestId('page-only-scope')).toHaveCount(0);
+  await expect(host.getByTestId('week-calendar-mismatch')).toHaveCount(0);
+  await expect(host.getByTestId('company-source-limit')).toContainText('입력 상태 확인 필요');
+  await page.evaluate(() => (window as any).showCompleteCompany());
+  await expect(host.getByTestId('partial-company-scope')).toHaveCount(0);
+  await expect(host.getByTestId('company-source-limit')).toContainText('빈 셀과 직접 입력한 0원');
+  await expect(host.getByTestId('company-source-limit')).toContainText('확정 결산이나 은행 잔액으로 사용하지 마세요');
 });

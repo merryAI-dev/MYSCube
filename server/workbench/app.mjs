@@ -46,7 +46,7 @@ export function createWorkbenchApp(options) {
   const headersForTests = options.authMode === 'headers' && core.runtime.projectId.startsWith('demo-') && Boolean(process.env.FIRESTORE_EMULATOR_HOST);
   if (!headersForTests && typeof verifyToken !== 'function') throw new Error('An isolated identity verifier is required.');
   const liveCredentials = createLiveCredentialLease({ verifyToken });
-  const liveAdapter = !headersForTests && (env.WORKBENCH_MYSCUBE_LIVE_ENABLED === 'true' || env.WORKBENCH_MYSCUBE_LIVE_ENABLED !== 'false' && !core.runtime.projectId.startsWith('demo-')) ? (options.liveAdapterFactory || createMyscubeLiveApiAdapter)({ env: { ...env, WORKBENCH_MYSCUBE_LIVE_ENABLED: 'true' }, credentialProvider: context => liveCredentials.get(context) }) : null;
+  const liveAdapter = !headersForTests && env.WORKBENCH_MYSCUBE_LIVE_ENABLED === 'true' ? (options.liveAdapterFactory || createMyscubeLiveApiAdapter)({ env, credentialProvider: context => liveCredentials.get(context) }) : null;
   const app = express();
   app.locals.clearLiveCredentials = () => liveCredentials.clear();
   app.disable('x-powered-by');
@@ -61,7 +61,10 @@ export function createWorkbenchApp(options) {
     req.context = { tenantId, actorId: claims.uid, actorRole: member?.role, requestId: randomUUID(), idempotencyKey: req.header('idempotency-key') };
     try { await core.authorize(req.context); }
     catch (error) { liveCredentials.revoke(req.context); app.locals.remoteRuntime?.revokeOwner(req.context); throw error; }
-    if (liveAdapter && !headersForTests) liveCredentials.accept(req.context, req.header('authorization'), claims, credentialTicket);
+    if (liveAdapter && !headersForTests) {
+      try { liveCredentials.accept(req.context, req.header('authorization'), claims, credentialTicket); }
+      catch (error) { if (error.code !== 'myscube_live_busy') throw error; }
+    }
     if (!['GET', 'HEAD'].includes(req.method) && !req.context.idempotencyKey) throw createHttpError(400, '요청 번호가 필요합니다.', 'idempotency_key_required');
     res.setHeader('Cache-Control', 'no-store');
     next();

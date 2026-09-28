@@ -1,6 +1,6 @@
 import { RemoteDomFrameSchema, RemoteDomEventSchema, RemoteDomFallbackFrameSchema, REMOTE_DOM_LIMITS } from '../../../shared/workbench-remote-dom.mjs';
 import { checkDomEvent } from './dom-events.mjs';
-import { digest } from './contract.mjs';
+import { digest, checkApiBudgets } from './contract.mjs';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { checkArtifact, checkEvent, checkViewport, dockerRunArguments, REMOTE_LIMITS, remoteError } from './contract.mjs';
@@ -15,6 +15,7 @@ const defaultSpawn = (args) => spawn('docker', args, { env: { PATH: '/usr/local/
 export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = defaultSpawn, now = () => Date.now(), limits = {} }) {
   if (typeof authorize !== 'function' || typeof callApi !== 'function') throw new Error('Remote renderer requires explicit authorization and API routing');
   const cap = Object.fromEntries(Object.entries(REMOTE_LIMITS).map(([key, value]) => [key, Number.isFinite(limits[key]) && limits[key] > 0 ? Math.min(value, limits[key]) : value]));
+  const apiCap = Number.isFinite(limits.apiMs) && limits.apiMs > 0 ? limits.apiMs : Infinity;
   const sessions = new Map();
   const release = (session) => {
     sessions.delete(session.id);
@@ -98,7 +99,7 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
     if (!binding || !message.input || typeof message.input !== 'object' || Array.isArray(message.input) || Buffer.byteLength(JSON.stringify(message.input)) > 32768) { clean(session, fail('이 화면에 허용되지 않은 API 요청입니다.', 'remote_api_forbidden', 403)); return; }
     session.seenApi.add(message.requestId);
     const controller = new AbortController(); session.apiControllers.set(message.requestId, controller);
-    const timer = setTimeout(() => controller.abort(), cap.apiMs); timer.unref();
+    const timer = setTimeout(() => controller.abort(), Math.min(session.apiBudgets[binding.id], apiCap)); timer.unref();
     try {
       const timedOut = () => fail('API 조회 시간이 지났습니다.', 'remote_api_timeout', 504);
       const assertActive = () => { if (controller.signal.aborted || session.closed) throw timedOut(); };
@@ -179,6 +180,7 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
       const viewMode = input.viewMode || 'png';
       const artifact = checkArtifact(input.artifact); const viewport = checkViewport(input.viewport);
       if (!/^[a-f0-9]{64}$/.test(input.sourceHash || '') || input.artifact.sourceHash !== input.sourceHash || !Array.isArray(input.apiBindings) || input.apiBindings.length > 12 || input.apiBindings.some(item => !item || !/^[a-f0-9-]{36}$/.test(item.id || '') || !Number.isSafeInteger(item.version) || item.version < 1) || new Set(input.apiBindings.map(item => item.id)).size !== input.apiBindings.length) throw fail('실행할 원문과 API 연결 버전을 확인해 주세요.', 'remote_binding_invalid', 400);
+      const apiBudgets = checkApiBudgets(input.apiBudgets, input.apiBindings.map(item => item.id));
       const owned = [...sessions.values()].filter(item => item.context.tenantId === context.tenantId && item.context.actorId === context.actorId);
       let previous;
       if (input.previousSessionId) {
@@ -189,7 +191,7 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
       const id = randomUUID(); const container = `axr-render-${id}`;
       const process = spawnDocker(dockerRunArguments(container));
       const session = { id, container, process, scope, previousSessionId: previous?.id, context: { ...context, analyticsScope: structuredClone(context.analyticsScope), ...(context.remoteEvidence ? { remoteEvidence: context.remoteEvidence } : {}) }, sourceHash: input.sourceHash, viewport, bindings: input.apiBindings.map(item => ({ id: item.id, version: item.version })), expiresAt: now() + cap.ttlMs,
-        viewMode, domFrame: null, domRevision: 0, documentEpoch: null, events: new Map(), replayFrames: [], pending: new Map(), apiControllers: new Map(), seenApi: new Set(), buffer: '', bytes: 0, apiCalls: 0, commands: 0, sequence: 0, closed: false };
+        apiBudgets, viewMode, domFrame: null, domRevision: 0, documentEpoch: null, events: new Map(), replayFrames: [], pending: new Map(), apiControllers: new Map(), seenApi: new Set(), buffer: '', bytes: 0, apiCalls: 0, commands: 0, sequence: 0, closed: false };
       sessions.set(id, session); if (previous) previous.candidateId = id; session.ttl = setTimeout(() => clean(session), cap.ttlMs); session.ttl.unref();
       session.authPoll = setInterval(() => { void pollAuthorization(session); }, 30000); session.authPoll.unref();
       process.once('error', () => clean(session, fail('독립 실행 공간을 시작하지 못했습니다.', 'remote_unavailable')));
@@ -205,7 +207,7 @@ export function createRemoteRuntimeBroker({ authorize, callApi, spawnDocker = de
           try { const message = JSON.parse(line); if (!message || typeof message !== 'object') throw new Error(); receive(session, message); } catch { clean(session, fail('실행 공간의 응답을 확인하지 못했습니다.', 'remote_protocol_invalid')); return; }
         }
       });
-      try { const frame = await request(session, 'init', { artifact, viewport, ...(viewMode === 'dom' ? { viewMode, sessionId: id, sourceHash: session.sourceHash } : {}) }); await authorize(context); if (scopeKey(context) !== scope) throw fail('조회 권한이 변경되었습니다.', 'remote_scope_changed', 403); return { sessionId: id, frame, expiresAt: new Date(session.expiresAt).toISOString() }; }
+      try { const frame = await request(session, 'init', { artifact, viewport, apiIds: session.bindings.map(item => item.id), apiBudgets, ...(viewMode === 'dom' ? { viewMode, sessionId: id, sourceHash: session.sourceHash } : {}) }); await authorize(context); if (scopeKey(context) !== scope) throw fail('조회 권한이 변경되었습니다.', 'remote_scope_changed', 403); return { sessionId: id, frame, expiresAt: new Date(session.expiresAt).toISOString() }; }
       catch (error) { clean(session, error); throw error; }
     },
     async frame(context, id) { const session = await withOwner(context, id); const frame = await request(session, 'frame'); await withOwner(context, id); return frame; },

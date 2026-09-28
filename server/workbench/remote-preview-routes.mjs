@@ -3,6 +3,12 @@ import { compileReactPreview } from './react-compiler.mjs';
 import { ReactSourceSchema, ReactApiRefsSchema, parseReact } from './react-pages.mjs';
 import { createWorkbenchAdmission } from '../bff/workbench-admission.mjs';
 import { createHttpError } from '../bff/bff-utils.mjs';
+import { registeredApiBudgetMs } from './registered-api-budget.mjs';
+import { checkApiBudgets } from './remote-runtime/contract.mjs';
+
+export function selectRemoteApiBudgets(selectedApis, env) {
+  return checkApiBudgets(Object.fromEntries(selectedApis.map(api => [api.id, registeredApiBudgetMs(api, env)])), selectedApis.map(api => api.id));
+}
 
 export function mountRemotePreview(app, { db, env, core, pages, apis, asyncHandler, brokerFactory }) {
   const prefix = '/api/v1/react-work-pages/remote';
@@ -12,7 +18,9 @@ export function mountRemotePreview(app, { db, env, core, pages, apis, asyncHandl
   const admission = createWorkbenchAdmission({ db, actorLimit: 12, leaseMs: 30000 });
   const broker = brokerFactory({ authorize: core.authorize, callApi: async (context, { apiId, apiVersion, input, signal }) => {
     if (env.WORKBENCH_READS_ENABLED === 'false') throw createHttpError(503, '분석 조회를 잠시 중지했습니다.', 'workbench_reads_disabled');
-    const result = await apis.invoke(context, apiId, apiVersion, input, { signal: signal || AbortSignal.timeout(10000) });
+    const activeSignal = signal || AbortSignal.timeout(10000);
+    const result = await apis.invoke(context, apiId, apiVersion, input, { signal: activeSignal });
+    if (activeSignal.aborted) throw createHttpError(504, 'API 조회 시간이 지났습니다.', 'remote_api_timeout');
     if (context.remoteEvidence && result.evidenceId) context.remoteEvidence[apiId] = { evidenceId: result.evidenceId };
     return result;
   } });
@@ -37,7 +45,7 @@ export function mountRemotePreview(app, { db, env, core, pages, apis, asyncHandl
       const artifact = await compileReactPreview(input.source, { apis: selectedApis, cacheContext: req.context });
       await checked(req);
       const context = { ...req.context, remoteEvidence: {} };
-      const value = await broker.create(context, { artifact, sourceHash: artifact.sourceHash, apiBindings: input.apis, viewport: input.viewport, viewMode: input.viewMode, previousSessionId: input.previousSessionId });
+      const value = await broker.create(context, { artifact, sourceHash: artifact.sourceHash, apiBindings: input.apis, apiBudgets: selectRemoteApiBudgets(selectedApis, env), viewport: input.viewport, viewMode: input.viewMode, previousSessionId: input.previousSessionId });
       try { await checked(req); }
       catch (error) { await broker.close(context, value.sessionId).catch(() => {}); throw error; }
       evidence.set(value.sessionId, { owner: owner(context), bindings: context.remoteEvidence, expiresAt: value.expiresAt });

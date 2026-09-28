@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { chromium } from 'playwright';
 import { createDomSnapshot } from './dom-snapshot.mjs';
 import { createDomEvents, checkDomEvent } from './dom-events.mjs';
-import { checkArtifact, checkEvent, checkViewport, REMOTE_LIMITS } from './contract.mjs';
+import { checkArtifact, checkEvent, checkViewport, checkApiBudgets, REMOTE_LIMITS } from './contract.mjs';
 
 export async function runRendererWorker({ input = process.stdin, output = process.stdout, packageFile = new URL('./packages.json', import.meta.url), launch = (options) => chromium.launch(options) } = {}) {
   const packages = JSON.parse(await readFile(packageFile, 'utf8'));
@@ -33,6 +33,7 @@ export async function runRendererWorker({ input = process.stdin, output = proces
   const init = async (message) => {
     if (initialized) throw new Error('already_initialized'); initialized = true;
     const artifact = checkArtifact(message.artifact); viewport = checkViewport(message.viewport);
+    const apiBudgets = checkApiBudgets(message.apiBudgets, message.apiIds ?? []);
     if (message.viewMode !== undefined && !['png', 'dom'].includes(message.viewMode)) throw new Error('view_mode_invalid');
     viewMode = message.viewMode || 'png';
     if (viewMode === 'dom') {
@@ -49,9 +50,10 @@ export async function runRendererWorker({ input = process.stdin, output = proces
     page.on('pageerror', (reason) => { try { send({ type: 'runtime-error', message: String(reason.message).slice(0, 500) }); } catch { void stop(); } });
     await page.exposeBinding('__axrReadApi', async (_source, apiId, body) => {
       if (closed || ++requests > REMOTE_LIMITS.apiCalls || pending.size >= REMOTE_LIMITS.pendingApi || typeof apiId !== 'string' || apiId.length > 100 || !body || typeof body !== 'object' || Array.isArray(body) || Buffer.byteLength(JSON.stringify(body)) > 32768) throw new Error('API 요청 범위 또는 횟수를 확인해 주세요.');
+      if (message.apiIds !== undefined && !Object.hasOwn(apiBudgets, apiId)) throw new Error('이 화면에 허용되지 않은 API 요청입니다.');
       const requestId = randomUUID();
       return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('API 응답 시간이 지났습니다.')); }, REMOTE_LIMITS.apiMs);
+        const timer = setTimeout(() => { pending.delete(requestId); reject(new Error('API 응답 시간이 지났습니다.')); }, apiBudgets[apiId] ?? REMOTE_LIMITS.apiMs);
         pending.set(requestId, { resolve, reject, timer });
         try { send({ type: 'api-call', requestId, apiId, input: body }); } catch (error) { clearTimeout(timer); pending.delete(requestId); reject(error); void stop(); }
       });

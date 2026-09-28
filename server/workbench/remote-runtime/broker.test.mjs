@@ -186,3 +186,57 @@ describe('remote renderer broker bounds and ownership', () => {
     broker.closeAll();
   });
 });
+
+
+describe('per-API remote deadlines', () => {
+  const company = '11111111-1111-4111-8111-111111111111', ordinary = '22222222-2222-4222-8222-222222222222';
+  const bindings = [{ id: company, version: 3 }, { id: ordinary, version: 1 }];
+  it('keeps ordinary calls at 10s and company calls at exactly 55s while frames/events remain independent', async () => {
+    vi.useFakeTimers(); const fake = fixture(), signals = new Map();
+    const broker = createRemoteRuntimeBroker({ authorize: async () => {}, spawnDocker: fake.spawnDocker, callApi: async (_ctx, value) => { signals.set(value.apiId, value.signal); return new Promise(() => {}); } });
+    try {
+      const budgets = { [company]: 55000, [ordinary]: 10000 };
+      const created = await broker.create(context, { ...input, apiBindings: bindings, apiBudgets: budgets }); budgets[company] = 10000;
+      expect(fake.calls[0]).toMatchObject({ apiIds: [company, ordinary], apiBudgets: { [company]: 55000, [ordinary]: 10000 } });
+      for (const [i, apiId] of [company, ordinary].entries()) fake.process().stdout.write(JSON.stringify({ type: 'api-call', requestId: `${i + 3}3333333-3333-4333-8333-333333333333`, apiId, input: {}, timeoutMs: 55000 }) + '\n');
+      await vi.advanceTimersByTimeAsync(9999); expect([...signals.values()].every(signal => !signal.aborted)).toBe(true);
+      expect((await broker.frame(context, created.sessionId)).sequence).toBe(2);
+      expect((await broker.event(context, created.sessionId, { type: 'key', key: 'Tab' })).sequence).toBe(3);
+      await vi.advanceTimersByTimeAsync(1); expect(signals.get(ordinary).aborted).toBe(true); expect(signals.get(company).aborted).toBe(false);
+      expect(fake.calls.filter(value => value.type === 'api-result')).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(44999); expect(signals.get(company).aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1); expect(signals.get(company).aborted).toBe(true);
+      expect(fake.calls.filter(value => value.type === 'api-result')).toHaveLength(2); expect(broker.activeSessions).toBe(1);
+    } finally { broker.shutdown(); vi.useRealTimers(); }
+  });
+  it('rejects unknown/missing budgets before spawning', async () => {
+    const fake = fixture(), spawnDocker = vi.fn(fake.spawnDocker);
+    const broker = createRemoteRuntimeBroker({ authorize: async () => {}, spawnDocker, callApi: async () => ({}) });
+    try {
+      for (const apiBudgets of [{ [company]: 60000 }, { [company]: 55000, [ordinary]: 10000 }, {}]) await expect(broker.create(context, { ...input, apiBindings: [bindings[0]], apiBudgets })).rejects.toMatchObject({ code: 'remote_api_budget_invalid' });
+      expect(spawnDocker).not.toHaveBeenCalled();
+    } finally { broker.shutdown(); }
+  });
+  it.each(['close', 'revocation', 'replacement'])('aborts a 55s call immediately on %s and discards a late result', async mode => {
+    vi.useFakeTimers(); const fake = fixture(); let finish, signal, allowed = true;
+    const broker = createRemoteRuntimeBroker({ authorize: async () => { if (!allowed) throw Object.assign(new Error('revoked'), { statusCode: 403 }); }, spawnDocker: fake.spawnDocker,
+      callApi: async (_ctx, value) => { signal = value.signal; return new Promise(resolve => { finish = resolve; }); } });
+    try {
+      const created = await broker.create(context, { ...input, apiBindings: [bindings[0]], apiBudgets: { [company]: 55000 } });
+      fake.process().stdout.write(JSON.stringify({ type: 'api-call', requestId: '33333333-3333-4333-8333-333333333333', apiId: company, input: {} }) + '\n');
+      await vi.advanceTimersByTimeAsync(1); expect(signal.aborted).toBe(false);
+      if (mode === 'revocation') { allowed = false; await expect(broker.frame(context, created.sessionId)).rejects.toMatchObject({ statusCode: 403 }); }
+      else { if (mode === 'replacement') await broker.create(context, { ...input, previousSessionId: created.sessionId }); await broker.close(context, created.sessionId); }
+      expect(signal.aborted).toBe(true); finish({ data: { late: true } }); await vi.advanceTimersByTimeAsync(1);
+      expect(fake.calls.some(value => value.type === 'api-result')).toBe(false);
+    } finally { broker.shutdown(); vi.useRealTimers(); }
+  });
+  it('still closes a hung render command at 8s even with a company budget', async () => {
+    vi.useFakeTimers(); const fake = fixture({ respond: false });
+    const broker = createRemoteRuntimeBroker({ authorize: async () => {}, spawnDocker: fake.spawnDocker, callApi: async () => ({}) });
+    try {
+      const failed = expect(broker.create(context, { ...input, apiBindings: [bindings[0]], apiBudgets: { [company]: 55000 } })).rejects.toMatchObject({ code: 'remote_command_timeout' });
+      await vi.advanceTimersByTimeAsync(8000); await failed; expect(broker.activeSessions).toBe(0);
+    } finally { broker.shutdown(); vi.useRealTimers(); }
+  });
+});

@@ -14,7 +14,7 @@ const releases = '/opt/myscube-workbench-releases';
 const configRoot = '/etc/myscube-workbench';
 const sha = /^[a-f0-9]{40}$/;
 const digest = value => createHash('sha256').update(value).digest('hex');
-const allowed = new Set(['WORKBENCH_PROJECT_ID', 'PRODUCTION_PROJECT_ID', 'WORKBENCH_MODEL_PROJECT_ID', 'PRODUCTION_MODEL_PROJECT_ID', 'WORKBENCH_AUTH_PROJECT_ID', 'WORKBENCH_TENANT_ID', 'WORKBENCH_APP_ORIGIN', 'WORKBENCH_AI_ENABLED', 'WORKBENCH_GEMINI_API_KEY', 'WORKBENCH_HTML_MODEL', 'WORKBENCH_READS_ENABLED', 'WORKBENCH_REMOTE_RUNTIME_ENABLED', 'WORKBENCH_REMOTE_RUNTIME_DRIVER', 'WORKBENCH_GIT_REPOSITORY', 'WORKBENCH_GIT_BASE_BRANCH', 'WORKBENCH_GIT_CREDENTIAL_MODE', 'WORKBENCH_GITHUB_APP_ID', 'WORKBENCH_GITHUB_INSTALLATION_ID', 'WORKBENCH_GITHUB_APP_PRIVATE_KEY']);
+const allowed = new Set(['WORKBENCH_PROJECT_ID', 'PRODUCTION_PROJECT_ID', 'WORKBENCH_MODEL_PROJECT_ID', 'PRODUCTION_MODEL_PROJECT_ID', 'WORKBENCH_AUTH_PROJECT_ID', 'WORKBENCH_TENANT_ID', 'WORKBENCH_APP_ORIGIN', 'WORKBENCH_AI_ENABLED', 'WORKBENCH_GEMINI_API_KEY', 'WORKBENCH_HTML_MODEL', 'WORKBENCH_READS_ENABLED', 'WORKBENCH_MYSCUBE_LIVE_ENABLED', 'WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED', 'WORKBENCH_REMOTE_RUNTIME_ENABLED', 'WORKBENCH_REMOTE_RUNTIME_DRIVER', 'WORKBENCH_GIT_REPOSITORY', 'WORKBENCH_GIT_BASE_BRANCH', 'WORKBENCH_GIT_CREDENTIAL_MODE', 'WORKBENCH_GITHUB_APP_ID', 'WORKBENCH_GITHUB_INSTALLATION_ID', 'WORKBENCH_GITHUB_APP_PRIVATE_KEY']);
 const fail = message => { throw new Error(message); };
 const plain = value => value && typeof value === 'object' && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
 
@@ -41,6 +41,10 @@ export function validateBootstrapConfiguration({ configuration, manifest, domain
   for (const [key, value] of Object.entries(configuration)) {
     if (typeof value !== 'string' || value.length > 20000 || /\r|\0/.test(value) || key !== 'WORKBENCH_GITHUB_APP_PRIVATE_KEY' && /\n/.test(value)) fail('Configuration value format is invalid.');
   }
+  for (const key of ['WORKBENCH_MYSCUBE_LIVE_ENABLED', 'WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED']) {
+    if (Object.hasOwn(configuration, key) && !['true', 'false'].includes(configuration[key])) fail('MYSCube connection switches must be literal true or false.');
+  }
+  if (configuration.WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED === 'true' && configuration.WORKBENCH_MYSCUBE_LIVE_ENABLED !== 'true') fail('Company summary requires explicit MYSCube live activation.');
   resolveWorkbenchRuntime(configuration);
   if (manifest?.classification !== 'production_candidate' || manifest.platform?.os !== 'linux' || manifest.platform?.architecture !== 'amd64') fail('A production Linux amd64 release is required.');
   if (typeof domain !== 'string' || domain.length > 253 || !/^[a-z0-9]+(?:[.-][a-z0-9]+)*\.[a-z]{2,63}$/.test(domain) || /(?:^|\.)(invalid|test|localhost)$/.test(domain)) fail('An approved public TLS domain is required.');
