@@ -1,6 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
-import { useObservationRetry } from '../product-operations/useObservationRetry';
 import {
   LogOut,
   FolderKanban, Menu,
@@ -104,9 +103,6 @@ const NAV_SECTIONS: PortalNavSection[] = [
     items: [
       // 자기 인사정보를 넣는 자리다. 아바타 드롭다운 안에만 두면 실무자가 못 찾는다.
       { to: '/portal/career-profile', icon: User, label: '마이페이지' },
-      { to: '/portal/work-pages', icon: FileSpreadsheet, label: '내 업무 페이지' },
-      { to: '/portal/cashflow-assistant', icon: BarChart3, label: '현금흐름 조회·진단' },
-      { to: '/portal/service-guidance', icon: Bell, label: '서비스 이용 안내' },
       { to: '/portal/payroll', icon: CircleDollarSign, label: '인건비/공지', accent: true, hidden: true },
     ],
   },
@@ -172,7 +168,6 @@ export function usePortalNavigationGuard() {
 }
 
 function PortalContent() {
-  useObservationRetry();
   const {
     activeProjectId,
     isLoading: portalLoading,

@@ -272,7 +272,7 @@ export function createProjectRegistrationDraftClient(options: {
     ) {
       const response = await client.patch<unknown>(pathFor(draftId), {
         ...request,
-        headers: { ...ownershipHeaders(sessionId, ownership), 'x-operation-mode': input.saveMode || 'unknown' },
+        headers: ownershipHeaders(sessionId, ownership),
         body: {
           expectedDraftRevision: revision(input.expectedDraftRevision),
           payload: input.payload,

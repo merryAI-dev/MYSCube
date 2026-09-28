@@ -1,0 +1,10 @@
+{
+  "name": "@myscube/isolated-workbench-runtime",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "@duckdb/node-api": "1.5.5-r.5",
+    "tldts": "7.0.25"
+  }
+}

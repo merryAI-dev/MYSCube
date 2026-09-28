@@ -1,0 +1,76 @@
+{
+  "verification": "actual independent host; sampled observations, not continuous availability proof",
+  "sourceSha": "0dc6fe797713043a7bdb747b6a2eb9da14da082c",
+  "hookSha256": "bb19b4e8bcad0ee5a9ef9d83151675810379e55cf661943ce17a2be894486b68",
+  "command": "certbot renew --cert-name axr.myscguard.app --force-renewal --reuse-key --non-interactive",
+  "renewalExitCode": 0,
+  "reloadStatus": "reloaded",
+  "observations": {
+    "before": {
+      "observedAt": "2026-09-24T08:22:11.548Z",
+      "host": "axr.myscguard.app",
+      "certificate": {
+        "verified": true,
+        "serial": "0610BB2B9075E7CD00A446538DB0F1D5B637",
+        "fingerprint": "15:19:A5:AE:81:36:DF:D7:48:F8:D8:61:75:AA:55:94:6A:B1:8B:26:08:9E:0A:7A:E8:D9:EC:6D:C8:46:15:71",
+        "expiresAt": "Dec 23 03:39:25 2026 GMT",
+        "publicKeySha256": "dfda9bccefcaae8a2aaaf89d459881626b6006741a7ce0673f5432ac8e00f3ee"
+      },
+      "health": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "service": "myscube-workbench",
+          "projectId": "myscube-axr-prod-20260924"
+        }
+      },
+      "unauthenticatedApi": 401
+    },
+    "during": {
+      "observedAt": "2026-09-24T08:25:06.238Z",
+      "host": "axr.myscguard.app",
+      "certificate": {
+        "verified": true,
+        "serial": "0610BB2B9075E7CD00A446538DB0F1D5B637",
+        "fingerprint": "15:19:A5:AE:81:36:DF:D7:48:F8:D8:61:75:AA:55:94:6A:B1:8B:26:08:9E:0A:7A:E8:D9:EC:6D:C8:46:15:71",
+        "expiresAt": "Dec 23 03:39:25 2026 GMT",
+        "publicKeySha256": "dfda9bccefcaae8a2aaaf89d459881626b6006741a7ce0673f5432ac8e00f3ee"
+      },
+      "health": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "service": "myscube-workbench",
+          "projectId": "myscube-axr-prod-20260924"
+        }
+      },
+      "unauthenticatedApi": 401
+    },
+    "after": {
+      "observedAt": "2026-09-24T08:27:04.031Z",
+      "host": "axr.myscguard.app",
+      "certificate": {
+        "verified": true,
+        "serial": "0609B37551472376CF9FB2480BD6450C0EB9",
+        "fingerprint": "19:C2:40:50:4A:B5:00:A5:32:D3:3D:9C:20:13:3B:04:5A:31:09:5C:D2:D7:5B:57:84:19:6B:FF:0B:21:D6:4D",
+        "expiresAt": "Dec 23 07:26:58 2026 GMT",
+        "publicKeySha256": "dfda9bccefcaae8a2aaaf89d459881626b6006741a7ce0673f5432ac8e00f3ee"
+      },
+      "health": {
+        "status": 200,
+        "body": {
+          "ok": true,
+          "service": "myscube-workbench",
+          "projectId": "myscube-axr-prod-20260924"
+        }
+      },
+      "unauthenticatedApi": 401
+    }
+  },
+  "remaining": [
+    "renewal failure preservation through installed hook",
+    "supplier failure notification receipt",
+    "expiry fail-closed",
+    "complete H2 independent acceptance"
+  ]
+}

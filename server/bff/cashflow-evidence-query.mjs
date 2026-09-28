@@ -11,6 +11,11 @@ export const evidenceQuery = z.object({
   after: z.string().min(1).max(100).regex(/^[^/]+$/).optional(),
 }).strict();
 
+export function readEvidenceHttpQuery(query) {
+  const { __path: forwardedPath, ...input } = query;
+  return input;
+}
+
 export function createCashflowEvidenceQuery({ db, readSnapshot, now = () => new Date().toISOString(), release = '', readBudgetMs = 5000 }) {
   return async (context, raw, signal) => {
     const parsed = evidenceQuery.safeParse(raw);
@@ -58,7 +63,10 @@ export function createCashflowEvidenceQuery({ db, readSnapshot, now = () => new 
           actual: evidence.monthlyTotals.actual, difference: evidence.difference.monthlyTotals, missingWeeks, evidence };
       } catch (error) {
         signal.throwIfAborted();
-        rows[index] = { ...row, status: 'FAILED', error: classifyReadError(error) };
+        const isolatedSourceError = ['workbench_snapshot_unavailable', 'workbench_snapshot_stale'].includes(error?.code);
+        rows[index] = { ...row, status: 'FAILED', error: isolatedSourceError
+          ? { category: 'snapshot_unavailable', code: error.code, message: error.message }
+          : classifyReadError(error) };
       } finally {
         clearTimeout(timer); signal.removeEventListener('abort', abort);
       }
@@ -97,7 +105,7 @@ export function mountCashflowEvidenceRoutes(app, { db, readSnapshot, now, releas
   app.get('/api/v1/cashflow-evidence', asyncHandler(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const signal = AbortSignal.timeout(25000);
-    res.json(await query(req.context, req.query, signal));
+    res.json(await query(req.context, readEvidenceHttpQuery(req.query), signal));
   }));
   app.get('/api/v1/cashflow-evidence/diagnostics', asyncHandler(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');

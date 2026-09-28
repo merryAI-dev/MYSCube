@@ -1,0 +1,47 @@
+{
+  "method": "actual await-ci source invoked with fake git/gh; virtual expired Date.now for nonmatching-run deadline, no network/CI/cloud calls",
+  "cases": [
+    {
+      "name": "two exact push workflows",
+      "pass_": true,
+      "exitCode": 0,
+      "expected": "pass"
+    },
+    {
+      "name": "failed CI",
+      "pass_": true,
+      "exitCode": 1,
+      "expected": "Required CI did not succeed"
+    },
+    {
+      "name": "superseded source",
+      "pass_": true,
+      "exitCode": 1,
+      "expected": "Deployment source was superseded"
+    },
+    {
+      "name": "PR-only is never accepted",
+      "pass_": true,
+      "exitCode": 1,
+      "expected": "Timed out waiting for exact-source CI"
+    },
+    {
+      "name": "same names wrong workflow paths",
+      "pass_": true,
+      "exitCode": 1,
+      "expected": "Timed out waiting for exact-source CI"
+    },
+    {
+      "name": "wrong branch",
+      "pass_": true,
+      "exitCode": 1,
+      "expected": "Timed out waiting for exact-source CI"
+    },
+    {
+      "name": "newer failed retry overrides old green",
+      "pass_": true,
+      "exitCode": 1,
+      "expected": "Required CI did not succeed"
+    }
+  ]
+}

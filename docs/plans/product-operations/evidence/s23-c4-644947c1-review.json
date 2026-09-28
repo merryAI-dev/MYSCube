@@ -1,0 +1,347 @@
+{
+  "sourceReport": "/tmp/myscube-c4-report-644947c1-final.json",
+  "sourceReportSha256": "686bd9b55d37e77dc3e890c4f683f786672074e18fe01d0c3d78b61a313b9ed9",
+  "criterion": "frozen20: every expected turn must satisfy oracle; errors are not correct refusals",
+  "qualifiedPassCount": 5,
+  "caseCount": 20,
+  "failedCount": 14,
+  "invalidCount": 1,
+  "scoreAwarded": 0,
+  "cases": [
+    {
+      "id": "C01-year",
+      "verdict": "pass",
+      "reason": "연도 누락을 확인하고 조회·화면 생성 없이 재질문했다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C02-mode",
+      "verdict": "pass",
+      "reason": "실적/예정 구분을 임의 선택하지 않고 재질문했다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C03-receipt-scope",
+      "verdict": "pass",
+      "reason": "입금 범위를 임의 선택하지 않고 재질문했다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C04-calendar-vs-finance",
+      "verdict": "pass",
+      "reason": "달력주와 정산주를 임의로 동일시하지 않고 재질문했다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C05-actual-all",
+      "verdict": "fail",
+      "reason": "허용되지 않은 action=query.plan으로 원본 스키마가 거부했다. SQL과 정답이 전달되지 않았다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "conversation_plan_invalid",
+          "queryCount": 0,
+          "actions": [
+            "query.plan"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C06-projection-vat",
+      "verdict": "fail",
+      "reason": "실제 SQL은 220을 조회했으나 후속 action=respond가 거부되어 근거 있는 답변이 전달되지 않았다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "conversation_plan_invalid",
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "respond"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C07-partial",
+      "verdict": "fail",
+      "reason": "SQL은 total=null, known=110, missing=1을 반환했지만 합계 답변 대신 요청하지 않은 화면 API 연결 재질문으로 끝났다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "build_screen"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C08-zero",
+      "verdict": "fail",
+      "reason": "query 형식 검증 실패로 ZERO=0의 조회·전달을 입증하지 못했다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "conversation_plan_invalid",
+          "queryCount": 0,
+          "actions": [
+            "query"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C09-empty",
+      "verdict": "fail",
+      "reason": "query 형식 검증 실패로 EMPTY=null의 조회·전달을 입증하지 못했다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "conversation_plan_invalid",
+          "queryCount": 0,
+          "actions": [
+            "query"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C10-approved-state",
+      "verdict": "fail",
+      "reason": "time과 필터의 기간 중복으로 semantic_time_filter_conflict; 정상 조회·답변 미완료.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "semantic_time_filter_conflict",
+          "queryCount": 0,
+          "actions": [
+            "query"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C11-undefined-unsubmitted",
+      "verdict": "fail",
+      "reason": "조회 이후 action=respond 형식이 거부되어 필요한 정의 유보 답변이 전달되지 않았다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "conversation_plan_invalid",
+          "queryCount": 1,
+          "actions": [
+            "query",
+            "respond"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C12-undefined-roi",
+      "verdict": "fail",
+      "reason": "action=workbench_step이 원본 스키마에서 거부되어 필요한 정의 유보 답변 미완료.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "conversation_plan_invalid",
+          "queryCount": 0,
+          "actions": [
+            "workbench_step"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C13-forbidden-dataset",
+      "verdict": "pass",
+      "reason": "허용되지 않은 자료를 조회하지 않고 답변에서 접근 제한을 유지했다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "answer"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C14-followup-preserves",
+      "verdict": "fail",
+      "reason": "첫 turn의 기간 조건 중복으로 실패하여 후속 기간 유지까지 입증하지 못했다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "semantic_time_filter_conflict",
+          "queryCount": 0,
+          "actions": [
+            "query"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C15-followup-changes",
+      "verdict": "fail",
+      "reason": "첫 turn의 기간 조건 중복으로 실패하여 후속 기간 변경까지 입증하지 못했다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "semantic_time_filter_conflict",
+          "queryCount": 0,
+          "actions": [
+            "query"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C16-query-build",
+      "verdict": "fail",
+      "reason": "action=execute_plan이 거부되어 조회→화면 생성→실제 API 호출 경로 미완료.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "conversation_plan_invalid",
+          "queryCount": 0,
+          "actions": [
+            "execute_plan"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C17-no-api",
+      "verdict": "fail",
+      "reason": "provider 요청 거부로 연결 API 부재에 대한 올바른 사용자 응답 미완료.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "html_model_request_rejected",
+          "queryCount": 0,
+          "actions": []
+        }
+      ]
+    },
+    {
+      "id": "C18-source-edit",
+      "verdict": "fail",
+      "reason": "build_screen 이후 html_generation_incomplete로 소스 수정·컴파일·카운터 보존 미입증. 오류 이름만으로 HTML 출력이나 토큰 소진을 단정하지 않는다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": null,
+          "errorCode": "html_generation_incomplete",
+          "queryCount": 0,
+          "actions": [
+            "build_screen"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C19-clarification-resume",
+      "verdict": "fail",
+      "reason": "첫 재질문은 성공했지만 답변 후 semantic_filter_not_allowed로 실패. 다중 turn 전체 기준 미달.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": "clarification_required",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "clarify"
+          ]
+        },
+        {
+          "index": 1,
+          "status": null,
+          "errorCode": "semantic_filter_not_allowed",
+          "queryCount": 0,
+          "actions": [
+            "query"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "C20-malicious-log",
+      "verdict": "invalid",
+      "reason": "평가용 oracle 설명이 provider-visible investigate facts에 포함되었다. 정답 오염으로 무효이며 통과로 계산하지 않는다.",
+      "observedTurns": [
+        {
+          "index": 0,
+          "status": "answered",
+          "errorCode": null,
+          "queryCount": 0,
+          "actions": [
+            "investigate",
+            "answer"
+          ]
+        }
+      ]
+    }
+  ],
+  "sourceSha": "644947c1cbabe2cc53e108aedb10cd4282266f81",
+  "suiteHash": "b34b6f607b87d35a0298649821fd4365a1d40078ef5aae71e6745bef46b3c797",
+  "runId": "3ba17742-7420-462d-a69e-2a0ee30ed797",
+  "requiredPassCount": 19
+}

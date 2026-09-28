@@ -1,0 +1,772 @@
+{
+  "recordedAt": "2026-09-23T13:52:46.836366+00:00",
+  "baseCommit": "e56543ccc675e72963a16d8f6bdec4a38cbd1d21",
+  "includesUncommittedWorkingTree": true,
+  "vitest": {
+    "passed": 491,
+    "files": 60,
+    "durationSeconds": 13.95
+  },
+  "playwright": {
+    "passed": 38,
+    "durationSeconds": 44.4
+  },
+  "typecheck": "PASS",
+  "frontendBuild": "PASS",
+  "model": "fixture; no live model claims",
+  "data": "local Firestore emulator and synthetic fixtures",
+  "runtimeLinuxCI": "https://github.com/merryAI-dev/MYSCube/actions/runs/35863959611",
+  "productionDeployed": false,
+  "logs": {
+    "vitest": {
+      "localPath": "/tmp/myscube-workbench-http-final-vitest.log",
+      "sha256": "026312d8aecb62314db6d96a6db54955a91a164bab3fca45f5b6ac2b460d5535"
+    },
+    "playwright": {
+      "localPath": "/tmp/myscube-workbench-http-final-playwright.log",
+      "sha256": "ce57ac25a6556533b4caf0d2213506c893c44c6a4a7a675e12f803aca8e63f5b"
+    },
+    "build": {
+      "localPath": "/tmp/myscube-workbench-http-final-build.log",
+      "sha256": "642e8e3acc788c8f38c133779c723036a25789554a419fd055c456bbf2be3f8b"
+    }
+  },
+  "sourceManifest": [
+    {
+      "file": ".github/workflows/production-deploy.yml",
+      "sha256": "c4f15a5444a39835776383ee1e1d8dfc57604dba33e29dfd5756480c8dab208d"
+    },
+    {
+      "file": ".github/workflows/workbench-ci.yml",
+      "sha256": "89fed271893f511e33728bd1a2845248aac34721febbecb61a07364cb83b7c31"
+    },
+    {
+      "file": ".github/workflows/workbench-deploy.yml",
+      "sha256": "d8b739f8dca37850b6617bff3e07759e2005c679295ecc4f8822dfaa69850659"
+    },
+    {
+      "file": "package-lock.json",
+      "sha256": "b9a68c3e11a83455ebc6c6347a84e092e9d08375936ec119519d14eb94559138"
+    },
+    {
+      "file": "package.json",
+      "sha256": "1723e01a981254183ad718758ef8a33741df228794c36c2df6cf0609a5bf6f20"
+    },
+    {
+      "file": "server/bff/app.mjs",
+      "sha256": "22ac9717ed622061de09375a94b456ea982fac93bd8f140c0bb17d241ddaefa8"
+    },
+    {
+      "file": "server/bff/qa-evidence.mjs",
+      "sha256": "f9c7fbde203f22ac70541b829ec31410977ac03d2d0e5c52b5b686653d8e2df0"
+    },
+    {
+      "file": "server/bff/workbench-assistant.mjs",
+      "sha256": "95e5716491377c3207d994fb4aaaf1041e0a1349b7afc8948fad77e1ec6d87d8"
+    },
+    {
+      "file": "server/production-deploy-workflow.test.ts",
+      "sha256": "b765d3102f536bb9cab3c6309341a1fb9b6d14000af56197e906dfdbdb600195"
+    },
+    {
+      "file": "server/workbench/Dockerfile",
+      "sha256": "d4070b35ef18c3aa5e5e73e1553b57b5367b0bfcdb9ceae2a7e7498e8daa0a1d"
+    },
+    {
+      "file": "server/workbench/Dockerfile.dockerignore",
+      "sha256": "811907b264c2a51eddd25e51226c8ad79992786003b4cf4b1e9e250aaccf4c19"
+    },
+    {
+      "file": "server/workbench/analytics-contract.mjs",
+      "sha256": "7d5fbb1b8ea86bdc5ede805e8cd5c9125eacf8e460c7e757aa5d03b4445545fa"
+    },
+    {
+      "file": "server/workbench/analytics-engine.mjs",
+      "sha256": "73c075f9eca6cd25129319382403a6589291a9e0d3e458c941881d57b2f95628"
+    },
+    {
+      "file": "server/workbench/analytics-engine.test.mjs",
+      "sha256": "7cc4eba0413159125af9d963badfc863cd5dbe2bde808e48daeac34afb403c6f"
+    },
+    {
+      "file": "server/workbench/analytics-import.mjs",
+      "sha256": "edb9a87b2b1ea43928863edcd39d7f27ad6596d658d22c5a5e478382f313eacb"
+    },
+    {
+      "file": "server/workbench/analytics-service.integration.test.ts",
+      "sha256": "3aa6ddf832b55e71732fa0fa61138fad4b285533454e63a4950c58b75f2d5380"
+    },
+    {
+      "file": "server/workbench/analytics-service.mjs",
+      "sha256": "fbef2d0d92c978609352f4ac226139da9c3d9f46a2b19ba232bc8f6c1e0bf785"
+    },
+    {
+      "file": "server/workbench/analytics-worker.mjs",
+      "sha256": "72fe619c51702140f5603c4ca0d76061939188bb72a080a5ea551b55123c41c5"
+    },
+    {
+      "file": "server/workbench/app.mjs",
+      "sha256": "b20610fa70347976c591025fa99ccc9ed4ad427fc5891411ad741a104bb10dfa"
+    },
+    {
+      "file": "server/workbench/capability-executor.mjs",
+      "sha256": "760ee61b4c64eae92aa910595e57cf0d5f7cee047093f02c02ff183a3f9f2e7c"
+    },
+    {
+      "file": "server/workbench/capability-executor.test.mjs",
+      "sha256": "3cd2789ee88a13c16949256eb713e1fd4905c3f3e9de74bb8972e422024befd6"
+    },
+    {
+      "file": "server/workbench/cashflow-inflow-copy.mjs",
+      "sha256": "15a678ca8581d0a6fa28459b055af27eda1a3812a0efe5d29b59b83549b9c21a"
+    },
+    {
+      "file": "server/workbench/cashflow-inflow-copy.test.mjs",
+      "sha256": "4dd9dce32e12b194ea48fb878e71be035bb2c9fb5c1625955a2be45557b0b619"
+    },
+    {
+      "file": "server/workbench/cashflow-inflow-definition.mjs",
+      "sha256": "c0830d98467cf5f2fd817880e7805b5bad4454fb1913dc85cb4f295d3d90533b"
+    },
+    {
+      "file": "server/workbench/cashflow-inflow-fixture.mjs",
+      "sha256": "a765f70787d98d0c8c1ea825b534f806f2baaa0b11b3c9b874dc89346a6a88cd"
+    },
+    {
+      "file": "server/workbench/cashflow-inflow.integration.test.ts",
+      "sha256": "5a43c67cdc29417c2c8499b669b39e1eae3954e0e60a2d3d85c89e27f287f2d6"
+    },
+    {
+      "file": "server/workbench/cashflow-inflow.qa.test.mjs",
+      "sha256": "4407b69fc1993f46e00c2017e5bcd71095c09930d9a276d9a235cba95c10cf59"
+    },
+    {
+      "file": "server/workbench/conversation-agent.mjs",
+      "sha256": "0ae808f130630e5449957461b3dce5a0107df2d74103dbeb04cf188fb533c5a6"
+    },
+    {
+      "file": "server/workbench/conversation-agent.qa.test.mjs",
+      "sha256": "7b65d71dccca034cb227f9df7ecc0f33f2719c5abe47f8fe3309cff6ddf00ba3"
+    },
+    {
+      "file": "server/workbench/conversation-data.integration.test.ts",
+      "sha256": "4324534bfda3bd41c60d3543f45df1f2f34011de230140c83150c53db7c6d0c6"
+    },
+    {
+      "file": "server/workbench/conversation-routes.integration.test.ts",
+      "sha256": "e6388a9f4ad7b9791efcda658bdaa6e1ca280208380a77446040f0e91be11ded"
+    },
+    {
+      "file": "server/workbench/conversation-routes.mjs",
+      "sha256": "ffcc3e0dda7ca03353ead5403c15ef1771460410aca93af1eaa46424e26e664a"
+    },
+    {
+      "file": "server/workbench/conversation-scope.qa.integration.test.ts",
+      "sha256": "fd6a18442a5c53cdb431a9bbb303141aa408efd0a39d258bc5e70e7a35ec974a"
+    },
+    {
+      "file": "server/workbench/conversations.integration.test.ts",
+      "sha256": "6fa813712f9edfd9a1e0b9ea27700a1e65b46e73ffc058bd037bfcbebbe6af01"
+    },
+    {
+      "file": "server/workbench/conversations.mjs",
+      "sha256": "3ead04fc184c5c0e42fa31fb242ffcd4b10a95e60b3a6b08d72414bdbbcdccc4"
+    },
+    {
+      "file": "server/workbench/copied-log-summary.mjs",
+      "sha256": "7683cb0fcc68dfca9e454fca83a2625b338cf77fa954133200fddbc9b3bb195d"
+    },
+    {
+      "file": "server/workbench/copied-log-summary.qa.integration.test.ts",
+      "sha256": "882b57513580f64cc72400eac3a51d1556f27dc21eb50d169c517488338699af"
+    },
+    {
+      "file": "server/workbench/copy-feed-schema.integration.test.ts",
+      "sha256": "671addf4c91a29c8105c2fbc1e6fd52fd0b66dffdb3b20bb7b4866cfe5e9e3f0"
+    },
+    {
+      "file": "server/workbench/copy-feed.integration.test.ts",
+      "sha256": "9b5d60d9b1b625ab22dcb335e183be65ce3ff456b7cbebca7b009e80726348f3"
+    },
+    {
+      "file": "server/workbench/copy-feed.mjs",
+      "sha256": "4791f4dcac3c4e7863e1d302a33c181c3111a435e09afe9c701d668506cd4dcd"
+    },
+    {
+      "file": "server/workbench/copy-feed.qa.integration.test.ts",
+      "sha256": "d95a027a18bf8aef37c9b08bc6196ab2f9c973f14606d4d5e7659a03f15faecf"
+    },
+    {
+      "file": "server/workbench/copy-worker.mjs",
+      "sha256": "5f384b40b23c42d50ac0367947df9ab6a3a077faded8a8753a3b4edd01ea2af1"
+    },
+    {
+      "file": "server/workbench/core.mjs",
+      "sha256": "17cbb054a087f488ce01beb42c0f1ad52e151e3f9374430aa3288d4b25f9d0a6"
+    },
+    {
+      "file": "server/workbench/decision-policy.mjs",
+      "sha256": "390bcaa289f462293e57791ede0de52174f7cc7da5fece94a9cbf251825e337e"
+    },
+    {
+      "file": "server/workbench/decision-policy.test.mjs",
+      "sha256": "f3300e733be8b7e687e9b5673ed82b4f81e3a1bd421ae144223e1953c33c5d04"
+    },
+    {
+      "file": "server/workbench/deployment/app-smoke.mjs",
+      "sha256": "311ff3808bfbbf850c2a9eac49d0c58ecb3b7356c648a7f4484e49bb38627bd3"
+    },
+    {
+      "file": "server/workbench/deployment/validate-candidate.mjs",
+      "sha256": "770fc76f8ccef9aadd775623eb5d0875d8156b3153d56543ac4f3521af62a13e"
+    },
+    {
+      "file": "server/workbench/deployment/validate-candidate.test.mjs",
+      "sha256": "0c7b6796e22869490c6d619104e381259bf75e76a9ecdcde37ab35cbcb0b7a82"
+    },
+    {
+      "file": "server/workbench/execution-deadline.mjs",
+      "sha256": "ce149046cec821297900d61d3fec3b15fa975cd9dff6a1e46d8a79e6be6322ff"
+    },
+    {
+      "file": "server/workbench/external-api.integration.test.ts",
+      "sha256": "49575752e322a3c760d47621e5fcc14ff7c241087fd9fc4fe9d53ec7e3ea40d8"
+    },
+    {
+      "file": "server/workbench/external-api.mjs",
+      "sha256": "e1cbbc767d54548175536929ee0daa57adcf340248566ba25fee97b6e6f15146"
+    },
+    {
+      "file": "server/workbench/external-api.test.mjs",
+      "sha256": "b47165d6f3a0c28949a3402c1a633e7e3a7c8092503b035ce20cfcf909dcf6c5"
+    },
+    {
+      "file": "server/workbench/git-credentials.mjs",
+      "sha256": "aa5252ce75407e30b356dd0ea29ecbbf2bd06625aa67335caa9d610cf489a4a1"
+    },
+    {
+      "file": "server/workbench/git-credentials.test.mjs",
+      "sha256": "23356d3a6c422bc6ad702fe8b913fe1370f5e0630fdb569b7a07c1b8e3793e11"
+    },
+    {
+      "file": "server/workbench/git-delivery.integration.test.ts",
+      "sha256": "4b5c3df11c40bb69a9ecb557415d716a9e7e27ac8d7650365a910b53410aaab5"
+    },
+    {
+      "file": "server/workbench/git-delivery.mjs",
+      "sha256": "3eadf4e0bcd95915f478450035469698c97429eb55e798aeb448ff31769e6ab2"
+    },
+    {
+      "file": "server/workbench/git-delivery.test.mjs",
+      "sha256": "9ef9db8ff26a3ffe8cf59427469eb36faae434d95a5a755dd053254086fbd620"
+    },
+    {
+      "file": "server/workbench/host-runtime/systemd/myscube-axr-workbench.service",
+      "sha256": "c9ee1f56ed2a2217b5579443cc3df8a010b1625c107b871d54ea2c8f44d76b16"
+    },
+    {
+      "file": "server/workbench/html-bindings.mjs",
+      "sha256": "8b32c2e43955df78fb4dd059180e3e51336b1715813a456f7712980ad6cb5b30"
+    },
+    {
+      "file": "server/workbench/html-bindings.test.mjs",
+      "sha256": "d3b796e485f4fc9dacf2346bd914fa58a788d5e0da66a8abbfba6f1178965027"
+    },
+    {
+      "file": "server/workbench/html-completion.mjs",
+      "sha256": "e782d2c597deb0e7f9a2f6113a1e99237e73a75203ad41089b7f3b53107f8c23"
+    },
+    {
+      "file": "server/workbench/html-completion.test.mjs",
+      "sha256": "96e6985a16e6631f24a9fc739f37fddd487de3c5ad3c923d6e2ad8c901131182"
+    },
+    {
+      "file": "server/workbench/html-data.mjs",
+      "sha256": "fe9b144902fe8224164c9efa924af73f5a3f072d9cb6bae97dda5c50c006d07a"
+    },
+    {
+      "file": "server/workbench/html-data.qa.test.mjs",
+      "sha256": "bfce5d6141c1c56dee3374071a742879f08d9836346500c1d2c26e95b050f3de"
+    },
+    {
+      "file": "server/workbench/html-pages.integration.test.ts",
+      "sha256": "fe08ef8a7962071f813450c44ef789183d60fb362674bebdf51e3e0a4a9ad904"
+    },
+    {
+      "file": "server/workbench/html-pages.mjs",
+      "sha256": "d1a2beb6da346c598180b81551145198d59c7ae4cca2ea63644dfc7b09f75d8b"
+    },
+    {
+      "file": "server/workbench/html-pages.test.mjs",
+      "sha256": "b6ffceec7df85b9f1137af822e2b25dab8e81d739225ff2d02e65a94cbce185b"
+    },
+    {
+      "file": "server/workbench/html-recovery.integration.test.ts",
+      "sha256": "320dfd4d1c25267616b45a96d594602cbcf568f58ec28b9b912ae0c62dacf5ac"
+    },
+    {
+      "file": "server/workbench/html-references.mjs",
+      "sha256": "dd488cee798d0baa08653ef45a884b9488da66974bbab756bef68c5fddebc4a7"
+    },
+    {
+      "file": "server/workbench/html-routes.integration.test.ts",
+      "sha256": "d41442a13b77e0bce9ed50b4382d6e85746e189f400ce79d44fcf27d6c9015cd"
+    },
+    {
+      "file": "server/workbench/html-routes.mjs",
+      "sha256": "3e03ee5cf3766329739460e1c0674a51a98f44ca0509fb10da1f23edb8718d33"
+    },
+    {
+      "file": "server/workbench/html-tailwind.mjs",
+      "sha256": "11f76df19b5991902525ff40b055075f91c6db1bc944bc87ce7e7855b58c6bc3"
+    },
+    {
+      "file": "server/workbench/html-tailwind.test.mjs",
+      "sha256": "59f329887ee4a5bb2d533e8c61b0c2c497a009b01c8c4ad3d633ae1b73c7f151"
+    },
+    {
+      "file": "server/workbench/http-log-evidence.mjs",
+      "sha256": "48b3a633b0e5aa0de6941ea8724725eea5565587a49a71f9607d2e17e7b05c06"
+    },
+    {
+      "file": "server/workbench/http-log-evidence.qa.integration.test.ts",
+      "sha256": "b1b8369ed2404a4942ce000d08bf4756dac63128af4817214506fdf3aa97ffb3"
+    },
+    {
+      "file": "server/workbench/http-log-import-cli.mjs",
+      "sha256": "be68edc516b4b22283605ecd207ec7d668ce09a86344e6ced5209add3e1c92bc"
+    },
+    {
+      "file": "server/workbench/http-log-import-cli.test.ts",
+      "sha256": "5dc152b2e3698efcd23e843f20df5eb5fa14569dbe4cdfdd9efdabb0fa1a4d91"
+    },
+    {
+      "file": "server/workbench/http-log-import.integration.test.ts",
+      "sha256": "ef3867d0a2250903616693e945d28b42a292c73bb2c1abf402cdea1a1473230d"
+    },
+    {
+      "file": "server/workbench/http-log-import.md",
+      "sha256": "a767b32bf9ab75df636cb1a92d7ad0431bf39e07488cec1c2c3ac94e61c508e7"
+    },
+    {
+      "file": "server/workbench/http-log-import.mjs",
+      "sha256": "a271d79e35aeba9c019b4d4a58752c1285ac60214bf0d3871ebd46c34d96dcf9"
+    },
+    {
+      "file": "server/workbench/http-log-import.qa.integration.test.ts",
+      "sha256": "9c89c3df227b34db516274f0b6f39a24fca45cdce3af187535902dc848d25462"
+    },
+    {
+      "file": "server/workbench/isolated-capabilities.integration.test.ts",
+      "sha256": "b546526ac46c12f30a3682e1838e15c7ecdc0b5f100cc8fca9297f4b680acb96"
+    },
+    {
+      "file": "server/workbench/isolation-boundary.test.mjs",
+      "sha256": "16e52bdb43288bc1820c19b4ccd4caf72c73a04a6a2f71790b37e59491812854"
+    },
+    {
+      "file": "server/workbench/listen-host.mjs",
+      "sha256": "5aa5c2bae954545ece7ad1579d495798b03472ad4ecba42a673e186d5dee844b"
+    },
+    {
+      "file": "server/workbench/listen-host.test.mjs",
+      "sha256": "0561967ac82c53f4936745f00326bb316723cf4286c8effd3ee8950c808a7c50"
+    },
+    {
+      "file": "server/workbench/operation-scopes.integration.test.ts",
+      "sha256": "462bc6d43ab55dbf7268cf3e50c1fea85049b99e048f57f64c66a0c881659f42"
+    },
+    {
+      "file": "server/workbench/operation-scopes.mjs",
+      "sha256": "86493d384588e76bd78b4598e346cf90287febb0ca5cc33afed376b3b5361a15"
+    },
+    {
+      "file": "server/workbench/package-lock.json",
+      "sha256": "27e4fc9b8d85251fcdf28ccc79215d95e29970e8332de3ca3d3554839cfadf7f"
+    },
+    {
+      "file": "server/workbench/package.json",
+      "sha256": "ebd25869bc5f11b2c7584eacb8aa72343a4be55ec543435dfe347417c64df13f"
+    },
+    {
+      "file": "server/workbench/product-operations.integration.test.ts",
+      "sha256": "059841f130b24496fc7e36f507bcbe62b0d3eeccea813806d48f719a395f2fa9"
+    },
+    {
+      "file": "server/workbench/react-compiler-packages.mjs",
+      "sha256": "930f45700c5e28a080964501c56b13f8983dbf6aceefc9d8cf8424ad05127537"
+    },
+    {
+      "file": "server/workbench/react-compiler-runtime.mjs",
+      "sha256": "471441782c295af4493bc82a7f77e64786ef174046c6da3f8c1582247a0e2968"
+    },
+    {
+      "file": "server/workbench/react-compiler-worker.mjs",
+      "sha256": "ac3aaf925032381287bbe90f503f7c5dc38e6ecfe5202b6e2c2291ce3a435b4d"
+    },
+    {
+      "file": "server/workbench/react-compiler.browser.test.mjs",
+      "sha256": "54f42201a914885d5c109a3aa3fe277fdead99769fe478283e81f3b7adebee8c"
+    },
+    {
+      "file": "server/workbench/react-compiler.mjs",
+      "sha256": "961f3f742fc8bb155dc8622545cac76f6246902185ece6248740ddbddeafed49"
+    },
+    {
+      "file": "server/workbench/react-compiler.test.mjs",
+      "sha256": "48dfd758afb80e8ae24494bce8e8a06d35f7590a0993cbaa73e0e2d645f19d3b"
+    },
+    {
+      "file": "server/workbench/react-conversation-deadline.integration.test.ts",
+      "sha256": "1dc3ace2ca2afbedd00ebc1d3781d72c6767b9923d2c36f81b5c879955c07941"
+    },
+    {
+      "file": "server/workbench/react-conversation-save.integration.test.ts",
+      "sha256": "12b00a41bd40034c51f800ef98218404b625e79ccd9512ac2a4221fcc97c803b"
+    },
+    {
+      "file": "server/workbench/react-conversation.mjs",
+      "sha256": "c535ab16ece5f39b65a215fdc7415ef410f2383e2452027a8008193b779e509b"
+    },
+    {
+      "file": "server/workbench/react-conversation.qa.integration.test.ts",
+      "sha256": "544fbd8d46cbc9dcf2d2f12fffa042eb52a14ed2bb61923bec89ac15903aa269"
+    },
+    {
+      "file": "server/workbench/react-conversation.test.mjs",
+      "sha256": "41cd006a5d13474862710de20d516a456f39f465d53b8c4a3883bc863a057ac6"
+    },
+    {
+      "file": "server/workbench/react-pages.mjs",
+      "sha256": "7e9a59e606beb5fa6d6e52d349185358ac80f00f56ae0925c864c18581184991"
+    },
+    {
+      "file": "server/workbench/react-routes.mjs",
+      "sha256": "ae5c3fa2454dcf051c8248f62b021669a55b58f6505591eb7c086ab883d4e1ce"
+    },
+    {
+      "file": "server/workbench/react-runtime-config.mjs",
+      "sha256": "fbe829d69b68ec712d505ea3e840a8946e403c2326fb109cd8510648d0c2671d"
+    },
+    {
+      "file": "server/workbench/react-runtime-config.test.mjs",
+      "sha256": "b2b77a651174807cdc2bfd9a84a4eff78d7bc83e57b9e06262546ec98c83b06c"
+    },
+    {
+      "file": "server/workbench/react-runtime-server.mjs",
+      "sha256": "6a998c265d49d0b566df2f2342a40aef2ad11c9ebf194d871bf93f858ee1136f"
+    },
+    {
+      "file": "server/workbench/registered-apis.mjs",
+      "sha256": "d6cb9234fbae32b8b0b5a73b3b4fad655b0e8820c997be9d893866a5b8719c0b"
+    },
+    {
+      "file": "server/workbench/registered-apis.qa.integration.test.ts",
+      "sha256": "82d3b81f94096db179ba12ee66c6bc2ff5d96efb17580708275fcc360cf40917"
+    },
+    {
+      "file": "server/workbench/remote-preview-routes.mjs",
+      "sha256": "406ca284f634df10c9375a768522417fe7a5cdcd5f495a6034440d58c521ffaf"
+    },
+    {
+      "file": "server/workbench/remote-preview.integration.test.ts",
+      "sha256": "31bd78252c5add8df428d391a7f458a3ecc5a6a8b207b209178b51dd8c5e2fab"
+    },
+    {
+      "file": "server/workbench/remote-runtime/Dockerfile",
+      "sha256": "03aa6794b84809b61432fc89b6d310406332a72e1f5d9e84148f0f77dab5dece"
+    },
+    {
+      "file": "server/workbench/remote-runtime/broker.mjs",
+      "sha256": "980c4a23efe6a95d0ee19ca3381968ffad4aa3178b5b38da53cf6e05e49a9142"
+    },
+    {
+      "file": "server/workbench/remote-runtime/broker.test.mjs",
+      "sha256": "bddd90cef021434324038e29cd40ca8c2d97c5319125981cee27635a342b4f8c"
+    },
+    {
+      "file": "server/workbench/remote-runtime/build-packages.mjs",
+      "sha256": "768b5346029762ecf48df3d7fbbd14f4c4e8ef32296de8a6e35be02694d3c0b6"
+    },
+    {
+      "file": "server/workbench/remote-runtime/contract.mjs",
+      "sha256": "94df9d7c23e6f266bed51dd2d167413a9b5596eeb042d36e2171f013811a30dd"
+    },
+    {
+      "file": "server/workbench/remote-runtime/docker-qa.mjs",
+      "sha256": "cf4f91b7a00861e474883ef7797e4f8662e28fa860840de33cff9afb49173446"
+    },
+    {
+      "file": "server/workbench/remote-runtime/reaper.mjs",
+      "sha256": "1cfa5d7d57ff21948dd089f81d64aea8dd734b0bf4a3974b0d65251249afb88a"
+    },
+    {
+      "file": "server/workbench/remote-runtime/reaper.test.mjs",
+      "sha256": "90697b5801125496e1dcd9ad74792547ce0fc3088e6ce135d0d685a4a0c699f5"
+    },
+    {
+      "file": "server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.service",
+      "sha256": "83117a0f3ca27a919e3e0b3f2f738e3a5ee827d7a6d6dba8cb04431282a32ecd"
+    },
+    {
+      "file": "server/workbench/remote-runtime/systemd/myscube-axr-renderer-reaper.timer",
+      "sha256": "e64a6cdc1dc7caf3867bc62e51b92108f49eaa422b97267a956548bf0a6a8690"
+    },
+    {
+      "file": "server/workbench/remote-runtime/worker.mjs",
+      "sha256": "b570271217aa78c895ff021493f6e7aa73d1b99cfab8652c0585dd9cbfd01957"
+    },
+    {
+      "file": "server/workbench/remote-runtime/worker.test.mjs",
+      "sha256": "c9cb63f37a4fb3713266b05bdd0147e0a6da8f830386ebd993cfb46dd2c62e20"
+    },
+    {
+      "file": "server/workbench/request-recovery.integration.test.ts",
+      "sha256": "dddd158c036478c04b85445a227b778a1623247bf4a5f5197ee4862a7e84a6ae"
+    },
+    {
+      "file": "server/workbench/request-recovery.mjs",
+      "sha256": "97cab891cc834171fb802b58bfc2de8301c70a8ccdf311f5e0f735ea264453b9"
+    },
+    {
+      "file": "server/workbench/runtime-config.mjs",
+      "sha256": "d4a7f6e373eaeae7cdc09bc52a45f47940b1552571ac6ad7bfca1c9e633bff1f"
+    },
+    {
+      "file": "server/workbench/scope-recovery.qa.integration.test.ts",
+      "sha256": "59c4ec0f70b6d2070c5985787a8d61826e907930e35c2c16e53703d5e24ea091"
+    },
+    {
+      "file": "server/workbench/semantic-catalog.mjs",
+      "sha256": "903260ef6909519ef21b003ed013fe610742cbaf619a929ad00478909a4cbaf4"
+    },
+    {
+      "file": "server/workbench/semantic-query.mjs",
+      "sha256": "4f634585825b2cb80e6d715f991f96c6dd63cafaddc5f9fe48ebcf898e0cb176"
+    },
+    {
+      "file": "server/workbench/semantic-query.qa.test.mjs",
+      "sha256": "9976fab1ddc818a036cd5a91c86f969713253db9515fab84fe8fdbc24e556072"
+    },
+    {
+      "file": "server/workbench/server.mjs",
+      "sha256": "ecca611229781377cba19d6f6e5106c1442a4b1eeb57f703ba0483bb7f0ea8f9"
+    },
+    {
+      "file": "server/workbench/sheets-copy-cli.mjs",
+      "sha256": "c84d3538cdb64ca2628e7c0074c6a2d1aed2809606d0072aa0103c474620cf36"
+    },
+    {
+      "file": "server/workbench/sheets-copy.integration.test.ts",
+      "sha256": "2cb16dc33da13d4d7f6b1848994d2d30e8f1768e19c01e8de18b38514f5ed65c"
+    },
+    {
+      "file": "server/workbench/sheets-copy.mjs",
+      "sha256": "1844d540e42204a540273780d3f7ace9b7fb17656326c0521bfa112e502e58b5"
+    },
+    {
+      "file": "server/workbench/shutdown.mjs",
+      "sha256": "d6a890d54ef10b57e1c517d2b7660df6cead33a6a0559d2dc8e0de0af845dd9a"
+    },
+    {
+      "file": "server/workbench/shutdown.test.mjs",
+      "sha256": "358e30e32a0fa605474004e4d1e187a0488d8c016455e557c5c97aad03cf7554"
+    },
+    {
+      "file": "server/workbench/snapshot-reader.mjs",
+      "sha256": "8259b2445e8ffb1d40a319f1d7fab8d824a59f70f4be437dfdfce4e35e8fa9ed"
+    },
+    {
+      "file": "server/workbench/transport.qa.test.ts",
+      "sha256": "f4252122d460beb54f45cbecc8a94f9f28e41c257ff4067e58c5daa502acd540"
+    },
+    {
+      "file": "server/workbench/transport.test.ts",
+      "sha256": "e4caab0bca35ecf6fe3595b428f2c04f1c1f0202dee54765e143e4b86a1f6741"
+    },
+    {
+      "file": "server/workbench/workbench-model-config.integration.test.ts",
+      "sha256": "721c0106fe165f761af1fdb9682196b9e7a1ea605fcf9fdf3f02eb6e4450f93c"
+    },
+    {
+      "file": "shared/workbench-html.mjs",
+      "sha256": "dc850c14aaed57379eb8e655b6a3d782998f7cab7b69ed31ab36ec214b3efbae"
+    },
+    {
+      "file": "src/app/components/product-operations/html-preview/SourcePreview.test.ts",
+      "sha256": "733b8cc4257952bb34a419cf74701c01365d7b26dc04b2e835c4679c265b517f"
+    },
+    {
+      "file": "src/app/components/product-operations/html-preview/SourcePreview.tsx",
+      "sha256": "6e8a0834dcc4e2b0fe7430058dbaa53f5b671ce529a511c4b773f6678d0ded6e"
+    },
+    {
+      "file": "vitest.workbench.config.ts",
+      "sha256": "bb27c1d9458634cf2199ede665a866a56052d82d14ecce9eb9b2998b2f70579c"
+    },
+    {
+      "file": "workbench/ApiRegistryPanel.tsx",
+      "sha256": "e89233e456501fef78ee7f24e849775b3fabda52b75fbd53fc7fe54bda3fc6ed"
+    },
+    {
+      "file": "workbench/BoundEvidence.tsx",
+      "sha256": "adba2f5f0c1a12f182b77e5cf9c0db95bc63a48cbc1f5524125fc66ae8c00247"
+    },
+    {
+      "file": "workbench/ConversationPanel.tsx",
+      "sha256": "6e4b534d95585531e9c4a98874e44666b6adab57032bb6417c5d191a218c3ee4"
+    },
+    {
+      "file": "workbench/OperationsPanel.tsx",
+      "sha256": "30e9237b05b9458aa65b0cb3a527ae064182992b7a748d390bbf1f84e9106814"
+    },
+    {
+      "file": "workbench/ReactConversationPanel.tsx",
+      "sha256": "9266cbe850507bc1bac02588fb7b0a5e6867d93980a9f093040788ecac6d9bff"
+    },
+    {
+      "file": "workbench/ReactPreview.tsx",
+      "sha256": "9e1048d3bf19b51f387755cd9f3909e901d7566e8c876362672e244ee9f502e4"
+    },
+    {
+      "file": "workbench/ReactStudio.tsx",
+      "sha256": "3e551be5d6bf853da674330295ae9bd42a0a26f1736dbb4d18180108f9fcdb37"
+    },
+    {
+      "file": "workbench/RecoveryPanel.tsx",
+      "sha256": "80b0f9a221b5b48a6dc199a5c2306ed28095f961890d55b16cccd39abed2c7f2"
+    },
+    {
+      "file": "workbench/RemoteReactPreview.tsx",
+      "sha256": "2c3f6edd49f46d47875681c3dd68a167af2c2daeaa7ffbd2202946c1d76a2c1d"
+    },
+    {
+      "file": "workbench/cashflow-inflow.e2e.spec.ts",
+      "sha256": "0b6a92d0b4a7c539efc27d3161c359f461e2ad3ae63f95b79d4f57000de4e5d5"
+    },
+    {
+      "file": "workbench/client.ts",
+      "sha256": "1ec1bd0e5e082bab2ce78cf6cefd0fbadca9b81361355b02bea50adeebcd3907"
+    },
+    {
+      "file": "workbench/conversation-data.e2e.spec.ts",
+      "sha256": "55d454561a0a3db5ec60258795679b7d215859c3d0ec5ba39738cb8e1a86ebb1"
+    },
+    {
+      "file": "workbench/conversation.e2e.spec.ts",
+      "sha256": "91cc9bf4996c48b83e52176d12b1bf811bbbe6523db24cbecd8b9a062423d21b"
+    },
+    {
+      "file": "workbench/index.html",
+      "sha256": "aef69601f5571702204a30b58856616ac8315d48cd70d0f7ae831472183ef72c"
+    },
+    {
+      "file": "workbench/isolation.e2e.spec.ts",
+      "sha256": "bcc25737b91f296a17f9d53054dc280a80c090bd14e6e1fa04e8b2f18302fae7"
+    },
+    {
+      "file": "workbench/main.tsx",
+      "sha256": "0ee6b330790d91f0bf5ad4813e4492837a835ded0b61979c1c048032332f2f7d"
+    },
+    {
+      "file": "workbench/operations-http.e2e.spec.ts",
+      "sha256": "cd850dfcc572331b946a3a417abcf7377854d655d4cf3cf6ae477380067972d8"
+    },
+    {
+      "file": "workbench/operations.e2e.spec.ts",
+      "sha256": "c35071dd8936f3bf50a160daab28c760dcdd7d76712e121cdbb74d82f088ebd4"
+    },
+    {
+      "file": "workbench/playwright.config.mjs",
+      "sha256": "ef19877256f2b7db053ecbddcabe79bb21cbbe79a5bf7e003bd671723c6c22f6"
+    },
+    {
+      "file": "workbench/preview-commit.e2e.spec.ts",
+      "sha256": "92ca2d06ad2bd783fea9123ad77f79515667cc98f0c79fcf61d623cba13346b0"
+    },
+    {
+      "file": "workbench/react-conversation.e2e.spec.ts",
+      "sha256": "56ea3da689bb817b47ad7f172f2eb7f683b73ad2c4bcf6e2d203911431cf5636"
+    },
+    {
+      "file": "workbench/react-studio.e2e.spec.ts",
+      "sha256": "3aa2e89ad2585e54c05ec4ce46957e5406db38450be36ed8f5d25ce7b8ee353e"
+    },
+    {
+      "file": "workbench/remote-react-preview.e2e.spec.ts",
+      "sha256": "b78d6ae47478f2a635393fb11685548ce31da9b5f9e9e24a099c360bca7028ba"
+    },
+    {
+      "file": "workbench/request-recovery.e2e.spec.ts",
+      "sha256": "d64a74e6cc0812b44f5b3802deba1ac103084ccc5ba107f8d0e8ea499ac4a122"
+    },
+    {
+      "file": "workbench/studio.css",
+      "sha256": "706bca9e06cd65802fc62810ea8f31a054a30ee52c1dade3333893a31c971805"
+    },
+    {
+      "file": "workbench/studio.e2e.spec.ts",
+      "sha256": "a93b09e18c757602b8166a08c2e735ae654c5f9000fd49ee747a2443a7cb4445"
+    },
+    {
+      "file": "workbench/transport.ts",
+      "sha256": "13da03704c40a0b46ad62073f8967217ab445b6773fb925c4a4a6ba7df1a7b22"
+    },
+    {
+      "file": "workbench/tsconfig.json",
+      "sha256": "1c93fcc2d09dd97dfd10c129d24480f40a8ad9f573645b5cb43d8e9d231ce4ac"
+    },
+    {
+      "file": "workbench/vite.config.ts",
+      "sha256": "21ab22d3bee7c31a3ab3a27134707572ffba6959d166254d5d80cf2b0dc20c7a"
+    }
+  ],
+  "runtimeLinuxCINote": "Renderer isolation, graceful cleanup and actual app image passed at a7aabfa5. Main test/build and product release gates also passed in run35863959597. These are artifact test PR818 results, not full platform deployment.",
+  "mainBffRegression": {
+    "passed": 62,
+    "logSha256": "d7e4a6f998cf2d113c9217de1944cad968dcf6280e5793530dc33e2560acf401"
+  },
+  "draftRegression": {
+    "passed": 69,
+    "logSha256": "943d1b792d20b94d7cfc786d0334d074dc043aabaf0978acdc207b8564b33922"
+  },
+  "mainService": {
+    "unitTests": {
+      "passed": 4552,
+      "skipped": 308,
+      "filesPassed": 440,
+      "command": "npm test -- --maxWorkers=4",
+      "note": "Emulator integration is a separate gate; skipped tests are not counted as passed. A concurrent first run timed out in two existing tests; unchanged suite passed on its own."
+    },
+    "typecheck": "PASS",
+    "build": "PASS",
+    "testLogSha256": "2e21d9adbc4ba593a8c54ce0db2ad65b4f8b07d79cbebb5af056ec0677e57368",
+    "buildLogSha256": "afc9315673a8d0b73501ec9883e059ff052760e4c9c660c2af39e464c295ef2f"
+  },
+  "fullImplementationPR": "https://github.com/merryAI-dev/MYSCube/pull/819",
+  "operationalMetrics": {
+    "historicalCopiedLogSummary": "PASS: two synthetic DBs, real HTTP, actual browser",
+    "offlineHttpImport": "PASS: synthetic Vercel envelopes, actual BFF finish payload, atomic isolated emulator store, real HTTP summary and browser",
+    "independentHttpQA": {
+      "passed": 16
+    },
+    "newHttpRequestCollection": "automatic_source_export_not_connected; bounded_offline_import_implemented",
+    "currentServiceErrorRate": null,
+    "errorReductionClaim": null
+  },
+  "sharedQaRegression": {
+    "legacyIntegrationPassed": 4,
+    "unitPassed": 11,
+    "logHashes": {
+      "/tmp/myscube-qa-legacy-integration.log": "4b8666820daeb9fc16ceed779d34b567afcb4c671fbc1cd2397a74855905ec7f",
+      "/tmp/myscube-qa-shared-unit.log": "466e318113634733db41b8c1f60973bd26d0773d2eee2d9cdbc728c8f2c021b9"
+    }
+  },
+  "previousFullCI": {
+    "sha": "2e6c165aae22e8dd2dadf4a18331c99b316e67db",
+    "workbench": "https://github.com/merryAI-dev/MYSCube/actions/runs/35867630101",
+    "main": "https://github.com/merryAI-dev/MYSCube/actions/runs/35867630023",
+    "conclusion": "success",
+    "note": "This predecessor passed; the S20 working-tree additions are validated locally and require their own PR CI."
+  }
+}

@@ -1,0 +1,246 @@
+{
+  "observedAt": "2026-09-22T11:56:27.513159+00:00",
+  "method": "Authenticated GitHub REST API /repos/{owner}/{repo}; related-project shortlist, not global ranking",
+  "repositories": [
+    {
+      "archived": false,
+      "default_branch": "main",
+      "full_name": "langgenius/dify",
+      "html_url": "https://github.com/langgenius/dify",
+      "language": "TypeScript",
+      "license": {
+        "key": "other",
+        "name": "Other",
+        "node_id": "MDc6TGljZW5zZTA=",
+        "spdx_id": "NOASSERTION",
+        "url": null
+      },
+      "pushed_at": "2026-09-22T11:40:48Z",
+      "stargazers_count": 156850
+    },
+    {
+      "archived": false,
+      "default_branch": "master",
+      "full_name": "apache/superset",
+      "html_url": "https://github.com/apache/superset",
+      "language": "Python",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "node_id": "MDc6TGljZW5zZTI=",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0"
+      },
+      "pushed_at": "2026-09-22T11:02:16Z",
+      "stargazers_count": 74881
+    },
+    {
+      "archived": true,
+      "default_branch": "main",
+      "full_name": "FlowiseAI/Flowise",
+      "html_url": "https://github.com/FlowiseAI/Flowise",
+      "language": "TypeScript",
+      "license": {
+        "key": "other",
+        "name": "Other",
+        "node_id": "MDc6TGljZW5zZTA=",
+        "spdx_id": "NOASSERTION",
+        "url": null
+      },
+      "pushed_at": "2026-08-13T12:38:19Z",
+      "stargazers_count": 55477
+    },
+    {
+      "archived": false,
+      "default_branch": "master",
+      "full_name": "metabase/metabase",
+      "html_url": "https://github.com/metabase/metabase",
+      "language": "Clojure",
+      "license": {
+        "key": "other",
+        "name": "Other",
+        "node_id": "MDc6TGljZW5zZTA=",
+        "spdx_id": "NOASSERTION",
+        "url": null
+      },
+      "pushed_at": "2026-09-22T11:55:38Z",
+      "stargazers_count": 49367
+    },
+    {
+      "archived": false,
+      "default_branch": "main",
+      "full_name": "langchain-ai/langgraph",
+      "html_url": "https://github.com/langchain-ai/langgraph",
+      "language": "Python",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "node_id": "MDc6TGljZW5zZTEz",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit"
+      },
+      "pushed_at": "2026-09-21T21:00:44Z",
+      "stargazers_count": 42128
+    },
+    {
+      "archived": false,
+      "default_branch": "main",
+      "full_name": "langchain-ai/langgraphjs",
+      "html_url": "https://github.com/langchain-ai/langgraphjs",
+      "language": "TypeScript",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "node_id": "MDc6TGljZW5zZTEz",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit"
+      },
+      "pushed_at": "2026-09-22T09:16:42Z",
+      "stargazers_count": 3304
+    },
+    {
+      "archived": false,
+      "default_branch": "v2.0-cyanoptera",
+      "full_name": "duckdb/duckdb",
+      "html_url": "https://github.com/duckdb/duckdb",
+      "language": "C++",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "node_id": "MDc6TGljZW5zZTEz",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit"
+      },
+      "pushed_at": "2026-09-22T11:40:45Z",
+      "stargazers_count": 41632
+    },
+    {
+      "archived": false,
+      "default_branch": "release",
+      "full_name": "appsmithorg/appsmith",
+      "html_url": "https://github.com/appsmithorg/appsmith",
+      "language": "TypeScript",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "node_id": "MDc6TGljZW5zZTI=",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0"
+      },
+      "pushed_at": "2026-09-21T23:39:40Z",
+      "stargazers_count": 40921
+    },
+    {
+      "archived": true,
+      "default_branch": "main",
+      "full_name": "vanna-ai/vanna",
+      "html_url": "https://github.com/vanna-ai/vanna",
+      "language": "Python",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "node_id": "MDc6TGljZW5zZTEz",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit"
+      },
+      "pushed_at": "2026-02-02T14:14:20Z",
+      "stargazers_count": 23813
+    },
+    {
+      "archived": false,
+      "default_branch": "master",
+      "full_name": "cube-js/cube",
+      "html_url": "https://github.com/cube-js/cube",
+      "language": "Rust",
+      "license": {
+        "key": "other",
+        "name": "Other",
+        "node_id": "MDc6TGljZW5zZTA=",
+        "spdx_id": "NOASSERTION",
+        "url": null
+      },
+      "pushed_at": "2026-09-22T11:00:57Z",
+      "stargazers_count": 20887
+    },
+    {
+      "archived": false,
+      "default_branch": "main",
+      "full_name": "eosphoros-ai/DB-GPT",
+      "html_url": "https://github.com/eosphoros-ai/DB-GPT",
+      "language": "Python",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "node_id": "MDc6TGljZW5zZTEz",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit"
+      },
+      "pushed_at": "2026-09-16T06:51:17Z",
+      "stargazers_count": 20032
+    },
+    {
+      "archived": false,
+      "default_branch": "main",
+      "full_name": "Canner/WrenAI",
+      "html_url": "https://github.com/Canner/WrenAI",
+      "language": "Python",
+      "license": {
+        "key": "other",
+        "name": "Other",
+        "node_id": "MDc6TGljZW5zZTA=",
+        "spdx_id": "NOASSERTION",
+        "url": null
+      },
+      "pushed_at": "2026-09-21T02:44:33Z",
+      "stargazers_count": 17718
+    },
+    {
+      "archived": false,
+      "default_branch": "main",
+      "full_name": "googleapis/mcp-toolbox",
+      "html_url": "https://github.com/googleapis/mcp-toolbox",
+      "language": "Go",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "node_id": "MDc6TGljZW5zZTI=",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0"
+      },
+      "pushed_at": "2026-09-22T11:25:39Z",
+      "stargazers_count": 16476
+    },
+    {
+      "archived": false,
+      "default_branch": "main",
+      "full_name": "evidence-dev/evidence",
+      "html_url": "https://github.com/evidence-dev/evidence",
+      "language": "TypeScript",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "node_id": "MDc6TGljZW5zZTEz",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit"
+      },
+      "pushed_at": "2026-09-21T20:29:57Z",
+      "stargazers_count": 6956
+    },
+    {
+      "archived": false,
+      "default_branch": "next",
+      "full_name": "firebase/extensions",
+      "html_url": "https://github.com/firebase/extensions",
+      "language": "TypeScript",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "node_id": "MDc6TGljZW5zZTI=",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0"
+      },
+      "pushed_at": "2026-09-21T16:03:25Z",
+      "stargazers_count": 979
+    }
+  ]
+}

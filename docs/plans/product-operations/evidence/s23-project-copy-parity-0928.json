@@ -1,0 +1,13 @@
+{
+  "sourceRows": 80,
+  "targetRows": 80,
+  "columns": 13,
+  "all80x13Equal": true,
+  "sourceReadTime": "2026-09-28T00:28:56.624249000Z",
+  "asOfEqualsSourceReadTime": true,
+  "versionPinned": true,
+  "truncated": false,
+  "rawEmptyStart": 1,
+  "rawEmptyEnd": 3,
+  "nullableFalsePreserved": true
+}

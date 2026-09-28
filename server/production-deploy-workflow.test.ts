@@ -32,23 +32,59 @@ describe('production deployment decisions', () => {
     expect(deployment.args).toContain('SETTLEMENT_AGENT_WORKER_SECRET=worker-key');
     expect(deployment.args.some((arg: string) => arg.startsWith('GEMINI_API_KEY='))).toBe(false);
   });
-  it.each([false, true])('isolates Workbench activation with settlement enabled=%s', (settlement) => {
-    for (const workbench of [false, true]) for (const maintenance of [false, true]) {
-      const deployment = buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance,
-        env: { ...env, SETTLEMENT_AGENT_ENABLED: String(settlement), PRODUCT_WORKBENCH_AI_ENABLED: String(workbench), SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key' } });
-      expect(deployment.args).toContain(`PRODUCT_WORKBENCH_AI_ENABLED=${workbench && !maintenance}`);
-      expect(deployment.args).toContain(`SETTLEMENT_AGENT_ENABLED=${settlement && !maintenance}`);
-      expect(deployment.args.includes('SETTLEMENT_AGENT_GEMINI_API_KEY=agent-key')).toBe(settlement || workbench);
-      expect(deployment.args.includes('SLACK_SIGNING_SECRET=signature')).toBe(settlement);
+  it.each([false, true])('ignores all Workbench flags while preserving settlement enabled=%s', (settlement) => {
+    for (const maintenance of [false, true]) {
+      const input = { sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance,
+        env: { ...env, SETTLEMENT_AGENT_ENABLED: String(settlement), SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key' } };
+      const baseline = buildVercelProductionDeployArgs(input);
+      for (const ai of [false, true]) for (const reads of [false, true]) {
+        const deployment = buildVercelProductionDeployArgs({ ...input, env: { ...input.env, PRODUCT_WORKBENCH_AI_ENABLED: String(ai), PRODUCT_WORKBENCH_READS_ENABLED: String(reads), WORKBENCH_AI_ENABLED: String(ai), WORKBENCH_GEMINI_API_KEY: 'independent-key' } });
+        expect(deployment).toEqual(baseline);
+        expect(deployment.args.some((arg: string) => arg.includes('WORKBENCH') || arg.includes('independent-key'))).toBe(false);
+        expect(deployment.args).toContain(`SETTLEMENT_AGENT_ENABLED=${settlement && !maintenance}`);
+        for (const ownCredential of ['SLACK_SIGNING_SECRET=signature', 'SETTLEMENT_AGENT_GEMINI_API_KEY=agent-key', 'SETTLEMENT_AGENT_WORKER_SECRET=worker-key']) expect(deployment.args.includes(ownCredential)).toBe(settlement);
+      }
     }
   });
-  it('requires Workbench isolation on every web release before alias promotion', () => {
+  it('continues requiring settlement own credentials and never borrows Workbench credentials', () => {
+    for (const required of ['SLACK_SIGNING_SECRET', 'SETTLEMENT_AGENT_GEMINI_API_KEY', 'SETTLEMENT_AGENT_WORKER_SECRET']) {
+      for (const maintenance of [false, true]) {
+        const configured: Record<string, string> = { ...env, SETTLEMENT_AGENT_ENABLED: 'true', SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key', PRODUCT_WORKBENCH_AI_ENABLED: 'true', WORKBENCH_GEMINI_API_KEY: 'independent-key' };
+        delete configured[required];
+        expect(() => buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance, env: configured })).toThrow(required);
+      }
+    }
+  });
+  it('removes the main Workbench deployment gate without altering the settlement canary contract', () => {
     const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');
-    const gate = workflow.split('- name: Verify Workbench isolation before alias')[1].split('- name: Promote canonical production alias')[0];
-    expect(gate).toContain("if: steps.release_mode.outputs.release_mode == 'web'");
-    expect(gate).not.toContain('settlement_cutover');
-    expect(gate).toContain('node scripts/verify-workbench-isolation.mjs');
-    expect(gate).toContain('steps.previous_alias.outputs.deployment_host');
+    expect(workflow).not.toContain('WORKBENCH');
+    expect(workflow).not.toContain('Verify Workbench isolation before alias');
+    expect(workflow).not.toContain('node scripts/verify-workbench-isolation.mjs');
+    const capture = workflow.indexOf('- name: Capture current canonical alias');
+    const verify = workflow.indexOf('- name: Verify authenticated settlement reads before alias');
+    const promote = workflow.indexOf('- name: Promote canonical production alias');
+    expect(capture).toBeGreaterThan(-1); expect(verify).toBeGreaterThan(capture); expect(promote).toBeGreaterThan(verify);
+    const canary = workflow.slice(verify, promote);
+    expect(canary).toContain("if: steps.release_mode.outputs.settlement_cutover == 'true'");
+    expect(canary).toContain('run: |\n          node scripts/verify-cashflow-settlement-candidate.mjs');
+    const canaryEnv = Object.fromEntries([...canary.matchAll(/^          ([A-Z_]+): (.+)$/gm)].map(match => [match[1], match[2]]));
+    expect(canaryEnv).toEqual({
+      SETTLEMENT_CANARY_BASE_URL: '${{ steps.vercel_deploy.outputs.deployment_url }}',
+      SETTLEMENT_CANARY_FIREBASE_WEB_API_KEY: '${{ vars.FIREBASE_WEB_API_KEY_LIVE }}',
+      SETTLEMENT_CANARY_FIREBASE_REFRESH_TOKEN: '${{ secrets.FIREBASE_SETTLEMENT_READ_CANARY_REFRESH_TOKEN_LIVE }}',
+      VERCEL_AUTOMATION_BYPASS_SECRET: '${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}',
+      SETTLEMENT_CANARY_ACTOR_UID: '${{ vars.SETTLEMENT_READ_CANARY_ACTOR_UID_LIVE }}',
+      SETTLEMENT_CANARY_PROJECT_ID: '${{ vars.JVM_SETTLEMENT_CANARY_PROJECT_ID_LIVE }}',
+      SETTLEMENT_CANARY_CYCLE_YEAR_MONTH: '${{ vars.JVM_SETTLEMENT_CANARY_CYCLE_YEAR_MONTH_LIVE }}',
+      SETTLEMENT_CANARY_EXPECTED_REQUEST_ID: '${{ vars.SETTLEMENT_CANARY_EXPECTED_REQUEST_ID_LIVE }}',
+      SETTLEMENT_CANARY_EXPECTED_STATUS: '${{ vars.SETTLEMENT_CANARY_EXPECTED_STATUS_LIVE }}',
+      SETTLEMENT_CANARY_EXPECTED_WORKFLOW_REVISION: '${{ vars.SETTLEMENT_CANARY_EXPECTED_WORKFLOW_REVISION_LIVE }}',
+      SETTLEMENT_CANARY_EXPECTED_EVIDENCE_REVISION: '${{ vars.SETTLEMENT_CANARY_EXPECTED_EVIDENCE_REVISION_LIVE }}',
+      SETTLEMENT_CANARY_EXPECTED_TARGET_YEAR_MONTH: '${{ vars.SETTLEMENT_CANARY_EXPECTED_TARGET_YEAR_MONTH_LIVE }}',
+      SETTLEMENT_CANARY_EXPECTED_ACTIONS: '${{ vars.SETTLEMENT_CANARY_EXPECTED_ACTIONS_LIVE }}',
+      SETTLEMENT_CANARY_TENANT_ID: 'mysc',
+      SETTLEMENT_CANARY_CANONICAL_ORIGIN: 'https://myscube.myscguard.app',
+    });
   });
   it('keeps the reviewed active September request in the read-only cutover inventory', () => {
     const workflow = readFileSync('.github/workflows/production-deploy.yml', 'utf8');

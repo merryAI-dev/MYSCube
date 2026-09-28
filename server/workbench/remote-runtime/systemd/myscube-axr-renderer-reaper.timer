@@ -1,0 +1,11 @@
+[Unit]
+Description=Check orphaned MYSCube AXR renderers every minute
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=myscube-axr-renderer-reaper.service
+
+[Install]
+WantedBy=timers.target

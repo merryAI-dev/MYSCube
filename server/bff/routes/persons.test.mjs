@@ -24,6 +24,9 @@ function asPerson(employments) {
   };
 }
 
+const containsProfileScore = value => value === '920' || value === 920
+  || Boolean(value && typeof value === 'object' && Object.values(value).some(containsProfileScore));
+
 describe('applyEmploymentChange — 계약 변경', () => {
   it('기존 계약을 적용일 직전에 닫고 새 계약을 잇는다', () => {
     const next = applyEmploymentChange(노성진, {
@@ -562,6 +565,12 @@ describe('라우트 — 인력 명부', () => {
     expect(store['orgs/tenant-a/persons/psn-x-강에나하에나']).toBeTruthy();
   });
 
+  it('점수 유출 검사에서 UUID 부분문자열은 허용하고 문자열·숫자 점수 값은 탐지한다', () => {
+    expect(containsProfileScore({ employments: [{ id: '19395b94-16d6-4097-920d-d2ce147ab799' }] })).toBe(false);
+    expect(containsProfileScore({ nested: [{ resultValue: '920' }] })).toBe(true);
+    expect(containsProfileScore({ nested: [{ resultValue: 920 }] })).toBe(true);
+  });
+
   it('신규 인력과 비어 있지 않은 전문 프로필을 CREATE + PROFILE_UPDATE audit과 한 transaction으로 저장한다', async () => {
     const { app, store, audit, auditHead, idempotencyBodies } = createApp();
     const response = await request(app).post('/api/v1/persons').send(personWithProfessionalProfile());
@@ -571,7 +580,9 @@ describe('라우트 — 인력 명부', () => {
       person: { personId: 'psn-x-강에나하에나', name: '강에나' },
       professionalProfile: { revision: 1, changed: true },
     });
-    expect(JSON.stringify(response.body)).not.toMatch(/Sussex|Development Studies|TOEIC|920|PMP/);
+    expect(response.body.professionalProfile).toEqual({ revision: 1, changed: true });
+    expect(JSON.stringify(response.body)).not.toMatch(/Sussex|Development Studies|TOEIC|PMP/);
+    expect(containsProfileScore(response.body)).toBe(false);
     expect(store['orgs/tenant-a/persons/psn-x-강에나하에나'].professionalProfile).toMatchObject({
       educationRecords: [expect.objectContaining({ institutionName: 'University of Sussex' })],
       certifications: [{ key: 'pmp', label: 'PMP' }],
@@ -579,8 +590,10 @@ describe('라우트 — 인력 명부', () => {
     });
     expect(audit.map(({ action }) => action)).toEqual(['CREATE', 'PROFILE_UPDATE']);
     expect(auditHead.lastSeq).toBe(2);
-    expect(JSON.stringify(audit[1])).not.toMatch(/Sussex|Development Studies|TOEIC|920|2026-06|PMP/);
-    expect(JSON.stringify(idempotencyBodies)).not.toMatch(/Sussex|Development Studies|TOEIC|920|2026-06|PMP/);
+    expect(JSON.stringify(audit[1])).not.toMatch(/Sussex|Development Studies|TOEIC|2026-06|PMP/);
+    expect(containsProfileScore(audit[1])).toBe(false);
+    expect(JSON.stringify(idempotencyBodies)).not.toMatch(/Sussex|Development Studies|TOEIC|2026-06|PMP/);
+    expect(containsProfileScore(idempotencyBodies)).toBe(false);
   });
 
   it('전문 프로필 포함 생성은 PII-free receipt만 저장하고 replay 응답은 canonical person으로 재구성한다', async () => {
@@ -617,7 +630,8 @@ describe('라우트 — 인력 명부', () => {
     expect([...harness.idempotencyRecords.values()].map(({ responseBody }) => responseBody))
       .toEqual(harness.idempotencyBodies);
     expect(JSON.stringify([...harness.idempotencyRecords.values()]))
-      .not.toMatch(/profile-person@example\.com|Sussex|Development Studies|TOEIC|920|2026-06|PMP/);
+      .not.toMatch(/profile-person@example\.com|Sussex|Development Studies|TOEIC|2026-06|PMP/);
+    expect(containsProfileScore([...harness.idempotencyRecords.values()])).toBe(false);
     expect(harness.audit.map(({ action }) => action)).toEqual(['CREATE', 'PROFILE_UPDATE']);
   });
 

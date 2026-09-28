@@ -1,0 +1,36 @@
+[Unit]
+Description=Isolated MYSCube AXR Workbench and renderer broker
+After=network-online.target docker.service
+Wants=network-online.target myscube-axr-renderer-reaper.timer
+Requires=docker.service
+StartLimitIntervalSec=900
+StartLimitBurst=20
+
+[Service]
+Type=exec
+User=axr-runtime
+Group=axr-runtime
+SupplementaryGroups=docker
+WorkingDirectory=/opt/myscube-workbench
+EnvironmentFile=/etc/myscube-workbench/runtime.env
+Environment=NODE_ENV=production
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=WORKBENCH_BIND_HOST=127.0.0.1
+Environment=PORT=8791
+ExecStart=/usr/bin/node /opt/myscube-workbench/server/workbench/server.mjs
+Restart=on-failure
+RestartSec=60s
+TimeoutStopSec=15s
+KillMode=mixed
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077
+LimitNOFILE=16384
+MemoryHigh=1G
+MemoryMax=2G
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

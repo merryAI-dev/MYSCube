@@ -1,0 +1,7 @@
+{
+  "model": "gemini-3.6-flash",
+  "calls": 44,
+  "totalTokens": 695206,
+  "maxCalls": 60,
+  "maxTokensBeforeNextCall": 700000
+}

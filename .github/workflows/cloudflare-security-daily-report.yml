@@ -5,9 +5,24 @@ on:
     # 09:00 Asia/Seoul
     - cron: "0 0 * * *"
   workflow_dispatch:
+    inputs:
+      action:
+        type: choice
+        default: report
+        options: [report, axr-dns-plan, axr-dns-apply]
+      reviewed_sha:
+        description: Reviewed full source commit for the DNS operation
+        type: string
+      confirmation:
+        description: 'For DNS only: axr.myscguard.app -> 34.64.247.190'
+        type: string
+      plan_hash:
+        description: SHA256 returned by the reviewed DNS plan (apply only)
+        type: string
 
 jobs:
   report:
+    if: github.event_name != 'workflow_dispatch' || inputs.action == 'report' || inputs.action == ''
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -39,3 +54,44 @@ jobs:
           name: cloudflare-security-daily-report
           path: tmp/cloudflare-security-reports/
           if-no-files-found: warn
+
+  axr-dns:
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'merryAI-dev/MYSCube' &&
+      github.ref == 'refs/heads/feat/axr-isolated-workbench-complete' &&
+      (inputs.action == 'axr-dns-plan' || inputs.action == 'axr-dns-apply')
+    permissions:
+      contents: read
+    concurrency:
+      group: axr-approved-dns-record
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify the reviewed source and exact approved DNS target
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+          ACTION: ${{ inputs.action }}
+          PLAN_HASH: ${{ inputs.plan_hash }}
+        run: |
+          set -euo pipefail
+          [[ "$REVIEWED_SHA" =~ ^[a-f0-9]{40}$ && "$REVIEWED_SHA" == "$GITHUB_SHA" ]]
+          [[ "$CONFIRMATION" == 'axr.myscguard.app -> 34.64.247.190' ]]
+          if [[ "$ACTION" == 'axr-dns-apply' ]]; then [[ "$PLAN_HASH" =~ ^[a-f0-9]{64}$ ]]; fi
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+      - name: Inspect or create only the approved independent AXR DNS record
+        env:
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          AXR_DNS_ACTION: ${{ inputs.action == 'axr-dns-apply' && 'apply' || 'plan' }}
+          AXR_DNS_PLAN_HASH: ${{ inputs.plan_hash }}
+        run: node server/workbench/deployment/axr-dns.mjs

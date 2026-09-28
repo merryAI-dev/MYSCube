@@ -1,0 +1,708 @@
+{
+  "status": "PASS",
+  "isolationVerified": true,
+  "image": "myscube-axr-renderer:1.58.2-v1",
+  "imageId": "sha256:6dc1a73c2516a0bf380cec74537b6659d1ae37a05c60c39f7304275bd5a6bc62",
+  "outcomes": [
+    {
+      "case": "actual-cgroup-network-filesystem-and-react-click",
+      "pass": true,
+      "firstFrameMs": 1081
+    },
+    {
+      "case": "raw-container-egress-with-bridge-positive-control",
+      "pass": true,
+      "positiveControlHits": 1,
+      "receiverHits": 0,
+      "sockets": [
+        {
+          "host": "172.17.0.1",
+          "connected": false
+        },
+        {
+          "host": "169.254.169.254",
+          "connected": false
+        },
+        {
+          "host": "1.1.1.1",
+          "connected": false
+        },
+        {
+          "host": "2606:4700:4700::1111",
+          "connected": false
+        }
+      ],
+      "dnsReached": false,
+      "nonLoopback": 0
+    },
+    {
+      "case": "browser-network-block",
+      "pass": true,
+      "receiverHits": 0,
+      "nextSessionFirstFrameMs": 1025
+    },
+    {
+      "case": "infinite-loop",
+      "pass": true,
+      "attackStarted": true,
+      "elapsedMs": 8069,
+      "canaryLatencyMs": 21,
+      "measurements": [
+        {
+          "latencyMs": 12,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 21,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 20,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 20,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 20,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 21,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 21,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 21,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 19,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 20,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 12,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 18,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 21,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 12,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 20,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 14,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 20,
+          "overlappedAttack": true
+        }
+      ],
+      "termination": "remote_command_timeout",
+      "memoryCapInspected": true,
+      "kernelOomObserved": false
+    },
+    {
+      "case": "memory-pressure",
+      "pass": true,
+      "attackStarted": true,
+      "elapsedMs": 8065,
+      "canaryLatencyMs": 28,
+      "measurements": [
+        {
+          "latencyMs": 13,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 28,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 18,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 18,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 12,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 12,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 12,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 14,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 17,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        }
+      ],
+      "termination": "remote_command_timeout",
+      "memoryCapInspected": true,
+      "kernelOomObserved": false
+    },
+    {
+      "case": "api-flood",
+      "pass": true,
+      "attackStarted": true,
+      "elapsedMs": 1538,
+      "canaryLatencyMs": 28,
+      "measurements": [
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 14,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 11,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 15,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 11,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 11,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 14,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 20,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 28,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 24,
+          "overlappedAttack": true
+        },
+        {
+          "latencyMs": 16,
+          "overlappedAttack": true
+        }
+      ],
+      "termination": "remote_react_error",
+      "memoryCapInspected": true,
+      "kernelOomObserved": false
+    },
+    {
+      "case": "graceful-http-and-renderer-shutdown-before-database-close",
+      "pass": true,
+      "exitCode": 0,
+      "databaseTerminated": true,
+      "reservedSessions": 0
+    },
+    {
+      "case": "managed-orphan-expiry-reaper-with-advanced-test-clock",
+      "pass": true,
+      "freshPreserved": true,
+      "expiredRemoved": true,
+      "restartGuardVerified": true
+    }
+  ],
+  "cleanupVerified": true,
+  "verification": {
+    "commit": "a7aabfa5ca7052dbc4023502bf52eb299e50aa0c",
+    "run": "https://github.com/merryAI-dev/MYSCube/actions/runs/35863959611",
+    "job": "https://github.com/merryAI-dev/MYSCube/actions/runs/35863959611/job/107190753844",
+    "productionDeployed": false,
+    "source": "GitHub Actions Linux real Docker; synthetic data only",
+    "logSha256": "be1f9f8bbdebd3f0c1b5a5b9b9b49422c2f2778ab4f10ecb9d0d940e97f51859"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "sourceSha": "3b630560b9f9c6e9717193f79cd6f31bd9808bf2",
+  "experiment": "Fresh G4-only v2; does not replace prior failed run or G3 samples",
+  "pass": false,
+  "failure": "resource_sampling_failed",
+  "rounds": 10,
+  "successfulRounds": 10,
+  "roundDurationMs": {
+    "p50": 1687.6545000000006,
+    "p95": 1724.2749160000021,
+    "max": 1724.2749160000021
+  },
+  "apiReceipts": {
+    "total": 22,
+    "completed": 22
+  },
+  "quotaStatus": 429,
+  "quotaError": "remote_capacity",
+  "resourceSampleCount": 18,
+  "twoLiveMeasuredSamples": 6,
+  "resourceEvidenceValid": false,
+  "collectorErrors": [
+    {
+      "stage": "collector",
+      "at": "2026-09-28T01:24:30.729Z",
+      "code": 1,
+      "killed": false
+    }
+  ],
+  "liveHealthScope": "Existing isolated AXR localhost8791, not main MYSCube business flow",
+  "liveHealthChecks": 19,
+  "liveHealthFailures": 0,
+  "cleanup": {
+    "reserved": 0,
+    "remainingOwnedContainers": [],
+    "details": []
+  },
+  "rawEvidenceHashes": {
+    "myscube-g4-only-host-browser-3b630560-v2.json": "342e35dd2b1bfef060b768f2361f1cb9d26bb50a86d06a8dc3d527d734999b47",
+    "myscube-g4-only-host-server-3b630560-v2.json": "b80f21f4852f80f7f43f8ffbcd7a1b5472b40bfeddc890af8a3c260a894969dd"
+  }
+}

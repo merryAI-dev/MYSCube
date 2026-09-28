@@ -1,0 +1,18 @@
+[Unit]
+Description=Remove expired isolated MYSCube AXR renderer containers
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=axr-runtime
+Group=axr-runtime
+SupplementaryGroups=docker
+WorkingDirectory=/opt/myscube-workbench
+ExecStart=/usr/bin/node /opt/myscube-workbench/server/workbench/remote-runtime/reaper.mjs
+TimeoutStartSec=40s
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
