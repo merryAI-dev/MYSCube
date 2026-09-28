@@ -42,8 +42,8 @@ for (const id of ids) {
   const events = trace.map((row) => row.event);
   assert.equal(events.find((event) => event.type === 'run_start')?.harness, harness, 'Wrong runner');
   assert.equal(events.findLast((event) => event.type === 'run_result')?.status, 'answered', 'Answer must be complete');
-  const reviews = events.filter((event) => event.type === 'answer_review');
-  assert(reviews.length && reviews.at(-1).review?.supported === true && reviews.at(-1).review?.addressesRequest === true, 'Final evidence review failed');
+  const answerPolicy = events.findLast((event) => event.type === 'run_result')?.answerPolicy;
+  assert.equal(answerPolicy, 'server_evidence_only', 'Answer must use server-owned evidence rendering');
   assert(!events.some((event) => ['tool_failure', 'hermes_tool_failure', 'model_failure'].includes(event.type) || event.outcome === 'rejected'), 'Execution failure observed');
   const called = events.filter((event) => ['tool_result', 'hermes_tool_result'].includes(event.type)).map((event) => event.tool);
   assert(called.every((tool) => HERMES_READ_TOOLS.includes(tool)), 'Non-read tool observed');
@@ -54,7 +54,7 @@ for (const id of ids) {
   console.log(JSON.stringify({ job: id, delivered: true, traceValid: true,
     harness: events.find((event) => event.type === 'run_start')?.harness,
     result: events.findLast((event) => event.type === 'run_result')?.status,
-    called, callCount: called.length, tokens, reviews: reviews.map((event) => ({ supported: event.review?.supported, addressesRequest: event.review?.addressesRequest })),
+    called, callCount: called.length, tokens, answerPolicy,
     failureCount: events.filter((event) => ['tool_failure', 'hermes_tool_failure', 'model_failure'].includes(event.type)).length,
     note: 'No write capability was observed. This does not prove no concurrent external business changes occurred.' }));
 }

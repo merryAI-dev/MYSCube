@@ -83,3 +83,36 @@ describe('accounting read evidence', () => {
     expect(readSnapshot).toHaveBeenCalledTimes(1);
   });
 });
+
+it('derives line differences by canonical rows and reports observed gaps without inferring cell states', () => {
+  const snapshot = source();
+  snapshot.readModel.months[0].projection.weeks[0].amounts = { SALES_IN: 0, TEAM_SUPPORT_IN: 20, BANK_INTEREST_IN: 10 };
+  snapshot.readModel.months[0].actual.weeks = [{ weekNo: 2,
+    amounts: { BANK_INTEREST_IN: 10, SALES_IN: 40, TEAM_SUPPORT_IN: 5 }, weekIn: 55, weekOut: -100, net: -45 }];
+  const result = accountingEvidence(snapshot, { ...input, detail: 'lines' });
+  const differences = Object.fromEntries(result.difference.weeks[0].lines.map((line) => [line.lineId, line.amount]));
+  expect(differences).toMatchObject({ SALES_IN: 40, TEAM_SUPPORT_IN: -15, BANK_INTEREST_IN: 0 });
+  expect(result.difference.weeks[0].lines.some((line) => line.amount === null)).toBe(true);
+  expect(result.observations.actual).toEqual({ negativeBalanceWeeks: [2], unrecordedWeeks: [] });
+  const month = accountingEvidence(snapshot, { projectId: input.projectId, yearMonth: input.yearMonth });
+  expect(month.observations.actual.unrecordedWeeks).not.toContain(2);
+  expect(month.observations.actual.unrecordedWeeks.length).toBeGreaterThan(0);
+  snapshot.readModel.months[0].projection.weeks[0].amounts.SALES_IN = -Number.MAX_SAFE_INTEGER;
+  expect(() => accountingEvidence(snapshot, { ...input, detail: 'lines' })).toThrow('accounting_amount_invalid');
+});
+
+it('delivers numeric verified fallback through the agent without another snapshot read', async () => {
+  const { runSettlementAgent } = await import('./settlement-agent.mjs');
+  const readSnapshot = vi.fn(async () => source());
+  const tools = createAccountingTools({ readSnapshot });
+  const complete = vi.fn().mockResolvedValueOnce({ tool_calls: [{ id: 'read', type: 'function', function: {
+    name: 'accounting_read', arguments: JSON.stringify({ ...input, detail: 'lines' }),
+  } }] }).mockResolvedValueOnce({ content: 'done' });
+  const result = await runSettlementAgent({ question: '계획과 실적 차이를 항목별로 알려줘', tools, complete });
+  expect(result.status).toBe('answered');
+  expect(result.answer).toContain('누적잔액 120원');
+  expect(result.answer).toContain('계획 0원 / 실적 미확인 / 차이 미확인');
+  expect(result.answer).toContain('EMPTY/ZERO/VALUE');
+  expect(result.answer).toContain('자료 조회 시각:');
+  expect(readSnapshot).toHaveBeenCalledTimes(1);
+});

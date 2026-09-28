@@ -22,8 +22,8 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Hermes worker route persi
       createdAt: new Date().toISOString(), status: 'queued', attempts: 0 });
     const deliveries: any[] = [];
     const readOverview = vi.fn();
-    const answer = '🔎 요청하신 사업을 찾았어요. 다음으로 어떤 정산 기간을 확인할까요?';
-    const hermesRunner = vi.fn(async ({ tools, question, history, env, loadFeedback, record, reviewAnswer, signal }: any) => {
+    const answer = `조회할 사업을 확인했어요.\n- ${project.name}`;
+    const hermesRunner = vi.fn(async ({ tools, question, history, env, loadFeedback, record, signal }: any) => {
       expect(env.SETTLEMENT_HERMES_URL).toBe('https://hermes-fixture.run.app');
       expect(question).toBe('내 사업을 찾아줘');
       expect(history).toEqual([]);
@@ -34,18 +34,12 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('Hermes worker route persi
       expect(result.items).toEqual([{ projectId: id, name: project.name }]);
       const evidence = [{ tool: tool.name, input, result }];
       await record({ type: 'hermes_tool_result', ...evidence[0] });
-      const review = await reviewAnswer({ question, history, answer, evidence, signal });
-      expect(review.supported).toBe(true);
-      return { status: 'answered', answer };
+      return { status: 'answered', answer: tool.render(result) };
     });
     const worker = createSlackWorker({ db, readOverview, hermesRunner,
       env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture',
         SETTLEMENT_HERMES_URL: 'https://hermes-fixture.run.app' },
-      completeFactory: () => async ({ messages }: any) => {
-        expect(messages[0].content).toContain('독립 검토자');
-        expect(JSON.parse(messages.at(-1).content).answer).toBe(answer);
-        return { content: JSON.stringify({ supported: true, addressesRequest: true, issues: [] }) };
-      },
+      completeFactory: () => async () => { throw new Error('unused completion'); },
       fetchImpl: async (url: string, options: any) => {
         if (new URL(url).pathname === '/api/users.info') {
           return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: member.email } } });
