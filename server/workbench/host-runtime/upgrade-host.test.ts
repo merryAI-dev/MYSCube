@@ -114,6 +114,9 @@ describe('upgrade real filesystem ownership and preflight contracts', () => {
     await link(file, join(root, 'hardlink')); await expect(readUpgradeFile(file, 100, { uid })).rejects.toMatchObject({ code: 'upgrade_file_invalid' });
   });
   async function fixture() {
+    let elapsed = 0;
+    const now = () => elapsed, advance = (ms: number) => { elapsed += ms; };
+    const wait = vi.fn(async (ms: number) => { advance(ms); });
     const root = await directory(), paths = { config: join(root, 'etc/config'), releases: join(root, 'opt/releases'), current: join(root, 'opt/current'), nginx: join(root, 'etc/nginx/conf.d/myscube-workbench.conf'), units: join(root, 'etc/systemd/system') };
     for (const path of [paths.config, paths.releases, dirname(paths.nginx), join(root, 'etc/nginx/sites-enabled'), paths.units, join(paths.releases, oldSha)]) await mkdir(path, { recursive: true, mode: 0o700 });
     const images = [{ role: 'app', tag: 'myscube-workbench-app:release', id: oldApp }, { role: 'renderer', tag: 'myscube-axr-renderer:1.58.2-v1', id: oldRenderer }];
@@ -128,7 +131,7 @@ describe('upgrade real filesystem ownership and preflight contracts', () => {
     for (const [name, relative] of Object.entries({ 'myscube-axr-workbench.service': 'host-runtime/systemd/myscube-axr-workbench.service', 'myscube-axr-renderer-reaper.service': 'remote-runtime/systemd/myscube-axr-renderer-reaper.service', 'myscube-axr-renderer-reaper.timer': 'remote-runtime/systemd/myscube-axr-renderer-reaper.timer' })) {
       const source = join(paths.releases, oldSha, 'server/workbench', relative); await mkdir(dirname(source), { recursive: true }); await writeFile(source, name, { mode: 0o644 }); await writeFile(join(paths.units, name), name, { mode: 0o644 });
     }
-    const run = vi.fn(async (file: string, args: string[]) => {
+    const run = vi.fn(async (file: string, args: string[], _options?: { timeout?: number; signal?: AbortSignal }) => {
       if (file.endsWith('docker')) {
         const target = args.at(-1)!; const id = target.includes('app:') ? oldApp : target.includes('renderer:') ? oldRenderer : target;
         if (args.includes('inspect')) return args[args.indexOf('--format') + 1] === '{{json .Id}}' ? JSON.stringify(id) : [id, 'linux', 'amd64', oldSha, 'production_candidate'].map(value => JSON.stringify(value)).join('\n');
@@ -142,13 +145,81 @@ describe('upgrade real filesystem ownership and preflight contracts', () => {
       return '';
     });
     const input = { pins: currentPins, bundle: { sourceSha, manifestSha256: 'f'.repeat(64), manifest: { sourceSha, build: { auth }, images: [{ bytes: 10 }] } } };
-    const actions = createUpgradeActions({ uid, paths, run }); await actions.acquire(input); return { root, paths, input, actions, run };
+    const actions = createUpgradeActions({ uid, paths, run, now, wait }); await actions.acquire(input); return { root, paths, input, actions, run, now, advance, wait };
   }
   it('checks actual pinned receipt/config/link/auth and saves exact original files before maintenance', async () => {
     const f = await fixture(); await expect(f.actions.preflight(f.input)).resolves.toMatchObject({ domain: 'workbench.example.org' });
     const before = await readFile(f.paths.nginx, 'utf8'); await f.actions.maintenance();
     expect(await readFile(f.paths.nginx, 'utf8')).toBe(renderUpgradeMaintenance('workbench.example.org'));
     expect(await readFile(join(f.paths.config, '.upgrade-lock/nginx.original'), 'utf8')).toBe(before);
+  });
+  it.each([
+    ['200', '503', '503'],
+    ['503', '200', '503', '503'],
+  ])('waits for consecutive maintenance responses after reload: %j', async (...statuses) => {
+    const f = await fixture(); await f.actions.preflight(f.input);
+    const previous = f.run.getMockImplementation()!, replies = [...statuses];
+    f.run.mockImplementation(async (file, args) => file.endsWith('curl') ? replies.shift()! : previous(file, args));
+    await f.actions.maintenance();
+    expect(replies).toEqual([]);
+    expect(f.run.mock.calls.filter(([file]) => file.endsWith('curl'))).toHaveLength(statuses.length);
+    expect(f.wait).toHaveBeenCalledTimes(statuses.length - 1);
+    expect(f.wait.mock.calls.every(([ms]) => ms === 250)).toBe(true);
+    expect(await readFile(f.paths.nginx, 'utf8')).toBe(renderUpgradeMaintenance('workbench.example.org'));
+  });
+  it('times out never-503 responses without advancing or reopening the upgrade', async () => {
+    const f = await fixture(); await f.actions.preflight(f.input);
+    const previous = f.run.getMockImplementation()!;
+    f.run.mockImplementation(async (file, args) => file.endsWith('curl') ? '200' : previous(file, args));
+    const flow = orchestration(); flow.actions.maintenance = f.actions.maintenance;
+    await expect(upgradeHost(options(), { actions: flow.actions })).rejects.toMatchObject({ code: 'upgrade_failed_manual_review' });
+    expect(f.now()).toBe(10000);
+    expect(f.run.mock.calls.filter(([file]) => file.endsWith('curl'))).toHaveLength(40);
+    expect(flow.actions.journal).toHaveBeenLastCalledWith('maintenance', 'failed-kept-closed', 'upgrade_maintenance_not_closed');
+    expect(flow.state).toMatchObject({ ingress: 503, enabled: false, active: false, app: oldApp, renderer: oldRenderer, link: oldSha, lock: true });
+    expect(flow.actions.switchRelease).not.toHaveBeenCalled(); expect(flow.actions.start).not.toHaveBeenCalled(); expect(flow.actions.releaseLock).not.toHaveBeenCalled();
+  });
+  it('limits each probe to remaining time and rejects even 503 after the deadline', async () => {
+    const f = await fixture(); await f.actions.preflight(f.input);
+    const previous = f.run.getMockImplementation()!;
+    let probes = 0;
+    f.run.mockImplementation(async (file, args) => {
+      if (!file.endsWith('curl')) return previous(file, args);
+      if (++probes === 1) { f.advance(9250); return '503'; }
+      expect(args[args.indexOf('--max-time') + 1]).toBe('0.5'); f.advance(501); return '503';
+    });
+    await expect(f.actions.maintenance()).rejects.toMatchObject({ code: 'upgrade_maintenance_not_closed' });
+    expect(probes).toBe(2);
+    const calls = f.run.mock.calls.filter(([file]) => file.endsWith('curl'));
+    expect(calls.map(call => call[2])).toMatchObject([{ timeout: 5000 }, { timeout: 500 }]);
+  });
+  it.each(['wait', 'probe'])('aborts during a maintenance %s without advancing the upgrade', async point => {
+    const f = await fixture(); await f.actions.preflight(f.input);
+    const controller = new AbortController(), previous = f.run.getMockImplementation()!;
+    f.run.mockImplementation(async (file, args) => {
+      if (!file.endsWith('curl')) return previous(file, args);
+      if (point === 'probe') controller.abort(); return '503';
+    });
+    f.wait.mockImplementation(async ms => { f.advance(ms); controller.abort(); });
+    const flow = orchestration(); flow.actions.maintenance = f.actions.maintenance;
+    await expect(upgradeHost(options(), { actions: flow.actions, signal: controller.signal })).rejects.toMatchObject({ code: 'upgrade_failed_manual_review' });
+    expect(f.run.mock.calls.filter(([file]) => file.endsWith('curl'))).toHaveLength(1);
+    expect(flow.actions.journal).toHaveBeenLastCalledWith('maintenance', 'failed-kept-closed', 'upgrade_aborted');
+    expect(flow.actions.switchRelease).not.toHaveBeenCalled(); expect(flow.actions.start).not.toHaveBeenCalled();
+    expect(flow.state).toMatchObject({ ingress: 503, enabled: false, active: false, lock: true });
+  });
+  it('does not retry a failed TLS/network probe or expose its output in the journal', async () => {
+    const f = await fixture(); await f.actions.preflight(f.input);
+    const previous = f.run.getMockImplementation()!;
+    f.run.mockImplementation(async (file, args) => {
+      if (file.endsWith('curl')) throw Object.assign(new Error('private curl output'), { code: 60 });
+      return previous(file, args);
+    });
+    const flow = orchestration(); flow.actions.maintenance = f.actions.maintenance;
+    await expect(upgradeHost(options(), { actions: flow.actions })).rejects.toMatchObject({ code: 'upgrade_failed_manual_review' });
+    expect(f.run.mock.calls.filter(([file]) => file.endsWith('curl'))).toHaveLength(1); expect(f.wait).not.toHaveBeenCalled();
+    expect(flow.actions.journal).toHaveBeenLastCalledWith('maintenance', 'failed-kept-closed', 'upgrade_maintenance_probe_failed');
+    expect(flow.actions.switchRelease).not.toHaveBeenCalled(); expect(flow.state).toMatchObject({ ingress: 503, enabled: false, active: false, lock: true });
   });
   it.each(['receipt', 'config', 'auth'])('rejects changed %s during preflight with no service stop or tag writes', async field => {
     const f = await fixture();

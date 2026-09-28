@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { setTimeout as delay } from 'node:timers/promises';
 import { constants } from 'node:fs';
 import { lstat, open, readFile, readlink, realpath, readdir, mkdir, mkdtemp, rename, symlink, chmod, chown, rm } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
@@ -88,7 +89,7 @@ async function replaceFile(path, bytes, expectedHash, mode, uid) {
   const staged = `${path}.upgrade-${randomUUID()}`;
   await durable(staged, bytes, mode); await previous.assertCurrent(); await rename(staged, path); await syncDir(dirname(path));
 }
-export function createUpgradeActions({ run = execute, uid = 0, paths = UPGRADE_PATHS, verify = verifyReleaseBundle } = {}) {
+export function createUpgradeActions({ run = execute, uid = 0, paths = UPGRADE_PATHS, verify = verifyReleaseBundle, now = () => performance.now(), wait = delay } = {}) {
   const configPath = name => join(paths.config, name), lock = configPath('.upgrade-lock');
   const docker = (...args) => run('/usr/bin/docker', ['--host', 'unix:///var/run/docker.sock', ...args], { timeout: 300000 });
   const unitState = async name => {
@@ -260,13 +261,28 @@ export function createUpgradeActions({ run = execute, uid = 0, paths = UPGRADE_P
         await rename(staging, final); await syncDir(paths.releases); return { final, assets };
       } finally { if (created) await docker('rm', container).catch(() => {}); }
     },
-    async maintenance() {
+    async maintenance({ signal } = {}) {
+      signal?.throwIfAborted();
       for (const file of [original.receiptFile, original.activationFile, original.environment, original.nginxFile]) await file.assertCurrent();
       const bytes = renderUpgradeMaintenance(original.activation.domain); maintenanceHash = digest(bytes);
       await replaceFile(paths.nginx, bytes, digest(original.nginxFile.bytes), 0o644, uid);
-      await run('/usr/sbin/nginx', ['-t']); await run('/usr/bin/systemctl', ['reload', 'nginx']);
-      const status = await run('/usr/bin/curl', ['--silent', '--show-error', '--output', '/dev/null', '--write-out', '%{http_code}', '--max-time', '5', '--resolve', `${original.activation.domain}:443:127.0.0.1`, `https://${original.activation.domain}/health`]);
-      if (status !== '503') fail('upgrade_maintenance_not_closed');
+      await run('/usr/sbin/nginx', ['-t']); signal?.throwIfAborted();
+      await run('/usr/bin/systemctl', ['reload', 'nginx']); signal?.throwIfAborted();
+      // Reload returns before new workers necessarily serve requests; observe convergence, not one response.
+      const deadline = now() + 10000;
+      const remaining = () => { signal?.throwIfAborted(); const ms = deadline - now(); if (ms <= 0) fail('upgrade_maintenance_not_closed'); return ms; };
+      let consecutive = 0;
+      while (consecutive < 2) {
+        const timeout = Math.floor(Math.min(5000, remaining()));
+        if (timeout < 1) fail('upgrade_maintenance_not_closed');
+        let status;
+        try {
+          status = await run('/usr/bin/curl', ['--silent', '--show-error', '--output', '/dev/null', '--write-out', '%{http_code}', '--max-time', String(timeout / 1000), '--resolve', `${original.activation.domain}:443:127.0.0.1`, `https://${original.activation.domain}/health`], { timeout, signal });
+        } catch { signal?.throwIfAborted(); fail('upgrade_maintenance_probe_failed'); }
+        remaining();
+        consecutive = status === '503' ? consecutive + 1 : 0;
+        if (consecutive < 2) { await wait(Math.min(250, remaining()), undefined, { signal }); remaining(); }
+      }
     },
     async disable() {
       await run('/usr/bin/systemctl', ['disable', appUnit]);
@@ -351,7 +367,7 @@ export async function upgradeHost(raw, { actions = createUpgradeActions(), signa
   try {
     await step('preflight', () => actions.preflight(input));
     const staged = await step('stage', () => actions.stage(input));
-    await step('maintenance', async () => { maintenanceAttempted = true; await actions.maintenance(); });
+    await step('maintenance', async () => { maintenanceAttempted = true; await actions.maintenance({ signal }); });
     await step('disable', () => actions.disable()); await step('stop', () => actions.stop()); await step('drain', () => actions.drain());
     await step('switch', () => actions.switchRelease(input, staged)); await step('runtime-smoke', () => actions.runtimeSmoke(input, staged)); await step('start', () => actions.start(input, staged));
     await step('acceptance', () => actions.acceptance(input, staged)); await step('reopen', () => actions.reopen()); await step('enable', () => actions.enable());
