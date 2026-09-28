@@ -6,8 +6,13 @@ import { executeAnalyticsQuery } from '../analytics-engine.mjs';
 import { createBuildMetadata } from './build-metadata.mjs';
 
 const metadata = JSON.parse(await readFile('workbench-build.json', 'utf8'));
-assert.equal(metadata.classification, 'synthetic', 'Smoke only accepts synthetic authentication builds');
-assert.deepEqual(metadata, await createBuildMetadata({ env: { WORKBENCH_RELEASE_SHA: metadata.sourceSha, WORKBENCH_BUILD_CLASS: 'synthetic', VITE_WORKBENCH_AUTH_PROJECT_ID: 'demo-image-identity', VITE_WORKBENCH_AUTH_API_KEY: 'synthetic-image-key-not-a-secret', VITE_WORKBENCH_AUTH_DOMAIN: 'demo-image-identity.firebaseapp.com' } }));
+const classification = process.env.WORKBENCH_SMOKE_CLASS || 'synthetic';
+assert.ok(['synthetic', 'production_candidate'].includes(classification));
+assert.equal(metadata.classification, classification);
+const auth = classification === 'synthetic'
+  ? { VITE_WORKBENCH_AUTH_PROJECT_ID: 'demo-image-identity', VITE_WORKBENCH_AUTH_API_KEY: 'synthetic-image-key-not-a-secret', VITE_WORKBENCH_AUTH_DOMAIN: 'demo-image-identity.firebaseapp.com' }
+  : { VITE_WORKBENCH_AUTH_PROJECT_ID: process.env.VITE_WORKBENCH_AUTH_PROJECT_ID, VITE_WORKBENCH_AUTH_API_KEY: process.env.VITE_WORKBENCH_AUTH_API_KEY, VITE_WORKBENCH_AUTH_DOMAIN: process.env.VITE_WORKBENCH_AUTH_DOMAIN };
+assert.deepEqual(metadata, await createBuildMetadata({ env: { WORKBENCH_RELEASE_SHA: metadata.sourceSha, WORKBENCH_BUILD_CLASS: classification, ...auth } }));
 if (process.env.WORKBENCH_EXPECTED_SOURCE_SHA) assert.equal(metadata.sourceSha, process.env.WORKBENCH_EXPECTED_SOURCE_SHA);
 
 const env = { PATH: process.env.PATH, NODE_ENV: 'production', PORT: '18971', WORKBENCH_PROJECT_ID: 'demo-image-workbench', PRODUCTION_PROJECT_ID: 'demo-image-business', WORKBENCH_MODEL_PROJECT_ID: 'demo-image-model', PRODUCTION_MODEL_PROJECT_ID: 'demo-image-business-model', WORKBENCH_AUTH_PROJECT_ID: 'demo-image-identity', WORKBENCH_TENANT_ID: 'synthetic-image-qa', WORKBENCH_AI_ENABLED: 'false', WORKBENCH_REMOTE_RUNTIME_ENABLED: 'false' };
@@ -26,7 +31,7 @@ try {
   const assets = [...html.matchAll(/(?:src|href)="(\/assets\/[^"<>]+)"/g)].map(item => item[1]); assert.ok(assets.some(path => path.endsWith('.js'))); assert.ok(assets.some(path => path.endsWith('.css')));
   let javascript = '';
   for (const asset of assets) { const response = await fetch(`http://127.0.0.1:18971${asset}`, { signal: AbortSignal.timeout(1000) }); assert.equal(response.status, 200); const text = await response.text(); assert.ok(text.length > 0); if (asset.endsWith('.js')) javascript += text; }
-  assert.ok(javascript.includes('demo-image-identity'), 'Synthetic frontend auth configuration missing from built assets');
+  assert.ok(javascript.includes(auth.VITE_WORKBENCH_AUTH_PROJECT_ID), 'Expected frontend auth configuration missing from built assets');
   assert.equal((await fetch('http://127.0.0.1:18971/api/v1/react-work-pages', { signal: AbortSignal.timeout(1000) })).status, 401);
   const packages = await getReactPackageSet(); assert.equal(packages.runtimeVersion, 'react-preview-v1'); assert.ok(packages.bundle.length > 1000);
   const artifact = await compileReactPreview({ title: 'Synthetic image QA', code: "import React from 'react';export default function App(){return <h1 className=\"text-blue-600\">Image smoke</h1>}" });

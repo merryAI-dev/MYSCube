@@ -1,0 +1,102 @@
+name: AXR Dedicated Host Deploy
+
+on:
+  push:
+    branches: [feat/axr-isolated-workbench-complete]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: axr-dedicated-production-host
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: vars.AXR_HOST_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      RELEASE_SHA: ${{ github.sha }}
+      GH_TOKEN: ${{ github.token }}
+      CLOUDSDK_CORE_DISABLE_PROMPTS: '1'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+      - uses: docker/setup-docker-action@v5
+        id: docker
+        with:
+          version: v29.8.1
+          daemon-config: '{"features":{"containerd-snapshotter":true}}'
+      - name: Match the dedicated host image store on this disposable builder
+        env:
+          BUILDER_SOCKET: ${{ steps.docker.outputs.sock }}
+        run: |
+          set -euo pipefail
+          [[ "$BUILDER_SOCKET" == unix:///* ]]
+          BUILDER_SOCKET_PATH=${BUILDER_SOCKET#unix://}
+          test -S "$BUILDER_SOCKET_PATH"
+          sudo systemctl stop docker.service docker.socket
+          sudo rm -f /var/run/docker.sock
+          sudo ln -s "$BUILDER_SOCKET_PATH" /var/run/docker.sock
+          DOCKER_BINARY=$(command -v docker)
+          if [ "$DOCKER_BINARY" != /usr/local/bin/docker ]; then sudo install -m 0755 "$DOCKER_BINARY" /usr/local/bin/docker; fi
+          test "$(/usr/local/bin/docker --host unix:///var/run/docker.sock version --format '{{.Server.Version}}')" = 29.8.1
+      - name: Build the exact reviewed production app and renderer pair
+        env:
+          AUTH_API_KEY: ${{ vars.AXR_AUTH_API_KEY }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
+          docker build -f server/workbench/Dockerfile --build-arg "WORKBENCH_RELEASE_SHA=$RELEASE_SHA" --build-arg WORKBENCH_BUILD_CLASS=production_candidate --build-arg VITE_WORKBENCH_AUTH_PROJECT_ID=inner-platform-live-20260316 --build-arg "VITE_WORKBENCH_AUTH_API_KEY=$AUTH_API_KEY" --build-arg VITE_WORKBENCH_AUTH_DOMAIN=inner-platform-live-20260316.firebaseapp.com -t myscube-workbench-app:release .
+          docker build -f server/workbench/remote-runtime/Dockerfile --build-arg "WORKBENCH_RELEASE_SHA=$RELEASE_SHA" --build-arg WORKBENCH_BUILD_CLASS=production_candidate -t myscube-axr-renderer:1.58.2-v1 .
+          node server/workbench/deployment/create-release-bundle.mjs --directory "$RUNNER_TEMP/axr-bundle" --source-sha "$RELEASE_SHA" --classification production_candidate > "$RUNNER_TEMP/axr-bundle-result.json"
+          docker run --rm --pull never --network none --memory 1g --cpus 2 --pids-limit 128 --read-only --tmpfs /tmp:rw,nosuid,size=128m --cap-drop ALL --security-opt no-new-privileges -e "WORKBENCH_EXPECTED_SOURCE_SHA=$RELEASE_SHA" -e WORKBENCH_SMOKE_CLASS=production_candidate -e VITE_WORKBENCH_AUTH_PROJECT_ID=inner-platform-live-20260316 -e "VITE_WORKBENCH_AUTH_API_KEY=$AUTH_API_KEY" -e VITE_WORKBENCH_AUTH_DOMAIN=inner-platform-live-20260316.firebaseapp.com myscube-workbench-app:release node server/workbench/deployment/app-smoke.mjs
+          git archive --format=tar -o "$RUNNER_TEMP/axr-source.tar" "$RELEASE_SHA" server/workbench shared
+      - name: Require successful CI for this exact commit before cloud access
+        run: node server/workbench/deployment/await-ci.mjs
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: projects/523130357051/locations/global/workloadIdentityPools/axr-github/providers/github
+          service_account: axr-deployer@myscube-axr-prod-20260924.iam.gserviceaccount.com
+          project_id: myscube-axr-prod-20260924
+      - uses: google-github-actions/setup-gcloud@v3
+      - name: Deliver immutable bundle through the dedicated IAP tunnel
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/feat/axr-isolated-workbench-complete | cut -f1)" = "$RELEASE_SHA"
+          gcloud storage cp --if-generation-match=0 "$RUNNER_TEMP/axr-bundle/manifest.json" "$RUNNER_TEMP/axr-bundle/app.docker.tar" "$RUNNER_TEMP/axr-bundle/renderer.docker.tar" "gs://myscube-axr-releases-20260924/releases/$RELEASE_SHA/"
+          gcloud compute ssh axr-workbench-01 --project=myscube-axr-prod-20260924 --zone=asia-northeast3-a --tunnel-through-iap --ssh-key-expire-after=2h --command="umask 077; mkdir /var/tmp/axr-ci-$RELEASE_SHA"
+          gcloud compute scp --recurse --compress --project=myscube-axr-prod-20260924 --zone=asia-northeast3-a --tunnel-through-iap "$RUNNER_TEMP/axr-bundle" "$RUNNER_TEMP/axr-source.tar" "axr-workbench-01:/var/tmp/axr-ci-$RELEASE_SHA/"
+      - name: Apply the reviewed upgrade on AXR only
+        run: |
+          set -euo pipefail
+          test "$(git ls-remote origin refs/heads/feat/axr-isolated-workbench-complete | cut -f1)" = "$RELEASE_SHA"
+          MANIFEST_HASH=$(jq -er .manifestSha256 "$RUNNER_TEMP/axr-bundle-result.json")
+          SOURCE_HASH=$(sha256sum "$RUNNER_TEMP/axr-source.tar" | cut -d' ' -f1)
+          [[ "$MANIFEST_HASH" =~ ^[a-f0-9]{64}$ && "$SOURCE_HASH" =~ ^[a-f0-9]{64}$ ]]
+          gcloud compute ssh axr-workbench-01 --project=myscube-axr-prod-20260924 --zone=asia-northeast3-a --tunnel-through-iap --command="sudo install -d -m 0700 /var/lib/myscube-axr-upgrades/$RELEASE_SHA && sudo cp -a /var/tmp/axr-ci-$RELEASE_SHA/. /var/lib/myscube-axr-upgrades/$RELEASE_SHA/ && sudo chown -R root:root /var/lib/myscube-axr-upgrades/$RELEASE_SHA && echo '$SOURCE_HASH  /var/lib/myscube-axr-upgrades/$RELEASE_SHA/axr-source.tar' | sudo sha256sum --check --status && sudo tar --no-same-owner -xf /var/lib/myscube-axr-upgrades/$RELEASE_SHA/axr-source.tar -C /var/lib/myscube-axr-upgrades/$RELEASE_SHA && sudo chmod 0600 /var/lib/myscube-axr-upgrades/$RELEASE_SHA/server/workbench/deployment/axr-current-pins.json && sudo systemd-run --unit=axr-upgrade-$RELEASE_SHA --wait --collect --property=Type=exec --property=CPUQuota=100% --property=MemoryMax=1G --property=RuntimeMaxSec=1200 /usr/bin/node /var/lib/myscube-axr-upgrades/$RELEASE_SHA/server/workbench/host-runtime/upgrade-host.mjs --directory /var/lib/myscube-axr-upgrades/$RELEASE_SHA/axr-bundle --source-sha $RELEASE_SHA --manifest-sha256 $MANIFEST_HASH --current-pins /var/lib/myscube-axr-upgrades/$RELEASE_SHA/server/workbench/deployment/axr-current-pins.json --apply --dedicated-host"
+      - name: Verify public TLS, health, authentication and installed source
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --max-time 15 https://axr.myscguard.app/health | jq -e '.ok == true and .service == "myscube-workbench" and .projectId == "myscube-axr-prod-20260924"'
+          test "$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 15 https://axr.myscguard.app/api/v1/react-work-pages)" = 401
+          gcloud compute ssh axr-workbench-01 --project=myscube-axr-prod-20260924 --zone=asia-northeast3-a --tunnel-through-iap --command="test \"\$(readlink -f /opt/myscube-workbench)\" = /opt/myscube-workbench-releases/$RELEASE_SHA && systemctl is-active myscube-axr-workbench.service myscube-axr-renderer-reaper.timer && sudo cat /etc/myscube-workbench/upgrade-journal.json"
+      - name: Preserve small release receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: axr-host-deployment-receipts
+          path: |
+            ${{ runner.temp }}/axr-bundle-result.json
+            ${{ runner.temp }}/axr-bundle/manifest.json
+          if-no-files-found: ignore
