@@ -50,7 +50,9 @@ describe('registered API query uses server-owned plans', () => {
   it('keeps dataset and stated period checks for server-resolved plans', async () => {
     for (const definition of [{ ...api, plan: { ...api.plan, datasetId: 'private' } }, { ...api, plan: { ...api.plan, time: { yearMonth: '2026-10', weekScope: 'all' } } }]) {
       const f = fixture(query, [definition]);
+      f.complete.mockResolvedValue(tool(query));
       await expect(runConversationTurn(f.args)).rejects.toMatchObject({ code: 'conversation_plan_context_mismatch' });
+      expect(f.complete).toHaveBeenCalledTimes(2);
       expect(f.analytics.queryPlan).not.toHaveBeenCalled();
     }
   });

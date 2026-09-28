@@ -86,10 +86,12 @@ describe('independent conversation agent QA (synthetic completion, no real model
     { datasetId: 'different_dataset' },
     { time: { yearMonth: '2025-09', weekScope: 'all' } },
   ])('rejects a plan that differs from its claimed context: %j', async (overrides) => {
-    const f = fixture([{ action: 'query', plan: plan(overrides), interpretation: interpretation() }]);
+    const badStep = { action: 'query', plan: plan(overrides), interpretation: interpretation() };
+    const f = fixture([badStep, badStep]);
     f.args.context.analyticsScope.datasetIds.push('different_dataset');
     await expect(runConversationTurn(f.args)).rejects.toMatchObject({ code: 'conversation_plan_context_mismatch' });
     expect(f.analytics.queryPlan).not.toHaveBeenCalled();
+    expect(f.complete).toHaveBeenCalledTimes(2);
   });
 
   it('rejects raw SQL as a model action before executing an analytics plan', async () => {
