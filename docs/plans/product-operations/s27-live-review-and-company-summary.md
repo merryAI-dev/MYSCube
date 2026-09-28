@@ -69,3 +69,7 @@ BFF 실제 합성 실행 결과(월/주/부분 결과)를 fixture로 보존해 A
 
 
 완전성 의미의 추가 검증: `complete=true`는 모든 대상 사업에서 저장된 집계 숫자를 받았다는 범위 표지다. JVM readModel은 셀 상태를 제공하지 않으며 일부 행만 기록되어도 다른 항목의 합산 결과가0일 수 있다(`accounting-read.mjs`의 `recorded` 판정, `WeeklyExpenseController.buildModeReadModel`, `CashflowWeekTotals.sumLines`). 모든 EMPTY가0으로 저장된다고 단정하는 것은 아니다. 그래서 완전/부분 결과 모두 호스트에 **저장된 집계값 기준 · 입력 상태 확인 필요** 안내를 강제하고, 모델이 보는 API 설명도 같은 의미로 제한한다. 기존 값이나 저장 로직을 변경하지 않는다.
+
+### Host configuration compatibility
+
+The bootstrap configuration schema accepts optional `WORKBENCH_MYSCUBE_LIVE_ENABLED` and `WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED` switches as literal string `true` or `false`. Omission preserves existing environment output and leaves the connection inactive. Company summary activation requires live activation. This change does not alter deployed environment files, configuration hashes, release pins, credentials, or Cloudflare rules. Activation requires a coordinated configuration/pin update; the existing two-path edge rule does not authorize the new company-summary endpoint.

@@ -16,6 +16,25 @@ describe('dedicated host bootstrap contracts (not real Linux acceptance)', () =>
     expect(validate(configuration())).toEqual(configuration());
     expect(Object.isFrozen(validate(configuration()))).toBe(true);
   });
+  it('preserves existing configuration bytes when live switches are omitted', () => {
+    expect(renderRuntimeEnvironment(validate(configuration()))).toBe(renderRuntimeEnvironment(configuration()));
+    expect(validate(configuration())).not.toHaveProperty('WORKBENCH_MYSCUBE_LIVE_ENABLED');
+  });
+  it.each(['true', 'false'])('accepts explicit live activation %s without implicitly enabling company summary', value => {
+    const input = { ...configuration(), WORKBENCH_MYSCUBE_LIVE_ENABLED: value };
+    expect(validate(input)).toEqual(input);
+    expect(renderRuntimeEnvironment(validate(input))).toContain(`WORKBENCH_MYSCUBE_LIVE_ENABLED="${value}"`);
+  });
+  it('requires live activation before company summary and accepts explicit disabled switches', () => {
+    for (const live of [undefined, 'false']) expect(() => validate({ ...configuration(), ...(live === undefined ? {} : { WORKBENCH_MYSCUBE_LIVE_ENABLED: live }), WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED: 'true' })).toThrow(/requires explicit/);
+    for (const value of ['true', 'false']) {
+      const input = { ...configuration(), WORKBENCH_MYSCUBE_LIVE_ENABLED: value, WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED: value };
+      expect(validate(input)).toEqual(input);
+    }
+  });
+  it.each(['WORKBENCH_MYSCUBE_LIVE_ENABLED', 'WORKBENCH_MYSCUBE_COMPANY_SUMMARY_ENABLED'])('rejects malformed activation: %s', key => {
+    for (const value of ['TRUE', '1', '', ' true', 'false ', true, 1, null]) expect(() => validate({ ...configuration(), [key]: value })).toThrow();
+  });
   it('rejects duplicate JSON fields and nonstring/nested values before environment-file rendering', () => {
     expect(parseBootstrapConfiguration(JSON.stringify(configuration()))).toEqual(configuration());
     expect(parseBootstrapConfiguration('{"key":"quoted \\"value\\" with : and , punctuation"}')).toEqual({ key: 'quoted "value" with : and , punctuation' });
