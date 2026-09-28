@@ -1,0 +1,295 @@
+{
+  "sourceSha": "3b630560b9f9c6e9717193f79cd6f31bd9808bf2",
+  "scope": "Actual isolated-host source candidate, Docker/CDP and product React view over localhost plus SSH IAP tunnel; synthetic identity, not OAuth or live TLS.",
+  "oracle": {
+    "cold": {
+      "count": 20,
+      "failures": 0,
+      "p95Ms": 5117.632124999989,
+      "maxMs": 6147.918250000001,
+      "pass": false
+    },
+    "update": {
+      "count": 20,
+      "failures": 0,
+      "p95Ms": 4619.674458000023,
+      "maxMs": 4631.362540999995,
+      "pass": false
+    },
+    "input": {
+      "count": 20,
+      "failures": 0,
+      "p95Ms": 422.13241699998616,
+      "maxMs": 903.47987499999,
+      "pass": true
+    }
+  },
+  "phase": {
+    "cold": {
+      "endToEndMs": {
+        "n": 20,
+        "p50": 4363.1,
+        "p95": 5117.63,
+        "max": 6147.92
+      },
+      "firstUsableMs": {
+        "n": 20,
+        "p50": 3352.5,
+        "p95": 3956,
+        "max": 5235.8
+      },
+      "breakdown": {
+        "clientFetchMs": {
+          "n": 20,
+          "p50": 3349.5,
+          "p95": 3948.6,
+          "max": 5212.5
+        },
+        "httpMs": {
+          "n": 20,
+          "p50": 3162.4,
+          "p95": 3797.76,
+          "max": 5047.74
+        },
+        "permissionAwaitMs": {
+          "n": 20,
+          "p50": 80.01,
+          "p95": 94.67,
+          "max": 134.51
+        },
+        "permissionReadCount": {
+          "n": 20,
+          "p50": 8,
+          "p95": 8,
+          "max": 8
+        },
+        "brokerMs": {
+          "n": 20,
+          "p50": 1611.4,
+          "p95": 2311.22,
+          "max": 2798.09
+        },
+        "rendererIpcMs": {
+          "n": 20,
+          "p50": 1582.37,
+          "p95": 2258.2,
+          "max": 2696.61
+        },
+        "outsideBrokerAndPermissionMs": {
+          "n": 20,
+          "p50": 1491.58,
+          "p95": 1716.6,
+          "max": 2147.66
+        },
+        "brokerResidualMs": {
+          "n": 20,
+          "p50": 10.4,
+          "p95": 37.34,
+          "max": 68.95
+        },
+        "clientFetchMinusHttpMs": {
+          "n": 20,
+          "p50": 139.39,
+          "p95": 199.65,
+          "max": 205.7
+        }
+      }
+    },
+    "update": {
+      "endToEndMs": {
+        "n": 20,
+        "p50": 4047.92,
+        "p95": 4619.67,
+        "max": 4631.36
+      },
+      "firstUsableMs": {
+        "n": 20,
+        "p50": 3265.9,
+        "p95": 3450.9,
+        "max": 3681.8
+      },
+      "breakdown": {
+        "clientFetchMs": {
+          "n": 20,
+          "p50": 3240.2,
+          "p95": 3437.9,
+          "max": 3658.3
+        },
+        "httpMs": {
+          "n": 20,
+          "p50": 3096.06,
+          "p95": 3293.4,
+          "max": 3505.71
+        },
+        "permissionAwaitMs": {
+          "n": 20,
+          "p50": 74.27,
+          "p95": 89.26,
+          "max": 98.33
+        },
+        "permissionReadCount": {
+          "n": 20,
+          "p50": 8,
+          "p95": 8,
+          "max": 8
+        },
+        "brokerMs": {
+          "n": 20,
+          "p50": 1573.39,
+          "p95": 1750.69,
+          "max": 1765.58
+        },
+        "rendererIpcMs": {
+          "n": 20,
+          "p50": 1548.57,
+          "p95": 1709.48,
+          "max": 1709.62
+        },
+        "outsideBrokerAndPermissionMs": {
+          "n": 20,
+          "p50": 1467.37,
+          "p95": 1511.23,
+          "max": 1676.37
+        },
+        "brokerResidualMs": {
+          "n": 20,
+          "p50": 9.14,
+          "p95": 21.84,
+          "max": 22.47
+        },
+        "clientFetchMinusHttpMs": {
+          "n": 20,
+          "p50": 130.26,
+          "p95": 182.54,
+          "max": 222.86
+        }
+      }
+    },
+    "input": {
+      "endToEndMs": {
+        "n": 20,
+        "p50": 396.5,
+        "p95": 422.13,
+        "max": 903.48
+      },
+      "firstUsableMs": null,
+      "breakdown": {
+        "clientFetchMs": {
+          "n": 21,
+          "p50": 326.1,
+          "p95": 344.2,
+          "max": 435
+        },
+        "httpMs": {
+          "n": 21,
+          "p50": 133.19,
+          "p95": 150.86,
+          "max": 244.92
+        },
+        "permissionAwaitMs": {
+          "n": 21,
+          "p50": 60.14,
+          "p95": 63.79,
+          "max": 65.2
+        },
+        "permissionReadCount": {
+          "n": 21,
+          "p50": 6,
+          "p95": 6,
+          "max": 6
+        },
+        "brokerMs": {
+          "n": 21,
+          "p50": 88.18,
+          "p95": 109.72,
+          "max": 197.06
+        },
+        "rendererIpcMs": {
+          "n": 21,
+          "p50": 56.39,
+          "p95": 70.22,
+          "max": 162.36
+        },
+        "outsideBrokerAndPermissionMs": {
+          "n": 21,
+          "p50": 4.68,
+          "p95": 5.76,
+          "max": 6.08
+        },
+        "brokerResidualMs": {
+          "n": 21,
+          "p50": 12.48,
+          "p95": 18.52,
+          "max": 21.7
+        },
+        "clientFetchMinusHttpMs": {
+          "n": 21,
+          "p50": 190.08,
+          "p95": 198.94,
+          "max": 205.52
+        }
+      }
+    }
+  },
+  "inputPhaseEventCountIncludingBaseline": 23,
+  "assumptions": [
+    "First 20 actor-a successful create calls=cold, next 20=update. Actual source markers retained in browser evidence.",
+    "Input phase event group excludes first two baseline focus/click events; includes input focus plus 20 input changes. This is request-level breakdown, not 20 independent input sample breakdown.",
+    "Permission and renderer intervals overlap broker; do not add columns. outsideBrokerAndPermission includes compilation/admission/validation/serialization; not a pure compiler measurement.",
+    "Client fetch minus HTTP includes IAP/network/body/automation scheduling. It excludes pre-fetch queue waits and post-fetch DOM work.",
+    "IPC includes Docker startup/Chromium/CDP/capture/stdio, not separate CDP timing. Background API bridge reads are detached counters, not guessed attribution."
+  ],
+  "load": {
+    "rounds": 10,
+    "successful": 10,
+    "durationMs": {
+      "n": 10,
+      "p50": 1664.54,
+      "p95": 2205.07,
+      "max": 2205.07
+    },
+    "receipts": {
+      "completed": 22
+    },
+    "resourceEvidenceValid": false,
+    "pass": false
+  },
+  "resources": {
+    "sampleCount": 158,
+    "statsErrors": 22,
+    "peakObservedProcessRSSBytes": 321441792,
+    "minimumObservedHostFreeMemoryBytes": 6169333760,
+    "maxObservedOwnContainers": 2,
+    "inspectedContainers": 43,
+    "oomObserved": 0,
+    "liveHealthChecks": 158,
+    "liveHealthFailures": 0
+  },
+  "cleanup": {
+    "reserved": 0,
+    "remainingOwnedContainers": [],
+    "details": []
+  },
+  "timings": {
+    "complete": true,
+    "counters": {
+      "observerErrors": 0,
+      "requestOverflow": 0,
+      "spanOverflow": 0,
+      "protocolInvalid": 0,
+      "unmatchedResponse": 0,
+      "ipcOverflow": 0,
+      "ipcExpired": 0,
+      "detachedMemberReads": 221,
+      "detachedBrokerCalls": 0,
+      "detachedCommands": 0,
+      "lateCompletions": 0,
+      "incompleteHttp": 0
+    }
+  },
+  "evidenceSha256": {
+    "myscube-g3-g4-host-browser-3b630560.json": "75981e8072328ef5ddf36c70ca81242ba9c6944f99e4b0ad9f9724b071633c36",
+    "myscube-g3-g4-host-server-3b630560.json": "64ae26d49c34d49523370918a533b9868a9722091bbb43018bc91aec019ec877",
+    "myscube-g3-g4-stats-destroy-correlation-3b630560.json": "9db8604756a15ec095476f9baf97d494819f4224b80955670b568c99b985dd51"
+  }
+}
