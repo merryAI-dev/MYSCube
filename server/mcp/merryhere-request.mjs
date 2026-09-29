@@ -1,99 +1,76 @@
 import * as z from 'zod/v4';
 import { kstDate, MerryhereError } from './merryhere-client.mjs';
 
-export function resolveRoomDate(text, now) {
-  const today = kstDate(now), day = Date.parse(`${today}T00:00:00+09:00`);
-  if (!text) return today;
-  text = text.replace(/\s+/g, '');
-  if (['오늘', '내일', '모레'].includes(text)) return kstDate(day + ['오늘', '내일', '모레'].indexOf(text) * 86400000);
-  const iso = /^(20\d{2})-(\d{2})-(\d{2})$/.exec(text);
-  const monthDay = /^(?:(20\d{2})년)?(\d{1,2})월(\d{1,2})일$/.exec(text);
-  let date;
-  if (iso || monthDay) {
-    const m = iso || monthDay;
-    date = `${m[1] || today.slice(0, 4)}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
-  } else {
-    const week = /^(이번주|다음주|다다음주)?([월화수목금토일])요일$/.exec(text);
-    if (!week) throw new MerryhereError('date_unclear');
-    const todayWeekday = (new Date(day + 9 * 3600000).getUTCDay() + 6) % 7;
-    const target = '월화수목금토일'.indexOf(week[2]);
-    const weeks = { 이번주: 0, 다음주: 1, 다다음주: 2 }[week[1]] ?? (target < todayWeekday ? 1 : 0);
-    date = kstDate(day + (weeks * 7 + target - todayWeekday) * 86400000);
-  }
-  const parsed = Date.parse(`${date}T00:00:00+09:00`);
-  if (!Number.isFinite(parsed) || kstDate(parsed) !== date || date < today || parsed > day + 28 * 86400000) throw new MerryhereError('date_out_of_range');
+const time = z.string().regex(/^(?:[01]\d|2[0-3]):[03]0$/).nullable().optional();
+const querySchema = z.object({
+  date: z.string().regex(/^20\d{2}-\d{2}-\d{2}$/).nullable().optional(), start: time, end: time,
+  duration: z.number().int().min(30).max(840).multipleOf(30).nullable().optional(),
+  room: z.string().trim().min(1).max(100).nullable().optional(),
+  capacity: z.number().int().min(1).max(100).nullable().optional(), title: z.string().trim().min(1).max(100).nullable().optional(),
+  afternoon: z.boolean().optional(),
+}).strict();
+export const roomRequestSchema = z.object({ action: z.enum(['explore', 'prepare', 'clarify']), inherit: z.boolean(),
+  query: querySchema, missing: z.array(z.enum(['date', 'time', 'meridiem', 'duration', 'room', 'title', 'intent'])).max(7),
+}).strict();
+
+export const roomToolDescription = `Merryhere 회의실 탐색·예약 준비.
+자연어 날짜/시각/기간을 현재 한국시간과 대화 문맥으로 해석하세요. date는 YYYY-MM-DD, start/end는 24시간 HH:mm, duration은 분, capacity는 인원입니다. 다음 주는 월요일 시작 주 기준입니다.
+"5시부터 한 시간 정도" 등 표현은 의미를 해석해 숫자로 전달하세요. 방은 사용자가 지칭한 이름(예:3A), 실제 ID는 서버가 조회합니다.
+독립 요청은 inherit=false. 추가 질문에 대한 답/정정은 inherit=true로 바뀐 조건만 query에 넣으세요. 생략 필드는 유지, null은 해제입니다.
+날짜가 없으면 오늘, 시간이 없으면 가능한 시간대를 먼저 조회합니다. 실제로 말한 시각의 오전/오후가 모호하면 start를 추측하지 말고 missing=["meridiem"]으로 질문하세요. 이전 발화는 대화 이력, 확인된 조건은 아래 서버 상태를 사용하세요.
+시작을 바꿀 때 이전 end를 복사하지 마세요. 서버가 유지된 duration으로 다시 계산합니다. 새 날짜는 이전 시간 조건을 임의로 상속하지 마세요.
+추가 답변을 받으면 이전 미해결 조건을 문맥으로 해석하고 해결된 missing을 제거하세요. "오후만"은 오후 시간대 탐색(afternoon=true)입니다.
+조회는 explore, 명시적 예약 요청은 prepare입니다. 준비에 room/start/end/title이 부족하면 missing에 포함합니다. 취소/다른 주제는 clarify/intent.
+missing은 이번 답변 이후에도 남은 미해결 조건 전체입니다. 예약 생성은 이 도구가 하지 않으며, 호스트가 별도의 사용자 확인번호 확정 후 수행합니다.`;
+
+export function validateRoomDate(date, now) {
+  const day = Date.parse(`${date}T00:00:00+09:00`);
+  const today = kstDate(now), min = Date.parse(`${today}T00:00:00+09:00`);
+  if (!/^20\d{2}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(day) || kstDate(day) !== date || day < min || day > min + 28 * 86400000) throw new MerryhereError('date_out_of_range');
   return date;
 }
-export function resolveRoomTime(text) {
-  if (!text) return null;
-  const m = /^(오전|오후)?\s*(\d{1,2})(?::(\d{2})|시(?:\s*(반|\d{1,2}분))?)$/.exec(text);
-  if (!m) throw new MerryhereError('invalid_time');
-  let hour = Number(m[2]);
-  const minute = m[3] ? Number(m[3]) : m[4] === '반' ? 30 : m[4] ? Number(m[4].replace('분', '')) : 0;
-  if (m[1] && (hour < 1 || hour > 12)) throw new MerryhereError('invalid_time');
-  if (m[1]) hour = hour % 12 + (m[1] === '오후' ? 12 : 0);
-  if (hour > 23 || ![0, 30].includes(minute)) throw new MerryhereError('invalid_time');
-  if (!m[1] && !m[3] && hour <= 12) throw new MerryhereError('time_unclear');
-  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
-}
-const quote = z.string().max(120).nullable();
-export const roomRequestSchema = z.object({ action: z.enum(['explore', 'prepare', 'clarify']), dateText: quote, startText: quote, endText: quote,
-  durationText: quote, roomText: quote, capacityText: quote, title: quote, inherit: z.boolean(), afternoon: z.boolean() }).strict();
-export const roomToolDescription = `Merryhere 회의실 탐색·예약 준비. 날짜 미지정은 오늘, 시간 미지정은 가능한 시간대를 먼저 조회합니다.
-dateText/startText/endText/durationText/roomText/capacityText/title 은 이번 사용자 발화에서 그대로 인용한 부분 문자열만 사용하세요. 없으면 null. 날짜를 계산하거나 방을 발명하지 마세요.
-날짜 미지정은 오늘, 시간 미지정은 가능한 시간대 탐색입니다. "다음주 수요일 가능한 장소"는 explore/dateText="다음주 수요일".
-"그중", "거기", "오후만" 같은 후속 요청만 inherit=true. 새 날짜 요청은 이전 시간을 임의로 유지하지 마세요.
-afternoon=true는 사용자가 "오후" 시간대 전체를 요청한 경우만. 명시적 예약 요청만 prepare, 조회는 explore.
-정산 등 다른 주제 또는 해석 불가능한 조건은 clarify. 취소/변경은 clarify. 예약 생성은 별도 사용자 확정 후 서버가 수행하며 이 도구는 생성하지 않습니다.`;
-export function interpretRoomRequest({ text, previous, now, input }) {
+const minutes = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
+export function interpretRoomRequest({ previous, now, input }) {
   let value;
   try { value = roomRequestSchema.parse(input); } catch { throw new MerryhereError('request_unclear'); }
-  for (const key of ['dateText', 'startText', 'endText', 'durationText', 'roomText', 'capacityText', 'title']) {
-    if (value[key] !== null && (!value[key] || !text.includes(value[key]))) throw new MerryhereError('request_unclear');
+  const base = value.inherit && previous?.query ? querySchema.parse(Object.fromEntries(
+    Object.entries(previous.query).filter(([key]) => Object.hasOwn(querySchema.shape, key)))) : {};
+  const patch = value.query;
+  const query = { ...base, ...patch };
+  query.date = query.date || (value.missing.includes('date') ? null : kstDate(now));
+  if (query.date) validateRoomDate(query.date, now);
+  // A new date starts a new time search; an edited start retains duration, never an obsolete end.
+  if (patch.date && patch.date !== base.date) {
+    for (const key of ['start', 'end', 'duration', 'afternoon']) if (!(key in patch)) delete query[key];
   }
-  if (value.action === 'clarify') return { action: 'clarify' };
-  const base = value.inherit && previous?.query ? previous.query : {};
-  const date = value.dateText ? resolveRoomDate(value.dateText, now) : base.date || resolveRoomDate(null, now);
-  // Revalidate inherited dates across midnight and week boundaries.
-  resolveRoomDate(date, now);
-  const start = value.startText ? resolveRoomTime(value.startText) : value.dateText ? null : base.start || null;
-  let end = value.endText ? resolveRoomTime(value.endText) : value.dateText || value.startText ? null : base.end || null;
-  let duration = value.dateText ? null : base.duration || null;
-  if (value.durationText) {
-    const m = /^(반|한|두|세|\d+)\s*(시간|분)$/.exec(value.durationText);
-    if (!m) throw new MerryhereError('invalid_time');
-    duration = ({ 반: 0.5, 한: 1, 두: 2, 세: 3 }[m[1]] ?? Number(m[1])) * (m[2] === '시간' ? 60 : 1);
-    if (!Number.isInteger(duration) || duration < 30 || duration > 840 || duration % 30) throw new MerryhereError('invalid_time');
-    if (start && !value.endText) {
-      const minutes = Number(start.slice(0, 2)) * 60 + Number(start.slice(3)) + duration;
-      if (minutes >= 1440) throw new MerryhereError('invalid_time');
-      end = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
-    }
+  if ('start' in patch && base.start && patch.start !== base.start && !('end' in patch)) delete query.end;
+  if ('duration' in patch && !('end' in patch)) delete query.end;
+  if (query.start && query.duration && !query.end) {
+    const end = minutes(query.start) + query.duration;
+    if (end >= 1440) throw new MerryhereError('invalid_time');
+    query.end = `${String(Math.floor(end / 60)).padStart(2, '0')}:${String(end % 60).padStart(2, '0')}`;
   }
-  if (start && !end && duration) {
-    const minutes = Number(start.slice(0, 2)) * 60 + Number(start.slice(3)) + duration;
-    if (minutes >= 1440) throw new MerryhereError('invalid_time');
-    end = `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  if (query.start && query.end && (query.end <= query.start || query.duration && minutes(query.end) - minutes(query.start) !== query.duration)) throw new MerryhereError('invalid_time');
+  if (query.start && query.end && !query.duration) query.duration = minutes(query.end) - minutes(query.start);
+  if (!querySchema.safeParse(query).success) throw new MerryhereError('invalid_time');
+  const missing = new Set(value.missing);
+  if (value.action === 'prepare') {
+    if (!query.room) missing.add('room');
+    if (!query.start) missing.add('time');
+    if (!query.end) missing.add('duration');
+    if (!query.title) missing.add('title');
   }
-  let room = value.roomText ? /(?:M\d-)?([34578][AB])/i.exec(value.roomText)?.[1].toUpperCase()
-    || (/메리홀|Merry\s*Hall/i.test(value.roomText) ? 'Merry Hall' : /스튜디오|Studio/i.test(value.roomText) ? 'Merry Studio' : null) : base.room || null;
-  if (value.roomText && !room) throw new MerryhereError('request_unclear');
-  if (/거기|그곳|그\s*방/.test(text) && !room) {
-    if (previous?.options?.length !== 1) throw new MerryhereError('room_unclear');
-    room = previous.options[0].room;
-  }
-  let capacity = base.capacity || null;
-  if (value.capacityText) {
-    const m = /^(\d+)\s*(?:명|인|인실)$/.exec(value.capacityText);
-    if (!m || Number(m[1]) < 1 || Number(m[1]) > 100) throw new MerryhereError('request_unclear');
-    capacity = Number(m[1]);
-  }
-  if (value.afternoon && !text.includes('오후')) throw new MerryhereError('request_unclear');
-  if (start && end && end <= start) throw new MerryhereError('invalid_time');
-  return { action: value.action === 'prepare' ? 'prepare' : 'explore', date, start, end, room, capacity, duration,
-    afternoon: value.afternoon || (!value.dateText && Boolean(base.afternoon)), title: value.title || base.title || null };
+  const bookingContext = { query, missing: [...missing], requestedAction: value.action };
+  return { ...query, action: missing.size || value.action === 'clarify' ? 'clarify' : value.action, bookingContext };
 }
-
+export function renderRoomClarification(context) {
+  const labels = { date: '이용할 날짜를 알려주세요.', time: '몇 시부터 이용할까요?', meridiem: '말씀하신 시각은 오전인가요, 오후인가요?',
+    duration: '얼마 동안 이용할까요?', room: '어느 회의실을 예약할까요?', title: '회의명을 알려주세요.', intent: '조회 또는 예약할 조건을 알려주세요.' };
+  const q = context?.query || {};
+  const known = [q.date, q.room, q.start && `${q.start}${q.end ? `~${q.end}` : '부터'}`, q.capacity && `${q.capacity}명`].filter(Boolean);
+  return [known.length ? `확인한 조건: ${known.join(' · ')} (한국시간)` : '',
+    ...[...new Set(context?.missing?.length ? context.missing : ['intent'])].map(key => labels[key])].filter(Boolean).join('\n');
+}
 export function availableRoomWindows(calendar, query, now) {
   const cutoff = calendar.date === kstDate(now) ? new Date(now + 9 * 3600000).toISOString().slice(11, 23) : '00:00:00.000';
   const rooms = new Map();
@@ -108,8 +85,7 @@ export function availableRoomWindows(calendar, query, now) {
     } else windows.push({ room: slot.name, capacity: slot.capacity, start: slot.start, end: slot.end, lastOrdinal: slot.ordinal });
     rooms.set(slot.roomId, windows);
   }
-  const mins = time => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
-  return [...rooms.values()].flat().filter(w => (!query.duration || mins(w.end) - mins(w.start) >= query.duration)
-    && (!query.start || !query.end || w.start === query.start && w.end === query.end))
+  return [...rooms.values()].flat().filter(w => (!query.duration || minutes(w.end) - minutes(w.start) >= query.duration)
+    && (!query.start || w.start === query.start) && (!query.start || !query.end || w.end === query.end))
     .sort((a, b) => a.start.localeCompare(b.start) || a.room.localeCompare(b.room));
 }

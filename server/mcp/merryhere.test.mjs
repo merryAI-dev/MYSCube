@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseCalendar, selectBookingSlots, validateBookingTime, createMerryhereClient } from './merryhere-client.mjs';
-import { resolveRoomDate, interpretRoomRequest, availableRoomWindows } from './merryhere-request.mjs';
+import { parseCalendar, selectBookingSlots, validateBookingTime, createMerryhereClient, kstDate } from './merryhere-client.mjs';
+import { validateRoomDate, interpretRoomRequest, availableRoomWindows } from './merryhere-request.mjs';
 import { runMerryhereBooking } from './merryhere-booking.mjs';
 import { memoryDb } from './slack-test-store.mjs';
 import { createSlackWorker } from './slack-runtime.mjs';
 
 const now = Date.parse('2026-09-29T13:47:00+09:00');
-const input = { action: 'explore', dateText: null, startText: null, endText: null, durationText: null, roomText: null, capacityText: null, title: null, inherit: false, afternoon: false };
+const input = { action: 'explore', inherit: false, query: {}, missing: [] };
 // Attribute names and values observed on the live 2026-09-30 calendar; no cookies or personal booking data.
 const slotHtml = (ordinal, attrs = '') => `<input type="checkbox" name="slot" value="9-${ordinal}-8" data-name="M3-3A" data-cnt="8" data-time="${9 + Math.floor(ordinal / 2)}:${ordinal % 2 ? '30' : '00'}" data-time2="${9 + Math.floor((ordinal + 1) / 2)}:${ordinal % 2 ? '00' : '30'}" data-list-id="" class="" ${attrs}>`;
 const html = (slots = slotHtml(0) + slotHtml(1), date = '2026-09-30') => `<a href="https://merryhere.kr/auth/logout">LOG OUT</a><input id="sel-date" value="${date}"><button id="btn-reservation" data-date="${date}"></button><form action="https://merryhere.kr/reserve" method="post"><input name="_token" value="csrf"></form>${slots}`;
@@ -66,34 +66,98 @@ describe('Merryhere provider contract', () => {
   });
 });
 
-describe('contextual exploration', () => {
-  it('resolves next Wednesday with a Monday-based Korean calendar', () => {
-    expect(resolveRoomDate('다음주 수요일', now)).toBe('2026-10-07');
-    expect(resolveRoomDate('수요일', now)).toBe('2026-09-30');
-    expect(resolveRoomDate(null, now)).toBe('2026-09-29');
-    expect(resolveRoomDate('내일', Date.parse('2026-12-31T23:59:00+09:00'))).toBe('2027-01-01');
-    expect(() => resolveRoomDate('2026-09-31', now)).toThrow();
+describe('normalized room query contract', () => {
+  it('defaults an independent search to today without inventing a time', () => {
+    const result = interpretRoomRequest({ input, now });
+    expect(result).toMatchObject({ action: 'explore', date: '2026-09-29', bookingContext: { missing: [] } });
+    expect(result.start).toBeUndefined();
+    expect(result.end).toBeUndefined();
   });
-  it('defaults missing date and time to exploration without a clarification round', () => {
-    expect(interpretRoomRequest({ text: '가능한 회의실 어디야', input, now })).toMatchObject({ action: 'explore', date: '2026-09-29', start: null, end: null });
+  it('accepts normalized dates and duration independently of the original Korean phrase', () => {
+    expect(interpretRoomRequest({ now, input: { ...input, query: { date: '2026-09-29', start: '17:00', duration: 60 } } }))
+      .toMatchObject({ start: '17:00', end: '18:00', duration: 60 });
+    expect(validateRoomDate('2026-10-07', now)).toBe('2026-10-07');
+    expect(validateRoomDate('2027-01-01', Date.parse('2026-12-31T23:59:00+09:00'))).toBe('2027-01-01');
   });
-  it('preserves the previous date for a capacity follow-up but refreshes availability', () => {
-    const previous = { query: { date: '2026-10-07' } };
-    expect(interpretRoomRequest({ text: '그중 4명 가능한 곳', previous, now, input: { ...input, inherit: true, capacityText: '4명' } })).toMatchObject({ date: '2026-10-07', capacity: 4 });
-    expect(() => interpretRoomRequest({ text: '그중 4명', previous, now, input: { ...input, capacityText: '8명' } })).toThrow('request_unclear');
+  it.each(['2026-09-31', '2026-09-28', '2026-10-28'])('rejects invalid or out-of-range date %s', date => {
+    expect(() => interpretRoomRequest({ now, input: { ...input, query: { date } } })).toThrow('date_out_of_range');
   });
-  it('does not merge across blocked or missing intermediate slots', () => {
+  it.each([
+    { start: '17:15' }, { start: '24:00' }, { start: '오후 5시' }, { duration: 15 }, { duration: 45 },
+    { capacity: 0 }, { capacity: 1.5 }, { actorRole: 'admin' },
+  ])('rejects invalid normalized fields %j before reading provider data', query => {
+    expect(() => interpretRoomRequest({ now, input: { ...input, query } })).toThrow('request_unclear');
+  });
+  it.each([
+    { start: '18:00', end: '17:00' }, { start: '17:00', end: '18:00', duration: 30 },
+    { start: '23:30', duration: 60 }, { start: '00:00', end: '23:30' },
+  ])('rejects inconsistent time intervals %j', query => {
+    expect(() => interpretRoomRequest({ now, input: { ...input, query } })).toThrow('invalid_time');
+  });
+  it('keeps a clarification draft without authenticating and resolves it through a later model query', async () => {
+    const clientFactory = vi.fn();
+    const args = { actor: {}, job: {}, env: {}, now, clientFactory };
+    const first = await runMerryhereBooking({ ...args, text: '다음 주 수요일 5시부터 1시간 4명',
+      input: { ...input, query: { date: '2026-10-07', duration: 60, capacity: 4 }, missing: ['meridiem'] } });
+    expect(first.answer).toContain('오전인가요, 오후인가요');
+    expect(first.bookingContext).toMatchObject({ query: { date: '2026-10-07', duration: 60, capacity: 4 }, missing: ['meridiem'] });
+    expect(clientFactory).not.toHaveBeenCalled();
+    const second = await runMerryhereBooking({ ...args, text: '점심 먹은 뒤니까 오후를 말했어', previous: first.bookingContext,
+      input: { ...input, inherit: true, query: { start: '17:00' } } });
+    expect(second.bookingContext.query).toMatchObject({ date: '2026-10-07', start: '17:00', end: '18:00', capacity: 4 });
+    expect(second.bookingContext.missing).toEqual([]);
+    expect(second.answer).toContain('계정 연결');
+  });
+  it.each([
+    [{ start: '14:00' }, { end: '17:00' }, '14:00', '17:00'],
+    [{ end: '18:00' }, { start: '17:00' }, '17:00', '18:00'],
+    [{ start: '09:00' }, { end: '17:00' }, '09:00', '17:00'],
+  ])('preserves explicit clock fields while the model resolves the ambiguous field %j', (known, patch, start, end) => {
+    const first = interpretRoomRequest({ now, input: { ...input, query: { date: '2026-09-30', ...known }, missing: ['meridiem'] } });
+    expect(interpretRoomRequest({ now, previous: first.bookingContext, input: { ...input, inherit: true, query: patch } }))
+      .toMatchObject({ start, end });
+  });
+  it('changes the start using the prior duration and preserves other known conditions', () => {
+    const previous = { query: { date: '2026-09-30', start: '14:00', end: '15:00', duration: 60, title: '팀 회의', capacity: 8 } };
+    expect(interpretRoomRequest({ previous, now, input: { ...input, inherit: true, query: { start: '15:00' } } }))
+      .toMatchObject({ start: '15:00', end: '16:00', duration: 60, title: '팀 회의', capacity: 8 });
+    expect(interpretRoomRequest({ previous, now, input: { ...input, inherit: true, query: { duration: 90 } } }))
+      .toMatchObject({ start: '14:00', end: '15:30', duration: 90 });
+  });
+  it('resets time on a new date and supports explicit null clearing without clearing omitted fields', () => {
+    const previous = { query: { date: '2026-09-30', start: '14:00', end: '15:00', duration: 60, afternoon: true, room: '3A', capacity: 8, title: '팀 회의' } };
+    const changed = interpretRoomRequest({ previous, now, input: { ...input, inherit: true, query: { date: '2026-10-01' } } });
+    expect(changed).toMatchObject({ date: '2026-10-01', room: '3A', capacity: 8 });
+    for (const key of ['start', 'end', 'duration', 'afternoon']) expect(changed[key]).toBeUndefined();
+    const cleared = interpretRoomRequest({ previous, now, input: { ...input, inherit: true,
+      query: { start: null, end: null, duration: null, room: null, capacity: null, title: null, afternoon: false } } });
+    expect(cleared).toMatchObject({ date: '2026-09-30', start: null, end: null, duration: null, room: null, capacity: null, title: null, afternoon: false });
+    expect(interpretRoomRequest({ previous, now, input }).room).toBeUndefined();
+  });
+  it('retains an inherited date rather than silently rolling it across midnight', () => {
+    expect(() => interpretRoomRequest({ previous: { query: { date: '2026-09-29' }, missing: ['meridiem'] },
+      now: Date.parse('2026-09-30T00:01:00+09:00'), input: { ...input, inherit: true, query: { start: '17:00' } } })).toThrow('date_out_of_range');
+  });
+  it('adds required preparation fields and never submits a query with unresolved conditions', () => {
+    const result = interpretRoomRequest({ now, input: { ...input, action: 'prepare', query: { date: '2026-09-30' } } });
+    expect(result.action).toBe('clarify');
+    expect(result.bookingContext.missing).toEqual(expect.arrayContaining(['room', 'time', 'duration', 'title']));
+    expect(result.bookingContext.requestedAction).toBe('prepare');
+    expect(interpretRoomRequest({ now, input: { ...input, missing: ['intent'] } }).action).toBe('clarify');
+  });
+  it('only returns rooms available at the requested start, never later fragments', () => {
+    const blocked = parseCalendar(html(slotHtml(0, 'disabled') + slotHtml(1)), '2026-09-30');
+    expect(availableRoomWindows(blocked, { start: '09:00' }, now)).toEqual([]);
+    expect(availableRoomWindows(blocked, {}, now)).toHaveLength(1);
+    const split = parseCalendar(html(slotHtml(0) + slotHtml(1, 'disabled') + slotHtml(2)), '2026-09-30');
+    expect(availableRoomWindows(split, { start: '09:00' }, now).map(w => `${w.start}~${w.end}`)).toEqual(['09:00~09:30']);
+    expect(availableRoomWindows(split, { start: '09:00', duration: 60 }, now)).toEqual([]);
+  });
+  it('does not merge across blocked or missing slots or offer already-started slots', () => {
     const calendar = parseCalendar(html(slotHtml(0) + slotHtml(1, 'disabled') + slotHtml(2)), '2026-09-30');
     expect(availableRoomWindows(calendar, {}, now).map(w => `${w.start}~${w.end}`)).toEqual(['09:00~09:30', '10:00~10:30']);
     expect(availableRoomWindows(calendar, { duration: 60 }, now)).toEqual([]);
-  });
-  it('excludes a slot whose starting minute is current but whose second has passed', () => {
     expect(availableRoomWindows(parseCalendar(html(), '2026-09-30'), {}, Date.parse('2026-09-30T09:00:30+09:00'))[0].start).toBe('09:30');
-  });
-  it('changes start time using prior duration, and retains a supplied meeting title', () => {
-    const previous = { query: { date: '2026-09-30', start: '14:00', end: '15:00', duration: 60, title: '팀 회의' } };
-    expect(interpretRoomRequest({ text: '오후 3시부터', previous, now, input: { ...input, inherit: true, startText: '오후 3시' } }))
-      .toMatchObject({ start: '15:00', end: '16:00', title: '팀 회의' });
   });
   it.each([
     ['2026-09-29', '13:30', '14:00'], ['2026-09-30', '09:15', '10:00'],
@@ -101,6 +165,60 @@ describe('contextual exploration', () => {
   ])('rejects invalid reservation %s %s %s', (date, start, end) => {
     expect(() => validateBookingTime({ date, start, end }, now)).toThrow();
   });
+});
+
+it('persists a clarification draft and sends history plus server context to the model before a provider read', async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-09-29T14:36:00+09:00'));
+  try {
+    const { db, records } = memoryDb();
+    const identity = { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1' };
+    const threadPath = 'settlement_agent_threads/conversation';
+    const job = { ...identity, status: 'queued', attempts: 0, conversationId: 'conversation', createdAt: new Date().toISOString(), question: '오늘 5시에 가능한 회의실 알려줘' };
+    records.set('orgs/mysc/members/member-pk', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
+    records.set('settlement_agent_jobs/first', job);
+    records.set(threadPath, { ...identity, queue: ['first'], turns: [] });
+    const providerCalls = [];
+    const completion = vi.fn(async ({ messages, tools }) => {
+      const followup = completion.mock.calls.length === 2;
+      const roomTool = tools.find(t => t.function.name === 'merryhere_rooms');
+      expect(roomTool).toBeDefined();
+      if (followup) {
+        expect(messages.some(m => m.role === 'user' && m.content.includes('오늘 5시에'))).toBe(true);
+        expect(messages.at(-1).content).toContain('아하 오후야');
+        expect(roomTool.function.description).toContain('2026-09-29');
+        expect(roomTool.function.description).toContain('meridiem');
+      }
+      return { tool_calls: [{ id: 'rooms', function: { name: 'merryhere_rooms', arguments: JSON.stringify(followup
+        ? { ...input, inherit: true, query: { start: '17:00' } }
+        : { ...input, query: { date: '2026-09-29' }, missing: ['meridiem'] }) } }] };
+    });
+    const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture',
+      MERRYHERE_ACCOUNTS_JSON: JSON.stringify({ 'member-pk': { email: 'provider@example.com', password: 'secret' } }) },
+      completeFactory: () => completion,
+      fetchImpl: async (url, options) => {
+        if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+        if (url.startsWith('https://slack.com/')) return Response.json({ ok: true, ts: '2.1', message_ts: '3.1' });
+        providerCalls.push(url);
+        if (url.endsWith('/auth/login')) return new Response('<form action="/auth/login" method="post"><input name="_token" value="csrf"></form>');
+        if (url.includes('/reservation?date=')) return new Response(html(slotHtml(16) + slotHtml(17), '2026-09-29'));
+        throw new Error('unexpected HTTP');
+      },
+    });
+    await worker();
+    expect(providerCalls).toHaveLength(0);
+    expect(records.get(threadPath).turns[0].bookingContext).toMatchObject({ query: { date: '2026-09-29' }, missing: ['meridiem'] });
+    records.set('settlement_agent_jobs/second', { ...job, question: '아하 오후야' });
+    records.set(threadPath, { ...records.get(threadPath), queue: ['second'] });
+    await worker();
+    expect(completion).toHaveBeenCalledTimes(2);
+    expect(providerCalls).toContain('https://merryhere.kr/reservation?date=2026-09-29');
+    const second = records.get('settlement_agent_jobs/second');
+    expect(second.bookingContext.query).toMatchObject({ date: '2026-09-29', start: '17:00' });
+    expect(second.answer).toContain('17:00~18:00');
+    expect(second.answer).toContain('Merryhere 회의실 도구');
+    expect(second.bookingContext.missing).toEqual([]);
+  } finally { vi.useRealTimers(); }
 });
 
 describe('durable reservation through existing Slack actor', () => {
@@ -122,7 +240,7 @@ describe('durable reservation through existing Slack actor', () => {
     return { args, records, client, calendar };
   };
   const prepare = '2026-09-30 09:00~10:00 3A 회의실 예약, 회의명: 팀 회의';
-  const preparation = { text: prepare, input: { ...input, action: 'prepare', dateText: '2026-09-30', startText: '09:00', endText: '10:00', roomText: '3A', title: '팀 회의' } };
+  const preparation = { text: prepare, input: { ...input, action: 'prepare', query: { date: '2026-09-30', start: '09:00', end: '10:00', room: '3A', title: '팀 회의' } } };
   it('prepares without a write and rejects a foreign requester confirmation', async () => {
     const { args, records, client } = setup();
     const reply = await runMerryhereBooking({ ...args, ...preparation });
@@ -147,11 +265,11 @@ describe('durable reservation through existing Slack actor', () => {
   });
   it('rejects over-capacity preparations and preserves incomplete preparation context', async () => {
     const { args, records } = setup();
-    const request = { ...input, action: 'prepare', dateText: '내일', startText: '09:00', endText: '10:00', roomText: '3A', capacityText: '10명', title: '팀 회의' };
+    const request = { ...input, action: 'prepare', query: { date: '2026-09-30', start: '09:00', end: '10:00', room: '3A', capacity: 10, title: '팀 회의' } };
     const reply = await runMerryhereBooking({ ...args, text: '내일 09:00~10:00 3A 10명 예약 팀 회의', input: request });
     expect(reply.answer).toContain('인원 조건');
     expect(records.size).toBe(0);
-    const partial = await runMerryhereBooking({ ...args, text: '내일 09:00~10:00 3A 예약', input: { ...request, capacityText: null, title: null } });
+    const partial = await runMerryhereBooking({ ...args, text: '내일 09:00~10:00 3A 예약', input: { ...request, query: { ...request.query, capacity: null, title: null } } });
     expect(partial.bookingContext.query).toMatchObject({ date: '2026-09-30', room: '3A', start: '09:00' });
   });
   it('rechecks blocked state and points before submitting', async () => {
@@ -177,7 +295,7 @@ describe('durable reservation through existing Slack actor', () => {
 
 it('uses the existing Slack agent, member PK and delivery path for room exploration', async () => {
   const { db, records } = memoryDb();
-  const date = resolveRoomDate(null, Date.now());
+  const date = kstDate(Date.now());
   records.set('orgs/mysc/members/member-pk', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
   records.set('settlement_agent_jobs/j', { status: 'queued', attempts: 0, createdAt: new Date().toISOString(),
     teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1', question: '가능한 회의실 알려줘' });
@@ -185,7 +303,7 @@ it('uses the existing Slack agent, member PK and delivery path for room explorat
   const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture',
     MERRYHERE_ACCOUNTS_JSON: JSON.stringify({ 'member-pk': { email: 'provider@example.com', password: 'secret' } }) },
     completeFactory: () => async ({ tools }) => {
-      expect(tools.map(t => t.function.name)).toEqual(['merryhere_rooms']);
+      expect(tools.map(t => t.function.name)).toContain('merryhere_rooms');
       return { tool_calls: [{ id: 'rooms', function: { name: 'merryhere_rooms', arguments: JSON.stringify(input) } }] };
     },
     fetchImpl: async (url, options) => {
