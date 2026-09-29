@@ -14,11 +14,11 @@ import { createAccountingTools } from './accounting-read.mjs';
 import { createAccountingReportTool } from './accounting-report.mjs';
 import { createAccountingComparisonTool } from './accounting-compare.mjs';
 import { createCfoBriefTool } from './cfo-brief.mjs';
-import { resolveSettlementRequest, settlementRequestTools } from './settlement-request.mjs';
+import { resolveSettlementRequest, settlementRequestTools, isSettlementTopic } from './settlement-request.mjs';
 import { createSlackProgress, readProgressJob, toolProgressStage } from './slack-progress.mjs';
 import { createSettlementStatusTool } from './settlement-status-report.mjs';
 import { createSupportTools } from './support-read.mjs';
-import { isMerryhereRequest, runMerryhereBooking } from './merryhere-booking.mjs';
+import { isMerryhereRequest, runMerryhereBooking, merryhereAuthIssue } from './merryhere-booking.mjs';
 import { roomRequestSchema, roomToolDescription } from './merryhere-request.mjs';
 import { createMerryhereClient } from './merryhere-client.mjs';
 
@@ -177,10 +177,12 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
   async function process(job) {
     const experiment = selectSlackHarness(job.question, job.turns);
     const roomText = experiment.question.replace(/<@[A-Z0-9]+>/g, '').trim();
-    const previousBooking = job.turns?.at(-1)?.bookingContext || null;
-    const roomRequest = isMerryhereRequest(roomText, previousBooking);
-    const roomConfirm = roomRequest && /^\s*(?:회의실\s*)?예약\s*확정\s+[a-f0-9]{24}\s*$/.test(roomText);
-    const request = roomRequest ? null : resolveSettlementRequest(experiment.question);
+    const previousBooking = job.turns?.findLast(turn => turn.bookingContext)?.bookingContext || null;
+    const roomConfirm = /^\s*(?:회의실\s*)?예약\s*확정\s+[a-f0-9]{24}\s*$/.test(roomText);
+    const settlementRequest = resolveSettlementRequest(experiment.question);
+    const pendingRoom = previousBooking?.missing?.some(key => key !== 'intent');
+    const roomRequest = roomConfirm || isMerryhereRequest(roomText) || (pendingRoom && !isSettlementTopic(roomText));
+    const request = roomRequest ? null : settlementRequest;
     const useHermes = experiment.variant === 'hermes' && !request?.direct && !roomRequest && !previousBooking;
     const scopes = [];
     const audit = [];
@@ -201,15 +203,16 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     let bookingContext = null;
     try {
       const actor = await contextFor(job);
+      const roomAuthIssue = roomRequest ? merryhereAuthIssue(env, actor.actorId) : null;
       progress.show('INTERPRET_REQUEST');
       await record({ type: 'run_start', actorId: actor.actorId, actorRole: actor.actorRole,
         readPrincipal: 'myscube-settlement-agent', permissionPolicy: 'mysc-designated-channel-company-settlement-read-v1',
-        question: job.question, model: request?.direct ? null : 'gemini-3.6-flash', experiment: experiment.variant,
+        question: job.question, model: request?.direct || roomConfirm || roomAuthIssue ? null : 'gemini-3.6-flash', experiment: experiment.variant,
         harness: request?.direct ? 'settlement-status-direct-v1' : useHermes ? 'hermes-readonly-v1' : 'settlement-read-v2' });
       if (useHermes && !env.SETTLEMENT_HERMES_URL) throw new Error('hermes_not_configured');
       const previousAnswerId = job.turns?.at(-1)?.jobId || null;
       await record({ type: 'conversation_feedback', ...observeConversationFeedback({ text: job.question, previousAnswerId }) });
-      if (!request?.direct && !roomConfirm) {
+      if (!request?.direct && !roomConfirm && !roomAuthIssue) {
         if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
         await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
       }
@@ -224,6 +227,31 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         const result = await runMerryhereBooking({ db, actor: await contextFor(job), job, env, text: roomText, input,
           previous: previousBooking, clientFactory: credentials => createMerryhereClient({ ...credentials, fetchImpl }) });
         bookingContext = result.bookingContext || previousBooking;
+        if (result.code === 'page_changed') {
+          try {
+            const alertRef = db.doc('merryhere_provider_alerts/page_changed');
+            const stamp = Date.now();
+            const claimed = await db.runTransaction(async tx => {
+              const prior = (await tx.get(alertRef)).data();
+              if (prior?.nextAttemptAt > stamp) return false;
+              tx.set(alertRef, { jobId: job.id, status: 'pending', nextAttemptAt: stamp + 15 * 60000 });
+              return true;
+            });
+            if (claimed) {
+              let status = 'sent';
+              try {
+                if (!env.SLACK_ALERT_CHANNEL_ID) throw new Error('alert_not_configured');
+                await slack('chat.postMessage', { channel: env.SLACK_ALERT_CHANNEL_ID,
+                  text: 'Merryhere 예약 화면 형식 변경이 감지되었습니다. 회의실 가용 여부를 추정하지 않고 처리를 중단했습니다. 관리자 점검이 필요합니다. 오류: page_changed',
+                  unfurl_links: false, unfurl_media: false }, 5000);
+              } catch { status = 'failed'; }
+              await db.runTransaction(async tx => {
+                if ((await tx.get(alertRef)).data()?.jobId === job.id) tx.update(alertRef, { status, nextAttemptAt: stamp + (status === 'sent' ? 15 : 1) * 60000 });
+              });
+              await record({ type: 'provider_alert', provider: 'merryhere', code: 'page_changed', status });
+            }
+          } catch { console.error('Merryhere page_changed: operational alert could not be recorded'); }
+        }
         return result;
       };
       tools.push({ name: 'merryhere_rooms', description: `${roomToolDescription}\n현재 한국 날짜: ${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date())}\n서버에 저장된 현재 요청자의 회의실 조건: ${JSON.stringify(previousBooking || null)}`, schema: roomRequestSchema,
@@ -305,7 +333,11 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         };
       }
       let result;
-      if (roomConfirm) {
+      if (roomAuthIssue) {
+        result = roomAuthIssue;
+        bookingContext = previousBooking;
+        await record({ type: 'tool_result', tool: 'merryhere_auth_preflight', result });
+      } else if (roomConfirm) {
         result = await booking();
         await record({ type: 'tool_result', tool: 'merryhere_booking_confirmation', result });
       } else if (request?.direct) {

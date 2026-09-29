@@ -26,6 +26,7 @@ export function memoryDb() {
         set: (ref, value) => pending.push(() => records.set(ref.path, structuredClone(value))),
         create: (ref, value) => { if (records.has(ref.path)) throw new Error('already_exists'); pending.push(() => records.set(ref.path, structuredClone(value))); },
         update: (ref, value) => pending.push(() => records.set(ref.path, { ...records.get(ref.path), ...structuredClone(value) })),
+        delete: (ref) => pending.push(() => records.delete(ref.path)),
       });
       pending.forEach((write) => write());
       return value;

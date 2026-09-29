@@ -1,6 +1,11 @@
 import * as z from 'zod/v4';
 
 const financialTools = new Set(['accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief']);
+const financialTerms = /금액|입금|출금|잔액|실적|계획|원장|P\s*\/\s*A|차액|비교/i;
+
+export function isSettlementTopic(text) {
+  return financialTerms.test(text) || /정산|결산|회계|CFO|씨에프오|사업|프로젝트/i.test(text);
+}
 
 export function resolveSettlementRequest(question, now = new Date()) {
   const text = question.replace(/<@[A-Z0-9]+>|\[(?:hermes|baseline)\]/gi, '').trim();
@@ -8,7 +13,7 @@ export function resolveSettlementRequest(question, now = new Date()) {
   const bareCfo = /^(?:CFO|씨에프오)\s*브리핑\s*(?:해\s*줘|해주세요|해|부탁해|부탁합니다)?[.!?\s]*$/i.test(text);
   const weekly = /주\s*정산/.test(text);
   const monthly = /월\s*결산|월\s*정산/.test(text);
-  const financial = /금액|입금|출금|잔액|실적|계획|원장|P\s*\/\s*A|차액|비교/i.test(text);
+  const financial = financialTerms.test(text);
   if (/아니고|말고/.test(text) && !/금액\s*말고/.test(text)) return null;
   const statusOnly = (weekly || monthly) && (!financial || /(?:여부|상태)\s*만|금액\s*(?:말고|제외)/.test(text));
   if (!bareCfo && !statusOnly) return null;

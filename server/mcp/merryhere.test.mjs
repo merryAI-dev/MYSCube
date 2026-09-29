@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { parseCalendar, selectBookingSlots, validateBookingTime, createMerryhereClient, kstDate } from './merryhere-client.mjs';
 import { validateRoomDate, interpretRoomRequest, availableRoomWindows } from './merryhere-request.mjs';
-import { runMerryhereBooking } from './merryhere-booking.mjs';
+import { runMerryhereBooking, merryhereAuthIssue } from './merryhere-booking.mjs';
 import { memoryDb } from './slack-test-store.mjs';
 import { createSlackWorker } from './slack-runtime.mjs';
 
@@ -67,6 +67,13 @@ describe('Merryhere provider contract', () => {
 });
 
 describe('normalized room query contract', () => {
+  it('preserves the default-date notice through clarification until an explicit date replaces it', () => {
+    const first = interpretRoomRequest({ now, input: { ...input, missing: ['meridiem'] } });
+    const second = interpretRoomRequest({ now, previous: first.bookingContext, input: { ...input, inherit: true, query: { start: '17:00' } } });
+    expect(second.bookingContext.dateDefaulted).toBe(true);
+    const third = interpretRoomRequest({ now, previous: second.bookingContext, input: { ...input, inherit: true, query: { date: '2026-09-30' } } });
+    expect(third.bookingContext.dateDefaulted).toBe(false);
+  });
   it('defaults an independent search to today without inventing a time', () => {
     const result = interpretRoomRequest({ input, now });
     expect(result).toMatchObject({ action: 'explore', date: '2026-09-29', bookingContext: { missing: [] } });
@@ -96,17 +103,17 @@ describe('normalized room query contract', () => {
   });
   it('keeps a clarification draft without authenticating and resolves it through a later model query', async () => {
     const clientFactory = vi.fn();
-    const args = { actor: {}, job: {}, env: {}, now, clientFactory };
+    const args = { actor: { actorId: 'member' }, job: {}, env: { MERRYHERE_ACCOUNTS_JSON: '{"member":{"email":"fixture@example.test","password":"fixture"}}' }, now, clientFactory };
     const first = await runMerryhereBooking({ ...args, text: '다음 주 수요일 5시부터 1시간 4명',
       input: { ...input, query: { date: '2026-10-07', duration: 60, capacity: 4 }, missing: ['meridiem'] } });
     expect(first.answer).toContain('오전인가요, 오후인가요');
     expect(first.bookingContext).toMatchObject({ query: { date: '2026-10-07', duration: 60, capacity: 4 }, missing: ['meridiem'] });
     expect(clientFactory).not.toHaveBeenCalled();
-    const second = await runMerryhereBooking({ ...args, text: '점심 먹은 뒤니까 오후를 말했어', previous: first.bookingContext,
+    const second = interpretRoomRequest({ now, previous: first.bookingContext,
       input: { ...input, inherit: true, query: { start: '17:00' } } });
     expect(second.bookingContext.query).toMatchObject({ date: '2026-10-07', start: '17:00', end: '18:00', capacity: 4 });
     expect(second.bookingContext.missing).toEqual([]);
-    expect(second.answer).toContain('계정 연결');
+    expect(second.action).toBe('explore');
   });
   it.each([
     [{ start: '14:00' }, { end: '17:00' }, '14:00', '17:00'],
@@ -167,6 +174,27 @@ describe('normalized room query contract', () => {
   });
 });
 
+it.each(['오늘 5시에 가능한 회의실 알려줘', `예약 확정 ${'a'.repeat(24)}`])('avoids model usage and provider traffic when auth is unconfigured: %s', async (question) => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1' };
+  const previous = { query: { date: '2026-09-30', start: '18:00' }, missing: [], intentId: 'a'.repeat(24) };
+  records.set('orgs/mysc/members/member-pk', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'conversation', createdAt: new Date().toISOString(), question });
+  records.set('settlement_agent_threads/conversation', { ...identity, queue: ['first'], turns: [{ jobId: 'prior', question: '회의실', answer: '이전 결과', bookingContext: previous }] });
+  const completeFactory = vi.fn(() => { throw new Error('model must not run'); });
+  const fetchImpl = vi.fn(async (url) => {
+    if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+    if (url.startsWith('https://slack.com/')) return Response.json({ ok: true, ts: '2.1', message_ts: '3.1' });
+    throw new Error('provider must not run');
+  });
+  await createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, completeFactory, fetchImpl })();
+  expect(completeFactory).not.toHaveBeenCalled();
+  expect(fetchImpl.mock.calls.every(([url]) => url.startsWith('https://slack.com/'))).toBe(true);
+  expect([...records.keys()].some(key => key.startsWith('settlement_agent_budgets/'))).toBe(false);
+  expect(records.get('settlement_agent_jobs/first')).toMatchObject({ bookingContext: previous });
+  expect(records.get('settlement_agent_jobs/first').answer).toContain('서버 자동 로그인 설정이 아직 없습니다');
+});
+
 it('persists a clarification draft and sends history plus server context to the model before a provider read', async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-09-29T14:36:00+09:00'));
@@ -222,14 +250,35 @@ it('persists a clarification draft and sends history plus server context to the 
 });
 
 describe('durable reservation through existing Slack actor', () => {
+  it.each([
+    [undefined, 'auth_not_configured'], ['  ', 'auth_not_configured'],
+    ['not-json', 'auth_config_invalid'], ['null', 'auth_config_invalid'], ['[]', 'auth_config_invalid'],
+    ['{"member-pk":{"email":42,"password":"private-secret"}}', 'auth_config_invalid'],
+    ['{"member-pk":{"email":"test@example.com","password":42}}', 'auth_config_invalid'],
+    ['{}', 'account_not_connected'],
+  ])('distinguishes account setup failures without exposing credentials: %s', (raw, code) => {
+    const issue = merryhereAuthIssue({ MERRYHERE_ACCOUNTS_JSON: raw }, 'member-pk');
+    expect(issue.code).toBe(code);
+    expect(JSON.stringify(issue)).not.toMatch(/private-secret|test@example.com|member-pk/);
+  });
+  it('accepts only an own member entry and keeps readiness separate from login success', () => {
+    expect(merryhereAuthIssue({ MERRYHERE_ACCOUNTS_JSON: '{}' }, 'constructor').code).toBe('account_not_connected');
+    expect(merryhereAuthIssue({ MERRYHERE_ACCOUNTS_JSON: '{"member-pk":{"email":"test@example.com","password":" secret "}}' }, 'member-pk')).toBeNull();
+  });
   it('starts missing-account onboarding without claiming browser login connects the server', async () => {
     const clientFactory = vi.fn();
-    const reply = await runMerryhereBooking({ db: {}, actor: { actorId: 'not-connected' }, job: {}, env: {},
+    const reply = await runMerryhereBooking({ db: {}, actor: { actorId: 'not-connected' }, job: {}, env: { MERRYHERE_ACCOUNTS_JSON: '{}' },
       text: '가능한 회의실', input, now, clientFactory });
     expect(reply.answer).toContain('https://merryhere.kr/auth/login');
     expect(reply.answer).toContain('브라우저 로그인만으로 Slack 서버에 연결되지는 않습니다');
     expect(reply.answer).toContain('비밀번호는 Slack에 보내지 마세요');
     expect(clientFactory).not.toHaveBeenCalled();
+  });
+  it('checks account setup before asking any clarification even outside the Slack worker', async () => {
+    const reply = await runMerryhereBooking({ actor: { actorId: 'member' }, env: {}, text: '5시', now,
+      input: { ...input, missing: ['meridiem'] } });
+    expect(reply.code).toBe('auth_not_configured');
+    expect(reply.answer).not.toContain('오전인가요');
   });
   const setup = () => {
     const { db, records } = memoryDb();
@@ -262,6 +311,11 @@ describe('durable reservation through existing Slack actor', () => {
     expect((await runMerryhereBooking({ ...args, text })).answer).toContain('자동 재제출하지 않습니다');
     expect(client.reserve).toHaveBeenCalledTimes(1);
     expect(records.get(`merryhere_booking_intents/${intent.id}`).state).toBe('UNKNOWN');
+    expect([...records.keys()].filter(key => key.startsWith('merryhere_booking_locks/'))).toHaveLength(2);
+    await runMerryhereBooking({ ...args, job: { ...args.job, id: 'another' }, ...preparation });
+    const next = [...records.values()].find(value => value.id && value.id !== intent.id);
+    expect((await runMerryhereBooking({ ...args, text: `회의실 예약 확정 ${next.id}` })).answer).toContain('중복 제출하지 않았습니다');
+    expect(client.reserve).toHaveBeenCalledTimes(1);
   });
   it('rejects over-capacity preparations and preserves incomplete preparation context', async () => {
     const { args, records } = setup();
@@ -288,8 +342,30 @@ describe('durable reservation through existing Slack actor', () => {
     client.reservation.mockResolvedValue({ title: intent.providerTitle, name: intent.roomName, price: intent.points });
     const text = `회의실 예약 확정 ${intent.id}`;
     expect((await runMerryhereBooking({ ...args, text })).answer).toContain('예약 완료');
+    expect([...records.keys()].filter(key => key.startsWith('merryhere_booking_locks/'))).toHaveLength(0);
     await runMerryhereBooking({ ...args, text });
     expect(client.reserve).toHaveBeenCalledTimes(1);
+    // Simulate an old deployment's remaining lock, then a cancellation on Merryhere.
+    records.set(`merryhere_booking_locks/${intent.date}_${intent.roomId}_0`, { intentId: intent.id, createdAt: now });
+    for (const s of calendar.slots) Object.assign(s, { state: 'available', owned: false, reservationId: null });
+    await runMerryhereBooking({ ...args, job: { ...args.job, id: 'after-cancel' }, ...preparation });
+    const next = [...records.values()].find(value => value.id && value.id !== intent.id);
+    client.reservation.mockResolvedValue({ title: next.providerTitle, name: next.roomName, price: next.points });
+    expect((await runMerryhereBooking({ ...args, text: `회의실 예약 확정 ${next.id}` })).answer).toContain('예약 완료');
+    expect(client.reserve).toHaveBeenCalledTimes(2);
+  });
+  it('does not remove locks owned by another intent during reconciliation', async () => {
+    const { args, records, client, calendar } = setup();
+    await runMerryhereBooking({ ...args, ...preparation });
+    const intent = [...records.values()][0];
+    const lockPath = `merryhere_booking_locks/${intent.date}_${intent.roomId}_0`;
+    client.reserve.mockImplementation(async () => {
+      for (const s of calendar.slots) Object.assign(s, { state: 'booked', owned: true, reservationId: 'booking-pk' });
+      records.set(lockPath, { intentId: 'b'.repeat(24), createdAt: now });
+    });
+    client.reservation.mockResolvedValue({ title: intent.providerTitle, name: intent.roomName, price: intent.points });
+    expect((await runMerryhereBooking({ ...args, text: `회의실 예약 확정 ${intent.id}` })).answer).toContain('예약 완료');
+    expect(records.get(lockPath).intentId).toBe('b'.repeat(24));
   });
 });
 
@@ -319,6 +395,7 @@ it('uses the existing Slack agent, member PK and delivery path for room explorat
   const job = records.get('settlement_agent_jobs/j');
   expect(job.status).toBe('succeeded');
   expect(job.bookingContext.query.date).toBe(date);
+  expect(job.answer.startsWith('날짜를 지정하지 않아 오늘 기준')).toBe(true);
   const message = calls.find(c => c.url.endsWith('/chat.postMessage'));
   expect(JSON.parse(message.options.body).text).toContain('예약 가능 시간');
   expect(job.answer).not.toContain('secret');
