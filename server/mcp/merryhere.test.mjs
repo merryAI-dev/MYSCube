@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseCalendar, selectBookingSlots, validateBookingTime, createMerryhereClient, kstDate } from './merryhere-client.mjs';
+import { parseCalendar, selectBookingSlots, validateBookingTime, createMerryhereClient, kstDate, MerryhereError } from './merryhere-client.mjs';
 import { validateRoomDate, interpretRoomRequest, availableRoomWindows } from './merryhere-request.mjs';
 import { runMerryhereBooking, merryhereAuthIssue } from './merryhere-booking.mjs';
 import { memoryDb } from './slack-test-store.mjs';
@@ -290,6 +290,21 @@ describe('durable reservation through existing Slack actor', () => {
   };
   const prepare = '2026-09-30 09:00~10:00 3A 회의실 예약, 회의명: 팀 회의';
   const preparation = { text: prepare, input: { ...input, action: 'prepare', query: { date: '2026-09-30', start: '09:00', end: '10:00', room: '3A', title: '팀 회의' } } };
+  it('automatically logs in before reading and asks for recovery after a rejected login without submitting', async () => {
+    const { args, client } = setup();
+    client.login.mockRejectedValueOnce(new MerryhereError('login_failed'));
+    const failed = await runMerryhereBooking({ ...args, ...preparation });
+    expect(failed.code).toBe('login_failed');
+    expect(failed.answer).toContain('로그인 정보 갱신');
+    expect(failed.bookingContext.query).toMatchObject(preparation.input.query);
+    expect(client.calendar).not.toHaveBeenCalled();
+    expect(client.reserve).not.toHaveBeenCalled();
+    const retried = await runMerryhereBooking({ ...args, ...preparation });
+    expect(retried.answer).toContain('예약 확정 전 확인');
+    expect(client.login).toHaveBeenCalledTimes(2);
+    expect(client.login.mock.invocationCallOrder[1]).toBeLessThan(client.calendar.mock.invocationCallOrder[0]);
+    expect(client.reserve).not.toHaveBeenCalled();
+  });
   it('prepares without a write and rejects a foreign requester confirmation', async () => {
     const { args, records, client } = setup();
     const reply = await runMerryhereBooking({ ...args, ...preparation });
