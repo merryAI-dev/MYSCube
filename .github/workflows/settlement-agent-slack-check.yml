@@ -16,6 +16,10 @@ on:
         description: 'Run live Gemini multi-turn reply QA with synthetic evidence only'
         type: boolean
         default: false
+      check_rooms:
+        description: 'Run four bounded Gemini room-intent checks without room provider access'
+        type: boolean
+        default: false
       check_runtime:
         description: 'Verify live Slack signatures and worker authentication without data writes'
         type: boolean
@@ -89,7 +93,7 @@ jobs:
           retention-days: 30
           if-no-files-found: warn
       - name: Install model SDK
-        if: inputs.check_model || inputs.check_replies
+        if: inputs.check_model || inputs.check_replies || inputs.check_rooms
         run: npm ci --ignore-scripts
       - name: Verify live runtime
         if: inputs.check_runtime || inputs.apply_slack_exception
@@ -106,6 +110,11 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
         run: node scripts/qa-settlement-replies.mjs --live
+      - name: Verify contextual room understanding
+        if: inputs.check_rooms
+        env:
+          SETTLEMENT_AGENT_GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
+        run: node scripts/check-merryhere-understanding.mjs
       - name: Diagnose blocked Slack probes without changing firewall settings
         if: failure() && (inputs.check_runtime || inputs.apply_slack_exception)
         env:

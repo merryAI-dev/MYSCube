@@ -226,7 +226,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         bookingContext = result.bookingContext || previousBooking;
         return result;
       };
-      tools.push({ name: 'merryhere_rooms', description: roomToolDescription, schema: roomRequestSchema,
+      tools.push({ name: 'merryhere_rooms', description: `${roomToolDescription}\n현재 한국 날짜: ${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date())}\n서버에 저장된 현재 요청자의 회의실 조건: ${JSON.stringify(previousBooking || null)}`, schema: roomRequestSchema,
         requiresReply: true, execute: booking, render: result => result.answer });
       tools.push({ name: 'observe_feedback', observationOnly: true,
         description: '이전 답변에 대한 사용자의 정정·범위 불만·활용 의사·모호함을 관찰 기록합니다. 현재 사용자 발화에서 근거를 그대로 인용하세요. 공손함/짜증/침묵을 정답·오답으로 해석하지 않습니다. 기록은 학습이나 정산값에 반영되지 않습니다. 기록 후 실제 질문 처리를 계속하세요.',
@@ -351,7 +351,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       await progress.close();
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${roomRequest ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
+    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${roomRequest || bookingContext ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
     const blocks = answerBlocks(text);
     const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     if (publicAnswer && answerStatus === 'answered' && scopes.length) blocks.push({ type: 'context', elements: [{ type: 'plain_text', text: '정정할 내용은 댓글로 편하게 알려주세요. 아래 조회 범위 평가는 선택사항입니다.' }] }, { type: 'actions', elements: [

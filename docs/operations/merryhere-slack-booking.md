@@ -1,6 +1,8 @@
 # Merryhere 회의실 도구
 
-기존 Slack ingress → `createSlackWorker` → `runSettlementAgent`의 `merryhere_rooms` 도구를 사용한다. 별도 에이전트, 브라우저 MCP 서버, 큐 또는 Slack 앱은 만들지 않는다. 진행 표시·서명 검증·활성 회원 검증·모델 API·답변 전달·스레드 이력은 기존 경로를 재사용한다. 모델은 요청의 문구만 추출하며, 날짜 계산·슬롯 판정·사용자 답변은 서버 코드가 수행한다.
+기존 Slack ingress → `createSlackWorker` → `runSettlementAgent`의 `merryhere_rooms` 도구를 사용한다. 별도 에이전트, 브라우저 MCP 서버, 큐 또는 Slack 앱은 만들지 않는다. 진행 표시·서명 검증·활성 회원 검증·모델 API·답변 전달·스레드 이력은 기존 경로를 재사용한다. Gemini가 자연어 날짜·시각·기간 및 후속 정정을 정규화한 `query`로 전달한다. 서버는 날짜 유효성·한국시간·4주 범위·30분 단위·기간 정합성·실제 슬롯·권한·멱등성을 검증한다. 가용 여부와 최종 답변은 실제 provider 근거로 출력한다.
+
+추가 질문도 `bookingContext`에 확인된 query와 missing을 저장한다. 다음 모델 호출에는 기존 대화와 이 상태를 함께 전달한다. `inherit=true`이면 생략 필드는 유지하고 명시적 null은 해제한다. 시작을 바꾸면 유지된 기간으로 종료를 계산하고, 새로운 날짜는 이전 시간 조건을 자동 상속하지 않는다. 특정 한국어 문장·조사·오전/오후 응답에 대한 별도 파서나 직행 경로는 두지 않는다. 회의실 도구는 결과를 얻은 첫 호출에서 종료하므로 탐색 요청당 모델 호출 1회를 유지한다.
 
 ## 사용자 흐름
 
@@ -49,5 +51,7 @@
 ## 검증과 출시 조건
 
 `npx vitest run server/mcp/merryhere.test.mjs`와 기존 Slack/agent 테스트로 코드·HTTP 모형 계약을 검증한다. 이 테스트는 실제 예약 성공 증거를 대체하지 않는다.
+
+실제 Gemini 자연어 해석 검사는 기존 `Settlement Agent Slack Check` workflow의 `check_rooms=true`로 수동 실행한다. 합성 대화 4회, 요청당 입력 4,000 token 상한이며 실제 Merryhere 조회·예약·Slack 메시지 발송은 없다. `scripts/check-merryhere-understanding.mjs`가 토큰 사용량과 정규화 결과를 출력한다. 운영 중 자동으로 반복 실행하지 않는다.
 
 실제 서버 로그인 정보 연결 후 **Slack 탐색 요청 → provider 로그인/조회 → 후속 조건 → 예약 준비/확정 → 실제 예약 내역 일치 → Slack 답변**을 검증해야 출시 완료다. provider DB PK/FK 확인은 소스/DDL 접근 후 별도로 기록한다. 배포는 저장소 정책대로 main CI 성공 후 자동 Production Deploy 경로를 사용한다.
