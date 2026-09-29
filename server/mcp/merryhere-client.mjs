@@ -62,9 +62,9 @@ export function selectBookingSlots(calendar, { roomId, start, end }) {
 }
 
 // Sessions are local to one operation; neither cookies nor credentials enter agent evidence.
-export function createMerryhereClient({ email, password, fetchImpl = fetch }) {
-  if (!email || !password) fail('account_not_connected');
-  const cookies = new Map();
+export function createMerryhereClient({ email, password, fetchImpl = fetch, sessionCookies, saveSession = async () => {} }) {
+  if ((!email || !password) && !sessionCookies) fail('account_not_connected');
+  const cookies = new Map(Object.entries(sessionCookies || {}));
   async function request(path, form, follow = true) {
     let url = new URL(path, origin);
     for (let hop = 0; hop < 5; hop++) {
@@ -80,6 +80,7 @@ export function createMerryhereClient({ email, password, fetchImpl = fetch }) {
         const pair = value.split(';')[0], index = pair.indexOf('=');
         if (index > 0) cookies.set(pair.slice(0, index), pair.slice(index + 1));
       }
+      await saveSession(Object.fromEntries(cookies));
       if (response.status >= 300 && response.status < 400) {
         if (!follow) return;
         const location = response.headers.get('location');
@@ -95,6 +96,10 @@ export function createMerryhereClient({ email, password, fetchImpl = fetch }) {
   }
   return {
     async login() {
+      if (!email || !password) {
+        parseCalendar(await request(`/reservation?date=${kstDate()}`), kstDate());
+        return;
+      }
       const html = await request('/auth/login');
       await request('/auth/login', { _token: tokenFrom(html, '/auth/login'), email, password });
     },
