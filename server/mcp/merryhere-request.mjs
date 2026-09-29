@@ -37,7 +37,8 @@ export function interpretRoomRequest({ previous, now, input }) {
     Object.entries(previous.query).filter(([key]) => Object.hasOwn(querySchema.shape, key)))) : {};
   const patch = value.query;
   const query = { ...base, ...patch };
-  query.date = validateRoomDate(query.date || kstDate(now), now);
+  query.date = query.date || (value.missing.includes('date') ? null : kstDate(now));
+  if (query.date) validateRoomDate(query.date, now);
   // A new date starts a new time search; an edited start retains duration, never an obsolete end.
   if (patch.date && patch.date !== base.date) {
     for (const key of ['start', 'end', 'duration', 'afternoon']) if (!(key in patch)) delete query[key];
@@ -51,6 +52,7 @@ export function interpretRoomRequest({ previous, now, input }) {
   }
   if (query.start && query.end && (query.end <= query.start || query.duration && minutes(query.end) - minutes(query.start) !== query.duration)) throw new MerryhereError('invalid_time');
   if (query.start && query.end && !query.duration) query.duration = minutes(query.end) - minutes(query.start);
+  if (!querySchema.safeParse(query).success) throw new MerryhereError('invalid_time');
   const missing = new Set(value.missing);
   if (value.action === 'prepare') {
     if (!query.room) missing.add('room');

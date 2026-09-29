@@ -181,7 +181,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     const roomRequest = isMerryhereRequest(roomText, previousBooking);
     const roomConfirm = roomRequest && /^\s*(?:회의실\s*)?예약\s*확정\s+[a-f0-9]{24}\s*$/.test(roomText);
     const request = roomRequest ? null : resolveSettlementRequest(experiment.question);
-    const useHermes = experiment.variant === 'hermes' && !request?.direct && !roomRequest;
+    const useHermes = experiment.variant === 'hermes' && !request?.direct && !roomRequest && !previousBooking;
     const scopes = [];
     const audit = [];
     const projectNames = new Map();

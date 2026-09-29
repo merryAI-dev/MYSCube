@@ -90,7 +90,7 @@ describe('normalized room query contract', () => {
   });
   it.each([
     { start: '18:00', end: '17:00' }, { start: '17:00', end: '18:00', duration: 30 },
-    { start: '23:30', duration: 60 },
+    { start: '23:30', duration: 60 }, { start: '00:00', end: '23:30' },
   ])('rejects inconsistent time intervals %j', query => {
     expect(() => interpretRoomRequest({ now, input: { ...input, query } })).toThrow('invalid_time');
   });
@@ -167,7 +167,7 @@ describe('normalized room query contract', () => {
   });
 });
 
-it('persists the unresolved time in the Slack thread and applies an AM/PM reply before a real provider read', async () => {
+it('persists a clarification draft and sends history plus server context to the model before a provider read', async () => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date('2026-09-29T14:36:00+09:00'));
   try {
