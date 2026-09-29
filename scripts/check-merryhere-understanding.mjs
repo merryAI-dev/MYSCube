@@ -1,4 +1,3 @@
-import { execFileSync } from 'node:child_process';
 import * as z from 'zod/v4';
 import { createGeminiCompletion } from '../server/mcp/gemini-model.mjs';
 import { roomRequestSchema, roomToolDescription, interpretRoomRequest } from '../server/mcp/merryhere-request.mjs';
@@ -7,10 +6,10 @@ import { roomRequestSchema, roomToolDescription, interpretRoomRequest } from '..
 const now = Date.parse('2026-09-29T14:36:00+09:00');
 const usage = [];
 try {
-  const apiKey = (process.env.SETTLEMENT_AGENT_GEMINI_API_KEY || execFileSync('gcloud', [
-    'secrets', 'versions', 'access', 'latest', '--secret=myscube-settlement-agent-gemini-key',
-    '--project=inner-platform-live-20260316',
-  ], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim();
+  if (process.env.GITHUB_ACTIONS !== 'true' || process.env.GITHUB_REF !== 'refs/heads/main'
+    || process.env.GITHUB_REPOSITORY !== 'merryAI-dev/MYSCube') throw new Error('main_workflow_required');
+  const apiKey = process.env.SETTLEMENT_AGENT_GEMINI_API_KEY?.trim();
+  if (!apiKey) throw new Error('model_not_configured');
   const complete = createGeminiCompletion({ apiKey, maxInputTokens: 4000, onUsage: u => usage.push(u) });
   async function check(text, previous, history = []) {
     const reply = await complete({ signal: AbortSignal.timeout(30000), messages: [

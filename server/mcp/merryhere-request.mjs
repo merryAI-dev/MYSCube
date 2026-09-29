@@ -37,6 +37,8 @@ export function interpretRoomRequest({ previous, now, input }) {
     Object.entries(previous.query).filter(([key]) => Object.hasOwn(querySchema.shape, key)))) : {};
   const patch = value.query;
   const query = { ...base, ...patch };
+  const dateDefaulted = (!query.date && !value.missing.includes('date'))
+    || Boolean(value.inherit && previous?.dateDefaulted && !Object.hasOwn(patch, 'date') && query.date);
   query.date = query.date || (value.missing.includes('date') ? null : kstDate(now));
   if (query.date) validateRoomDate(query.date, now);
   // A new date starts a new time search; an edited start retains duration, never an obsolete end.
@@ -60,7 +62,7 @@ export function interpretRoomRequest({ previous, now, input }) {
     if (!query.end) missing.add('duration');
     if (!query.title) missing.add('title');
   }
-  const bookingContext = { query, missing: [...missing], requestedAction: value.action };
+  const bookingContext = { query, missing: [...missing], requestedAction: value.action, dateDefaulted };
   return { ...query, action: missing.size || value.action === 'clarify' ? 'clarify' : value.action, bookingContext };
 }
 export function renderRoomClarification(context) {
@@ -68,7 +70,7 @@ export function renderRoomClarification(context) {
     duration: '얼마 동안 이용할까요?', room: '어느 회의실을 예약할까요?', title: '회의명을 알려주세요.', intent: '조회 또는 예약할 조건을 알려주세요.' };
   const q = context?.query || {};
   const known = [q.date, q.room, q.start && `${q.start}${q.end ? `~${q.end}` : '부터'}`, q.capacity && `${q.capacity}명`].filter(Boolean);
-  return [known.length ? `확인한 조건: ${known.join(' · ')} (한국시간)` : '',
+  return [context?.dateDefaulted ? '날짜를 지정하지 않아 오늘 기준입니다.' : '', known.length ? `확인한 조건: ${known.join(' · ')} (한국시간)` : '',
     ...[...new Set(context?.missing?.length ? context.missing : ['intent'])].map(key => labels[key])].filter(Boolean).join('\n');
 }
 export function availableRoomWindows(calendar, query, now) {
