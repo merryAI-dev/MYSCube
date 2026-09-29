@@ -1,12 +1,15 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { createMerryhereClient, kstDate } from './merryhere-client.mjs';
 
-export async function saveLocalRoomLogin({ store, email, password, fetchImpl = fetch }) {
+export async function saveLocalRoomLogin({ store, loginId, password, fetchImpl = fetch }) {
+  if (typeof loginId !== 'string' || !loginId.trim() || loginId.length > 320) throw new Error('invalid_login');
+  loginId = loginId.trim();
   let session;
-  const client = createMerryhereClient({ email, password, fetchImpl, saveSession: async cookies => { session = cookies; } });
+  // Merryhere posts both usernames and email addresses under the field named "email".
+  const client = createMerryhereClient({ email: loginId, password, fetchImpl, saveSession: async cookies => { session = cookies; } });
   await client.login(); await client.calendar(kstDate());
   const identities = await store.read('identities.json') || {};
-  const identity = createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
+  const identity = createHash('sha256').update(loginId.includes('@') ? loginId.toLowerCase() : loginId).digest('hex');
   const accountKey = identities[identity] || randomBytes(16).toString('hex');
   await store.write('identities.json', { ...identities, [identity]: accountKey });
   await store.write('session.json', { cookies: session, accountKey });

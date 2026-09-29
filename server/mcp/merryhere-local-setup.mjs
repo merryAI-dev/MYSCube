@@ -8,7 +8,7 @@ export async function startLocalRoomSetup({ store, startRunner, login = saveLoca
   const page = `<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Merryhere 개인 연결</title>
 <style>body{font:16px system-ui;max-width:620px;margin:60px auto;padding:24px;background:#f5f7fa;color:#182a38}section{background:white;padding:24px;border-radius:16px;margin:18px 0}input,button{font:inherit;padding:12px;box-sizing:border-box;width:100%;margin:8px 0}button{background:#185f52;color:white;border:0;border-radius:8px;cursor:pointer}button:disabled{opacity:.5}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#eef4f1;padding:16px}#status{white-space:pre-wrap}small{line-height:1.7}label{display:block}</style>
 <h1>Merryhere 개인 연결</h1><p>로그인 세션은 이 컴퓨터에만 저장됩니다. 비밀번호는 저장하거나 Slack으로 보내지 않습니다.</p>
-<section><h2>1. Merryhere 로그인</h2><form id="login"><label>이메일<input name="email" type="email" autocomplete="username" required></label><label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label><button>로그인하고 세션 저장</button></form></section>
+<section><h2>1. Merryhere 로그인</h2><form id="login"><label>아이디 또는 이메일<input name="loginId" type="text" autocomplete="username" autocapitalize="none" required></label><label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label><button>로그인하고 세션 저장</button></form></section>
 <section><h2>2. Slack 계정 연결</h2><button id="pair">연결 코드 만들기</button><p>기존 채널에서 @innerplatform-alerts를 멘션하고 아래 문장을 보내주세요.</p><pre id="code">로그인 후 연결 코드를 만들어주세요.</pre><button id="check">Slack 연결 요청 확인</button><p id="identity"></p><button id="approve" hidden>표시된 계정이 본인입니다 · 연결하고 실행</button></section>
 <p id="status" role="status">설정 준비 완료</p><small>연결 완료 후에는 실행기가 백그라운드에서 동작합니다. 컴퓨터가 꺼져 있거나 잠자기 상태이면 회의실 요청을 처리할 수 없습니다.</small>
 <script nonce="${nonce}">
@@ -37,8 +37,8 @@ document.querySelector('#approve').onclick=()=>act(async()=>{await call('approve
       for await (const part of req) { length += part.length; if (length > 8192) throw new Error('body_limit'); chunks.push(part); }
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')), action = req.url.slice(nonce.length + 2);
       if (action === 'login') {
-        if (typeof body.email !== 'string' || body.email.length > 320 || typeof body.password !== 'string' || body.password.length > 4096) throw new Error('invalid_login');
-        await login({ store, email: body.email, password: body.password });
+        if (typeof body.loginId !== 'string' || !body.loginId.trim() || body.loginId.length > 320 || typeof body.password !== 'string' || body.password.length > 4096) throw new Error('invalid_login');
+        await login({ store, loginId: body.loginId, password: body.password });
         return send(200, { ok: true });
       }
       if (action === 'pair') {

@@ -16,12 +16,12 @@ try {
     let muted = false;
     const output = new Writable({ write(chunk, _encoding, callback) { if (!muted) process.stdout.write(chunk); callback(); } });
     const terminal = createInterface({ input: process.stdin, output, terminal: true });
-    const email = await terminal.question('Merryhere 이메일: ');
+    const loginId = await terminal.question('Merryhere 아이디 또는 이메일: ');
     const pending = terminal.question('Merryhere 비밀번호 (화면에 표시되지 않습니다): ');
     muted = true;
     const password = await pending;
     terminal.close(); process.stdout.write('\n');
-    await saveLocalRoomLogin({ store, email, password });
+    await saveLocalRoomLogin({ store, loginId, password });
     console.log('로그인 확인 완료. 세션만 이 컴퓨터에 저장했습니다. 비밀번호는 저장하지 않았습니다.');
   } else if (action === 'pair') {
     const token = randomBytes(32).toString('hex'), code = randomBytes(16).toString('hex');

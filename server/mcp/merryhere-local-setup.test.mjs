@@ -20,9 +20,10 @@ it('keeps login local, rejects foreign origins and starts the runner only after 
     expect((await fetch(`${origin}/wrong-nonce`)).status).toBe(403);
     expect((await post('login', { password: 'a'.repeat(9000) })).status).toBe(400);
     expect(login).not.toHaveBeenCalled();
-    const response = await post('login', { email: 'self@example.test', password: 'private-password' });
+    const response = await post('login', { loginId: 'memberID', password: 'private-password' });
     expect(await response.json()).toEqual({ ok: true });
     expect(login.mock.calls[0][0].password).toBe('private-password');
+    expect(login.mock.calls[0][0].loginId).toBe('memberID');
     expect(JSON.stringify([...values])).not.toContain('private-password');
     expect((await (await post('pair')).json()).code).toMatch(/^[a-f0-9]{32}$/);
     const checked = await (await post('check')).json();
