@@ -111,7 +111,7 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
         run: node scripts/qa-settlement-replies.mjs --live
       - name: Verify contextual room understanding
-        if: inputs.check_rooms
+        if: inputs.check_rooms && github.ref == 'refs/heads/main'
         env:
           SETTLEMENT_AGENT_GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
         run: node scripts/check-merryhere-understanding.mjs
