@@ -1,22 +1,15 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 import { Writable } from 'node:stream';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { localStore } from '../server/mcp/merryhere-local-store.mjs';
-import { createMerryhereClient, kstDate } from '../server/mcp/merryhere-client.mjs';
+import { saveLocalRoomLogin, localRelayApi as api } from '../server/mcp/merryhere-local-login.mjs';
 import { executeLocalRoomCommand } from '../server/mcp/merryhere-local-executor.mjs';
 
-const base = 'https://myscube.myscguard.app';
 const store = await localStore(join(homedir(), '.myscube-merryhere'));
 const action = process.argv[2];
-async function api(action, token, body) {
-  const response = await fetch(`${base}/api/v1/merryhere/local/${action}`, { method: 'POST', redirect: 'error',
-    signal: AbortSignal.timeout(15000), headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' }, body: JSON.stringify(body) });
-  if (!response.ok) throw new Error(response.status === 401 ? 'local_connection_expired' : 'local_server_unavailable');
-  return response.json();
-}
 try {
   if (action === 'login') {
     if (!process.stdin.isTTY) throw new Error('interactive_terminal_required');
@@ -28,14 +21,7 @@ try {
     muted = true;
     const password = await pending;
     terminal.close(); process.stdout.write('\n');
-    let session;
-    const client = createMerryhereClient({ email, password, saveSession: async cookies => { session = cookies; } });
-    await client.login(); await client.calendar(kstDate());
-    const identities = await store.read('identities.json') || {};
-    const identity = createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
-    const accountKey = identities[identity] || randomBytes(16).toString('hex');
-    await store.write('identities.json', { ...identities, [identity]: accountKey });
-    await store.write('session.json', { cookies: session, accountKey });
+    await saveLocalRoomLogin({ store, email, password });
     console.log('로그인 확인 완료. 세션만 이 컴퓨터에 저장했습니다. 비밀번호는 저장하지 않았습니다.');
   } else if (action === 'pair') {
     const token = randomBytes(32).toString('hex'), code = randomBytes(16).toString('hex');
