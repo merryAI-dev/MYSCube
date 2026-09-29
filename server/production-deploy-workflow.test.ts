@@ -25,6 +25,18 @@ const env = {
 };
 
 describe('production deployment decisions', () => {
+  it.each([undefined, '', '  ', '{"member":{"email":"fixture@example.test","password":"fixture-secret"}}'])('passes optional room credentials only to runtime: %s', (accounts) => {
+    const deployment = buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance: false,
+      env: { ...env, SETTLEMENT_AGENT_ENABLED: 'true', SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key', MERRYHERE_ACCOUNTS_JSON: accounts } });
+    const index = deployment.args.findIndex((arg: string) => arg.startsWith('MERRYHERE_ACCOUNTS_JSON='));
+    if (accounts?.trim()) {
+      expect(deployment.args[index - 1]).toBe('--env');
+      expect(deployment.args[index]).toBe(`MERRYHERE_ACCOUNTS_JSON=${accounts}`);
+    } else expect(index).toBe(-1);
+  });
+  it.each(['production-deploy.yml', 'jvm-production-deploy.yml'])('connects room credentials in %s', (file) => {
+    expect(readFileSync(`.github/workflows/${file}`, 'utf8')).toContain('MERRYHERE_ACCOUNTS_JSON: ${{ secrets.MERRYHERE_ACCOUNTS_JSON }}');
+  });
   it('isolates agent credentials from the shared Gemini key', () => {
     const deployment = buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance: false,
       env: { ...env, SETTLEMENT_AGENT_ENABLED: 'true', SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key' } });
