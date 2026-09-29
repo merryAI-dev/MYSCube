@@ -128,6 +128,7 @@ import { createPersonHrEvidenceStorageService } from './person-hr-evidence-stora
 import { mountCashflowExportRoutes } from './routes/cashflow-exports.mjs';
 import { mountJvmWeeklyApiRoutes } from './routes/jvm-weekly-api.mjs';
 import { createMcpOAuthService, mountMcpOAuthRoutes } from './mcp-oauth.mjs';
+import { createLocalRoomRelay, mountLocalRoomRelay } from '../mcp/merryhere-local-relay.mjs';
 import { mountCashflowSheetLabRoutes } from './routes/cashflow-sheet-lab.mjs';
 import { mountCashflowLaborRiskRoutes } from './routes/cashflow-labor-risk.mjs';
 import { mountCashflowPeriodPolicyRoutes } from './routes/cashflow-period-policy.mjs';
@@ -1421,6 +1422,8 @@ export function createBffApp(options = {}) {
       authMode: 'firebase_required', verifyToken, readHeaderValue: (name) => req.header(name),
     }),
   });
+
+  if (settlementAgentEnabled && env.MERRYHERE_EXECUTION_MODE === 'local') mountLocalRoomRelay(app, createLocalRoomRelay({ db }));
 
   app.use('/api/v1', createApiContextMiddleware({
     authMode, verifyToken, resolveMemberIdentity,

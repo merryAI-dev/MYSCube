@@ -15,7 +15,7 @@ export function memoryDb() {
         startAfter: (doc) => { after = doc.id; return query; },
         limit: (value) => { limit = value; return query; },
         get: async () => ({ docs: [...records].filter(([key, data]) => key.startsWith(`${path}/`) && !key.slice(path.length + 1).includes('/')
-          && filters.every(([field, op, value]) => op === 'in' ? value.includes(data[field]) : data[field] === value))
+          && filters.every(([field, op, value]) => op === 'in' ? value.includes(data[field]) : op === '>' ? data[field] > value : data[field] === value))
           .filter(([key]) => !after || key.split('/').at(-1) > after).sort(([a], [b]) => a.localeCompare(b)).slice(0, limit).map(([key]) => snap(db.doc(key))) }),
       };
       return query;
