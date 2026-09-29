@@ -43,9 +43,9 @@ export const CODE_EVIDENCE = [
   {
     "topic": "agent_runtime",
     "path": "server/mcp/settlement-agent.mjs",
-    "sourceSha256": "93a7ea16c25847767058cc3227062d8eee4aa5f03c7f0353c4985a2d6aa64108",
-    "startLine": 94,
-    "endLine": 98,
+    "sourceSha256": "ca99ed68c52178bc95fad9f43299eb7d454d198a975c96c2aadca58553084859",
+    "startLine": 95,
+    "endLine": 99,
     "excerpt": "    if (!calls?.length) {\n      if (!answers.length) return { status: 'unverified', answer: renderToolFailures(failures) || '정산 정보를 확인하지 못했습니다. 조회할 사업과 기간을 알려주세요.' };\n      return { status: failures.length ? 'partial' : 'answered', answer: [\n        ...answers, ...(failures.length ? [renderToolFailures(failures)] : [])].join('\\n\\n') };\n    }"
   },
   {

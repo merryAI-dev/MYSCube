@@ -1,6 +1,7 @@
 const stages = Object.freeze({
   INTERPRET_REQUEST: '요청 내용과 조회 범위를 확인하고 있습니다.',
   READ_PROJECTS: '등록 사업 목록을 조회하고 있습니다.',
+  READ_ROOMS: 'Merryhere에서 회의실의 날짜·시간·이용 차단 여부를 확인하고 있습니다.',
   READ_SETTLEMENT: '주정산·월결산 상태를 조회하고 있습니다.',
   READ_ACCOUNTING: '회계 원장 자료를 조회하고 있습니다.',
   COMPARE_PERIODS: '두 기간의 원장 자료를 조회하고 비교하고 있습니다.',
