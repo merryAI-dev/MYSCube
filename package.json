@@ -21,6 +21,7 @@
     "test:settlement:integration": "bash scripts/test_settlement_product_completeness_integration.sh",
     "bff:dev": "node server/bff/server.mjs",
     "mcp:myscube": "node server/mcp/server.mjs",
+    "merryhere:local": "node scripts/merryhere-local.mjs",
     "bff:seed:demo": "node scripts/bff_seed_demo_data.mjs",
     "bff:test:integration": "bash scripts/test_bff_integration.sh",
     "bff:cleanup:idempotency": "node server/bff/cleanup_idempotency.mjs",

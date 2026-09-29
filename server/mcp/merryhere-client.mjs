@@ -61,7 +61,7 @@ export function selectBookingSlots(calendar, { roomId, start, end }) {
   return slots;
 }
 
-// Sessions are local to one operation; neither cookies nor credentials enter agent evidence.
+// The local runner persists cookies; neither cookies nor credentials enter agent evidence.
 export function createMerryhereClient({ email, password, fetchImpl = fetch, sessionCookies, saveSession = async () => {} }) {
   if ((!email || !password) && !sessionCookies) fail('account_not_connected');
   const cookies = new Map(Object.entries(sessionCookies || {}));

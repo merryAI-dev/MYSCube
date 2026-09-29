@@ -14,6 +14,16 @@ export function createLocalRoomRelay({ db, now = Date.now, sleep = delay }) {
   const ownerRef = actor => db.doc(`merryhere_local_owners/${hash(`${actor.tenantId}/${actor.actorId}`)}`);
   const commands = id => `merryhere_local_devices/${id}/commands`;
   const jobRef = (deviceId, id) => db.doc(`${commands(deviceId)}/${id}`);
+  async function currentDevice(tx, id) {
+    const device = (await tx.get(deviceRef(id))).data();
+    if (!device || device.expiresAt < now()) fail('local_unauthorized');
+    if (device.actorId) {
+      const owner = (await tx.get(ownerRef(device))).data();
+      const member = (await tx.get(db.doc(`orgs/${device.tenantId}/members/${device.actorId}`))).data();
+      if (owner?.deviceId !== id || member?.status !== 'ACTIVE') fail('local_unauthorized');
+    }
+    return device;
+  }
   async function authenticate(token) {
     if (!/^[a-f0-9]{64}$/.test(token || '')) fail('local_unauthorized');
     const id = hash(token), snap = await deviceRef(id).get();
@@ -46,8 +56,23 @@ export function createLocalRoomRelay({ db, now = Date.now, sleep = delay }) {
         const dev = deviceRef(pairing.deviceId);
         if (!(await tx.get(dev)).exists) fail('local_pair_expired');
         tx.update(ref, { used: true });
-        tx.update(dev, { tenantId: actor.tenantId, actorId: actor.actorId, expiresAt: now() + 30 * 86400000 });
-        tx.set(ownerRef(actor), { deviceId: pairing.deviceId });
+        tx.update(dev, { pending: { tenantId: actor.tenantId, actorId: actor.actorId, requestId: randomUUID() } });
+      });
+    },
+    async approve(token, requestId, accepted) {
+      const device = await authenticate(token);
+      const pending = device.pending;
+      if (!pending || pending.requestId !== requestId || typeof accepted !== 'boolean') fail('local_invalid');
+      const member = (await db.doc(`orgs/${pending.tenantId}/members/${pending.actorId}`).get()).data();
+      if (member?.status !== 'ACTIVE') fail('local_unauthorized');
+      await db.runTransaction(async tx => {
+        const current = (await tx.get(deviceRef(device.id))).data();
+        const currentMember = (await tx.get(db.doc(`orgs/${pending.tenantId}/members/${pending.actorId}`))).data();
+        if (current?.pending?.requestId !== requestId || current.expiresAt < now()) fail('local_invalid');
+        if (currentMember?.status !== 'ACTIVE') fail('local_unauthorized');
+        if (!accepted) { tx.update(deviceRef(device.id), { pending: null, expiresAt: 0 }); return; }
+        tx.update(deviceRef(device.id), { tenantId: pending.tenantId, actorId: pending.actorId, pending: null, expiresAt: now() + 30 * 86400000 });
+        tx.set(ownerRef(pending), { deviceId: device.id });
       });
     },
     async connection(actor) {
@@ -56,7 +81,7 @@ export function createLocalRoomRelay({ db, now = Date.now, sleep = delay }) {
       const device = (await deviceRef(owner.deviceId).get()).data();
       if (!device || device.expiresAt < now() || device.lastSeenAt < now() - 45000) return { issue: 'local_offline' };
       if (!device.sessionReady) return { issue: 'local_login_required' };
-      return { deviceId: owner.deviceId, accountKey: owner.deviceId };
+      return { deviceId: owner.deviceId, accountKey: device.accountKey };
     },
     async disconnect(actor) {
       await db.runTransaction(async tx => {
@@ -64,19 +89,25 @@ export function createLocalRoomRelay({ db, now = Date.now, sleep = delay }) {
         if (owner) { tx.update(deviceRef(owner.deviceId), { expiresAt: 0 }); tx.delete(ownerRef(actor)); }
       });
     },
-    async poll(token, sessionReady) {
+    async poll(token, sessionReady, accountKey) {
       const device = await authenticate(token);
+      sessionReady = sessionReady === true && /^[a-f0-9]{32}$/.test(accountKey || '');
       await db.runTransaction(async tx => {
-        if ((await tx.get(deviceRef(device.id))).exists) tx.update(deviceRef(device.id), { lastSeenAt: now(), sessionReady: sessionReady === true });
+        await currentDevice(tx, device.id);
+        tx.update(deviceRef(device.id), { lastSeenAt: now(), sessionReady, accountKey: sessionReady ? accountKey : null });
       });
-      if (!device.actorId) return { paired: false, command: null };
+      if (!device.actorId) {
+        const member = device.pending ? (await db.doc(`orgs/${device.pending.tenantId}/members/${device.pending.actorId}`).get()).data() : null;
+        return { paired: false, command: null, pending: member ? { requestId: device.pending.requestId, name: member.name || '', email: member.email || '' } : null };
+      }
       const candidates = await db.collection(commands(device.id)).where('expiresAt', '>', now()).limit(100).get();
       for (const snap of candidates.docs) {
         const command = await db.runTransaction(async tx => {
+          await currentDevice(tx, device.id);
           const value = (await tx.get(jobRef(device.id, snap.id))).data();
           if (value?.state !== 'QUEUED' || value.expiresAt <= now()) return null;
           tx.update(jobRef(device.id, snap.id), { state: 'CLAIMED' });
-          return { id: snap.id, expiresAt: value.expiresAt, payload: value.payload };
+          return { id: snap.id, expiresAt: value.expiresAt, payload: value.payload, accountKey: value.accountKey };
         });
         if (command) return { paired: true, command };
       }
@@ -86,10 +117,20 @@ export function createLocalRoomRelay({ db, now = Date.now, sleep = delay }) {
       const device = await authenticate(token);
       if (!/^[a-f0-9-]{36}$/.test(id || '')) fail('local_invalid');
       await db.runTransaction(async tx => {
+        await currentDevice(tx, device.id);
         const ref = jobRef(device.id, id), command = (await tx.get(ref)).data();
         if (!command || command.deviceId !== device.id || command.state !== 'CLAIMED' || command.expiresAt <= now()) fail('local_invalid');
         const safe = localResultSchema(command.payload).parse(result);
         tx.update(ref, { state: 'DONE', result: safe });
+      });
+    },
+    async permit(token, id) {
+      const device = await authenticate(token);
+      if (!/^[a-f0-9-]{36}$/.test(id || '')) fail('local_invalid');
+      await db.runTransaction(async tx => {
+        const current = await currentDevice(tx, device.id);
+        const command = (await tx.get(jobRef(device.id, id))).data();
+        if (!command || command.state !== 'CLAIMED' || command.expiresAt <= now() || command.payload.op !== 'reserve' || command.accountKey !== current.accountKey) fail('local_invalid');
       });
     },
     client(connection) {
@@ -97,7 +138,7 @@ export function createLocalRoomRelay({ db, now = Date.now, sleep = delay }) {
         if (!devicePattern.test(connection.deviceId)) fail('local_not_connected');
         payload = localCommandSchema.parse(payload);
         const ref = jobRef(connection.deviceId, randomUUID()), expiresAt = now() + 25000;
-        await db.runTransaction(async tx => tx.create(ref, { deviceId: connection.deviceId, payload, state: 'QUEUED', expiresAt }));
+        await db.runTransaction(async tx => tx.create(ref, { deviceId: connection.deviceId, accountKey: connection.accountKey, payload, state: 'QUEUED', expiresAt }));
         try {
           while (now() < expiresAt) {
             const command = (await ref.get()).data();
@@ -126,7 +167,7 @@ export function createLocalRoomRelay({ db, now = Date.now, sleep = delay }) {
 
 export function mountLocalRoomRelay(app, relay) {
   const registrations = new Map();
-  for (const action of ['register', 'poll', 'complete']) app.post(`/api/merryhere/local/${action}`, async (req, res) => {
+  for (const action of ['register', 'poll', 'complete', 'permit', 'approve']) app.post(`/api/v1/merryhere/local/${action}`, async (req, res) => {
     try {
       if (Buffer.byteLength(JSON.stringify(req.body || {})) > 256000) return res.status(413).json({ error: 'local_request_too_large' });
       if (action === 'register') {
@@ -138,7 +179,9 @@ export function mountLocalRoomRelay(app, relay) {
       }
       const token = /^Bearer ([a-f0-9]{64})$/.exec(req.header('authorization') || '')?.[1];
       const value = action === 'register' ? await relay.register(token, req.body?.code)
-        : action === 'poll' ? await relay.poll(token, req.body?.sessionReady)
+        : action === 'poll' ? await relay.poll(token, req.body?.sessionReady, req.body?.accountKey)
+          : action === 'approve' ? await relay.approve(token, req.body?.requestId, req.body?.accepted)
+          : action === 'permit' ? await relay.permit(token, req.body?.id)
           : await relay.complete(token, req.body?.id, req.body?.result);
       res.json(value || { ok: true });
     } catch (error) { res.status(error.code === 'local_unauthorized' ? 401 : 400).json({ error: 'local_request_rejected' }); }
