@@ -18,6 +18,9 @@ import { resolveSettlementRequest, settlementRequestTools } from './settlement-r
 import { createSlackProgress, readProgressJob, toolProgressStage } from './slack-progress.mjs';
 import { createSettlementStatusTool } from './settlement-status-report.mjs';
 import { createSupportTools } from './support-read.mjs';
+import { isMerryhereRequest, runMerryhereBooking } from './merryhere-booking.mjs';
+import { roomRequestSchema, roomToolDescription } from './merryhere-request.mjs';
+import { createMerryhereClient } from './merryhere-client.mjs';
 
 export function slackText(text) {
   const formatted = text.split(/(```[\s\S]*?(?:```|$)|`[^`\n]*(?:`|$))/g).map((part, index) => index % 2 ? part : part
@@ -173,8 +176,12 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
   }
   async function process(job) {
     const experiment = selectSlackHarness(job.question, job.turns);
-    const request = resolveSettlementRequest(experiment.question);
-    const useHermes = experiment.variant === 'hermes' && !request?.direct;
+    const roomText = experiment.question.replace(/<@[A-Z0-9]+>/g, '').trim();
+    const previousBooking = job.turns?.at(-1)?.bookingContext || null;
+    const roomRequest = isMerryhereRequest(roomText, previousBooking);
+    const roomConfirm = roomRequest && /^\s*(?:회의실\s*)?예약\s*확정\s+[a-f0-9]{24}\s*$/.test(roomText);
+    const request = roomRequest ? null : resolveSettlementRequest(experiment.question);
+    const useHermes = experiment.variant === 'hermes' && !request?.direct && !roomRequest;
     const scopes = [];
     const audit = [];
     const projectNames = new Map();
@@ -191,6 +198,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     };
     let answer;
     let answerStatus;
+    let bookingContext = null;
     try {
       const actor = await contextFor(job);
       progress.show('INTERPRET_REQUEST');
@@ -201,7 +209,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       if (useHermes && !env.SETTLEMENT_HERMES_URL) throw new Error('hermes_not_configured');
       const previousAnswerId = job.turns?.at(-1)?.jobId || null;
       await record({ type: 'conversation_feedback', ...observeConversationFeedback({ text: job.question, previousAnswerId }) });
-      if (!request?.direct) {
+      if (!request?.direct && !roomConfirm) {
         if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
         await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
       }
@@ -211,6 +219,15 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         for (const doc of names) if (doc.exists && doc.data().name) projectNames.set(doc.id, doc.data().name);
         return readOverview({ context, body: input });
       } });
+      const booking = async (input) => {
+        progress.show('READ_ROOMS');
+        const result = await runMerryhereBooking({ db, actor: await contextFor(job), job, env, text: roomText, input,
+          previous: previousBooking, clientFactory: credentials => createMerryhereClient({ ...credentials, fetchImpl }) });
+        bookingContext = result.bookingContext || previousBooking;
+        return result;
+      };
+      tools.push({ name: 'merryhere_rooms', description: roomToolDescription, schema: roomRequestSchema,
+        requiresReply: true, execute: booking, render: result => result.answer });
       tools.push({ name: 'observe_feedback', observationOnly: true,
         description: '이전 답변에 대한 사용자의 정정·범위 불만·활용 의사·모호함을 관찰 기록합니다. 현재 사용자 발화에서 근거를 그대로 인용하세요. 공손함/짜증/침묵을 정답·오답으로 해석하지 않습니다. 기록은 학습이나 정산값에 반영되지 않습니다. 기록 후 실제 질문 처리를 계속하세요.',
         schema: z.object({ kind: z.enum(['correction', 'scope_concern', 'use_intent', 'ambiguous']), quote: z.string().min(1).max(500) }).strict(),
@@ -288,7 +305,10 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         };
       }
       let result;
-      if (request?.direct) {
+      if (roomConfirm) {
+        result = await booking();
+        await record({ type: 'tool_result', tool: 'merryhere_booking_confirmation', result });
+      } else if (request?.direct) {
         const tool = tools.find((tool) => tool.name === 'settlement_status_report');
         const input = tool.schema.parse(request.input);
         const evidence = await tool.execute(input, { signal: AbortSignal.timeout(100000) });
@@ -301,7 +321,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         const runAgent = useHermes ? hermesRunner : runSettlementAgent;
         result = await runAgent({ env, question: experiment.question, history: (job.turns || []).flatMap((turn) => [
           { role: 'user', content: selectSlackHarness(turn.question).question }, { role: 'assistant', content: turn.answer },
-        ]), tools: settlementRequestTools(tools, request), complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
+        ]), tools: roomRequest ? tools.filter(t => t.name === 'merryhere_rooms') : settlementRequestTools(tools, request), complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
           loadFeedback: async (scope) => {
             scope = { ...scope, experimentVariant: experiment.variant };
             const key = feedbackScopeKey(job, scope);
@@ -331,7 +351,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       await progress.close();
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
+    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${roomRequest ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
     const blocks = answerBlocks(text);
     const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     if (publicAnswer && answerStatus === 'answered' && scopes.length) blocks.push({ type: 'context', elements: [{ type: 'plain_text', text: '정정할 내용은 댓글로 편하게 알려주세요. 아래 조회 범위 평가는 선택사항입니다.' }] }, { type: 'actions', elements: [
@@ -341,6 +361,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     const answerDelivery = publicAnswer ? 'public' : 'private';
     const method = publicAnswer ? 'chat.postMessage' : 'chat.postEphemeral';
     await updateClaimedJob({ db, job, patch: { status: 'sending', answerDelivery, deliveryMethod: method, answer: text, scopes, audit, experimentVariant: experiment.variant,
+      bookingContext,
       reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
       answeredAt: new Date().toISOString() } });
     const body = {
@@ -529,5 +550,6 @@ async function finishConversation(tx, db, job, status) {
   if (!thread || thread.queue[0] !== job.id) throw new Error('conversation_order_lost');
   tx.update(ref, { queue: thread.queue.slice(1),
     turns: status === 'succeeded' ? [...thread.turns, { jobId: job.id, question: job.question, answer: job.answer,
+      ...(job.bookingContext ? { bookingContext: job.bookingContext } : {}),
       ...(job.experimentVariant ? { experimentVariant: job.experimentVariant } : {}) }].slice(-6) : thread.turns });
 }
