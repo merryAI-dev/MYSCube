@@ -4,10 +4,10 @@ import { interpretRoomRequest, availableRoomWindows } from './merryhere-request.
 
 const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
 const messages = {
-  account_not_connected: 'Slack 요청자에게 연결된 Merryhere 로그인 계정이 없습니다. 관리자에게 서버 계정 연결을 요청해주세요.',
-  login_failed: 'Merryhere 로그인이 거부되었습니다. 예약은 제출하지 않았습니다.',
-  login_required: 'Merryhere 로그인 상태를 확인하지 못했습니다. 예약은 제출하지 않았습니다.',
-  session_expired: 'Merryhere 로그인 세션이 만료되었습니다. 예약 결과를 확인해주세요.',
+  account_not_connected: '먼저 Merryhere 계정 연결이 필요합니다.\n1. https://merryhere.kr/auth/login 에서 계정으로 로그인할 수 있는지 확인해주세요.\n2. 관리자에게 해당 계정의 Slack 서버 연결을 요청해주세요. 브라우저 로그인만으로 Slack 서버에 연결되지는 않습니다. 비밀번호는 Slack에 보내지 마세요.\n3. 연결이 끝나면 이 스레드에서 원래 요청을 다시 보내주세요. 서버가 자동 로그인한 뒤 조회합니다.\n이번 요청에서는 예약을 제출하지 않았습니다. 이전 예약 확인번호가 있다면 연결 후 같은 번호로 결과를 재조회해주세요.',
+  login_failed: 'Merryhere 자동 로그인이 거부되었습니다. https://merryhere.kr/auth/login 에서 로그인을 확인하고, 관리자에게 서버에 연결된 로그인 정보 갱신을 요청해주세요. 비밀번호는 Slack에 보내지 마세요. 갱신 후 같은 요청을 다시 보내주세요. 이전 예약 확인번호가 있다면 반드시 같은 번호로 결과를 재조회해주세요.',
+  login_required: 'Merryhere 자동 로그인 후에도 인증 상태를 확인하지 못했습니다. https://merryhere.kr/auth/login 에서 계정을 확인하고 관리자에게 서버 계정 연결 점검을 요청해주세요. 예약 확인번호가 있다면 같은 번호로 결과를 재조회해주세요.',
+  session_expired: 'Merryhere 로그인 세션이 만료되었습니다. 같은 요청을 다시 보내면 서버가 로그인부터 다시 진행합니다. 예약 확인번호가 있다면 반드시 같은 번호를 사용해주세요. 이미 제출한 예약은 재제출하지 않고 결과만 조회합니다.',
   invalid_time: '존재하는 날짜와 30분 단위의 시작·종료 시각을 지정해주세요. 종료는 시작보다 늦어야 합니다.',
   past_time: '이미 지난 시간은 예약할 수 없습니다. 한국시간 기준으로 미래 시간을 지정해주세요.',
   date_out_of_range: '오늘부터 4주 이내 날짜만 예약할 수 있습니다.',

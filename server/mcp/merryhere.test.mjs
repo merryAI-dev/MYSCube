@@ -104,6 +104,15 @@ describe('contextual exploration', () => {
 });
 
 describe('durable reservation through existing Slack actor', () => {
+  it('starts missing-account onboarding without claiming browser login connects the server', async () => {
+    const clientFactory = vi.fn();
+    const reply = await runMerryhereBooking({ db: {}, actor: { actorId: 'not-connected' }, job: {}, env: {},
+      text: '가능한 회의실', input, now, clientFactory });
+    expect(reply.answer).toContain('https://merryhere.kr/auth/login');
+    expect(reply.answer).toContain('브라우저 로그인만으로 Slack 서버에 연결되지는 않습니다');
+    expect(reply.answer).toContain('비밀번호는 Slack에 보내지 마세요');
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
   const setup = () => {
     const { db, records } = memoryDb();
     const calendar = parseCalendar(html(), '2026-09-30');
