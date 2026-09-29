@@ -47,7 +47,7 @@ Node 22 이상과 프로젝트 의존성이 설치된 컴퓨터에서 다음 순
 
 릴레이는 기존 `/api/v1` rewrite 아래 `/api/v1/merryhere/local/{register,poll,approve,permit,complete}`만 사용한다. 로컬에서 outbound HTTPS로 연결하며 공개 로컬 포트를 열지 않는다. 서버에는 capability 해시·소유 회원·30일 만료·heartbeat와 25초 작업만 저장한다. 작업은 한 번 claim하며 예약 제출 전에도 연결·기한을 확인한다. 결과는 날짜·슬롯·예약 상세의 제한된 필드만 검증 후 받는다. 로컬 제출 기록은 POST 전에 독점 생성해 중단·재시작 시 중복 POST를 차단한다. 지연·불명 제출은 기존 서버 UNKNOWN/reconcile 경로를 유지한다.
 
-명확한 회의실 요청은 모델 호출 전에 미연결·오프라인·로컬 로그인 필요 상태를 구분한다. 3초 poll은 Gemini를 호출하지 않는다. 로컬 연결 코드는 공개 Slack 메시지와 기존 감사 이력에 남을 수 있지만 일회용이며 로컬 승인 없이는 권한을 부여하지 않는다. 장기 capability·세션은 이 이력에 포함하지 않는다.
+명확한 회의실 요청은 모델 호출 전에 미연결·오프라인·로컬 로그인 필요 상태를 구분한다. 대기 중에는 10초마다, 작업을 받은 뒤 15초 동안은 750ms마다 poll하며 Gemini를 호출하지 않는다. 로컬 연결 코드는 공개 Slack 메시지와 기존 감사 이력에 남을 수 있지만 일회용이며 로컬 승인 없이는 권한을 부여하지 않는다. 장기 capability·세션은 이 이력에 포함하지 않는다.
 
 ## 중복 방지와 장애 처리
 
@@ -67,4 +67,4 @@ Node 22 이상과 프로젝트 의존성이 설치된 컴퓨터에서 다음 순
 
 실제 Gemini 자연어 해석 검사는 main의 `Settlement Agent Slack Check` workflow에서 `check_rooms=true`로 수동 실행한다. 합성 대화 4회, 요청당 입력 4,000 token 상한이며 실제 Merryhere 조회·예약·Slack 메시지 발송은 없다. `scripts/check-merryhere-understanding.mjs`가 토큰 사용량과 정규화 결과를 출력한다. 로컬 Secret Manager 조회 경로는 없으며 main GitHub Actions 밖에서는 실행을 거부한다. 운영 중 자동으로 반복 실행하지 않는다.
 
-실제 서버 로그인 정보 연결 후 **Slack 탐색 요청 → provider 로그인/조회 → 후속 조건 → 예약 준비/확정 → 실제 예약 내역 일치 → Slack 답변**을 검증해야 출시 완료다. provider DB PK/FK 확인은 소스/DDL 접근 후 별도로 기록한다. 배포는 저장소 정책대로 main CI 성공 후 자동 Production Deploy 경로를 사용한다.
+사용자 로컬 로그인·기기 승인 후 **Slack 탐색 요청 → 로컬 세션 조회 → 후속 조건 → 예약 준비/확정 → 실제 예약 내역 일치 → Slack 답변**을 검증해야 출시 완료다. provider DB PK/FK 확인은 소스/DDL 접근 후 별도로 기록한다. 배포는 저장소 정책대로 main CI 성공 후 자동 Production Deploy 경로를 사용한다.

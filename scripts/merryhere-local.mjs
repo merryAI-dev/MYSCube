@@ -47,6 +47,7 @@ try {
     if (!connection?.token) throw new Error('local_pair_required');
     console.log('로컬 회의실 실행기 시작. 종료하려면 Ctrl+C. 로그인 필요 시 별도 터미널에서 npm run merryhere:local -- login');
     let priorStatus;
+    let fastUntil = 0;
     for (;;) {
       try {
         const session = await store.read('session.json');
@@ -64,6 +65,7 @@ try {
         if (priorStatus !== status) console.log(status);
         priorStatus = status;
         if (command) {
+          fastUntil = Date.now() + 15000;
           const result = await executeLocalRoomCommand({ command, store, authorizeWrite: id => api('permit', connection.token, { id }) });
           if (!result.ok && ['login_required', 'login_failed', 'session_expired'].includes(result.code)) {
             await store.write('session.json', {});
@@ -76,7 +78,7 @@ try {
         if (priorStatus !== 'offline') console.log('서버 연결이 지연되고 있습니다. 예약은 자동 재제출하지 않습니다.');
         priorStatus = 'offline';
       }
-      await sleep(3000);
+      await sleep(Date.now() < fastUntil ? 750 : 10000);
     }
   } else console.log('사용법: npm run merryhere:local -- login | pair | run');
 } catch (error) {
