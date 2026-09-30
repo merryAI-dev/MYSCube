@@ -92,7 +92,7 @@ export async function reserveAgentBudget(db, month) {
   return db.runTransaction(async (tx) => {
     const ref = db.doc(`settlement_agent_budgets/${month}`);
     const budget = (await tx.get(ref)).data() || { reservedKrw: 0, attempts: 0 };
-    if (!Number.isSafeInteger(budget.reservedKrw) || budget.reservedKrw < 0 || budget.reservedKrw + 500 > 30000) throw new Error('budget_exhausted');
+    if (!Number.isSafeInteger(budget.reservedKrw) || budget.reservedKrw < 0 || budget.reservedKrw + 500 > 100000) throw new Error('budget_exhausted');
     tx.set(ref, { reservedKrw: budget.reservedKrw + 500, attempts: budget.attempts + 1, policy: '2026-09-14-500krw-per-attempt' });
   });
 }
