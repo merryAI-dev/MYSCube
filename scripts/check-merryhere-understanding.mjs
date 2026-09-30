@@ -36,7 +36,15 @@ try {
   if (third.start !== '17:00' || third.end !== '18:00' || third.action !== 'explore') throw new Error('duration_mismatch');
   const fourth = await check('다음 주 수요일에 넷이 들어갈 회의실 있어?');
   if (fourth.date !== '2026-10-07' || fourth.capacity !== 4 || fourth.action !== 'explore') throw new Error('date_capacity_mismatch');
-  console.log(JSON.stringify({ passed: 5, calls: usage.length, inputTokens: usage.reduce((n, u) => n + (u.promptTokenCount || 0), 0),
+  const booking = await check('다음 주 목요일 오전 10시부터 90분, 네 명 가능한 곳 찾아서 예약해줘');
+  if (booking.date !== '2026-10-08' || booking.end !== '11:30' || booking.action !== 'explore' || booking.bookingContext.requestedAction !== 'prepare') throw new Error('explore_before_booking_failed');
+  const selection = await check('M4-4A로 할게. 그런데 6층과 8층도 가능한지 알려줘', booking.bookingContext);
+  if (selection.room !== 'M4-4A' || !selection.relatedRooms.some(x => x.includes('6')) || !selection.relatedRooms.some(x => x.includes('8'))) throw new Error('compound_room_request_failed');
+  const ack = await check('확인했어 고마워', { ...selection.bookingContext, missing: [], intentId: 'a'.repeat(24) }, [
+    { role: 'assistant', content: '예약 결과를 자동 확인하지 못했습니다.' },
+  ]);
+  if (ack.action !== 'acknowledge') throw new Error('acknowledgment_failed');
+  console.log(JSON.stringify({ passed: 8, calls: usage.length, inputTokens: usage.reduce((n, u) => n + (u.promptTokenCount || 0), 0),
     outputTokens: usage.reduce((n, u) => n + (u.candidatesTokenCount || 0), 0), thinkingTokens: usage.reduce((n, u) => n + (u.thoughtsTokenCount || 0), 0) }));
 } catch (error) {
   console.error(JSON.stringify({ passed: false, code: /^[a-z_]+$/.test(error.message || '') ? error.message : 'model_check_failed', calls: usage.length }));

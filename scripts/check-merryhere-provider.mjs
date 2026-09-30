@@ -3,6 +3,7 @@ import { getFirestore } from 'firebase-admin/firestore';
 import parse5 from 'parse5';
 import { createMerryhereConnections } from '../server/mcp/merryhere-connection.mjs';
 import { createMerryhereClient, selectBookingSlots } from '../server/mcp/merryhere-client.mjs';
+import { parseIcsEvents, busyIntervalsForDate } from '../server/mcp/ics-calendar.mjs';
 import { createGoogleCalendarRooms, parseCalendarRoomsConfig } from '../server/mcp/google-calendar-rooms.mjs';
 
 if (process.env.GITHUB_ACTIONS !== 'true' || process.env.GITHUB_REF !== 'refs/heads/main') throw new Error('Main CI only');
@@ -31,14 +32,24 @@ for (const room of parseCalendarRoomsConfig(process.env)) {
   try {
     const response = await safeFetch(room.icsUrl, { redirect: 'error', signal: AbortSignal.timeout(10000) });
     const text = await response.text();
-    console.log(JSON.stringify({ calendar: room.name, status: response.status, isIcs: text.includes('BEGIN:VCALENDAR'), windows: response.ok ? await rooms.windowsForDate(date, { room: room.name, start: '11:00', end: '12:00', duration: 60 }) : [] }));
+    const events = parseIcsEvents(text);
+    console.log(JSON.stringify({ calendar: room.name, events: events.length, unsupportedRules: events.filter(e => e.rrule?.unsupported).length, unsupportedZones: events.filter(e => e.dtstart.unsupported).length, busy: busyIntervalsForDate({ events, date }), ruleShapes: [...new Set((text.match(/^RRULE:.+$/gm) || []).map(line => line.replace(/(?:UNTIL|COUNT)=([^;\r]+)/g, '$&')))].filter(rule => /BYSETPOS|BYWEEKNO|BYYEARDAY|BYMONTHDAY=[^;]*,/.test(rule)).slice(0, 10), status: response.status, isIcs: text.includes('BEGIN:VCALENDAR'), windows: response.ok ? await rooms.windowsForDate(date, { room: room.name, start: '11:00', end: '12:00', duration: 60 }) : [] }));
   } catch { console.log(JSON.stringify({ calendar: room.name, error: 'calendar_fetch_failed' })); }
 }
 console.log(JSON.stringify({ configuredCalendars: rooms.roomNames }));
 const id = process.env.ROOM_CHECK_INTENT;
 if (id) {
   if (!/^[a-f0-9]{24}$/.test(id)) throw new Error('Invalid intent');
-  const app = initializeApp({ credential: cert(JSON.parse(process.env.ROOM_CHECK_SERVICE_ACCOUNT)), projectId: 'inner-platform-live-20260316' });
+  const api = async path => {
+    const response = await fetch(`https://api.vercel.com${path}${path.includes('?') ? '&' : '?'}teamId=${process.env.VERCEL_ORG_ID}`, { headers: { Authorization: `Bearer ${process.env.VERCEL_TOKEN}` }, signal: AbortSignal.timeout(15000) });
+    if (!response.ok) throw new Error('Existing server credential unavailable');
+    return response.json();
+  };
+  const configured = await api(`/v9/projects/${process.env.VERCEL_PROJECT_ID}/env?target=production`);
+  const entry = configured.envs.find(e => e.key === 'FIREBASE_SERVICE_ACCOUNT_JSON' && e.target?.includes('production') && !e.gitBranch);
+  if (!entry) throw new Error('Existing server credential unavailable');
+  const credential = await api(`/v1/projects/${process.env.VERCEL_PROJECT_ID}/env/${entry.id}`);
+  const app = initializeApp({ credential: cert(JSON.parse(credential.value)), projectId: 'inner-platform-live-20260316' });
   const db = getFirestore(app);
   const intent = (await db.doc(`merryhere_booking_intents/${id}`).get()).data();
   if (!intent || !['SUBMITTING', 'UNKNOWN', 'CONFIRMED'].includes(intent.state)) throw new Error('Existing submitted intent required');
