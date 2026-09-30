@@ -1,0 +1,129 @@
+{
+  "note": "현재 위반을 고정한 목록. 고치면 항목을 지운다. manual=true는 코드를 읽어 확인한 항목(감지기 사각지대).",
+  "violations": [
+    {
+      "actor": "bff",
+      "collection": "cashflow_month_close_request_audits",
+      "file": "server/bff/routes/jvm-weekly-api.mjs",
+      "kind": "write",
+      "rule": "single-writer",
+      "owner": "jvm"
+    },
+    {
+      "actor": "bff",
+      "collection": "cashflow_month_close_request_months",
+      "file": "server/bff/routes/jvm-weekly-api.mjs",
+      "kind": "write",
+      "rule": "single-writer",
+      "owner": "jvm"
+    },
+    {
+      "actor": "bff",
+      "collection": "cashflow_month_close_requests",
+      "file": "server/bff/routes/jvm-weekly-api.mjs",
+      "kind": "write",
+      "rule": "single-writer",
+      "owner": "jvm"
+    },
+    {
+      "actor": "agent",
+      "collection": "client_error_events",
+      "file": "server/mcp/support-read.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "actor": "agent",
+      "collection": "members",
+      "file": "server/mcp/accounting-report.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "actor": "agent",
+      "collection": "members",
+      "file": "server/mcp/merryhere-connection.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "actor": "agent",
+      "collection": "members",
+      "file": "server/mcp/merryhere-local-relay.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "actor": "agent",
+      "collection": "members",
+      "file": "server/mcp/settlement-status-report.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "actor": "agent",
+      "collection": "members",
+      "file": "server/mcp/slack-runtime.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "actor": "agent",
+      "collection": "projects",
+      "file": "server/mcp/accounting-report.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "actor": "agent",
+      "collection": "projects",
+      "file": "server/mcp/grounded-answer.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "actor": "agent",
+      "collection": "projects",
+      "file": "server/mcp/settlement-status-report.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "actor": "agent",
+      "collection": "projects",
+      "file": "server/mcp/slack-runtime.mjs",
+      "kind": "read",
+      "rule": "agent-isolation",
+      "owner": "bff"
+    },
+    {
+      "rule": "single-writer",
+      "actor": "bff",
+      "collection": "cashflow_cumulative_close_heads",
+      "file": "server/bff/cashflow-cumulative-close-head-recovery.mjs",
+      "kind": "write",
+      "owner": "jvm",
+      "manual": true,
+      "note": "헤드 복구가 생성·덮어쓰기·삭제한다 (901, 1075행)."
+    },
+    {
+      "rule": "single-writer",
+      "actor": "bff",
+      "collection": "monthly_closes",
+      "file": "server/bff/cashflow-cumulative-close-head-recovery.mjs",
+      "kind": "write",
+      "owner": "jvm",
+      "manual": true,
+      "note": "헤드 복구가 월 마감 본문을 삭제한다 (1076행)."
+    }
+  ]
+}

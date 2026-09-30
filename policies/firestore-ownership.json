@@ -1,0 +1,338 @@
+{
+  "version": 1,
+  "description": "Firestore 컬렉션 쓰기 소유권. 컬렉션당 소유자 1개, 쓰기는 소유자만, 에이전트는 agent 소유 컬렉션만 접근.",
+  "actors": {
+    "bff": {
+      "roots": [
+        "server/bff"
+      ],
+      "extensions": [
+        ".mjs",
+        ".js"
+      ]
+    },
+    "jvm": {
+      "roots": [
+        "server/jvm-weekly-api/src/main"
+      ],
+      "extensions": [
+        ".java"
+      ],
+      "blindSpot": "쓰기를 자체 래퍼로 감싸서 컬렉션별 쓰기 감지가 불완전하다."
+    },
+    "agent": {
+      "roots": [
+        "server/mcp"
+      ],
+      "extensions": [
+        ".mjs",
+        ".js"
+      ]
+    }
+  },
+  "collections": {
+    "agent_locks": {
+      "owner": "bff"
+    },
+    "agent_runs": {
+      "owner": "bff"
+    },
+    "ai_usage": {
+      "owner": "bff"
+    },
+    "audit_chain": {
+      "owner": "bff"
+    },
+    "audit_logs": {
+      "owner": "bff"
+    },
+    "budget_evidence_maps": {
+      "owner": "bff"
+    },
+    "business": {
+      "owner": "bff",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "business_card_imports": {
+      "owner": "bff"
+    },
+    "cashflow_actual_sync_state": {
+      "owner": "bff"
+    },
+    "cashflow_change_candidates": {
+      "owner": "bff"
+    },
+    "cashflow_cumulative_close_heads": {
+      "owner": "jvm",
+      "note": "누적 마감 헤드. BFF 복구 스크립트가 쓰거나 지운다."
+    },
+    "cashflow_labor_risk_snapshots": {
+      "owner": "bff"
+    },
+    "cashflow_month_amendments": {
+      "owner": "jvm"
+    },
+    "cashflow_month_close_request_audits": {
+      "owner": "jvm",
+      "note": "승인자 변경·철회 감사 문서. 이전 대상."
+    },
+    "cashflow_month_close_request_months": {
+      "owner": "jvm",
+      "note": "월 마감 요청의 월별 샤드. 이전 1순위."
+    },
+    "cashflow_month_close_requests": {
+      "owner": "jvm",
+      "note": "월 마감 요청. 정산 사이클의 상태 전이는 JVM만 쓴다. 단계·샤드 문서 생성이 아직 BFF에 있다."
+    },
+    "cashflow_pending_approval_change_warnings": {
+      "owner": "jvm"
+    },
+    "cashflow_settlement_statuses": {
+      "owner": "jvm"
+    },
+    "cashflow_sheet_mirrors": {
+      "owner": "bff",
+      "note": "Sheet Lab 단방향 수집 결과. 좌표 계약 대상이라 BFF 소유로 고정."
+    },
+    "cashflow_sheet_publications": {
+      "owner": "bff",
+      "note": "Sheet Lab 공개 상태. BFF 소유로 고정, JVM은 읽기만."
+    },
+    "cashflow_sheet_refresh_runs": {
+      "owner": "bff"
+    },
+    "cashflow_sheet_snapshot_months": {
+      "owner": "bff"
+    },
+    "cashflow_sheet_snapshot_years": {
+      "owner": "bff"
+    },
+    "cashflow_sheet_snapshots": {
+      "owner": "bff"
+    },
+    "cashflow_sheet_stage_months": {
+      "owner": "bff"
+    },
+    "cashflow_sheet_stage_runs": {
+      "owner": "bff"
+    },
+    "cashflow_sheet_stage_years": {
+      "owner": "bff"
+    },
+    "cashflow_sheet_year_totals": {
+      "owner": "jvm"
+    },
+    "cashflow_weekly_compliance_heads": {
+      "owner": "jvm"
+    },
+    "cashflow_weekly_settlement_change_warnings": {
+      "owner": "jvm"
+    },
+    "cashflow_weekly_update_completion_versions": {
+      "owner": "jvm"
+    },
+    "cashflow_weekly_update_completions": {
+      "owner": "jvm"
+    },
+    "cashflow_weekly_update_reset_controls": {
+      "owner": "jvm"
+    },
+    "cashflow_weeks": {
+      "owner": "jvm",
+      "note": "JVM 컬렉션. BFF의 views/cashflow_weeks(프로젝션 뷰)와 이름만 같다."
+    },
+    "change_events": {
+      "owner": "bff"
+    },
+    "change_requests": {
+      "owner": "bff"
+    },
+    "client_error_events": {
+      "owner": "bff",
+      "note": "클라이언트 오류 수집(BFF 워커). 에이전트는 BFF 도구 API로 읽어야 한다."
+    },
+    "comments": {
+      "owner": "bff",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "contacts": {
+      "owner": "bff",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "editLeases": {
+      "owner": "bff",
+      "note": "30분 편집 잠금. BFF 소유. JVM이 종료 처리하는지 확인 필요."
+    },
+    "events": {
+      "owner": "bff",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "evidences": {
+      "owner": "bff"
+    },
+    "expense_sets": {
+      "owner": "bff"
+    },
+    "guide_documents": {
+      "owner": "bff"
+    },
+    "guide_qa": {
+      "owner": "bff"
+    },
+    "history": {
+      "owner": "bff",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "idempotency_keys": {
+      "owner": "bff"
+    },
+    "ledgers": {
+      "owner": "bff"
+    },
+    "members": {
+      "owner": "bff",
+      "note": "플랫폼 마스터. 쓰기는 BFF만. 에이전트는 BFF 도구 API로 읽어야 한다."
+    },
+    "merryhere_booking_intents": {
+      "owner": "agent"
+    },
+    "merryhere_booking_locks": {
+      "owner": "agent"
+    },
+    "merryhere_connect_links": {
+      "owner": "agent"
+    },
+    "merryhere_connections": {
+      "owner": "agent"
+    },
+    "merryhere_local_devices": {
+      "owner": "agent"
+    },
+    "merryhere_local_owners": {
+      "owner": "agent"
+    },
+    "merryhere_local_pairings": {
+      "owner": "agent"
+    },
+    "merryhere_provider_alerts": {
+      "owner": "agent"
+    },
+    "migration_archives": {
+      "owner": "jvm"
+    },
+    "monthly_close_versions": {
+      "owner": "jvm"
+    },
+    "monthly_closes": {
+      "owner": "jvm",
+      "note": "월 마감 본문. BFF 헤드 복구가 삭제한다."
+    },
+    "notifications": {
+      "owner": "bff"
+    },
+    "outbox": {
+      "owner": "bff"
+    },
+    "outbox_deliveries": {
+      "owner": "bff"
+    },
+    "partEntries": {
+      "owner": "bff"
+    },
+    "participation_roster_push_status": {
+      "owner": "bff"
+    },
+    "participation_rules": {
+      "owner": "bff"
+    },
+    "payroll_runs": {
+      "owner": "bff"
+    },
+    "payroll_schedules": {
+      "owner": "bff"
+    },
+    "personal_work_pages": {
+      "owner": "bff"
+    },
+    "persons": {
+      "owner": "bff",
+      "note": "플랫폼 마스터. 쓰기는 BFF만."
+    },
+    "privateEditDrafts": {
+      "owner": "bff"
+    },
+    "project": {
+      "owner": "bff",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "projectCodeClaims": {
+      "owner": "bff"
+    },
+    "projectRequestDrafts": {
+      "owner": "bff"
+    },
+    "project_requests": {
+      "owner": "bff"
+    },
+    "projects": {
+      "owner": "bff",
+      "note": "플랫폼 마스터. 쓰기는 BFF만. 에이전트는 BFF 도구 API로 읽어야 한다."
+    },
+    "relation_rules": {
+      "owner": "bff"
+    },
+    "reliability_": {
+      "owner": "bff",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "reliability_operations": {
+      "owner": "bff"
+    },
+    "settlement_agent_budgets": {
+      "owner": "agent"
+    },
+    "settlement_agent_feedback": {
+      "owner": "agent"
+    },
+    "settlement_agent_jobs": {
+      "owner": "agent"
+    },
+    "settlement_agent_threads": {
+      "owner": "agent"
+    },
+    "trace": {
+      "owner": "agent",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "transactions": {
+      "owner": "bff"
+    },
+    "versions": {
+      "owner": "bff",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "views": {
+      "owner": "bff",
+      "note": "하위 컬렉션이거나 경로 조각일 수 있음. 소유자 확인 필요."
+    },
+    "weekly_api_audit_events": {
+      "owner": "jvm"
+    },
+    "weekly_api_audit_exports": {
+      "owner": "jvm"
+    },
+    "weekly_api_idempotency": {
+      "owner": "jvm"
+    },
+    "weekly_bank_import_batches": {
+      "owner": "jvm"
+    },
+    "weekly_submission_status": {
+      "owner": "bff",
+      "note": "주간 제출 상태 캐시. BFF가 쓴다. JVM 이전 시 소유자를 다시 정한다."
+    },
+    "work_queue": {
+      "owner": "bff"
+    }
+  }
+}
