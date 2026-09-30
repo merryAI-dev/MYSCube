@@ -18,6 +18,17 @@
 
 현재 예약 취소·변경은 Merryhere의 내 예약현황에서 처리한다. 외부 신청인 스튜디오와 유료 홀 시간은 내부 예약 API로 우회하지 않는다.
 
+## Google Calendar 회의실 (Merryhere 밖 회의실)
+
+일부 회의실은 Merryhere가 아니라 회사 공용 Google Calendar 리소스로만 관리된다. `server/mcp/ics-calendar.mjs`(RFC5545 최소 구현: 반복 규칙·EXDATE·RECURRENCE-ID를 라이브러리 없이 직접 계산)와 `server/mcp/google-calendar-rooms.mjs`(캘린더 읽기·`availableRoomWindows`로 병합)가 이를 담당한다.
+
+- **설정**: `GOOGLE_CALENDAR_ROOMS_JSON` 하나로 전사 공용 설정이며 사람마다 등록하지 않는다. `[{"name":"8층 회의실","icsUrl":"https://calendar.google.com/...","capacity":10}]` 형식이다. `icsUrl`은 Google Calendar의 **비공개(private) iCal 주소**이며 URL 자체가 접근 토큰이다. 비밀값으로만 보관하고 코드나 로그에 남기지 않는다. `https://calendar.google.com` 호스트가 아니면 무시한다.
+- **읽기 전용**: 서비스 계정이나 OAuth 설정이 없다. 조회만 가능하며, 이 회의실을 `prepare`(예약 준비)하려 하면 "Google Calendar에서 직접 예약해주세요"로 안내하고 준비를 시작하지 않는다.
+- **병합**: `explore`(조회) 응답에서만 Merryhere 결과와 합쳐 시작 시각 순으로 보여준다. Google Calendar 쪽 조회가 실패해도 Merryhere 결과는 그대로 답한다(부분 실패로 전체를 버리지 않음).
+- **정원 미상**: 설정에 `capacity`가 없으면 인원 조건이 있는 검색에서는 그 회의실을 제외한다(정원을 확인할 수 없는 회의실을 임의로 통과시키지 않는다).
+- **반복 일정 판정**: DAILY/WEEKLY/MONTHLY(+BYDAY 서수)까지 지원한다. 지원하지 않는 규칙(BYSETPOS 등)이나 Asia/Seoul이 아닌 TZID는 "확인 필요"가 아니라 **DTSTART 이후 항상 바쁨**으로 보수적으로 처리한다(비어 있다고 잘못 말하지 않는다).
+- **현재 범위**: 계정 연결 여부와 무관하게 항상 동작하는 것이 아니라, Merryhere 계정이 연결된 사용자의 조회에만 합쳐진다. 미연결 사용자는 기존과 동일하게 Merryhere 계정 연결 안내만 받는다.
+
 ## 식별자 계약 및 확인 수준
 
 2026-09-29 로그인된 실제 예약 화면의 form/checkbox/클릭 핸들러에서 확인했다. Merryhere 소스 저장소와 DB DDL은 제공되지 않아 **실제 DB PK/FK 제약은 아직 확인하지 못했다**. 다음은 관측된 HTTP 식별자 역할이다.

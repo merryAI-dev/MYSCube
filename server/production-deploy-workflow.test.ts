@@ -40,6 +40,17 @@ describe('production deployment decisions', () => {
     }
     expect(readFileSync('.github/workflows/production-deploy.yml', 'utf8')).toContain('MERRYHERE_CREDENTIAL_KEY: ${{ secrets.MERRYHERE_CREDENTIAL_KEY }}');
   });
+  it('forwards the shared Google Calendar room config only when the settlement agent runs, and never trims a missing value', () => {
+    for (const settlement of [true, false]) {
+      const deployment = buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance: false,
+        env: { ...env, SETTLEMENT_AGENT_ENABLED: String(settlement), SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key', GOOGLE_CALENDAR_ROOMS_JSON: ' [{"name":"x"}] ' } });
+      expect(deployment.args.includes('GOOGLE_CALENDAR_ROOMS_JSON=[{"name":"x"}]')).toBe(settlement);
+    }
+    const deployment = buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance: false,
+      env: { ...env, SETTLEMENT_AGENT_ENABLED: 'true', SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key' } });
+    expect(deployment.args.some((arg: string) => arg.startsWith('GOOGLE_CALENDAR_ROOMS_JSON='))).toBe(false);
+    expect(readFileSync('.github/workflows/production-deploy.yml', 'utf8')).toContain('GOOGLE_CALENDAR_ROOMS_JSON: ${{ secrets.GOOGLE_CALENDAR_ROOMS_JSON }}');
+  });
   it.each(['production-deploy.yml', 'jvm-production-deploy.yml'])('does not inject provider credentials in %s', (file) => {
     expect(readFileSync(`.github/workflows/${file}`, 'utf8')).not.toContain('MERRYHERE_ACCOUNTS_JSON:');
   });

@@ -48,7 +48,7 @@ const summary = i => `${i.date} ${i.start}~${i.end} (한국시간) · ${i.roomNa
 const result = answer => ({ status: 'answered', answer });
 const uncertain = i => result(`예약 결과 확인 필요: ${summary(i)}\n예약 제출이 시작됐으나 생성 결과를 확인하지 못했습니다. 자동 재제출하지 않습니다. 같은 확인번호로 “회의실 예약 확정 ${i.id}”을 보내면 결과만 다시 조회합니다.\nMerryhere에서 직접 확인: https://merryhere.kr/mypage/reservation`);
 
-export async function runMerryhereBooking({ db, actor, job, text, input, previous, now = Date.now(), clientFactory = createMerryhereClient, localConnection, credentials }) {
+export async function runMerryhereBooking({ db, actor, job, text, input, previous, now = Date.now(), clientFactory = createMerryhereClient, localConnection, credentials, googleRooms }) {
   let queryContext;
   try {
     if (!localConnection && !credentials?.email) throw new MerryhereError('account_not_connected');
@@ -57,6 +57,10 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
       ...(request.bookingContext ? { bookingContext: request.bookingContext } : {}) };
     if (request.action === 'unsupported') return result('예약 취소·변경은 현재 Slack에서 지원하지 않습니다. Merryhere 내 예약현황에서 처리해주세요: https://merryhere.kr/mypage/reservation');
     if (['explore', 'prepare'].includes(request.action)) queryContext = { ...request.bookingContext, options: [] };
+    if (request.action === 'prepare') {
+      const googleOnlyRoom = googleRooms?.findRoom(request.room);
+      if (googleOnlyRoom) return result(`${googleOnlyRoom.name}은(는) 조회만 가능한 회의실입니다. Slack에서 예약을 준비할 수 없으니 Google Calendar에서 직접 예약해주세요. 아직 예약을 제출하지 않았습니다.`);
+    }
     const accountKey = localConnection ? localConnection.accountKey : credentials.accountKey || hash(credentials.email.toLowerCase());
     const client = clientFactory(localConnection ? null : { email: credentials.email, password: credentials.password });
     const scope = { actorId: actor.actorId, teamId: job.teamId, channelId: job.channelId, threadTs: job.threadTs, accountKey };
@@ -122,15 +126,22 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
     await client.login();
     const calendar = await client.calendar(request.date);
     if (request.action === 'explore') {
-      const options = availableRoomWindows(calendar, request, now);
+      const merryhereOptions = availableRoomWindows(calendar, request, now);
+      let googleOptions = [];
+      if (googleRooms?.available) {
+        try { googleOptions = await googleRooms.windowsForDate(request.date, request); }
+        catch { /* One calendar's fetch failure should not discard an otherwise-successful Merryhere answer. */ }
+      }
+      const options = [...merryhereOptions, ...googleOptions].sort((a, b) => a.start.localeCompare(b.start) || a.room.localeCompare(b.room));
       const shown = options.slice(0, 12);
       return { status: 'answered', bookingContext: { ...request.bookingContext, options: shown }, answer: [
         ...(request.bookingContext.dateDefaulted ? ['날짜를 지정하지 않아 오늘 기준으로 조회했습니다.'] : []),
         ...(meridiemNote(request.bookingContext) ? [meridiemNote(request.bookingContext)] : []),
-        `${request.date} · 한국시간 · Merryhere 예약 가능 시간`,
-        ...(shown.length ? shown.map(w => `• ${w.room} (${w.capacity}인): ${w.start}~${w.end}`) : ['요청 조건에 맞는 예약 가능 구간이 없습니다.']),
+        `${request.date} · 한국시간 · 예약 가능 시간`,
+        ...(shown.length ? shown.map(w => `• ${w.room}${w.capacity ? ` (${w.capacity}인)` : ''}: ${w.start}~${w.end}`) : ['요청 조건에 맞는 예약 가능 구간이 없습니다.']),
         '이미 예약된 시간, 이용이 막힌 시간, 외부 신청만 받는 공간은 뺐습니다.',
         ...(options.length > shown.length ? ['가장 빠른 시간부터 12개 표시했습니다. 시간이나 인원으로 좁힐 수 있습니다.'] : []),
+        ...(googleOptions.length ? [`${googleRooms.roomNames.join(', ')}는 조회만 가능하며 Google Calendar에서 직접 예약해주세요.`] : []),
         '원하는 방과 이용 시간을 말씀해주세요. 예약 직전에 상태와 포인트를 다시 확인합니다.',
       ].join('\n') };
     }
