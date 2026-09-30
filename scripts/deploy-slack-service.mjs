@@ -26,7 +26,7 @@ await api(`/v9/projects/${project.id}`, 'PATCH', { ssoProtection: null, framewor
 // Copy only the existing server configuration; credentials never leave this runner or Vercel.
 const source = await api(`/v9/projects/${env.VERCEL_PROJECT_ID}/env?target=production`);
 const selected = source.envs.filter(item => item.target?.includes('production') && !item.gitBranch
-  && /^(FIREBASE_|BFF_|JVM_|SETTLEMENT_|MERRYHERE_|GOOGLE_CALENDAR_ROOMS_JSON$|CRON_SECRET$)/.test(item.key));
+  && /^(FIREBASE_|BFF_|JVM_|SETTLEMENT_|MERRYHERE_|GOOGLE_CALENDAR_ROOMS_JSON$)/.test(item.key));
 const copied = {};
 for (const item of selected) {
   const value = await api(`/v1/projects/${env.VERCEL_PROJECT_ID}/env/${item.id}`);
@@ -34,7 +34,7 @@ for (const item of selected) {
   copied[item.key] = value.value;
 }
 if (!copied.FIREBASE_SERVICE_ACCOUNT_JSON && !copied.FIREBASE_SERVICE_ACCOUNT_BASE64) throw new Error('Existing Firestore credentials unavailable');
-Object.assign(copied, slackServiceEnvironment(copied, { origin, sha }));
+Object.assign(copied, slackServiceEnvironment(copied, { origin, sha, workerSecret: env.SETTLEMENT_AGENT_WORKER_SECRET }));
 await api(`/v10/projects/${project.id}/env?upsert=true`, 'POST', Object.entries(copied).map(([key, value]) => ({ key, value, type: 'encrypted', target: ['production'] })));
 mkdirSync('.vercel', { recursive: true });
 writeFileSync('.vercel/project.json', JSON.stringify({ projectId: project.id, orgId: env.VERCEL_ORG_ID }));
