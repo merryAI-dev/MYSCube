@@ -73,6 +73,7 @@ export function buildVercelProductionDeployArgs({
     pair(args, '--env', 'SETTLEMENT_AGENT_WORKER_SECRET', required(env, 'SETTLEMENT_AGENT_WORKER_SECRET'));
     pair(args, '--env', 'SETTLEMENT_HERMES_URL', env.SETTLEMENT_HERMES_URL || '');
     if (env.MERRYHERE_CREDENTIAL_KEY?.trim()) pair(args, '--env', 'MERRYHERE_CREDENTIAL_KEY', env.MERRYHERE_CREDENTIAL_KEY.trim());
+    if (env.GOOGLE_CALENDAR_ROOMS_JSON?.trim()) pair(args, '--env', 'GOOGLE_CALENDAR_ROOMS_JSON', env.GOOGLE_CALENDAR_ROOMS_JSON.trim());
   }
   pair(args, '--meta', 'maintenanceReadOnly', String(maintenance));
   pair(args, '--meta', 'githubCommitSha', commitSha);

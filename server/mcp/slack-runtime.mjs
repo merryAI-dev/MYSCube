@@ -23,6 +23,7 @@ import { createMerryhereConnections, CONNECT_LINK_PLACEHOLDER } from './merryher
 import { createLocalRoomRelay, localPairCode } from './merryhere-local-relay.mjs';
 import { roomRequestSchema, roomToolDescription } from './merryhere-request.mjs';
 import { createMerryhereClient } from './merryhere-client.mjs';
+import { createGoogleCalendarRooms } from './google-calendar-rooms.mjs';
 
 // Weekday and minute are needed for relative dates ("다음 주 수요일") and for refusing an already-past assumed time.
 export function roomClock(date) {
@@ -100,6 +101,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
   const teamId = 'T099F304GAY';
   const channelIds = new Set(['C0BQ6980HR6', 'C0AAC4AHTN1']);
   const tenantId = 'mysc';
+  const googleRooms = createGoogleCalendarRooms({ env, fetchImpl });
   async function slack(method, body, timeoutMs = 10000) {
     const readUser = method === 'users.info';
     let response;
@@ -257,7 +259,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           catch (error) { return localRoomIssue(error.code === 'login_failed' ? 'login_failed' : 'account_not_connected'); }
         }
         const result = await runMerryhereBooking({ db, actor: await contextFor(job), job, text: roomText, input,
-          previous: previousBooking, localConnection: connection, credentials,
+          previous: previousBooking, localConnection: connection, credentials, googleRooms,
           clientFactory: credentials => localRelay ? localRelay.client(connection) : createMerryhereClient({ ...credentials, fetchImpl }) });
         bookingContext = result.bookingContext || previousBooking;
         if (!localRelay && ['login_failed', 'login_required'].includes(result.code)) await connections.markLoginFailed(actor);

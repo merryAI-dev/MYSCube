@@ -416,6 +416,40 @@ describe('durable reservation through existing Slack actor', () => {
     expect((await runMerryhereBooking({ ...args, text: `회의실 예약 확정 ${intent.id}` })).answer).toContain('예약 완료');
     expect(records.get(lockPath).intentId).toBe('b'.repeat(24));
   });
+
+  describe('Google Calendar rooms alongside Merryhere', () => {
+    const googleRooms = (windows, findRoom = () => null) => ({ available: true, roomNames: ['8층 회의실', '6층 회의실'], findRoom, windowsForDate: vi.fn(async () => windows) });
+    it('merges Google Calendar free windows into the explore answer, sorted with Merryhere', async () => {
+      const { args } = setup();
+      const reply = await runMerryhereBooking({ ...args, text: '가능한 회의실', input, googleRooms: googleRooms([{ room: '8층 회의실', capacity: null, start: '08:00', end: '09:00' }]) });
+      expect(reply.answer).toContain('• 8층 회의실: 08:00~09:00');
+      expect(reply.answer.indexOf('8층 회의실')).toBeLessThan(reply.answer.indexOf('M3-3A'));
+      expect(reply.answer).toContain('조회만 가능하며 Google Calendar에서 직접 예약');
+      expect(reply.bookingContext.options.some(w => w.room === '8층 회의실')).toBe(true);
+    });
+    it('still answers with only Merryhere results when the Google Calendar fetch fails', async () => {
+      const { args } = setup();
+      const failing = { available: true, roomNames: ['8층 회의실'], findRoom: () => null, windowsForDate: vi.fn(async () => { throw new Error('calendar_transport_error'); }) };
+      const reply = await runMerryhereBooking({ ...args, text: '가능한 회의실', input, googleRooms: failing });
+      expect(reply.status).toBe('answered');
+      expect(reply.answer).not.toContain('조회만 가능하며');
+    });
+    it('shows a capacity without parentheses only when Merryhere reports one, and omits it when unknown', async () => {
+      const { args } = setup();
+      const reply = await runMerryhereBooking({ ...args, text: '가능한 회의실', input, googleRooms: googleRooms([{ room: '6층 회의실', capacity: null, start: '08:00', end: '09:00' }]) });
+      expect(reply.answer).toContain('• 6층 회의실: 08:00~09:00');
+      expect(reply.answer).not.toContain('6층 회의실 (');
+    });
+    it('refuses to prepare a Google Calendar-only room and points the user to Google Calendar', async () => {
+      const { args } = setup();
+      const floor8 = { name: '8층 회의실' };
+      const reply = await runMerryhereBooking({ ...args, text: '8층 예약해줘', input: { ...input, action: 'prepare', query: { date: '2026-09-30', start: '09:00', end: '10:00', room: '8층', title: '팀 회의' } },
+        googleRooms: googleRooms([], (text) => text === '8층' ? floor8 : null) });
+      expect(reply.answer).toContain('8층 회의실은(는) 조회만 가능한 회의실입니다');
+      expect(reply.answer).toContain('Google Calendar에서 직접 예약');
+      expect(reply.answer).not.toContain('예약 확정 전 확인');
+    });
+  });
 });
 
 it('uses the existing Slack agent, member PK and delivery path for room exploration', async () => {
