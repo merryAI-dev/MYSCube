@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "description": "주정산·월결산·시트 반영 알림에 붙이는 '고치는 법'. 같은 오류에는 항상 같은 문구를 쓴다. 재무팀 검수 전 초안.",
+  "guides": {
+    "SHEET_VALUE_INVALID": "금액 칸은 숫자만(쉼표 가능) 적고, 아직 모르면 빈칸으로 두세요. 0은 '0원으로 확정'이라는 뜻이라 빈칸과 다릅니다. 날짜는 2026-05-12 형식으로 적어 주세요.",
+    "SHEET_CONTROL_TOTAL_INCOMPLETE": "Total 열(BS)의 합계 수식을 양식 원본대로 되돌린 뒤 시트를 다시 불러와 주세요.",
+    "SHEET_CONTROL_TOTAL_INVALID": "Total 열(BS)의 합계 칸에 수식 오류나 글자가 없는지 확인한 뒤 시트를 다시 불러와 주세요.",
+    "SHEET_CONTROL_TOTAL_MISMATCH": "Total 열 합계가 주차 합과 다릅니다. 합계 수식이 C열부터 BR열까지 모두 더하는지 확인해 주세요.",
+    "SHEET_CALCULATION_CHECK_MISSING": "주차별 입금 합계·출금 합계·잔액 행을 양식 원본 위치에 둔 채 시트를 다시 불러와 주세요.",
+    "SHEET_CALCULATION_VALUE_INVALID": "표시된 합계·잔액 칸에 수식 오류(#REF! 등)나 글자가 없는지 확인해 주세요.",
+    "SHEET_CALCULATION_MISMATCH": "합계 수식이 모든 항목 행을 포함하는지, 항목 칸에 글자로 적힌 숫자가 없는지 확인해 주세요.",
+    "SHEET_LAST_REFRESH_FAILED": "표시된 칸을 표준 양식대로 고친 뒤 시트를 다시 불러와 주세요. 그 전까지는 이전에 불러온 값으로 진행합니다.",
+    "SHEET_MONTH_INCOMPLETE": "이 달 1~5주차 항목 칸이 모두 읽히는지 확인하고 시트를 다시 불러와 주세요. 모르는 금액은 빈칸으로 두면 됩니다.",
+    "PROJECTION_WINDOW_INCOMPLETE": "표시된 주차·항목의 Projection 값을 시트에 입력한 뒤 다시 반영해 주세요.",
+    "OUT_OF_WINDOW_WEEK_DOCUMENT_INVALID": "관리자에게 표시된 주차 기록 정리를 요청해 주세요. 이번 주정산에는 영향이 없습니다."
+  }
+}

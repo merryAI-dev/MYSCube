@@ -116,7 +116,7 @@ import {
   type CashflowActivityCursor,
   type CashflowActivityMutation,
 } from './cashflow-activity-loader';
-import { describeCashflowMonthCloseIssue, describeCashflowWeeklyCompletionNotice } from './cashflow-month-close-blocker-helpers';
+import { cashflowSheetIssueGuide, describeCashflowMonthCloseIssue, describeCashflowWeeklyCompletionNotice } from './cashflow-month-close-blocker-helpers';
 import { buildSheetApplyNotice } from './cashflow-sheet-apply-notice';
 import { pickCashflowMonthCloseNotice } from './cashflow-month-close-notice';
 import { CashflowScheduleBar } from './CashflowScheduleBar';
@@ -3605,6 +3605,7 @@ export function CashflowProjectSheet({
                               {notice.lines.map((line) => <li key={line}>- {line}</li>)}
                             </ul>
                           ) : null}
+                          {cashflowSheetIssueGuide(notice.code) ? <div className="mt-0.5 ml-3 text-muted-foreground">고치는 법: {cashflowSheetIssueGuide(notice.code)}</div> : null}
                         </li>
                       ))}
                     </ul>
@@ -3657,6 +3658,7 @@ export function CashflowProjectSheet({
                                   {blocker.lines.map((line) => <li key={line}>- {line}</li>)}
                                 </ul>
                               ) : null}
+                              {cashflowSheetIssueGuide(blocker.code) ? <div className="mt-0.5 ml-3 text-red-700">고치는 법: {cashflowSheetIssueGuide(blocker.code)}</div> : null}
                             </li>
                           ))}
                         </ul>
@@ -3684,6 +3686,7 @@ export function CashflowProjectSheet({
                                   {warning.lines.map((line) => <li key={line}>- {line}</li>)}
                                 </ul>
                               ) : null}
+                              {cashflowSheetIssueGuide(warning.code) ? <div className="mt-0.5 ml-3 text-muted-foreground">고치는 법: {cashflowSheetIssueGuide(warning.code)}</div> : null}
                             </li>
                           ))}
                         </ul>

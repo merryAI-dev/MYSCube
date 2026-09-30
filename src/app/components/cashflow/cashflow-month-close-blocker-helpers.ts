@@ -1,4 +1,5 @@
 import { CASHFLOW_SHEET_LINE_LABELS, type CashflowSheetLineId } from '../../data/types';
+import issueGuidance from '../../../../policies/cashflow-sheet-issue-guidance.json';
 
 // 서버는 막는 사유마다 어느 칸인지(셀 주소·주차·구분)까지 보내는데 화면은 첫 줄 문장만 쓰고 버렸다.
 // 담당자가 시트 전체를 뒤지지 않도록, 받은 값을 그대로 사람이 읽는 한 줄로 옮긴다.
@@ -154,4 +155,11 @@ export function describeCashflowWeeklyCompletionNotice(notice: CashflowMonthClos
     }), Number.isSafeInteger(total) ? total : documents.length);
   }
   return [];
+}
+
+const ISSUE_GUIDES: Record<string, string> = issueGuidance.guides;
+
+/** 알림 코드에 붙일 '고치는 법'. policies/cashflow-sheet-issue-guidance.json 한 곳에서 관리한다. 없으면 빈 문자열. */
+export function cashflowSheetIssueGuide(code: string | null | undefined): string {
+  return (code && ISSUE_GUIDES[code]) || '';
 }

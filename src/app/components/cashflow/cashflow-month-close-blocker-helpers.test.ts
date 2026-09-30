@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { describeCashflowMonthCloseIssue, describeCashflowWeeklyCompletionNotice } from './cashflow-month-close-blocker-helpers';
+import { cashflowSheetIssueGuide, describeCashflowMonthCloseIssue, describeCashflowWeeklyCompletionNotice } from './cashflow-month-close-blocker-helpers';
+import issueGuidance from '../../../../policies/cashflow-sheet-issue-guidance.json';
 import { CASHFLOW_SHEET_LINE_LABELS } from '../../data/types';
 
 describe('describeCashflowMonthCloseIssue', () => {
@@ -119,5 +120,23 @@ describe('SHEET_LAST_REFRESH_FAILED', () => {
         diagnosticCount: 3,
       },
     })).toEqual(['E13 칸 · E13 칸의 주차 표기를 26-1-1 형식으로 맞춰 주세요.', '외 2건']);
+  });
+});
+
+describe('cashflowSheetIssueGuide', () => {
+  it('returns one fixed fix guide per notice code and nothing for unknown codes', () => {
+    expect(cashflowSheetIssueGuide('SHEET_VALUE_INVALID')).toContain('빈칸');
+    expect(cashflowSheetIssueGuide('PROJECTION_WINDOW_INCOMPLETE')).toContain('Projection');
+    expect(cashflowSheetIssueGuide('UNKNOWN_CODE')).toBe('');
+    expect(cashflowSheetIssueGuide(undefined)).toBe('');
+  });
+
+  it('covers every notice code the month close and weekly screens can show', () => {
+    const codes = [
+      'SHEET_VALUE_INVALID', 'SHEET_CONTROL_TOTAL_INCOMPLETE', 'SHEET_CONTROL_TOTAL_INVALID', 'SHEET_CONTROL_TOTAL_MISMATCH',
+      'SHEET_CALCULATION_CHECK_MISSING', 'SHEET_CALCULATION_VALUE_INVALID', 'SHEET_CALCULATION_MISMATCH',
+      'SHEET_LAST_REFRESH_FAILED', 'SHEET_MONTH_INCOMPLETE', 'PROJECTION_WINDOW_INCOMPLETE', 'OUT_OF_WINDOW_WEEK_DOCUMENT_INVALID',
+    ];
+    expect(Object.keys(issueGuidance.guides).sort()).toEqual([...codes].sort());
   });
 });
