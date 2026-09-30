@@ -485,6 +485,16 @@ export interface CashflowSheetLabStageResult {
   skippedInvalidWeekCount?: number;
   skippedInvalidWeeks?: string[];
   blockedMonths?: string[];
+  /** 시트 형식 때문에 이번 반영에서 뺀 달. 이유와 칸 위치는 서버가 준 그대로다. */
+  excludedMonths?: Array<{
+    yearMonth: string;
+    reason: 'INVALID_CELLS' | 'MONTH_INCOMPLETE' | 'AFTER_BLOCKED_MONTH';
+    message: string;
+    cells?: Array<{ sourceCell: string; rawValue: string }>;
+    cellCount?: number;
+  }>;
+  /** 이번 반영에서 뺀 연간 연도. */
+  excludedYears?: Array<{ year: number; reason: string; message: string }>;
   closedMonthDifferences?: Array<{
     yearMonth: string;
     differenceCount: number;
@@ -885,4 +895,24 @@ export function cashflowSheetErrorPhase(step: CashflowSheetStep, error: unknown)
   const code = typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : '';
   if (step === 'apply' && /^(cashflow_jvm_|jvm_)/.test(code)) return CASHFLOW_SHEET_PHASE_LABELS.save;
   return CASHFLOW_SHEET_PHASE_LABELS[step];
+}
+
+/** 이번 반영에서 뺀 달·연도를 사람이 읽는 줄로 편다. 서버 문구와 칸 위치를 그대로 쓴다. */
+export function describeCashflowSheetExclusions(stage: Pick<CashflowSheetLabStageResult, 'excludedMonths' | 'excludedYears'> | null | undefined): string[] {
+  const lines: string[] = [];
+  const months = stage?.excludedMonths || [];
+  const direct = months.filter((month) => month.reason !== 'AFTER_BLOCKED_MONTH');
+  for (const month of direct) {
+    const cells = (month.cells || []).slice(0, 5)
+      .map((cell) => (cell.rawValue ? `${cell.sourceCell}('${cell.rawValue}')` : cell.sourceCell))
+      .join(', ');
+    const more = (month.cellCount || 0) > 5 ? ` 외 ${(month.cellCount || 0) - 5}칸` : '';
+    lines.push(`${month.message}${cells ? ` 확인할 칸: ${cells}${more}` : ''}`);
+  }
+  const following = months.filter((month) => month.reason === 'AFTER_BLOCKED_MONTH').map((month) => month.yearMonth);
+  if (following.length > 0) {
+    lines.push(`${following[0]}${following.length > 1 ? `~${following[following.length - 1]}` : ''}은 앞 달 잔액을 이어받을 수 없어 이번 반영에서 뺐습니다.`);
+  }
+  for (const year of stage?.excludedYears || []) lines.push(year.message);
+  return lines;
 }

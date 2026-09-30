@@ -1158,6 +1158,78 @@ describe('cashflow sheet lab route', () => {
     await db.doc(reordered.path).set(reordered.data);
   });
 
+  it('scopes the formula preflight and annual years to the months before an unreadable month', async () => {
+    const matrix = buildMultiYearMatrix();
+    matrix[14][24] = '확인 필요';
+    const db = createDb({
+      project: {
+        id: 'project-a',
+        contractStart: '2024-01-01',
+        contractEnd: '2028-12-31',
+        cashflowSheetLab: {
+          value: 'saved-spreadsheet-a', sheetName: 'cashflow(사용내역 연동)', startWeek: '26-1-1', endWeek: '26-1-5',
+        },
+      },
+    });
+    const javaWeeklyClient = {
+      applyCashflowSheetLab: vi.fn(async (input) => javaApplyResponse(input, `sha256:${'7'.repeat(64)}`)),
+      applyCashflowSheetBatch: vi.fn(async (input) => javaBatchApplyResponse(input, `sha256:${'7'.repeat(64)}`)),
+      applyCashflowSheetAnnualTotal: vi.fn(async (input) => {
+        const response = javaAnnualApplyResponse(input);
+        const docId = Buffer.from(`${input.projectId}\n${input.year}`, 'utf8').toString('base64url');
+        await db.doc(`orgs/tenant-a/cashflow_sheet_year_totals/${docId}`).set({
+          projectId: input.projectId,
+          year: input.year,
+          sourceRevision: input.sourceRevision,
+          revision: response.revision,
+          projection: response.projection,
+          actual: response.actual,
+          projectionStates: response.projectionStates,
+          actualStates: response.actualStates,
+          updatedAt: '2026-07-20T00:00:00.000Z',
+        });
+        return response;
+      }),
+    };
+    const editLeaseService = {
+      acquire: vi.fn(async () => ({ body: { leaseId: 'scoped-lease', fence: 3 } })),
+      release: vi.fn(),
+    };
+    const app = createApp({
+      db,
+      googleSheetsService: {
+        previewSpreadsheet: vi.fn(async () => ({
+          spreadsheetId: 'spreadsheet-a', spreadsheetTitle: 'Cashflow workbook', selectedSheetName: 'cashflow(사용내역 연동)',
+          availableSheets: [{ sheetId: 1, title: 'cashflow(사용내역 연동)', index: 0 }],
+          matrix,
+        })),
+      },
+      routeOptions: { editLeasesEnabled: true, editLeaseService, javaWeeklyClient },
+    });
+    const mirror = await request(app).post('/api/v1/projects/project-a/cashflow-sheet-lab/mirror/refresh')
+      .send({ idempotencyKey: 'scoped-refresh' }).expect(200);
+
+    const stage = await request(app).post('/api/v1/projects/project-a/cashflow-sheet-lab/stage')
+      .send({ expectedMirrorRevision: mirror.body.sourceRevision, idempotencyKey: 'scoped-stage' }).expect(200);
+
+    expect(stage.body).toMatchObject({
+      status: 'READY',
+      stagedMonths: ['2026-01', '2026-02', '2026-03', '2026-04'],
+      stagedYears: [2024, 2025],
+      sheetScope: { untilMonth: '2026-05', excludedYears: [2028] },
+    });
+    expect(stage.body.excludedYears).toEqual([expect.objectContaining({ year: 2028, reason: 'AFTER_BLOCKED_MONTH' })]);
+
+    await request(app).post('/api/v1/projects/project-a/cashflow-sheet-lab/apply')
+      .send({ stageRunId: stage.body.runId, closedMonthChangeReason: '부분 반영', idempotencyKey: 'scoped-apply' })
+      .expect(200);
+    expect(javaWeeklyClient.validateCashflowSheetFormulas).toHaveBeenCalledOnce();
+    const preflight = javaWeeklyClient.validateCashflowSheetFormulas.mock.calls[0][0];
+    expect(preflight.months.map((month) => month.yearMonth)).toEqual(['2026-01', '2026-02', '2026-03', '2026-04']);
+    expect(new Set(preflight.annualCells.map((cell) => cell.year))).not.toContain(2028);
+    expect(new Set(preflight.annualDerivedCells.map((cell) => cell.year))).not.toContain(2028);
+  });
+
   it('applies annual totals and weekly values together without inventing annual weeks', async () => {
     const db = createDb({
       project: {
@@ -3198,6 +3270,106 @@ describe('cashflow sheet lab route', () => {
       .send(payload)
       .expect(200);
     expect(replay.body).toEqual(stage.body);
+  });
+
+  it('applies the months before an unreadable month and reports the excluded months with their cells', async () => {
+    const matrix = buildMatrixWithWeekLabels([...JANUARY_FINANCE_WEEKS, '26-2-1', '26-2-2', '26-2-3', '26-2-4', '26-2-5']);
+    matrix[14][9] = '확인 필요';
+    const db = createDb({
+      project: {
+        id: 'project-a',
+        cashflowSheetLab: {
+          value: 'saved-spreadsheet-a', sheetName: 'cashflow(사용내역 연동)', startWeek: '26-1-1', endWeek: '26-2-5',
+        },
+      },
+    });
+    const javaWeeklyClient = {
+      applyCashflowSheetLab: vi.fn(async (input) => javaApplyResponse(input, `sha256:${'8'.repeat(64)}`)),
+      applyCashflowSheetBatch: vi.fn(async (input) => javaBatchApplyResponse(input, `sha256:${'8'.repeat(64)}`)),
+    };
+    const app = createApp({
+      db,
+      googleSheetsService: {
+        previewSpreadsheet: vi.fn(async () => ({
+          spreadsheetId: 'spreadsheet-a', selectedSheetName: 'cashflow(사용내역 연동)',
+          availableSheets: [{ sheetId: 1, title: 'cashflow(사용내역 연동)', index: 0 }],
+          matrix,
+        })),
+      },
+      routeOptions: { javaWeeklyClient },
+    });
+    const mirror = await request(app).post('/api/v1/projects/project-a/cashflow-sheet-lab/mirror/refresh')
+      .send({ idempotencyKey: 'refresh-invalid-february' }).expect(200);
+
+    const stage = await request(app).post('/api/v1/projects/project-a/cashflow-sheet-lab/stage')
+      .send({ expectedMirrorRevision: mirror.body.sourceRevision, idempotencyKey: 'stage-invalid-february' }).expect(200);
+
+    expect(stage.body).toMatchObject({
+      status: 'READY',
+      blockedMonths: ['2026-02'],
+      stagedMonths: ['2026-01'],
+      sheetScope: { untilMonth: '2026-02' },
+    });
+    expect(stage.body.excludedMonths[0]).toMatchObject({
+      yearMonth: '2026-02',
+      reason: 'INVALID_CELLS',
+      cells: [{ sourceCell: 'J15', rawValue: '확인 필요' }],
+      cellCount: 1,
+    });
+    expect(stage.body.excludedMonths.slice(1).every((month) => month.reason === 'AFTER_BLOCKED_MONTH')).toBe(true);
+    expect(stage.body.excludedMonths.map((month) => month.yearMonth)).not.toContain('2026-01');
+    await request(app).post('/api/v1/projects/project-a/cashflow-sheet-lab/apply')
+      .send({ stageRunId: stage.body.runId, idempotencyKey: 'apply-invalid-february' }).expect(200);
+    const appliedMonths = [
+      ...javaWeeklyClient.applyCashflowSheetLab.mock.calls.map(([input]) => input.yearMonth),
+      ...javaWeeklyClient.applyCashflowSheetBatch.mock.calls.flatMap(([input]) => (input.months || []).map((month) => month.yearMonth)),
+    ].filter(Boolean);
+    expect(appliedMonths).toContain('2026-01');
+    expect(appliedMonths).not.toContain('2026-02');
+  });
+
+  it.each([
+    ['skips an incomplete future annual year and reports it', 64, 2027, true],
+    ['still stops on an incomplete prior annual year because it opens January', 3, 2025, false],
+  ])('%s', async (_label, columnIndex, year, staged) => {
+    const matrix = buildMatrix();
+    matrix[14][columnIndex] = '확인 필요';
+    const db = createDb({
+      project: {
+        id: 'project-a',
+        cashflowSheetLab: {
+          value: 'saved-spreadsheet-a', sheetName: 'cashflow(사용내역 연동)', startWeek: '26-1-1', endWeek: '26-1-1',
+        },
+      },
+    });
+    const app = createApp({
+      db,
+      googleSheetsService: {
+        previewSpreadsheet: vi.fn(async () => ({
+          spreadsheetId: 'spreadsheet-a', selectedSheetName: 'cashflow(사용내역 연동)',
+          availableSheets: [{ sheetId: 1, title: 'cashflow(사용내역 연동)', index: 0 }],
+          matrix,
+        })),
+      },
+    });
+    const mirror = await request(app).post('/api/v1/projects/project-a/cashflow-sheet-lab/mirror/refresh')
+      .send({ idempotencyKey: `refresh-annual-${year}` }).expect(200);
+
+    const stage = await request(app).post('/api/v1/projects/project-a/cashflow-sheet-lab/stage')
+      .send({ expectedMirrorRevision: mirror.body.sourceRevision, idempotencyKey: `stage-annual-${year}` });
+
+    if (staged) {
+      expect(stage.status).toBe(200);
+      expect(stage.body.excludedYears).toEqual(expect.arrayContaining([
+        expect.objectContaining({ year, reason: 'ANNUAL_INCOMPLETE' }),
+      ]));
+      expect(stage.body.sheetScope.excludedYears).toContain(year);
+      expect(stage.body.stagedYears || []).not.toContain(year);
+    } else {
+      expect(stage.status).toBe(409);
+      expect(stage.body.code).toBe('cashflow_sheet_annual_incomplete');
+      expect(stage.body.message).toContain(`${year}년`);
+    }
   });
 
   it('blocks only a month containing an invalid pinned cell', async () => {

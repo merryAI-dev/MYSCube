@@ -87,6 +87,7 @@ import {
   type CashflowFormulaMismatch,
   type CashflowSheetStep,
   cashflowSheetErrorPhase,
+  describeCashflowSheetExclusions,
 } from '../../lib/sheets-cashflow-readonly-client';
 import {
   buildCashflowMonthCloseDraftInput,
@@ -538,6 +539,7 @@ export function CashflowProjectSheet({
   const [reopenReason, setReopenReason] = useState('');
   const [sheetRefreshLoading, setSheetRefreshLoading] = useState(false);
   // 시트 검토·반영이 실패한 이유. 성공만 토스트로 알리고 오류는 그 자리에 남긴다.
+  const [sheetExclusionNotice, setSheetExclusionNotice] = useState<string[]>([]);
   const [sheetOperationError, setSheetOperationError] = useState('');
   const [sheetReviewDialogOpen, setSheetReviewDialogOpen] = useState(false);
   const [lateSheetApply, setLateSheetApply] = useState<CashflowSheetLabStageResult | null>(null);
@@ -2159,6 +2161,7 @@ export function CashflowProjectSheet({
     }
     const startedAt = Date.now();
     setSheetOperationError('');
+    setSheetExclusionNotice([]);
     const refreshIdempotencyKey = `cashflow-sheet-refresh:${projectId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     const refreshMirror = (actor: NonNullable<Awaited<ReturnType<typeof resolveBffActor>>>) => (
       refreshCashflowSheetLabMirrorViaBff({
@@ -2281,6 +2284,7 @@ export function CashflowProjectSheet({
     const notifySheetApplied = () => {
       const notice = buildSheetApplyNotice({ stagedLineCount: stage.stagedLineCount, candidates: stage.candidates });
       toast.success(notice.title, notice.lines.length > 0 ? { description: notice.lines.join('\n') } : undefined);
+      setSheetExclusionNotice(describeCashflowSheetExclusions(stage));
     };
     const apply = async (actor: NonNullable<Awaited<ReturnType<typeof resolveBffActor>>>) => {
       return applyCashflowSheetLabViaBff({
@@ -3516,6 +3520,14 @@ export function CashflowProjectSheet({
           {sheetOperationError ? (
             <div role="alert" className="rounded-md border border-red-200 bg-red-50 p-3 text-[12px] leading-5 text-red-800">
               {sheetOperationError}
+            </div>
+          ) : null}
+          {sheetExclusionNotice.length > 0 ? (
+            <div role="status" className="rounded-md border border-border bg-background p-3 text-[12px] leading-5 text-card-foreground">
+              <div className="font-bold text-red-700">시트 반영은 됐지만 일부는 빠졌어요. 시트를 고친 뒤 다시 불러와 주세요.</div>
+              <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                {sheetExclusionNotice.map((line) => <li key={line}>- {line}</li>)}
+              </ul>
             </div>
           ) : null}
 
