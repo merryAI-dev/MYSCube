@@ -5306,7 +5306,7 @@ describe('cashflow sheet lab route', () => {
     expect(calls[1].closedMonthChangeReason).toBe('결산 후 실제 입금액 정정');
   });
 
-  it('keeps the staged run atomic until formula mismatches are explicitly accepted', async () => {
+  it('applies despite formula mismatches and lists the engine-calculated mismatches in the result', async () => {
     const db = createDb({
       project: {
         id: 'project-a',
@@ -5325,25 +5325,24 @@ describe('cashflow sheet lab route', () => {
       matrix: buildMatrixWithWeekLabels(JANUARY_FINANCE_WEEKS),
     }));
     const resultingTargetRevision = `sha256:${'6'.repeat(64)}`;
-    const mismatch = {
-      yearMonth: '2026-01',
-      mode: 'projection',
-      weekNo: 1,
-      field: 'depositTotal',
-      reported: 6_800_000,
-      calculated: 6_700_000,
-      sourceCell: 'BO12',
-    };
     const javaWeeklyClient = {
       applyCashflowSheetLab: vi.fn(async (input) => {
         if (!input.acceptFormulaMismatches) {
           throw Object.assign(new Error('formula confirmation required'), {
             statusCode: 409,
             code: 'cashflow_formula_mismatch_confirmation_required',
-            details: { mismatchCount: 1, mismatches: [mismatch] },
           });
         }
-        return javaApplyResponse(input, resultingTargetRevision);
+        const response = javaApplyResponse(input, resultingTargetRevision);
+        const first = response.calculationChecks[0];
+        response.calculationChecks[0] = {
+          ...first,
+          reported: { ...(first.reported || {}), depositTotal: 6_800_000 },
+          calculated: { ...first.calculated, depositTotal: 6_700_000 },
+          sourceCells: { ...(first.sourceCells || {}), depositTotal: 'E22' },
+          matches: { ...first.matches, depositTotal: false },
+        };
+        return response;
       }),
     };
     const app = createApp({
@@ -5360,43 +5359,20 @@ describe('cashflow sheet lab route', () => {
       .send({ expectedMirrorRevision: mirror.body.sourceRevision, yearMonth: '2026-01', idempotencyKey: 'stage-formula-mismatch' })
       .expect(200);
 
-    const rejected = await request(app)
+    const applied = await request(app)
       .post('/api/v1/projects/project-a/cashflow-sheet-lab/apply')
-      .send({ stageRunId: stage.body.runId, idempotencyKey: 'apply-formula-mismatch-first' })
-      .expect(409);
-    expect(rejected.body).toMatchObject({
-      code: 'cashflow_formula_mismatch_confirmation_required',
-      details: { mismatchCount: 1, mismatches: [mismatch] },
-    });
-    expect(db.__getDocument(`orgs/tenant-a/cashflow_sheet_stage_runs/${stage.body.runId}`).status).toBe('READY');
-
-    const currentMirror = db.__getDocument('orgs/tenant-a/cashflow_sheet_mirrors/project-a');
-    const originalSourceRevision = currentMirror.sourceRevision;
-    currentMirror.sourceRevision = `sha256:${'9'.repeat(64)}`;
-    await request(app)
-      .post('/api/v1/projects/project-a/cashflow-sheet-lab/apply')
-      .send({
-        stageRunId: stage.body.runId,
-        idempotencyKey: 'apply-formula-mismatch-stale-confirmation',
-        acceptFormulaMismatches: true,
-      })
-      .expect(409)
-      .expect((response) => expect(response.body.code).toBe('cashflow_sheet_mirror_revision_conflict'));
-    expect(javaWeeklyClient.applyCashflowSheetLab).toHaveBeenCalledTimes(1);
-    currentMirror.sourceRevision = originalSourceRevision;
-
-    await request(app)
-      .post('/api/v1/projects/project-a/cashflow-sheet-lab/apply')
-      .send({
-        stageRunId: stage.body.runId,
-        idempotencyKey: 'apply-formula-mismatch-confirmed',
-        acceptFormulaMismatches: true,
-      })
+      .send({ stageRunId: stage.body.runId, idempotencyKey: 'apply-formula-mismatch' })
       .expect(200);
 
-    expect(javaWeeklyClient.applyCashflowSheetLab).toHaveBeenCalledTimes(2);
-    expect(javaWeeklyClient.applyCashflowSheetLab.mock.calls[0][0].acceptFormulaMismatches).toBe(false);
-    expect(javaWeeklyClient.applyCashflowSheetLab.mock.calls[1][0].acceptFormulaMismatches).toBe(true);
+    expect(javaWeeklyClient.applyCashflowSheetLab).toHaveBeenCalledOnce();
+    expect(javaWeeklyClient.applyCashflowSheetLab.mock.calls[0][0].acceptFormulaMismatches).toBe(true);
+    expect(applied.body.formulaMismatches).toEqual([expect.objectContaining({
+      yearMonth: '2026-01',
+      field: 'depositTotal',
+      reported: 6_800_000,
+      calculated: 6_700_000,
+      sourceCell: 'E22',
+    })]);
   });
 
   it('treats a monthly close missing only contractVersion as legacy v1 and reaches formula validation', async () => {

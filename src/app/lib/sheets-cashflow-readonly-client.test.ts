@@ -453,3 +453,12 @@ describe('describeCashflowSheetExclusions', () => {
     expect(describeCashflowSheetExclusions({})).toEqual([]);
   });
 });
+
+describe('describeCashflowSheetFormulaMismatches', () => {
+  it('names the week, the cell, the sheet value and the engine value', async () => {
+    const { describeCashflowSheetFormulaMismatches } = await import('./sheets-cashflow-readonly-client');
+    expect(describeCashflowSheetFormulaMismatches([{
+      yearMonth: '2026-01', mode: 'projection', weekNo: 1, field: 'depositTotal', reported: 6_800_000, calculated: 6_700_000, sourceCell: 'E22',
+    }])).toEqual(['2026-01 1주차 Projection 입금 합계(E22): 시트 6,800,000원 · 항목 합으로 계산 6,700,000원']);
+  });
+});

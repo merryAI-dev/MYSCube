@@ -163,7 +163,19 @@ export interface CashflowSheetLabPreviewResult {
   cashflowSnapshotError?: { code: string; message: string } | null;
 }
 
+export interface CashflowSheetFormulaMismatchNotice {
+  yearMonth: string;
+  mode: string;
+  weekNo: number;
+  field: 'depositTotal' | 'withdrawalTotal' | 'balance' | string;
+  reported?: number | string;
+  calculated?: number | string;
+  sourceCell?: string;
+}
+
 export interface CashflowSheetLabApplyResult {
+  /** 반영은 됐지만 시트 합계·잔액이 정산 엔진 계산과 다른 칸. */
+  formulaMismatches?: CashflowSheetFormulaMismatchNotice[];
   projectId: string;
   spreadsheetId: string;
   spreadsheetTitle: string;
@@ -915,4 +927,23 @@ export function describeCashflowSheetExclusions(stage: Pick<CashflowSheetLabStag
   }
   for (const year of stage?.excludedYears || []) lines.push(year.message);
   return lines;
+}
+
+const FORMULA_FIELD_LABELS: Record<string, string> = { depositTotal: '입금 합계', withdrawalTotal: '출금 합계', balance: '잔액' };
+const MODE_LABELS: Record<string, string> = { projection: 'Projection', actual: 'Actual' };
+
+function formatWon(value: unknown): string {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? `${amount.toLocaleString('ko-KR')}원` : String(value ?? '');
+}
+
+/** 반영 후 합계·잔액 불일치를 "어느 주차 · 어느 칸 · 시트 값 · 계산 값" 줄로 편다. */
+export function describeCashflowSheetFormulaMismatches(mismatches: CashflowSheetFormulaMismatchNotice[] | null | undefined): string[] {
+  const list = mismatches || [];
+  const lines = list.slice(0, 10).map((mismatch) => {
+    const field = FORMULA_FIELD_LABELS[mismatch.field] || mismatch.field;
+    const where = `${mismatch.yearMonth} ${mismatch.weekNo}주차 ${MODE_LABELS[mismatch.mode] || mismatch.mode} ${field}${mismatch.sourceCell ? `(${mismatch.sourceCell})` : ''}`;
+    return `${where}: 시트 ${formatWon(mismatch.reported)} · 항목 합으로 계산 ${formatWon(mismatch.calculated)}`;
+  });
+  return list.length > 10 ? [...lines, `외 ${list.length - 10}건`] : lines;
 }

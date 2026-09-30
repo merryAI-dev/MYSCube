@@ -2948,9 +2948,14 @@ async function applyStagedCashflowSheetLab({
   const pendingApprovalAffectedMonths = acceptPendingApprovalDifferences
     ? buildPendingApprovalAffectedMonths(stageRun.pendingApprovalDifferences)
     : [];
+  // 합계·잔액 불일치는 반영을 막지 않고 알린다(2026-09-30 결정, 수식 검증 계약 개정). 이어서 하는 반영은
+  // 처음 요청 그대로 둔다. 불일치 목록은 정산 엔진의 검산 결과로 응답에 담는다.
+  // 배포 전에 멈춘 반영(APPLYING·재전송)은 그때 요청 그대로 판정해야 이어서 할 수 있다.
   const acceptFormulaMismatches = storedApplyInput
     ? storedApplyInput.acceptFormulaMismatches === true
-    : parsed.acceptFormulaMismatches === true;
+    : (resuming || replaying)
+      ? parsed.acceptFormulaMismatches === true
+      : true;
   const applyRequestHash = stableHash({
     stagedRunId,
     applyRiskCandidates,
@@ -3639,6 +3644,7 @@ async function applyStagedCashflowSheetLab({
     verifiedLineCount,
     canonicalReadbackVerifiedCellCount,
     formulaValidation: verifiedFormulaValidation,
+    formulaMismatches: formulaMismatchesFromChecks(verifiedFormulaValidation),
     firebaseResult: {
       ok: true,
       commandName: CASHFLOW_SHEET_APPLY_COMMAND,
@@ -3747,6 +3753,27 @@ async function applyStagedCashflowSheetLab({
     }, 'warn');
   }
   return finalizedResponse;
+}
+
+// 정산 엔진이 다시 계산한 주차 합계·잔액이 시트 값과 다른 칸.
+function formulaMismatchesFromChecks(checks) {
+  const mismatches = [];
+  for (const check of Array.isArray(checks) ? checks : []) {
+    const matches = check?.matches && typeof check.matches === 'object' ? check.matches : {};
+    for (const field of ['depositTotal', 'withdrawalTotal', 'balance']) {
+      if (matches[field] !== false) continue;
+      mismatches.push(stripUndefinedDeep({
+        yearMonth: readOptionalText(check.yearMonth),
+        mode: readOptionalText(check.mode),
+        weekNo: Number(check.weekNo),
+        field,
+        reported: check.reported?.[field],
+        calculated: check.calculated?.[field],
+        sourceCell: readOptionalText(check.sourceCells?.[field]),
+      }));
+    }
+  }
+  return mismatches;
 }
 
 function stageRunStatus({ pendingBlocked, sheetBlocked, candidateCount }) {

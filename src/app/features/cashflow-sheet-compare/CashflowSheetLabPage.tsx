@@ -22,6 +22,7 @@ import {
   type CashflowFormulaMismatch,
   cashflowSheetErrorPhase,
   describeCashflowSheetExclusions,
+  describeCashflowSheetFormulaMismatches,
 } from '../../lib/sheets-cashflow-readonly-client';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -860,8 +861,12 @@ export function CashflowSheetLabPage() {
       setClosedMonthPendingApprovalAccepted(false);
       setPendingApprovalStage(null);
       setFormulaMismatchPrompt(null);
-      const exclusions = describeCashflowSheetExclusions(staged);
-      setStatusMessage(`시트 값 ${result.appliedLineCount.toLocaleString()}건으로 MYSCube를 덮어썼습니다.${exclusions.length ? ` 이번 반영에서 뺀 부분: ${exclusions.join(' ')}` : ''}`);
+      const mismatchLines = describeCashflowSheetFormulaMismatches(result.formulaMismatches);
+      const exclusions = [
+        ...describeCashflowSheetExclusions(staged),
+        ...(mismatchLines.length ? [`시트 합계 검산이 맞지 않는 칸(반영은 했고 이 달 결산 전에 시트를 확인해 주세요): ${mismatchLines.join(' / ')}`] : []),
+      ];
+      setStatusMessage(`시트 값 ${result.appliedLineCount.toLocaleString()}건으로 MYSCube를 덮어썼습니다.${exclusions.length ? ` 확인할 부분: ${exclusions.join(' ')}` : ''}`);
       logCashflowLab('apply.sheet_values.ok', {
         projectId: requestedProjectId,
         spreadsheetId: result.spreadsheetId,

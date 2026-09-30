@@ -88,6 +88,8 @@ import {
   type CashflowSheetStep,
   cashflowSheetErrorPhase,
   describeCashflowSheetExclusions,
+  describeCashflowSheetFormulaMismatches,
+  type CashflowSheetLabApplyResult,
 } from '../../lib/sheets-cashflow-readonly-client';
 import {
   buildCashflowMonthCloseDraftInput,
@@ -2281,10 +2283,14 @@ export function CashflowProjectSheet({
     const applyIdempotencyKey = `cashflow-sheet-apply-stage:${projectId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     // 건수·내용은 검토 단계의 변경 후보로 말한다. 서버의 appliedLineCount 는 다시 쓴 월의
     // 전체 셀 수(월당 160)라 "2건 바꿨는데 160건" 이 된다.
-    const notifySheetApplied = () => {
+    const notifySheetApplied = (result: CashflowSheetLabApplyResult) => {
       const notice = buildSheetApplyNotice({ stagedLineCount: stage.stagedLineCount, candidates: stage.candidates });
       toast.success(notice.title, notice.lines.length > 0 ? { description: notice.lines.join('\n') } : undefined);
-      setSheetExclusionNotice(describeCashflowSheetExclusions(stage));
+      const mismatchLines = describeCashflowSheetFormulaMismatches(result.formulaMismatches);
+      setSheetExclusionNotice([
+        ...describeCashflowSheetExclusions(stage),
+        ...(mismatchLines.length ? ['합계·잔액이 시트와 다른 칸이 있어요. 반영은 했고, 이 달 결산 전에 시트를 확인해 주세요.', ...mismatchLines] : []),
+      ]);
     };
     const apply = async (actor: NonNullable<Awaited<ReturnType<typeof resolveBffActor>>>) => {
       return applyCashflowSheetLabViaBff({
@@ -2343,7 +2349,7 @@ export function CashflowProjectSheet({
       }
       const result = await apply(actor);
       await rememberApplyResult(result);
-      notifySheetApplied();
+      notifySheetApplied(result);
       logCashflowSettlement({ phase: 'success', operation: 'cashflow.sheet_apply', projectId, summary: { appliedLineCount: result.appliedLineCount } });
     } catch (error) {
       let finalError = error;
@@ -2353,7 +2359,7 @@ export function CashflowProjectSheet({
           if (!actor?.idToken) throw error;
           const result = await apply(actor);
           await rememberApplyResult(result);
-          notifySheetApplied();
+          notifySheetApplied(result);
           logCashflowSettlement({ phase: 'success', operation: 'cashflow.sheet_apply', projectId, summary: { appliedLineCount: result.appliedLineCount, authRetried: true } });
           return;
         } catch (retryError) {
@@ -3524,7 +3530,7 @@ export function CashflowProjectSheet({
           ) : null}
           {sheetExclusionNotice.length > 0 ? (
             <div role="status" className="rounded-md border border-border bg-background p-3 text-[12px] leading-5 text-card-foreground">
-              <div className="font-bold text-red-700">시트 반영은 됐지만 일부는 빠졌어요. 시트를 고친 뒤 다시 불러와 주세요.</div>
+              <div className="font-bold text-red-700">시트 반영은 됐지만 확인할 부분이 있어요. 시트를 고친 뒤 다시 불러와 주세요.</div>
               <ul className="mt-1 space-y-0.5 text-muted-foreground">
                 {sheetExclusionNotice.map((line) => <li key={line}>- {line}</li>)}
               </ul>
