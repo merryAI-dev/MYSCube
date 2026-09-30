@@ -54,6 +54,13 @@ const CASHFLOW_SHEET_SNAPSHOT_MONTHS_COLLECTION_ID = 'cashflow_sheet_snapshot_mo
 const CASHFLOW_SHEET_SNAPSHOT_YEARS_COLLECTION_ID = 'cashflow_sheet_snapshot_years';
 const CASHFLOW_SHEET_REFRESH_RUNS_COLLECTION_ID = 'cashflow_sheet_refresh_runs';
 const CASHFLOW_SHEET_STAGE_RUNS_COLLECTION_ID = 'cashflow_sheet_stage_runs';
+// 시트 내용이 양식·주차 규칙에 안 맞아 불러오기를 거절한 오류. 시트를 고치기 전까지 반복되는 규칙 문제다.
+const SHEET_RULE_REFRESH_ERROR_CODES = new Set([
+  'cashflow_sheet_template_unsupported',
+  'cashflow_sheet_tab_unsupported',
+  'cashflow_week_range_not_in_sheet',
+  'cashflow_sheet_source_year_mismatch',
+]);
 const CASHFLOW_SHEET_STAGE_MONTHS_COLLECTION_ID = 'cashflow_sheet_stage_months';
 const CASHFLOW_SHEET_STAGE_YEARS_COLLECTION_ID = 'cashflow_sheet_stage_years';
 const CASHFLOW_MODES = ['projection', 'actual'];
@@ -4499,10 +4506,14 @@ export function mountCashflowSheetLabRoutes(app, {
           diagnosticCount: Number(normalized?.diagnosticCount) || diagnostics.length,
         } : {}),
       };
+      // 시트 규칙이 안 맞아 불러오기를 못 한 경우는 그 불러오기만 건너뛴다. 이미 고정한 값의 상태는 두고
+      // 실패 내용만 남겨, 그 값으로 하는 월결산·주정산이 멈추지 않게 한다. 통신 오류는 지금처럼 STALE 이다.
+      const keepPreviousStatus = SHEET_RULE_REFRESH_ERROR_CODES.has(lastRefreshError.code)
+        && readOptionalText(previousMirror?.status) === 'FRESH';
       const mirror = previousMirror?.sourceRevision
         ? {
           ...previousMirror,
-          status: 'STALE',
+          status: keepPreviousStatus ? 'FRESH' : 'STALE',
           lastRefreshAttemptAt: attemptedAt,
           lastRefreshError,
           lastRefreshIdempotencyKey: parsed.idempotencyKey,

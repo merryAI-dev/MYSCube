@@ -98,6 +98,19 @@ function managementLines(details: unknown): string[] {
   return detail ? [detail] : [];
 }
 
+// 서버가 남긴 양식 진단을 칸 위치와 서버 문구 그대로 옮긴다.
+function refreshFailureLines(details: unknown): string[] {
+  const record = asRecord(details);
+  const diagnostics = asArray(record.diagnostics).map(asRecord);
+  const lines = diagnostics.map((diagnostic) => {
+    const where = cell(diagnostic.sourceCell);
+    const what = text(diagnostic.message) || text(diagnostic.code);
+    return `${where ? `${where} · ` : ''}${what}`;
+  }).filter(Boolean);
+  const total = Number(record.diagnosticCount);
+  return Number.isSafeInteger(total) && total > lines.length ? [...lines, `외 ${total - lines.length}건`] : lines;
+}
+
 /** 서버가 준 막는 사유·경고 하나를 "무엇이 · 어디서 · 왜" 한 줄들로 편다. */
 export function describeCashflowMonthCloseIssue(issue: CashflowMonthCloseIssue | null | undefined): string[] {
   if (!issue) return [];
@@ -107,6 +120,7 @@ export function describeCashflowMonthCloseIssue(issue: CashflowMonthCloseIssue |
   if (code === 'SHEET_CALCULATION_MISMATCH') return calculationLines(issue.details, 'mismatch');
   if (code === 'SHEET_CONTROL_TOTAL_MISMATCH') return controlTotalLines(issue.details);
   if (code.startsWith('MANAGEMENT_CHECK_')) return managementLines(issue.details);
+  if (code === 'SHEET_LAST_REFRESH_FAILED') return refreshFailureLines(issue.details);
   return [];
 }
 

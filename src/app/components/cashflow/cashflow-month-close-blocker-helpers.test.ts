@@ -108,3 +108,16 @@ describe('describeCashflowWeeklyCompletionNotice', () => {
     expect(describeCashflowWeeklyCompletionNotice({ code: 'OTHER', message: 'x' })).toEqual([]);
   });
 });
+
+describe('SHEET_LAST_REFRESH_FAILED', () => {
+  it('lists the server diagnostics with their cells', () => {
+    expect(describeCashflowMonthCloseIssue({
+      code: 'SHEET_LAST_REFRESH_FAILED',
+      message: '최근 시트 불러오기가 실패해 이전에 불러온 값으로 진행합니다.',
+      details: {
+        diagnostics: [{ code: 'cashflow_week_header_invalid', sourceCell: 'E13', message: 'E13 칸의 주차 표기를 26-1-1 형식으로 맞춰 주세요.' }],
+        diagnosticCount: 3,
+      },
+    })).toEqual(['E13 칸 · E13 칸의 주차 표기를 26-1-1 형식으로 맞춰 주세요.', '외 2건']);
+  });
+});

@@ -2747,6 +2747,23 @@ async function readCashflowMonthCloseStatuses({
   };
 }
 
+// 시트 규칙 문제로 최근 불러오기를 못 했지만 이전 값으로 진행 중일 때, 그 사실과 서버가 남긴 칸 목록을 알린다.
+function sheetLastRefreshWarnings(mirror) {
+  const failure = objectValue(mirror?.lastRefreshError);
+  if (!failure || readOptionalText(mirror?.status) !== 'FRESH') return [];
+  const reason = readOptionalText(failure.message);
+  return [{
+    code: 'SHEET_LAST_REFRESH_FAILED',
+    message: `최근 시트 불러오기가 실패해 이전에 불러온 값으로 진행합니다.${reason ? ` ${reason}` : ''}`,
+    details: {
+      code: readOptionalText(failure.code),
+      at: readOptionalText(failure.at),
+      diagnostics: Array.isArray(failure.diagnostics) ? failure.diagnostics : [],
+      diagnosticCount: Number(failure.diagnosticCount) || 0,
+    },
+  }];
+}
+
 function sheetControlBlockers(sheetFacts) {
   if (!objectValue(sheetFacts)) {
     return [{ code: 'SHEET_FACTS_MISSING', message: '시트 검증값이 없습니다. 시트값을 다시 불러와 주세요.' }];
@@ -3633,6 +3650,7 @@ async function composeCashflowMonthDashboard({
   };
   const warnings = closedSnapshot ? [] : [
     ...sheetRuleWarnings,
+    ...sheetLastRefreshWarnings(mirror),
     ...projectSheetWarnings(project, sheetFacts?.metadata),
     ...sheetControlWarnings(sheetFacts),
     ...monthSheetCalculationWarnings(sheetFacts, yearMonth),

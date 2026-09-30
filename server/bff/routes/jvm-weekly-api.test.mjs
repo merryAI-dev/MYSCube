@@ -7046,6 +7046,42 @@ describe('JVM weekly API BFF proxy', () => {
     expect(created.body.code).not.toBe('cashflow_month_close_validation_failed');
   });
 
+  it('lets month close continue on the pinned values and says the last sheet refresh failed', async () => {
+    const source = fullMonthCloseSource();
+    source.documents.get('orgs/tenant-a/cashflow_sheet_mirrors/project-a').lastRefreshError = {
+      code: 'cashflow_sheet_template_unsupported',
+      message: '시트 양식이 표준과 다릅니다. 표시된 칸을 표준 양식으로 맞춘 뒤 다시 불러와 주세요.',
+      statusCode: 400,
+      at: '2026-07-09T00:00:00.000Z',
+      diagnostics: [{ code: 'cashflow_week_header_invalid', sourceCell: 'E13', message: 'E13 칸의 주차 표기를 26-1-1 형식으로 맞춰 주세요.' }],
+      diagnosticCount: 1,
+    };
+    const fetchImpl = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify(monthDashboardSource({
+        ok: true, projectId: 'project-a', yearMonth: '2026-07', status: 'OPEN', revision: 0,
+        reopenCount: 0, projectWarningCount: 0, snapshot: {},
+      })),
+    }));
+    const { app } = createApp(fetchImpl, createIdempotencyService(), {
+      actorId: 'pm-1', actorRole: 'pm',
+    }, { env: runtimeEnv, db: source.db, now: () => new Date('2026-07-10T00:00:00.000Z') });
+
+    const read = await request(app).get('/api/v1/cashflow/project-a/month-close?yearMonth=2026-07').expect(200);
+
+    expect(read.body.dashboard.validation.canClose).toBe(true);
+    expect(read.body.dashboard.validation.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: 'SHEET_LAST_REFRESH_FAILED',
+        message: expect.stringContaining('시트 양식이 표준과 다릅니다.'),
+        details: expect.objectContaining({
+          diagnostics: [expect.objectContaining({ sourceCell: 'E13' })],
+        }),
+      }),
+    ]));
+  });
+
   it('keeps an explicit sheet zero in the complete month-close evidence', async () => {
     const source = fullMonthCloseSource({ explicitZero: true, yearMonth: '2026-05' });
     const fetchImpl = vi.fn(async () => ({

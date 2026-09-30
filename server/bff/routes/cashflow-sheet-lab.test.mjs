@@ -1604,6 +1604,60 @@ describe('cashflow sheet lab route', () => {
     expect(response.body.sourceRevision).toBeUndefined();
   });
 
+  it('keeps the last-good mirror FRESH when a refresh fails on a sheet rule, recording the cells', async () => {
+    const db = createDb({
+      project: {
+        id: 'project-a',
+        cashflowSheetLab: {
+          value: 'spreadsheet-a',
+          sheetName: 'cashflow(사용내역 연동)',
+          startWeek: '26-1-1',
+          endWeek: '26-1-1',
+        },
+      },
+    });
+    const broken = buildMatrix();
+    broken[12][4] = 'broken-week-header';
+    const previewSpreadsheet = vi.fn()
+      .mockResolvedValueOnce({
+        spreadsheetId: 'spreadsheet-a',
+        spreadsheetTitle: 'Cashflow workbook',
+        selectedSheetName: 'cashflow(사용내역 연동)',
+        availableSheets: [{ sheetId: 1, title: 'cashflow(사용내역 연동)', index: 0 }],
+        matrix: buildMatrix(),
+      })
+      .mockResolvedValueOnce({
+        spreadsheetId: 'spreadsheet-a',
+        spreadsheetTitle: 'Cashflow workbook',
+        selectedSheetName: 'cashflow(사용내역 연동)',
+        availableSheets: [{ sheetId: 1, title: 'cashflow(사용내역 연동)', index: 0 }],
+        matrix: broken,
+      });
+    const app = createApp({ db, googleSheetsService: { previewSpreadsheet } });
+
+    const first = await request(app)
+      .post('/api/v1/projects/project-a/cashflow-sheet-lab/mirror/refresh')
+      .send({ idempotencyKey: 'mirror-rule-first' })
+      .expect(200);
+    const second = await request(app)
+      .post('/api/v1/projects/project-a/cashflow-sheet-lab/mirror/refresh')
+      .send({ idempotencyKey: 'mirror-rule-second' })
+      .expect(200);
+
+    expect(first.body.status).toBe('FRESH');
+    expect(second.body).toMatchObject({
+      status: 'FRESH',
+      sourceRevision: first.body.sourceRevision,
+      lastRefreshError: {
+        code: 'cashflow_sheet_template_unsupported',
+        diagnostics: expect.arrayContaining([
+          expect.objectContaining({ code: 'cashflow_week_header_invalid', sourceCell: 'E13' }),
+        ]),
+      },
+    });
+    expect(second.body.cells).toEqual(first.body.cells);
+  });
+
   it('returns the exact cells that make a cashflow sheet structure unsupported', async () => {
     const db = createDb({
       project: {
