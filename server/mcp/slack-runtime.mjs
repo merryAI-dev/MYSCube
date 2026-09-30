@@ -24,6 +24,13 @@ import { createLocalRoomRelay, localPairCode } from './merryhere-local-relay.mjs
 import { roomRequestSchema, roomToolDescription } from './merryhere-request.mjs';
 import { createMerryhereClient } from './merryhere-client.mjs';
 
+// Weekday and minute are needed for relative dates ("다음 주 수요일") and for refusing an already-past assumed time.
+export function roomClock(date) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', weekday: 'short' })
+    .formatToParts(date).map(({ type, value }) => [type, value]));
+  const weekday = { Mon: '월', Tue: '화', Wed: '수', Thu: '목', Fri: '금', Sat: '토', Sun: '일' }[parts.weekday];
+  return `${parts.year}-${parts.month}-${parts.day}(${weekday}) ${parts.hour}:${parts.minute}`;
+}
 export function slackText(text) {
   const formatted = text.split(/(```[\s\S]*?(?:```|$)|`[^`\n]*(?:`|$))/g).map((part, index) => index % 2 ? part : part
     .replace(/^ {0,3}(?:-{3,}|\*{3,}|_{3,})[ \t]*$/gm, '')
@@ -281,7 +288,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         }
         return result;
       };
-      tools.push({ name: 'merryhere_rooms', description: `${roomToolDescription}\n현재 한국 날짜: ${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date())}\n서버에 저장된 현재 요청자의 회의실 조건: ${JSON.stringify(previousBooking || null)}`, schema: roomRequestSchema,
+      tools.push({ name: 'merryhere_rooms', description: `${roomToolDescription}\n현재 한국 시각: ${roomClock(new Date())}\n서버에 저장된 현재 요청자의 회의실 조건: ${JSON.stringify(previousBooking || null)}`, schema: roomRequestSchema,
         requiresReply: true, execute: booking, render: result => result.answer });
       tools.push({ name: 'observe_feedback', observationOnly: true,
         description: '이전 답변에 대한 사용자의 정정·범위 불만·활용 의사·모호함을 관찰 기록합니다. 현재 사용자 발화에서 근거를 그대로 인용하세요. 공손함/짜증/침묵을 정답·오답으로 해석하지 않습니다. 기록은 학습이나 정산값에 반영되지 않습니다. 기록 후 실제 질문 처리를 계속하세요.',

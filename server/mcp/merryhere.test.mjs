@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { parseCalendar, selectBookingSlots, validateBookingTime, createMerryhereClient, kstDate, MerryhereError } from './merryhere-client.mjs';
-import { validateRoomDate, interpretRoomRequest, availableRoomWindows } from './merryhere-request.mjs';
+import { validateRoomDate, interpretRoomRequest, availableRoomWindows, renderRoomClarification } from './merryhere-request.mjs';
 import { runMerryhereBooking } from './merryhere-booking.mjs';
 import { memoryDb, connectMerryhere, TEST_MERRYHERE_KEY } from './slack-test-store.mjs';
 import { createSlackWorker } from './slack-runtime.mjs';
@@ -114,6 +114,36 @@ describe('normalized room query contract', () => {
     expect(second.bookingContext.query).toMatchObject({ date: '2026-10-07', start: '17:00', end: '18:00', capacity: 4 });
     expect(second.bookingContext.missing).toEqual([]);
     expect(second.action).toBe('explore');
+  });
+  it.each([
+    ['17:00', '오후 5시(17:00)'], ['10:00', '오전 10시(10:00)'], ['12:30', '오후 12시 반(12:30)'], ['08:00', '오전 8시(08:00)'], ['19:00', '오후 7시(19:00)'],
+  ])('accepts a bare hour the model placed in working hours and states the assumption: %s', (start, label) => {
+    const result = interpretRoomRequest({ now, input: { ...input, query: { date: '2026-09-30', start }, assumptions: ['meridiem'] } });
+    expect(result).toMatchObject({ action: 'explore', start });
+    expect(result.bookingContext.meridiemAssumed).toBe(true);
+    expect(renderRoomClarification(result.bookingContext)).toContain(`업무 시간 기준 ${label}로 이해했습니다`);
+  });
+  it.each([
+    ['2026-09-30', '05:00'], ['2026-09-30', '21:00'], ['2026-09-29', '10:00'], ['2026-09-29', '13:30'],
+  ])('asks instead of trusting an assumption outside working hours or already past: %s %s', (date, start) => {
+    const result = interpretRoomRequest({ now, input: { ...input, query: { date, start, duration: 60 }, assumptions: ['meridiem'] } });
+    expect(result.action).toBe('clarify');
+    expect(result.bookingContext.missing).toContain('meridiem');
+    expect(result.bookingContext.query.start).toBeUndefined();
+    expect(result.bookingContext.query).toMatchObject({ date, duration: 60 });
+  });
+  it('follows an explicit meridiem outside working hours without a note', () => {
+    const result = interpretRoomRequest({ now, input: { ...input, query: { date: '2026-09-30', start: '06:00' } } });
+    expect(result).toMatchObject({ action: 'explore', start: '06:00' });
+    expect(result.bookingContext.meridiemAssumed).toBe(false);
+  });
+  it('keeps the assumption note on follow-ups until the time itself is restated', () => {
+    const first = interpretRoomRequest({ now, input: { ...input, query: { date: '2026-09-30', start: '17:00' }, assumptions: ['meridiem'] } });
+    const narrowed = interpretRoomRequest({ now, previous: first.bookingContext, input: { ...input, inherit: true, query: { capacity: 4 } } });
+    expect(narrowed.bookingContext.meridiemAssumed).toBe(true);
+    const corrected = interpretRoomRequest({ now, previous: narrowed.bookingContext, input: { ...input, inherit: true, query: { start: '05:00' } } });
+    expect(corrected).toMatchObject({ action: 'explore', start: '05:00' });
+    expect(corrected.bookingContext.meridiemAssumed).toBe(false);
   });
   it.each([
     [{ start: '14:00' }, { end: '17:00' }, '14:00', '17:00'],
