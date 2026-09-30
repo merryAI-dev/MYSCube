@@ -136,3 +136,26 @@ jobs:
           const events = result.data.viewer.zones[0]?.firewallEventsAdaptive || [];
           console.log(JSON.stringify(events.filter(e => e.clientRequestHTTPHost === 'myscube.myscguard.app' && ['/api/slack/events', '/api/slack/interactions'].includes(e.clientRequestPath)), null, 2));
           JS
+
+      - name: Read isolated service startup logs
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_DEPLOY_TOKEN_PRODUCTION }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+        run: |
+          node --input-type=module <<'JS'
+          const host = 'mysc-slack-agent-782i0soa8-merryai-devs-projects.vercel.app';
+          const headers = { authorization: `Bearer ${process.env.VERCEL_TOKEN}` };
+          const team = `teamId=${process.env.VERCEL_ORG_ID}`;
+          const d = await (await fetch(`https://api.vercel.com/v13/deployments/${host}?${team}`, { headers })).json();
+          if (!d.id || !d.projectId) throw new Error('Deployment metadata unavailable');
+          const probe = async () => { await new Promise(r => setTimeout(r, 2000)); console.log('probe_status', (await fetch(`https://${host}/healthz`)).status); };
+          const pending = probe();
+          try {
+            const r = await fetch(`https://api.vercel.com/v1/projects/${d.projectId}/deployments/${d.id}/runtime-logs?${team}`, { headers, signal: AbortSignal.timeout(15000) });
+            console.log('logs_status', r.status);
+            const reader = r.body.getReader(); let count = 0;
+            while (count < 12000) { const {done,value} = await reader.read(); if (done) break; const text = new TextDecoder().decode(value); console.log(text); count += text.length; }
+            await reader.cancel();
+          } catch (e) { console.log('logs_end', e.name); }
+          await pending;
+          JS
