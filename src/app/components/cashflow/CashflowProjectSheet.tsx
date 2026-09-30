@@ -2474,7 +2474,7 @@ export function CashflowProjectSheet({
         const blockedMonths = (contractIssue?.blockedMonths || result.blockedMonths || []).join(', ');
         const message = contractIssue
           ? `${contractIssue.message}${blockedMonths ? ` 확인할 월: ${blockedMonths}` : ''}`
-          : `반영할 수 없는 시트 범위가 있습니다.${blockedMonths ? ` 확인할 월: ${blockedMonths}` : ''}`;
+          : `반영할 수 없는 시트 범위가 있습니다.${blockedMonths ? ` 확인할 월: ${blockedMonths}` : ''}${describeCashflowSheetExclusions(result).length ? ` ${describeCashflowSheetExclusions(result).join(' ')}` : ''}`;
         toast.error(message);
         setSheetOperationError(message);
         return;
