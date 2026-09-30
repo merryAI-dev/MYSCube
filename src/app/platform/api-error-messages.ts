@@ -190,6 +190,11 @@ const presentations = new Map<string, ApiErrorPresentation>([
   }],
 ]);
 
+/** 이 코드에 사람이 쓴 안내 문구가 따로 있는지. 없으면 resolveApiErrorPresentation 은 일반 문구를 준다. */
+export function hasApiErrorPresentation(code: string): boolean {
+  return typeof code === 'string' && presentations.has(code);
+}
+
 export function resolveApiErrorPresentation(code: string, statusCode: number): ApiErrorPresentation {
   const mapped = typeof code === 'string' ? presentations.get(code) : undefined;
   if (mapped) return { ...mapped };

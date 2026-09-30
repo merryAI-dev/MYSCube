@@ -33,6 +33,8 @@ import { useAuth } from '../../data/auth-store';
 import { useFirebase } from '../../lib/firebase-context';
 import { getAuthInstance } from '../../lib/firebase';
 import {
+  describeApiError,
+  formatApiErrorDescription,
   resolveApiErrorMessage,
   resolveCashflowWeeklyCompletionErrorMessage,
 } from '../../platform/api-error-message';
@@ -83,6 +85,8 @@ import {
   type CashflowSheetLabShareAccountResult,
   type CashflowSheetLabStageResult,
   type CashflowFormulaMismatch,
+  type CashflowSheetStep,
+  cashflowSheetErrorPhase,
 } from '../../lib/sheets-cashflow-readonly-client';
 import {
   buildCashflowMonthCloseDraftInput,
@@ -364,12 +368,14 @@ function bffErrorCode(error: unknown): string {
  * 토스트도 안 뜬다"). 문구는 서버 코드에 대한 공용 안내를 그대로 쓴다 - 여기서 새로 짓지 않는다.
  * 이 화면의 오류는 토스트가 아니라 그 자리 인라인 배너로 남긴다(2026-08-19 결정).
  */
-function sheetOperationErrorMessage(error: unknown): string {
+function sheetOperationErrorMessage(error: unknown, step: CashflowSheetStep): string {
   const status = error instanceof PlatformApiError
     ? error.status
     : Number((error as { status?: number })?.status) || 400;
   const code = error instanceof PlatformApiError ? error.code : bffErrorCode(error);
-  return resolveApiErrorPresentation(code, status).guide;
+  const fallback = resolveApiErrorPresentation(code, status).guide;
+  // 서버가 쓴 문구를 그대로 두고, 어느 단계에서 났는지와 문의용 코드를 붙인다.
+  return formatApiErrorDescription(describeApiError(error, { fallback, phase: cashflowSheetErrorPhase(step, error) }));
 }
 
 export function CashflowProjectSheet({
@@ -2152,6 +2158,7 @@ export function CashflowProjectSheet({
       return null;
     }
     const startedAt = Date.now();
+    setSheetOperationError('');
     const refreshIdempotencyKey = `cashflow-sheet-refresh:${projectId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     const refreshMirror = (actor: NonNullable<Awaited<ReturnType<typeof resolveBffActor>>>) => (
       refreshCashflowSheetLabMirrorViaBff({
@@ -2230,6 +2237,7 @@ export function CashflowProjectSheet({
             durationMs: Date.now() - startedAt,
             error: retryError,
           });
+          setSheetOperationError(sheetOperationErrorMessage(retryError, 'refresh'));
           return null;
         }
       }
@@ -2241,6 +2249,7 @@ export function CashflowProjectSheet({
         durationMs: Date.now() - startedAt,
         error,
       });
+      setSheetOperationError(sheetOperationErrorMessage(error, 'refresh'));
       return null;
     } finally {
       setSheetRefreshLoading(false);
@@ -2401,7 +2410,7 @@ export function CashflowProjectSheet({
         setSheetApplyResumeRequired(false);
         setLateSheetPendingApprovalAccepted(false);
         toast.error(resolveApiErrorMessage(finalError, '시트 값을 반영하지 못했습니다. 잠시 후 다시 시도해 주세요.'));
-        setSheetOperationError(sheetOperationErrorMessage(finalError));
+        setSheetOperationError(sheetOperationErrorMessage(finalError, 'apply'));
       }
     } finally {
       setSheetStageApplyLoading(false);
@@ -2516,13 +2525,13 @@ export function CashflowProjectSheet({
           return;
         } catch (retryError) {
           toast.error(resolveApiErrorMessage(retryError, '시트 변경 검토를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.'));
-          setSheetOperationError(sheetOperationErrorMessage(retryError));
+          setSheetOperationError(sheetOperationErrorMessage(retryError, 'stage'));
           return;
         }
       } else {
         toast.error(resolveApiErrorMessage(error, '시트 변경 검토를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.'));
       }
-      setSheetOperationError(sheetOperationErrorMessage(error));
+      setSheetOperationError(sheetOperationErrorMessage(error, 'stage'));
     } finally {
       setSheetRefreshLoading(false);
     }

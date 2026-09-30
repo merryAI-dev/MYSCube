@@ -870,3 +870,19 @@ export async function probeCashflowSheetFreshnessViaBff(params: {
   );
   return response.data;
 }
+
+export type CashflowSheetStep = 'refresh' | 'stage' | 'apply';
+
+const CASHFLOW_SHEET_PHASE_LABELS: Record<CashflowSheetStep | 'save', string> = {
+  refresh: '① 시트 불러오기',
+  stage: '② 반영 검토',
+  apply: '③ 반영',
+  save: '④ 정산 엔진 저장',
+};
+
+/** 시트 반영 오류가 어느 단계에서 났는지. 반영 중 정산 엔진이 거절·검증 실패한 경우는 저장 단계로 본다. */
+export function cashflowSheetErrorPhase(step: CashflowSheetStep, error: unknown): string {
+  const code = typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : '';
+  if (step === 'apply' && /^(cashflow_jvm_|jvm_)/.test(code)) return CASHFLOW_SHEET_PHASE_LABELS.save;
+  return CASHFLOW_SHEET_PHASE_LABELS[step];
+}
