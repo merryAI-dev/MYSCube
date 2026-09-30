@@ -99,7 +99,7 @@ export async function reserveAgentBudget(db, month) {
 
 export function createSlackWorker({ db, readOverview, readSnapshot, env = process.env, fetchImpl = fetch, completeFactory = createGeminiCompletion, hermesRunner = runHermesAgent }) {
   const teamId = 'T099F304GAY';
-  const channelIds = new Set(['C0BQ6980HR6', 'C0AAC4AHTN1']);
+  const channelIds = new Set(['C0BQ6980HR6', 'C0AAC4AHTN1', 'C0C6DLPBJ00']);
   const tenantId = 'mysc';
   const googleRooms = createGoogleCalendarRooms({ env, fetchImpl });
   async function slack(method, body, timeoutMs = 10000) {
