@@ -19,7 +19,7 @@ const safeFetch = async (url, options) => {
     const html = await response.clone().text();
     const nodes = []; const visit = n => { if (n.tagName) nodes.push({ tag: n.tagName, attrs: Object.fromEntries((n.attrs || []).map(a => [a.name, a.value])) }); for (const c of n.childNodes || []) visit(c); }; visit(parse5.parse(html));
     const slots = nodes.filter(n => n.tag === 'input' && n.attrs.name === 'slot').map(n => n.attrs);
-    const selected = slots.filter(a => a.value?.startsWith(`${diagnosticIntent.roomId}-`) && [diagnosticIntent.start, diagnosticIntent.start.slice(0, 3) + '30'].includes(a['data-time']?.padStart(5, '0')));
+    const selected = slots.filter(a => a.value?.startsWith(`${diagnosticIntent.roomId}-`) && diagnosticIntent.ordinals.includes(Number(a.value.split('-')[1])));
     const tokens = [...new Set(nodes.filter(n => n.tag === 'input' && n.attrs.name === '_token').map(n => n.attrs.value).filter(Boolean))];
     lastCalendar = { selected, token: tokens.length === 1 ? tokens[0] : null };
     console.log(JSON.stringify({ calendarContract: true, bytes: Buffer.byteLength(html), classes: [...new Set(slots.map(a => a.class || ''))], slotCount: slots.length, tokenCount: tokens.length, forms: nodes.filter(n => n.tag === 'form').map(n => ({ action: n.attrs.action, method: n.attrs.method })), selected: selected.map(a => Object.fromEntries(Object.entries(a).filter(([k]) => ['class', 'value', 'data-name', 'data-cnt', 'data-time', 'data-time2', 'disabled', 'readonly'].includes(k)))) }));
