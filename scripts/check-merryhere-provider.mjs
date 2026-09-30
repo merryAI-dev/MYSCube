@@ -9,11 +9,21 @@ import { createGoogleCalendarRooms, parseCalendarRoomsConfig } from '../server/m
 if (process.env.GITHUB_ACTIONS !== 'true' || process.env.GITHUB_REF !== 'refs/heads/main') throw new Error('Main CI only');
 const date = process.env.ROOM_CHECK_DATE;
 if (!/^20\d{2}-\d{2}-\d{2}$/.test(date || '')) throw new Error('Invalid date');
+let diagnosticIntent, lastCalendar;
 const safeFetch = async (url, options) => {
   const target = new URL(url);
   if (!['merryhere.kr', 'calendar.google.com'].includes(target.hostname)) throw new Error('Unexpected provider');
   if (options?.method === 'POST' && !['/auth/login', '/reserveinfo'].includes(target.pathname)) throw new Error('Read-only check');
   const response = await fetch(url, options);
+  if (target.pathname === '/reservation' && diagnosticIntent && target.searchParams.get('date') === diagnosticIntent.date) {
+    const html = await response.clone().text();
+    const nodes = []; const visit = n => { if (n.tagName) nodes.push({ tag: n.tagName, attrs: Object.fromEntries((n.attrs || []).map(a => [a.name, a.value])) }); for (const c of n.childNodes || []) visit(c); }; visit(parse5.parse(html));
+    const slots = nodes.filter(n => n.tag === 'input' && n.attrs.name === 'slot').map(n => n.attrs);
+    const selected = slots.filter(a => a.value?.startsWith(`${diagnosticIntent.roomId}-`) && diagnosticIntent.ordinals.includes(Number(a.value.split('-')[1])));
+    const tokens = [...new Set(nodes.filter(n => n.tag === 'input' && n.attrs.name === '_token').map(n => n.attrs.value).filter(Boolean))];
+    lastCalendar = { selected, token: tokens.length === 1 ? tokens[0] : null };
+    console.log(JSON.stringify({ calendarContract: true, bytes: Buffer.byteLength(html), classes: [...new Set(slots.map(a => a.class || ''))], slotCount: slots.length, tokenCount: tokens.length, forms: nodes.filter(n => n.tag === 'form').map(n => ({ action: n.attrs.action, method: n.attrs.method })), selected: selected.map(a => Object.fromEntries(Object.entries(a).filter(([k]) => ['class', 'value', 'data-name', 'data-cnt', 'data-time', 'data-time2', 'disabled', 'readonly'].includes(k)))) }));
+  }
   if (target.pathname === '/reserveinfo') {
     const body = await response.clone().text();
     let shape;
@@ -35,7 +45,7 @@ for (const room of parseCalendarRoomsConfig(process.env)) {
     const response = await safeFetch(room.icsUrl, { redirect: 'error', signal: AbortSignal.timeout(10000) });
     const text = await response.text();
     const events = parseIcsEvents(text);
-    console.log(JSON.stringify({ calendar: room.name, events: events.length, unsupportedRules: events.filter(e => e.rrule?.unsupported).length, unsupportedZones: events.filter(e => e.dtstart.unsupported).length, busy: busyIntervalsForDate({ events, date }), ruleShapes: [...new Set((text.match(/^RRULE:.+$/gm) || []))].filter(rule => /BYSETPOS|BYWEEKNO|BYYEARDAY|BYMONTHDAY=[^;]*,/.test(rule)).slice(0, 10), status: response.status, isIcs: text.includes('BEGIN:VCALENDAR'), windows: response.ok ? await rooms.windowsForDate(date, { room: room.name, start: '11:00', end: '12:00', duration: 60 }) : [] }));
+    console.log(JSON.stringify({ calendar: room.name, bytes: Buffer.byteLength(text), events: events.length, unsupportedRules: events.filter(e => e.rrule?.unsupported).length, unsupportedZones: events.filter(e => e.dtstart.unsupported).length, busy: busyIntervalsForDate({ events, date }), ruleShapes: [...new Set((text.match(/^RRULE:.+$/gm) || []))].filter(rule => /BYSETPOS|BYWEEKNO|BYYEARDAY|BYMONTHDAY=[^;]*,/.test(rule)).slice(0, 10), status: response.status, isIcs: text.includes('BEGIN:VCALENDAR'), lookup: response.ok ? await rooms.readForDate(date, { room: room.name, start: '11:00', end: '12:00', duration: 60 }) : null }));
   } catch { console.log(JSON.stringify({ calendar: room.name, error: 'calendar_fetch_failed' })); }
 }
 console.log(JSON.stringify({ configuredCalendars: rooms.roomNames }));
@@ -55,6 +65,7 @@ if (id) {
   const db = getFirestore(app);
   const intent = (await db.doc(`merryhere_booking_intents/${id}`).get()).data();
   if (!intent || !['SUBMITTING', 'UNKNOWN', 'CONFIRMED'].includes(intent.state)) throw new Error('Existing submitted intent required');
+  diagnosticIntent = intent;
   const credentials = await createMerryhereConnections({ db, env: process.env }).credentials({ tenantId: 'mysc', actorId: intent.actorId });
   const client = createMerryhereClient({ ...credentials, fetchImpl: safeFetch });
   let stage = 'login';
@@ -68,5 +79,12 @@ if (id) {
       stage = 'detail'; const detail = await client.reservation(ids[0], calendar.token);
       console.log(JSON.stringify({ titleMatches: detail.title === intent.providerTitle, roomMatches: detail.name === intent.roomName, priceMatches: Number(detail.price) === intent.points }));
     }
-  } catch (error) { console.log(JSON.stringify({ stage, code: error.code || 'check_failed' })); }
+  } catch (error) {
+    console.log(JSON.stringify({ stage, code: error.code || 'check_failed' }));
+    const ids = [...new Set((lastCalendar?.selected || []).map(a => a['data-list-id']))];
+    if (stage === 'calendar' && lastCalendar?.token && ids.length === 1 && /^\d+$/.test(ids[0] || '')) {
+      try { const detail = await client.reservation(ids[0], lastCalendar.token); console.log(JSON.stringify({ diagnosticDetail: true, titleMatches: detail.title === intent.providerTitle, roomMatches: detail.name === intent.roomName, priceMatches: Number(detail.price) === intent.points })); }
+      catch (detailError) { console.log(JSON.stringify({ stage: 'diagnostic_detail', code: detailError.code || 'check_failed' })); }
+    }
+  }
 }

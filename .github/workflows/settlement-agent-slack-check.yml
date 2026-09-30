@@ -147,7 +147,7 @@ jobs:
           console.log(JSON.stringify(events.filter(e => e.clientRequestHTTPHost === 'myscube.myscguard.app' && ['/api/slack/events', '/api/slack/interactions'].includes(e.clientRequestPath)), null, 2));
           JS
       - name: Read room provider contracts
-        if: inputs.check_provider && github.ref == 'refs/heads/main'
+        if: always() && inputs.check_provider && github.ref == 'refs/heads/main'
         env:
           ROOM_CHECK_DATE: ${{ inputs.room_date }}
           ROOM_CHECK_INTENT: ${{ inputs.room_intent }}

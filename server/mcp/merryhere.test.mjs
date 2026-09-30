@@ -510,3 +510,11 @@ it('stages explore then book independently of the example wording', () => {
   expect(renderRoomClarification(early.bookingContext)).toContain('얼마 동안');
   expect(renderRoomClarification(early.bookingContext)).not.toContain('회의명');
 });
+
+it('does not let model suggestions make optional exploration fields mandatory', () => {
+  const result = interpretRoomRequest({ now, input: { action: 'explore', inherit: false, query: { date: '2026-10-07', capacity: 4 }, missing: ['time', 'duration', 'room', 'title'] } });
+  expect(result.action).toBe('explore');
+  expect(result.bookingContext.missing).toEqual([]);
+  const ambiguous = interpretRoomRequest({ now, input: { action: 'explore', inherit: false, query: {}, missing: ['meridiem'] } });
+  expect(ambiguous.action).toBe('clarify');
+});
