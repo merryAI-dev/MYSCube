@@ -41,16 +41,22 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: Verify green CI, current main and deployment author
+        id: gate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
-          test "$(git rev-parse origin/main)" = "$TARGET_SHA"
+          if [ "$(git rev-parse origin/main)" != "$TARGET_SHA" ]; then
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
           test "$(git log -1 --format=%ae)" = 'ai@mysc.co.kr'
           gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${TARGET_SHA}&event=push" \
             --jq '.workflow_runs | any(.conclusion == "success" and .head_branch == "main")' | grep -qx true
       - name: Deploy isolated Slack service and verify before promotion
+        if: steps.gate.outputs.current == 'true'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_DEPLOY_TOKEN_PRODUCTION }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}

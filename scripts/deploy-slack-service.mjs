@@ -56,6 +56,11 @@ for (const path of ['/api/v1/projects', '/api/v1/health', '/']) {
   const response = await fetch(`${deployment.deploymentUrl}${path}`, { redirect: 'manual' });
   if (response.status !== 404) throw new Error(`Unrelated route exposed: ${path}`);
 }
+const latestMain = execFileSync('git', ['ls-remote', 'origin', 'refs/heads/main'], { encoding: 'utf8' }).split(/\s+/)[0];
+if (latestMain !== sha) {
+  console.log('Newer main exists; candidate not promoted.');
+  process.exit(0);
+}
 const prior = await api(`/v4/aliases/${name}.vercel.app`);
 try {
   await api(`/v2/deployments/${identity.id}/aliases`, 'POST', { alias: `${name}.vercel.app` });
