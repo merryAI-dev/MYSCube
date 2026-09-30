@@ -45,9 +45,9 @@ it('accepts only signed feedback bound to the persisted answer and requesting us
   expect(documents.get('settlement_agent_jobs/job1/feedback/UABC').value).toBe(1);
 });
 
-it('serves the second allowed channel and replies there, not the hardcoded default', async () => {
+it.each(['C0AAC4AHTN1', 'C0C6DLPBJ00'])('serves allowed channel %s and replies there', async (channelId) => {
   const { db, records } = memoryDb();
-  const identity = { teamId: 'T099F304GAY', channelId: 'C0AAC4AHTN1', slackUserId: 'UQA', threadTs: '1.1' };
+  const identity = { teamId: 'T099F304GAY', channelId, slackUserId: 'UQA', threadTs: '1.1' };
   records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
   records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(), question: '정산 상태 확인해줘' });
   records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
@@ -60,7 +60,7 @@ it('serves the second allowed channel and replies there, not the hardcoded defau
   const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, completeFactory: () => vi.fn(), fetchImpl });
   await worker();
   const delivery = calls.find((call) => call.url.endsWith('chat.postMessage') || call.url.endsWith('chat.postEphemeral'));
-  expect(delivery.body.channel).toBe('C0AAC4AHTN1');
+  expect(delivery.body.channel).toBe(channelId);
   expect(records.get('settlement_agent_jobs/first')).toMatchObject({ status: 'succeeded' });
 });
 

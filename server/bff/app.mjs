@@ -923,7 +923,7 @@ export function createBffApp(options = {}) {
   let runSettlementWorker;
   const settlementAgentEnabled = env.SETTLEMENT_AGENT_ENABLED === 'true';
   if (settlementAgentEnabled) {
-    const slackConfig = { db, secret: env.SLACK_SIGNING_SECRET, teamId: 'T099F304GAY', channelIds: ['C0BQ6980HR6', 'C0AAC4AHTN1'] };
+    const slackConfig = { db, secret: env.SLACK_SIGNING_SECRET, teamId: 'T099F304GAY', channelIds: ['C0BQ6980HR6', 'C0AAC4AHTN1', 'C0C6DLPBJ00'] };
     app.post('/api/slack/events', express.raw({ type: 'application/json', limit: '32kb' }), createSlackIngress({ ...slackConfig, botToken: env.SLACK_ALERT_BOT_TOKEN,
       defer: options.waitUntil || ((promise) => { void promise; }),
       onQueued: async (jobId) => {

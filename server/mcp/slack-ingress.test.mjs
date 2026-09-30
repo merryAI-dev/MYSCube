@@ -36,23 +36,23 @@ describe('Slack ingress', () => {
     await handler(req, response());
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
-  it('accepts a second allowed channel and stamps the job with that channel, not the default', async () => {
+  it.each(['C0AAC4AHTN1', 'C0C6DLPBJ00'])('accepts allowed channel %s and preserves its reply destination', async (channelId) => {
     const db = store();
     const fetchImpl = vi.fn(async (url, options) => {
-      expect(JSON.parse(options.body)).toMatchObject({ channel: 'C0AAC4AHTN1', thread_ts: '1.1' });
+      expect(JSON.parse(options.body)).toMatchObject({ channel: channelId, thread_ts: '1.1' });
       return Response.json({ ok: true });
     });
-    const handler = createSlackIngress({ db, secret, teamId: 'T1', channelIds: ['C0BQ6980HR6', 'C0AAC4AHTN1'], botToken: 'fixture', fetchImpl, now: () => now });
-    const req = request({ team_id: 'T1', event_id: 'E1', type: 'event_callback', event: { type: 'app_mention', user: 'U1', text: '조회', channel: 'C0AAC4AHTN1', ts: '1.1' } });
+    const handler = createSlackIngress({ db, secret, teamId: 'T1', channelIds: ['C0BQ6980HR6', 'C0AAC4AHTN1', 'C0C6DLPBJ00'], botToken: 'fixture', fetchImpl, now: () => now });
+    const req = request({ team_id: 'T1', event_id: 'E1', type: 'event_callback', event: { type: 'app_mention', user: 'U1', text: '조회', channel: channelId, ts: '1.1' } });
     await handler(req, response());
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const job = [...db.documents.entries()].find(([path]) => path.startsWith('settlement_agent_jobs/'))[1];
-    expect(job.channelId).toBe('C0AAC4AHTN1');
+    expect(job.channelId).toBe(channelId);
   });
   it('ignores a channel outside the allow list even with a valid signature', async () => {
     const db = store();
     const fetchImpl = vi.fn();
-    const handler = createSlackIngress({ db, secret, teamId: 'T1', channelIds: ['C0BQ6980HR6', 'C0AAC4AHTN1'], botToken: 'fixture', fetchImpl, now: () => now });
+    const handler = createSlackIngress({ db, secret, teamId: 'T1', channelIds: ['C0BQ6980HR6', 'C0AAC4AHTN1', 'C0C6DLPBJ00'], botToken: 'fixture', fetchImpl, now: () => now });
     const req = request({ team_id: 'T1', event_id: 'E1', type: 'event_callback', event: { type: 'app_mention', user: 'U1', text: '조회', channel: 'CUNKNOWN', ts: '1.1' } });
     const res = await handler(req, response());
     expect(res.body).toEqual({ ok: true, ignored: true });
