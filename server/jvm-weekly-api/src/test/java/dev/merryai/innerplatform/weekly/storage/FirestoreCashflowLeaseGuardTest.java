@@ -3854,7 +3854,7 @@ class FirestoreCashflowLeaseGuardTest {
     }
 
     @Test
-    void weeklyCompletionValidatesCanonicalSixteenWeekWindowAndAllowsAuditedOverride() {
+    void weeklyCompletionNotifiesMissingProjectionWithoutBlocking() {
         Fixture fixture = fixture(activeMember(), Map.of());
         fixture.documents.put("orgs/tenant-a/cashflow_sheet_mirrors/project-a", Map.of(
             "projectId", "project-a", "weeklyYear", 2026
@@ -3866,87 +3866,38 @@ class FirestoreCashflowLeaseGuardTest {
         projection.remove("SALES_IN");
         missingWeek.put("projection", projection);
         fixture.documents.put(missingPath, missingWeek);
-        CompleteCashflowWeeklyUpdateRequest initial = new CompleteCashflowWeeklyUpdateRequest(
+        CompleteCashflowWeeklyUpdateRequest request = new CompleteCashflowWeeklyUpdateRequest(
             "window-in-weekly-year", "2026-09", 4, "2026-09-24T14:59:00Z", "NO_CHANGES"
         );
 
-        Throwable failure = catchThrowable(() -> fixture.persistence.runCommandTransaction(() -> commandService(
-            fixture.persistence
-        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", initial)));
-        assertThat(failure).isInstanceOf(WeeklyExpenseEditLeaseException.class);
-        WeeklyExpenseEditLeaseException incomplete = (WeeklyExpenseEditLeaseException) failure;
-        assertThat(incomplete.code()).isEqualTo("cashflow_projection_window_incomplete");
-        assertThat(incomplete.details())
-            .containsEntry("tenantId", "tenant-a")
-            .containsEntry("projectId", "project-a")
-            .containsEntry("yearMonth", "2026-09")
-            .containsEntry("weekNo", 4)
-            .containsEntry("windowStart", "2026-09-w4")
-            .containsEntry("windowEnd", "2026-12-w4")
-            .containsEntry("requiredWeekCount", 16)
-            .containsEntry("requiredCellCount", 256);
-        assertThat((List<Map<String, Object>>) incomplete.details().get("missingCells"))
-            .containsExactly(Map.of("yearMonth", "2026-10", "weekNo", 2, "lineId", "SALES_IN"));
-        assertThat(fixture.documents.keySet()).noneMatch(path -> path.contains("/cashflow_weekly_update_completions/")
-            || path.contains("/cashflow_weekly_update_completion_versions/")
-            || path.contains("/weekly_api_audit_events/"));
-        verify(fixture.transaction, never()).set(any(DocumentReference.class), any(), any());
-
-        String evidenceHash = String.valueOf(incomplete.details().get("evidenceHash"));
-        Throwable staleOverride = catchThrowable(() -> fixture.persistence.runCommandTransaction(() -> commandService(
-            fixture.persistence
-        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", new CompleteCashflowWeeklyUpdateRequest(
-            "window-in-weekly-year-stale", "2026-09", 4, "2026-09-24T14:59:00Z", "NO_CHANGES",
-            true, "sha256:" + "f".repeat(64), 1
-        ))));
-        assertThat(staleOverride).isInstanceOf(WeeklyExpenseEditLeaseException.class);
-        assertThat(((WeeklyExpenseEditLeaseException) staleOverride).code())
-            .isEqualTo("cashflow_projection_window_changed");
-        assertThat(fixture.documents.keySet()).noneMatch(path -> path.contains("/cashflow_weekly_update_completions/")
-            || path.contains("/cashflow_weekly_update_completion_versions/")
-            || path.contains("/weekly_api_audit_events/"));
-
-        projection.put("SALES_IN", 0L);
-        missingWeek.put("projection", projection);
-        fixture.documents.put(missingPath, missingWeek);
-        Throwable resolvedOverride = catchThrowable(() -> fixture.persistence.runCommandTransaction(() -> commandService(
-            fixture.persistence
-        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", new CompleteCashflowWeeklyUpdateRequest(
-            "window-in-weekly-year-resolved", "2026-09", 4, "2026-09-24T14:59:00Z", "NO_CHANGES",
-            true, evidenceHash, 1
-        ))));
-        assertThat(resolvedOverride).isInstanceOf(WeeklyExpenseEditLeaseException.class);
-        assertThat(((WeeklyExpenseEditLeaseException) resolvedOverride).code())
-            .isEqualTo("cashflow_projection_window_changed");
-
-        projection.remove("SALES_IN");
-        missingWeek.put("projection", projection);
-        fixture.documents.put(missingPath, missingWeek);
-
-        CompleteCashflowWeeklyUpdateRequest override = new CompleteCashflowWeeklyUpdateRequest(
-            "window-in-weekly-year-override", "2026-09", 4, "2026-09-24T14:59:00Z", "NO_CHANGES",
-            true, evidenceHash, 1
-        );
         CashflowWeeklyUpdateCompletionResponse completed = fixture.persistence.runCommandTransaction(() -> commandService(
             fixture.persistence
-        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", override));
+        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", request));
+
         assertThat(completed.status()).isEqualTo("SUBMITTED");
         assertThat(completed.updateResult()).isEqualTo("NO_CHANGES");
         assertThat(completed.complianceStatus()).isEqualTo("ON_TIME");
+        assertThat(completed.notices()).singleElement().satisfies(notice -> {
+            assertThat(notice)
+                .containsEntry("code", "PROJECTION_WINDOW_INCOMPLETE")
+                .containsEntry("projectId", "project-a")
+                .containsEntry("yearMonth", "2026-09")
+                .containsEntry("weekNo", 4)
+                .containsEntry("windowStart", "2026-09-w4")
+                .containsEntry("windowEnd", "2026-12-w4")
+                .containsEntry("requiredCellCount", 256)
+                .doesNotContainKey("tenantId");
+            assertThat((List<Map<String, Object>>) notice.get("missingCells"))
+                .containsExactly(Map.of("yearMonth", "2026-10", "weekNo", 2, "lineId", "SALES_IN"));
+        });
+        String evidenceHash = String.valueOf(completed.notices().getFirst().get("evidenceHash"));
+        assertThat(evidenceHash).matches("sha256:[a-f0-9]{64}");
         assertThat(fixture.documents.get(
             "orgs/tenant-a/cashflow_weekly_update_completions/project-a-2026-09-w4"
         ))
             .containsEntry("projectionValidationOverride", true)
             .containsEntry("projectionValidationIssueCount", 1)
             .containsEntry("projectionValidationEvidenceHash", evidenceHash);
-        assertThat(fixture.documents.entrySet().stream()
-            .filter(entry -> entry.getKey().contains("/weekly_api_audit_events/"))
-            .map(entry -> String.valueOf(entry.getValue().get("metadataJson"))))
-            .singleElement()
-            .satisfies(metadata -> assertThat(metadata)
-                .contains("\"projectionValidationOverride\":true")
-                .contains("\"projectionValidationIssueCount\":1")
-                .contains(evidenceHash));
         Map<?, ?> periods = (Map<?, ?>) fixture.documents.get(
             "orgs/tenant-a/cashflow_settlement_statuses/project-a-2026-09"
         ).get("periods");
@@ -3954,14 +3905,92 @@ class FirestoreCashflowLeaseGuardTest {
 
         CashflowWeeklyUpdateCompletionResponse replay = fixture.persistence.runCommandTransaction(() -> commandService(
             fixture.persistence
-        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", override));
+        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", request));
         assertThat(replay).isEqualTo(completed);
         assertThat(fixture.documents.keySet().stream()
             .filter(path -> path.contains("/cashflow_weekly_update_completion_versions/")))
             .hasSize(1);
-        assertThat(fixture.documents.keySet().stream()
-            .filter(path -> path.contains("/weekly_api_audit_events/")))
-            .hasSize(1);
+    }
+
+    @Test
+    void weeklyCompletionStillAcceptsLegacyOverrideFieldsWithoutJudgingThem() {
+        Fixture fixture = fixture(activeMember(), Map.of());
+        fixture.documents.put("orgs/tenant-a/cashflow_sheet_mirrors/project-a", Map.of(
+            "projectId", "project-a", "weeklyYear", 2026
+        ));
+        putCompleteProjectionWindow(fixture, "2026-09", 4);
+
+        CashflowWeeklyUpdateCompletionResponse completed = fixture.persistence.runCommandTransaction(() -> commandService(
+            fixture.persistence
+        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", new CompleteCashflowWeeklyUpdateRequest(
+            "legacy-override-stale-hash", "2026-09", 4, "2026-09-24T14:59:00Z", "NO_CHANGES",
+            true, "sha256:" + "f".repeat(64), 1
+        )));
+
+        assertThat(completed.status()).isEqualTo("SUBMITTED");
+        assertThat(completed.notices()).isEmpty();
+        assertThat(fixture.documents.get(
+            "orgs/tenant-a/cashflow_weekly_update_completions/project-a-2026-09-w4"
+        ))
+            .containsEntry("projectionValidationOverride", false)
+            .containsEntry("projectionValidationIssueCount", 0);
+    }
+
+    @Test
+    void weeklyCompletionNotifiesMalformedWeekDocumentsOutsideItsWindow() {
+        Fixture fixture = fixture(activeMember(), Map.of());
+        fixture.documents.put("orgs/tenant-a/cashflow_sheet_mirrors/project-a", Map.of(
+            "projectId", "project-a", "weeklyYear", 2026
+        ));
+        putCompleteProjectionWindow(fixture, "2026-09", 4);
+        String strayPath = "orgs/tenant-a/cashflow_weeks/project-a-2025-03-w1";
+        fixture.documents.put(strayPath, Map.of(
+            "projectId", "project-a", "yearMonth", "2025-03", "weekNo", 1,
+            "projection", Map.of("SALES_IN", "미정")
+        ));
+
+        CashflowWeeklyUpdateCompletionResponse completed = fixture.persistence.runCommandTransaction(() -> commandService(
+            fixture.persistence
+        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", new CompleteCashflowWeeklyUpdateRequest(
+            "out-of-window-stray", "2026-09", 4, "2026-09-24T14:59:00Z", "NO_CHANGES"
+        )));
+
+        assertThat(completed.status()).isEqualTo("SUBMITTED");
+        assertThat(completed.notices()).singleElement().satisfies(notice -> {
+            assertThat(notice)
+                .containsEntry("code", "OUT_OF_WINDOW_WEEK_DOCUMENT_INVALID")
+                .containsEntry("count", 1);
+            assertThat((List<Map<String, Object>>) notice.get("documents")).containsExactly(Map.of(
+                "documentId", "project-a-2025-03-w1",
+                "yearMonth", "2025-03",
+                "weekNo", 1,
+                "problem", "projection SALES_IN 값이 숫자가 아닙니다"
+            ));
+        });
+    }
+
+    @Test
+    void weeklyCompletionStillRejectsMalformedWeekDocumentsInsideItsWindow() {
+        Fixture fixture = fixture(activeMember(), Map.of());
+        fixture.documents.put("orgs/tenant-a/cashflow_sheet_mirrors/project-a", Map.of(
+            "projectId", "project-a", "weeklyYear", 2026
+        ));
+        putCompleteProjectionWindow(fixture, "2026-09", 4);
+        String insidePath = "orgs/tenant-a/cashflow_weeks/project-a-2026-10-w2";
+        Map<String, Object> inside = new LinkedHashMap<>(fixture.documents.get(insidePath));
+        Map<String, Object> projection = new LinkedHashMap<>((Map<String, Object>) inside.get("projection"));
+        projection.put("SALES_IN", "미정");
+        inside.put("projection", projection);
+        fixture.documents.put(insidePath, inside);
+
+        Throwable failure = catchThrowable(() -> fixture.persistence.runCommandTransaction(() -> commandService(
+            fixture.persistence
+        ).completeCashflowWeeklyUpdate(ACTOR, "project-a", new CompleteCashflowWeeklyUpdateRequest(
+            "in-window-malformed", "2026-09", 4, "2026-09-24T14:59:00Z", "NO_CHANGES"
+        ))));
+
+        assertThat(failure).isInstanceOf(WeeklyExpenseConflictException.class);
+        assertThat(fixture.documents.keySet()).noneMatch(path -> path.contains("/cashflow_weekly_update_completions/"));
     }
 
     @Test

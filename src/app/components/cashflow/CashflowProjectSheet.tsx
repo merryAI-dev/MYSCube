@@ -109,7 +109,7 @@ import {
   type CashflowActivityCursor,
   type CashflowActivityMutation,
 } from './cashflow-activity-loader';
-import { describeCashflowMonthCloseIssue } from './cashflow-month-close-blocker-helpers';
+import { describeCashflowMonthCloseIssue, describeCashflowWeeklyCompletionNotice } from './cashflow-month-close-blocker-helpers';
 import { buildSheetApplyNotice } from './cashflow-sheet-apply-notice';
 import { pickCashflowMonthCloseNotice } from './cashflow-month-close-notice';
 import { CashflowScheduleBar } from './CashflowScheduleBar';
@@ -512,6 +512,7 @@ export function CashflowProjectSheet({
   const [weeklyConfirmBusy, setWeeklyConfirmBusy] = useState(false);
   // 완료 요청·회수·확정이 실제로 접수됐다는 확인. 상태 배지만으로는 "내가 누른 것이 먹혔는지" 가 안 보인다.
   const [weeklyActionNotice, setWeeklyActionNotice] = useState('');
+  const [weeklyCompletionNotices, setWeeklyCompletionNotices] = useState<Array<{ code: string; message: string; lines: string[] }>>([]);
   const [weeklyProjectionWarning, setWeeklyProjectionWarning] = useState<WeeklyProjectionValidation | null>(null);
   const [weeklyHistoryOpen, setWeeklyHistoryOpen] = useState(false);
   const [weeklyComplianceHistory, setWeeklyComplianceHistory] = useState<CashflowWeeklyComplianceItem[]>([]);
@@ -962,6 +963,7 @@ export function CashflowProjectSheet({
     }
     setWeeklyCompletionError('');
     setWeeklyProjectionWarning(null);
+    setWeeklyCompletionNotices([]);
     setWeeklyUpdateResult('');
     setWeeklyCompletionOpen(true);
   }, [savedExecutiveApproverId]);
@@ -1025,6 +1027,11 @@ export function CashflowProjectSheet({
         ? '이미 완료 요청된 주입니다. 현재 상태를 다시 불러왔어요.'
         : '주간 정산 완료 요청을 보냈어요. 조직장 확정을 기다립니다.');
       if (!result.alreadyCompleted) toast.success('주간 정산 완료 요청을 보냈어요.');
+      setWeeklyCompletionNotices((result.notices || []).map((notice) => ({
+        code: notice.code,
+        message: notice.message,
+        lines: describeCashflowWeeklyCompletionNotice(notice),
+      })));
       setWeeklyProjectionWarning(null);
       setWeeklyUpdateResult('');
       logCashflowSettlement({
@@ -3556,6 +3563,26 @@ export function CashflowProjectSheet({
                 </div>
                 {weeklyWithdrawError ? <div role="alert" className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-800">{weeklyWithdrawError}</div> : null}
                 {weeklyActionNotice && !weeklyWithdrawError ? <div role="status" className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] leading-5 text-emerald-900">{weeklyActionNotice}</div> : null}
+                {weeklyCompletionNotices.length > 0 ? (
+                  <div role="status" className="mt-2 rounded-md border border-border bg-background px-3 py-2 text-[12px] leading-5 text-card-foreground">
+                    <div className="flex items-center gap-1.5 font-bold text-red-700">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      주간 정산은 완료 요청됐어요. 아래 항목을 확인해 주세요
+                    </div>
+                    <ul className="mt-1 space-y-0.5">
+                      {weeklyCompletionNotices.map((notice) => (
+                        <li key={notice.code}>
+                          · {notice.message}
+                          {notice.lines.length > 0 ? (
+                            <ul className="mt-0.5 ml-3 space-y-0.5 text-muted-foreground">
+                              {notice.lines.map((line) => <li key={line}>- {line}</li>)}
+                            </ul>
+                          ) : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {weeklyScheduleSteps.length > 0 ? <CashflowScheduleBar steps={weeklyScheduleSteps} className="mt-3" /> : null}
                 <div className="mt-3 flex items-center gap-4 text-[12px] text-muted-foreground">
                   <span>누적 미준수 <strong className="ml-1 text-red-700">{deadlineSummaryUnavailable ? '확인 불가' : formatCashflowCount(monthCloseResult?.dashboard?.deadlineSummary?.missedCount, '회')}</strong></span>

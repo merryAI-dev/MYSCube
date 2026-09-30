@@ -1664,6 +1664,8 @@ export interface CashflowWeeklyUpdateCompletionResult {
   operationId?: string | null;
   auditId?: string | null;
   updateResult?: 'CHANGED' | 'NO_CHANGES' | null;
+  /** 완료는 됐지만 확인이 필요한 항목. 막지 않고 알린다. */
+  notices?: Array<{ code: string; message: string; [key: string]: unknown }>;
 }
 
 export interface CashflowWeeklyComplianceItem {

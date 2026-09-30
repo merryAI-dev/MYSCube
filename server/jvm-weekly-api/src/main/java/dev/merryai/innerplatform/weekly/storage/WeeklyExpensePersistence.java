@@ -218,8 +218,22 @@ public interface WeeklyExpensePersistence extends CashflowMonthReopenPort, Cashf
         String updateResult,
         boolean projectionValidationOverride,
         int projectionValidationIssueCount,
-        String projectionValidationEvidenceHash
+        String projectionValidationEvidenceHash,
+        List<Map<String, Object>> notices
     ) {
+        public CashflowWeeklyUpdateCompletionRecord {
+            notices = notices == null ? List.of() : List.copyOf(notices);
+        }
+
+        public CashflowWeeklyUpdateCompletionRecord withNotices(List<Map<String, Object>> value) {
+            return new CashflowWeeklyUpdateCompletionRecord(
+                projectId, yearMonth, weekNo, completedAt, completedBy, alreadyCompleted, status, revision,
+                reopenCount, snapshotHash, sourceRevision, targetRevision, reopenedAt, reopenedBy, reopenReason,
+                deadline, complianceStatus, operationId, auditId, updateResult, projectionValidationOverride,
+                projectionValidationIssueCount, projectionValidationEvidenceHash, value
+            );
+        }
+
         public CashflowWeeklyUpdateCompletionRecord(
             String projectId, String yearMonth, int weekNo, String completedAt, String completedBy,
             boolean alreadyCompleted, String status, long revision, long reopenCount, String snapshotHash,
@@ -227,7 +241,7 @@ public interface WeeklyExpensePersistence extends CashflowMonthReopenPort, Cashf
         ) {
             this(projectId, yearMonth, weekNo, completedAt, completedBy, alreadyCompleted, status, revision,
                 reopenCount, snapshotHash, sourceRevision, targetRevision, reopenedAt, reopenedBy, reopenReason,
-                "", "", "", "", "", false, 0, "");
+                "", "", "", "", "", false, 0, "", List.of());
         }
     }
 

@@ -4655,7 +4655,8 @@ public class WeeklyExpenseCommandService {
             saved.complianceStatus(),
             saved.operationId(),
             saved.auditId(),
-            saved.updateResult()
+            saved.updateResult(),
+            saved.notices()
         );
     }
 

@@ -109,3 +109,35 @@ export function describeCashflowMonthCloseIssue(issue: CashflowMonthCloseIssue |
   if (code.startsWith('MANAGEMENT_CHECK_')) return managementLines(issue.details);
   return [];
 }
+
+const NOTICE_LIST_LIMIT = 10;
+
+function limited(lines: string[], total: number): string[] {
+  const shown = lines.slice(0, NOTICE_LIST_LIMIT);
+  return total > shown.length ? [...shown, `외 ${total - shown.length}건`] : shown;
+}
+
+/** 주정산 완료 응답의 알림을 "어느 주차 · 어느 항목" 한 줄들로 편다. 서버가 준 값만 옮긴다. */
+export function describeCashflowWeeklyCompletionNotice(notice: CashflowMonthCloseIssue | null | undefined): string[] {
+  if (!notice) return [];
+  const record = asRecord(notice);
+  const code = text(notice.code);
+  if (code === 'PROJECTION_WINDOW_INCOMPLETE') {
+    const cells = asArray(record.missingCells).map(asRecord);
+    return limited(cells.map((cell) => {
+      const weekNo = Number(cell.weekNo);
+      const week = `${text(cell.yearMonth)}${Number.isSafeInteger(weekNo) ? ` ${weekNo}주차` : ''}`;
+      return `${week} · Projection ${lineLabel(cell)} 미입력`;
+    }), cells.length);
+  }
+  if (code === 'OUT_OF_WINDOW_WEEK_DOCUMENT_INVALID') {
+    const documents = asArray(record.documents).map(asRecord);
+    const total = Number(record.count);
+    return limited(documents.map((doc) => {
+      const weekNo = Number(doc.weekNo);
+      const week = `${text(doc.yearMonth)}${Number.isSafeInteger(weekNo) && weekNo > 0 ? ` ${weekNo}주차` : ''}`;
+      return `${week || text(doc.documentId)} · ${text(doc.problem)}`;
+    }), Number.isSafeInteger(total) ? total : documents.length);
+  }
+  return [];
+}
