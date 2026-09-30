@@ -94,6 +94,17 @@ const SAFE_UPSTREAM_CLIENT_MESSAGES = new Map([
   ],
 ]);
 
+// 정산 엔진이 보낸 구조화된 값(연월·주차·문제)으로 어느 기록을 고쳐야 하는지 문장을 만든다.
+// 엔진의 원문 메시지는 쓰지 않는다.
+function weekDocumentInvalidMessage(code, details) {
+  if (code !== 'cashflow_week_document_invalid' || !details || typeof details !== 'object') return '';
+  const yearMonth = readOptionalText(details.yearMonth);
+  const weekNo = Number(details.weekNo);
+  const problem = readOptionalText(details.problem).slice(0, 200);
+  const where = [yearMonth, Number.isSafeInteger(weekNo) && weekNo > 0 ? `${weekNo}주차` : ''].filter(Boolean).join(' ');
+  return `${where || '일부'} 주차 기록이 표준 형태가 아닙니다${problem ? `: ${problem}` : ''}. 관리자에게 기록 정리를 요청해 주세요.`;
+}
+
 function readJavaError(status, payload) {
   const upstreamCode = readOptionalText(payload?.code);
   const hasStableCode = /^[a-z][a-z0-9_]{2,100}$/.test(upstreamCode)
@@ -102,7 +113,8 @@ function readJavaError(status, payload) {
   const normalizedStatus = upstreamFailure ? 503 : status;
   const message = upstreamFailure
     ? '현금흐름 저장 서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'
-    : (SAFE_UPSTREAM_CLIENT_MESSAGES.get(upstreamCode)
+    : (weekDocumentInvalidMessage(upstreamCode, payload?.details)
+      || SAFE_UPSTREAM_CLIENT_MESSAGES.get(upstreamCode)
       || '요청을 처리할 수 없습니다. 최신 상태와 입력 내용을 확인해 주세요.');
   const code = hasStableCode
     ? upstreamCode

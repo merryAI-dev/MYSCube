@@ -1418,6 +1418,16 @@ public class WeeklyExpenseController {
         };
     }
 
+    @org.springframework.web.bind.annotation.ExceptionHandler(CashflowWeekDocumentInvalidException.class)
+    public ResponseEntity<Map<String, Object>> weekDocumentInvalid(CashflowWeekDocumentInvalidException error) {
+        return ResponseEntity.status(409).body(Map.of(
+            "ok", "false",
+            "code", "cashflow_week_document_invalid",
+            "message", error.getMessage(),
+            "details", error.details()
+        ));
+    }
+
     @org.springframework.web.bind.annotation.ExceptionHandler(WeeklyExpenseConflictException.class)
     public ResponseEntity<Map<String, String>> conflict(WeeklyExpenseConflictException error) {
         return ResponseEntity.status(409).body(Map.of(

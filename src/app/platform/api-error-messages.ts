@@ -36,6 +36,10 @@ const presentations = new Map<string, ApiErrorPresentation>([
     guide: '검토한 뒤 시트 고정본이 변경됐어요. 최신 시트 내용을 다시 검토해 주세요.',
     resolution: 'contact',
   }],
+  ['cashflow_week_document_invalid', {
+    guide: '저장된 주차 기록 하나가 표준 형태가 아니어서 연간 잔액을 계산할 수 없어요. 표시된 연월·주차를 알려 주시면 관리자가 기록을 정리합니다.',
+    resolution: 'contact',
+  }],
   ['cashflow_sheet_template_unsupported', {
     guide: '시트 양식이 표준과 달라요. cashflow(사용내역 연동) 탭의 고정된 행과 열을 확인한 뒤 다시 불러와 주세요.',
     resolution: 'contact',

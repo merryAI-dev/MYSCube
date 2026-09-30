@@ -54,6 +54,7 @@ import dev.merryai.innerplatform.weekly.api.TrustedActorContext;
 import dev.merryai.innerplatform.weekly.api.UpsertProjectionRequest;
 import dev.merryai.innerplatform.weekly.api.UpsertProjectionResponse;
 import dev.merryai.innerplatform.weekly.api.WeeklyExpenseEditLeaseException;
+import dev.merryai.innerplatform.weekly.api.CashflowWeekDocumentInvalidException;
 import dev.merryai.innerplatform.weekly.api.WeeklyExpenseConflictException;
 import dev.merryai.innerplatform.weekly.api.WeeklyExpenseForbiddenException;
 import dev.merryai.innerplatform.weekly.domain.CashflowLineCatalog;
@@ -3989,7 +3990,12 @@ class FirestoreCashflowLeaseGuardTest {
             "in-window-malformed", "2026-09", 4, "2026-09-24T14:59:00Z", "NO_CHANGES"
         ))));
 
-        assertThat(failure).isInstanceOf(WeeklyExpenseConflictException.class);
+        assertThat(failure).isInstanceOf(CashflowWeekDocumentInvalidException.class);
+        assertThat(((CashflowWeekDocumentInvalidException) failure).details())
+            .containsEntry("documentId", "project-a-2026-10-w2")
+            .containsEntry("yearMonth", "2026-10")
+            .containsEntry("weekNo", 2)
+            .containsEntry("problem", "projection SALES_IN 값이 숫자가 아닙니다");
         assertThat(fixture.documents.keySet()).noneMatch(path -> path.contains("/cashflow_weekly_update_completions/"));
     }
 

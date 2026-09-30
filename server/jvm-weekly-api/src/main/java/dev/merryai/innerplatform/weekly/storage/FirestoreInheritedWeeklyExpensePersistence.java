@@ -44,6 +44,7 @@ import dev.merryai.innerplatform.weekly.api.MigrateCashflowSettlementCycleHeadV2
 import dev.merryai.innerplatform.weekly.api.NormalizeLegacyCashflowSettlementCycleRequest;
 import dev.merryai.innerplatform.weekly.observability.CashflowReadMetrics;
 import dev.merryai.innerplatform.weekly.api.TrustedActorContext;
+import dev.merryai.innerplatform.weekly.api.CashflowWeekDocumentInvalidException;
 import dev.merryai.innerplatform.weekly.api.WeeklyExpenseConflictException;
 import dev.merryai.innerplatform.weekly.api.CashflowSettledWeekChangeConfirmation;
 import dev.merryai.innerplatform.weekly.api.CashflowSettledWeekChangeConfirmationExpiredException;
@@ -5874,8 +5875,9 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         String docId,
         Map<String, Object> document
     ) {
-        if (cashflowMonthDocumentProblem(projectId, yearMonth, expectedWeekNo, docId, document) != null) {
-            throw malformedCashflowMonth();
+        String problem = cashflowMonthDocumentProblem(projectId, yearMonth, expectedWeekNo, docId, document);
+        if (problem != null) {
+            throw new CashflowWeekDocumentInvalidException(docId, yearMonth, expectedWeekNo, problem);
         }
     }
 
