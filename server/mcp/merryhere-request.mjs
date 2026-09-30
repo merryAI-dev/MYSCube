@@ -61,6 +61,7 @@ export function interpretRoomRequest({ previous, now, input }) {
   if (query.start && query.end && !query.duration) query.duration = minutes(query.end) - minutes(query.start);
   if (!querySchema.safeParse(query).success) throw new MerryhereError('invalid_time');
   const missing = new Set(value.missing);
+  if (value.action === 'explore') for (const key of ['time', 'duration', 'room', 'title']) missing.delete(key);
   // The model resolves bare hours to working hours; the server only refuses assumptions that break that rule.
   const meridiemAssumed = value.assumptions?.includes('meridiem')
     || Boolean(value.inherit && previous?.meridiemAssumed && !Object.hasOwn(patch, 'start') && !Object.hasOwn(patch, 'end'));
