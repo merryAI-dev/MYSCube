@@ -44,6 +44,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     environment: Production
+    env:
+      SETTLEMENT_CANARY_BASE_URL: https://mysc-slack-agent.vercel.app
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
