@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createMerryhereClient, MerryhereError, validateBookingTime, selectBookingSlots } from './merryhere-client.mjs';
-import { interpretRoomRequest, availableRoomWindows, renderRoomClarification } from './merryhere-request.mjs';
+import { interpretRoomRequest, availableRoomWindows, renderRoomClarification, meridiemNote } from './merryhere-request.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex').slice(0, 24);
 const messages = {
@@ -126,9 +126,10 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
       const shown = options.slice(0, 12);
       return { status: 'answered', bookingContext: { ...request.bookingContext, options: shown }, answer: [
         ...(request.bookingContext.dateDefaulted ? ['날짜를 지정하지 않아 오늘 기준으로 조회했습니다.'] : []),
+        ...(meridiemNote(request.bookingContext) ? [meridiemNote(request.bookingContext)] : []),
         `${request.date} · 한국시간 · Merryhere 예약 가능 시간`,
         ...(shown.length ? shown.map(w => `• ${w.room} (${w.capacity}인): ${w.start}~${w.end}`) : ['요청 조건에 맞는 예약 가능 구간이 없습니다.']),
-        '기예약·이용 차단(blocked)·외부 신청 슬롯은 제외했습니다.',
+        '이미 예약된 시간, 이용이 막힌 시간, 외부 신청만 받는 공간은 뺐습니다.',
         ...(options.length > shown.length ? ['가장 빠른 시간부터 12개 표시했습니다. 시간이나 인원으로 좁힐 수 있습니다.'] : []),
         '원하는 방과 이용 시간을 말씀해주세요. 예약 직전에 상태와 포인트를 다시 확인합니다.',
       ].join('\n') };
@@ -146,7 +147,7 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
       return { ...r, slots, points: slots.reduce((n, s) => n + s.points, 0) };
     });
     const room = views[0];
-    if (views.length !== 1 || room.slots.some(s => s.state !== 'available' || request.capacity && s.capacity < request.capacity)) return result('요청 시간 전체를 예약할 수 없습니다. 인원 조건을 충족하지 않거나, 기예약·이용 차단(blocked)·외부 신청 슬롯이 포함되어 있습니다. 예약을 제출하지 않았습니다.');
+    if (views.length !== 1 || room.slots.some(s => s.state !== 'available' || request.capacity && s.capacity < request.capacity)) return result('요청 시간 전체를 예약할 수 없습니다. 인원 조건이 맞지 않거나, 이미 예약됐거나 이용이 막힌 시간, 외부 신청 전용 공간이 포함되어 있습니다. 예약을 제출하지 않았습니다.');
     const id = hash(`${job.id}/${actor.actorId}`);
     const intent = { id, ...scope, date: request.date, start: request.start, end: request.end, roomId: room.roomId, roomName: room.name,
       title: request.title, providerTitle: `${request.title} [MC:${id}]`, points: room.points, ordinals: room.slots.map(s => s.ordinal),
@@ -157,7 +158,7 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
       if (existing.exists) return existing.data();
       tx.create(refFor(id), intent); return intent;
     });
-    return { ...result(`예약 확정 전 확인: ${summary(saved)}\n회의명: ${saved.title}\n현재 전체 구간 예약 가능 · 아직 예약하지 않았습니다. 확정 시 ${saved.points}P가 차감됩니다.\n10분 이내 같은 스레드에서 “회의실 예약 확정 ${id}”을 보내주세요.`), bookingContext: { ...request.bookingContext, intentId: id, options: [] } };
+    return { ...result(`${meridiemNote(request.bookingContext) ? `${meridiemNote(request.bookingContext)}\n` : ''}예약 확정 전 확인: ${summary(saved)}\n회의명: ${saved.title}\n현재 전체 구간 예약 가능 · 아직 예약하지 않았습니다. 확정 시 ${saved.points}P가 차감됩니다.\n10분 이내 같은 스레드에서 “회의실 예약 확정 ${id}”을 보내주세요.`), bookingContext: { ...request.bookingContext, intentId: id, options: [] } };
   } catch (error) {
     if (localConnection && ['login_required', 'login_failed', 'session_expired'].includes(error.code)) error = new MerryhereError('local_login_required');
     return { status: 'partial', ...(messages[error.code] ? { code: error.code } : {}), ...(error.bookingContext || queryContext ? { bookingContext: error.bookingContext || queryContext } : {}),

@@ -33,12 +33,16 @@ const turns = [{ question: '내일 6시 회의실', answer: '오전 오후?', bo
 
 it('restores the latest room context across an intervening turn and restricts unresolved followups to the room tool', async () => {
   const f = await fixture({ question: '오후 6시', turns });
-  let capturedTools;
-  f.complete.mockImplementation(async ({ tools }) => {
-    capturedTools = tools;
+  let capturedTools, capturedMessages;
+  f.complete.mockImplementation(async ({ tools, messages }) => {
+    capturedTools = tools; capturedMessages = messages;
     return { tool_calls: [{ id: 'rooms', function: { name: 'merryhere_rooms', arguments: JSON.stringify({ action: 'explore', inherit: true, query: { start: '18:00' }, missing: [] }) } }] };
   });
   await f.worker();
+  const system = capturedMessages.filter(m => m.role === 'system').map(m => m.content).join('\n');
+  expect(system).toContain('merryhere_rooms');
+  expect(system).not.toMatch(/CFO|정산 도우미|accounting_report|월결산/);
+  expect(capturedTools.find(t => t.function.name === 'merryhere_rooms').function.description).toMatch(/현재 한국 시각: \d{4}-\d{2}-\d{2}\([월화수목금토일]\) \d{2}:\d{2}/);
   expect(capturedTools.map(t => t.function.name)).toEqual(['merryhere_rooms']);
   expect(capturedTools[0].function.description).toContain('2026-09-30');
   expect(f.complete).toHaveBeenCalledTimes(1);
@@ -47,9 +51,9 @@ it('restores the latest room context across an intervening turn and restricts un
 
 it('does not block a financial topic switch on a missing room account or force a room-only toolset', async () => {
   const f = await fixture({ question: '에코 사업 9월과 8월 실적 비교해줘', turns, connected: false });
-  let capturedTools;
-  f.complete.mockImplementation(async ({ tools }) => {
-    capturedTools = tools;
+  let capturedTools, capturedMessages;
+  f.complete.mockImplementation(async ({ tools, messages }) => {
+    capturedTools = tools; capturedMessages = messages;
     return { content: 'fixture answer' };
   });
   await f.worker();
