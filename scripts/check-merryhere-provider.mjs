@@ -22,7 +22,7 @@ const safeFetch = async (url, options) => {
     const selected = slots.filter(a => a.value?.startsWith(`${diagnosticIntent.roomId}-`) && diagnosticIntent.ordinals.includes(Number(a.value.split('-')[1])));
     const tokens = [...new Set(nodes.filter(n => n.tag === 'input' && n.attrs.name === '_token').map(n => n.attrs.value).filter(Boolean))];
     lastCalendar = { selected, token: tokens.length === 1 ? tokens[0] : null };
-    console.log(JSON.stringify({ calendarContract: true, bytes: Buffer.byteLength(html), classes: [...new Set(slots.map(a => a.class || ''))], slotCount: slots.length, tokenCount: tokens.length, forms: nodes.filter(n => n.tag === 'form').map(n => ({ action: n.attrs.action, method: n.attrs.method })), selected: selected.map(a => Object.fromEntries(Object.entries(a).filter(([k]) => ['class', 'value', 'data-name', 'data-cnt', 'data-time', 'data-time2', 'disabled', 'readonly'].includes(k)))) }));
+    console.log(JSON.stringify({ calendarContract: true, bytes: Buffer.byteLength(html), classes: [...new Set(slots.map(a => a.class || ''))], slotCount: slots.length, tokenCount: tokens.length, forms: nodes.filter(n => n.tag === 'form').map(n => ({ action: new URL(n.attrs.action || '/', 'https://merryhere.kr').pathname, method: n.attrs.method })), selectedAttributeNames: selected.map(a => Object.keys(a)), selected: selected.map(a => Object.fromEntries(Object.entries(a).filter(([k]) => ['class', 'value', 'data-name', 'data-cnt', 'data-time', 'data-time2', 'disabled', 'readonly', 'id', 'name'].includes(k) || /^data-.*id$/.test(k) || k.startsWith('data-') && /^\d+$/.test(a[k])))) }));
   }
   if (target.pathname === '/reserveinfo') {
     const body = await response.clone().text();
