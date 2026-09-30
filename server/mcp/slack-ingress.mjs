@@ -8,8 +8,9 @@ export function verifySlackRequest({ body, timestamp, signature, secret, now = D
   return timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
 }
 
-export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR6', botToken, fetchImpl = fetch, now = () => Date.now(), onQueued, defer }) {
+export function createSlackIngress({ db, secret, teamId, channelIds = ['C0BQ6980HR6'], botToken, fetchImpl = fetch, now = () => Date.now(), onQueued, defer }) {
   if (!teamId || !secret) throw new Error('Slack workspace and signing secret are required');
+  const allowedChannels = new Set(channelIds);
   return async function ingest(req, res) {
     const started = performance.now();
     if (!verifySlackRequest({ body: req.body, timestamp: req.get('x-slack-request-timestamp'), signature: req.get('x-slack-signature'), secret, now: now() })) {
@@ -21,7 +22,8 @@ export function createSlackIngress({ db, secret, teamId, channelId = 'C0BQ6980HR
     if (payload.team_id !== teamId) return res.status(403).json({ error: 'workspace_not_allowed' });
     const event = payload.event;
     if (payload.type !== 'event_callback' || !['app_mention', 'message'].includes(event?.type) || event.bot_id || event.subtype
-      || event.channel !== channelId) return res.json({ ok: true, ignored: true });
+      || !allowedChannels.has(event.channel)) return res.json({ ok: true, ignored: true });
+    const channelId = event.channel;
     if (!/^[UW][A-Z0-9]+$/.test(event.user || '') || typeof payload.event_id !== 'string'
       || typeof event.text !== 'string' || !event.text.trim() || event.text.length > 8000
       || !/^\d{1,12}\.\d{1,6}$/.test(event.ts || '')

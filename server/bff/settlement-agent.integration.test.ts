@@ -118,7 +118,7 @@ describe.skipIf(!process.env.FIRESTORE_EMULATOR_HOST)('cloud settlement worker p
     await worker();
     expect(deliveries).toHaveLength(2);
     const payload = { team: { id: saved.teamId }, channel: { id: saved.channelId }, user: { id: slackUserId }, container: { message_ts: '2.1' }, actions: [{ action_id: 'settlement_scope_no', value: firstRef.id, action_ts: '3.1' }] };
-    expect(await saveSlackFeedback({ db, payload, teamId: saved.teamId, channelId: saved.channelId })).toBe(true);
+    expect(await saveSlackFeedback({ db, payload, teamId: saved.teamId, channelIds: new Set([saved.channelId]) })).toBe(true);
     expect((await db.doc(`settlement_agent_feedback/${saved.scopes[0].key}`).get()).data()!.votes[0].value).toBe(0);
 
     overview.items[0].settlementCycle.businessState = 'SUBMITTED';

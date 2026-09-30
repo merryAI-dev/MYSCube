@@ -49,7 +49,7 @@ it.each(['yes', 'no'])('replaces buttons with persisted %s feedback without hidi
     expect(options.redirect).toBe('error');
     return new Response('ok');
   });
-  const handler = createFeedbackIngress({ db, secret: 'fixture', teamId: 'T1', channelId: 'C1', fetchImpl });
+  const handler = createFeedbackIngress({ db, secret: 'fixture', teamId: 'T1', channelIds: ['C1'], fetchImpl });
   const payload = { team: { id: 'T1' }, user: { id: 'U1' }, channel: { id: 'C1' }, container: { message_ts: '1.2' },
     response_url: 'https://hooks.slack.com/actions/T1/test', actions: [{ action_id: `settlement_scope_${choice}`, value: 'job1', action_ts: '2.1' }] };
   const send = async () => {
