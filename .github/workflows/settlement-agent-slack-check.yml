@@ -151,7 +151,9 @@ jobs:
         env:
           ROOM_CHECK_DATE: ${{ inputs.room_date }}
           ROOM_CHECK_INTENT: ${{ inputs.room_intent }}
-          ROOM_CHECK_SERVICE_ACCOUNT: ${{ secrets.JVM_WEEKLY_API_SERVICE_ACCOUNT_JSON_LIVE }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_DEPLOY_TOKEN_PRODUCTION }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
           MERRYHERE_CREDENTIAL_KEY: ${{ secrets.MERRYHERE_CREDENTIAL_KEY }}
           GOOGLE_CALENDAR_ROOMS_JSON: ${{ secrets.GOOGLE_CALENDAR_ROOMS_JSON }}
         run: node scripts/check-merryhere-provider.mjs
