@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { slackServiceEnvironment } from './slack-service-environment.mjs';
 import { deployVercelProductionCandidate } from './deploy-vercel-production-candidate.mjs';
 
 if (process.env.GITHUB_ACTIONS !== 'true' || process.env.GITHUB_REF !== 'refs/heads/main') throw new Error('Only main GitHub Actions may deploy');
@@ -24,7 +25,8 @@ if (project.id === env.VERCEL_PROJECT_ID) throw new Error('Must not deploy over 
 await api(`/v9/projects/${project.id}`, 'PATCH', { ssoProtection: null, framework: null });
 // Copy only the existing server configuration; credentials never leave this runner or Vercel.
 const source = await api(`/v9/projects/${env.VERCEL_PROJECT_ID}/env?target=production`);
-const selected = source.envs.filter(item => /^(FIREBASE_|BFF_|JVM_|SETTLEMENT_|MERRYHERE_|GOOGLE_CALENDAR_ROOMS_JSON$)/.test(item.key));
+const selected = source.envs.filter(item => item.target?.includes('production') && !item.gitBranch
+  && /^(FIREBASE_|BFF_|JVM_|SETTLEMENT_|MERRYHERE_|GOOGLE_CALENDAR_ROOMS_JSON$)/.test(item.key));
 const copied = {};
 for (const item of selected) {
   const value = await api(`/v1/projects/${env.VERCEL_PROJECT_ID}/env/${item.id}`);
@@ -32,8 +34,7 @@ for (const item of selected) {
   copied[item.key] = value.value;
 }
 if (!copied.FIREBASE_SERVICE_ACCOUNT_JSON && !copied.FIREBASE_SERVICE_ACCOUNT_BASE64) throw new Error('Existing Firestore credentials unavailable');
-Object.assign(copied, { BFF_ALLOWED_ORIGINS: `${origin},https://myscube.myscguard.app`, MERRYHERE_CONNECT_ORIGIN: origin,
-  SLACK_SERVICE_RELEASE: sha, PRODUCT_WORKBENCH_READS_ENABLED: 'false', PRODUCT_WORKBENCH_AI_ENABLED: 'false' });
+Object.assign(copied, slackServiceEnvironment(copied, { origin, sha, workerSecret: env.SETTLEMENT_AGENT_WORKER_SECRET }));
 await api(`/v10/projects/${project.id}/env?upsert=true`, 'POST', Object.entries(copied).map(([key, value]) => ({ key, value, type: 'encrypted', target: ['production'] })));
 mkdirSync('.vercel', { recursive: true });
 writeFileSync('.vercel/project.json', JSON.stringify({ projectId: project.id, orgId: env.VERCEL_ORG_ID }));
