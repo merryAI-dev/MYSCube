@@ -1530,6 +1530,17 @@ export function CashflowProjectSheet({
     }))
   ), [monthCloseResult?.dashboard?.validation?.blockers]);
 
+  // 시트 형식·검산 경고는 결산을 막지 않는다. 어느 칸을 고칠지 알 수 있게 알림으로만 보여준다.
+  const monthCloseSheetWarnings = useMemo(() => (
+    (monthCloseResult?.dashboard?.validation?.warnings || [])
+      .filter((warning) => warning.code.startsWith('SHEET_'))
+      .map((warning) => ({
+        code: warning.code,
+        message: warning.message,
+        lines: describeCashflowMonthCloseIssue(warning),
+      }))
+  ), [monthCloseResult?.dashboard?.validation?.warnings]);
+
   // 일정 진행 바. 마감·완료 시각·초과 판정은 서버 값이고, 여기서는 단계 상태만 고른다.
   const weeklyScheduleSteps = useMemo(() => {
     const current = monthCloseResult?.dashboard?.deadlineSummary?.current;
@@ -3602,6 +3613,26 @@ export function CashflowProjectSheet({
                         className={`mt-1 text-[12px] leading-4 ${monthCloseNotice.tone === 'attention' ? 'font-semibold text-red-700' : 'text-muted-foreground'}`}
                       >
                         {monthCloseNotice.text}
+                      </div>
+                    ) : null}
+                    {monthCloseSheetWarnings.length > 0 ? (
+                      <div role="status" className="mt-2 rounded-md border border-border bg-background px-3 py-2 text-[12px] leading-5 text-card-foreground">
+                        <div className="flex items-center gap-1.5 font-bold text-red-700">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          시트에서 확인할 항목이 있어요 (월 결산은 진행할 수 있어요)
+                        </div>
+                        <ul className="mt-1 space-y-0.5">
+                          {monthCloseSheetWarnings.map((warning) => (
+                            <li key={warning.code}>
+                              · {warning.message}
+                              {warning.lines.length > 0 ? (
+                                <ul className="mt-0.5 ml-3 space-y-0.5 text-muted-foreground">
+                                  {warning.lines.map((line) => <li key={line}>- {line}</li>)}
+                                </ul>
+                              ) : null}
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     ) : null}
                   </div>

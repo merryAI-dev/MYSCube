@@ -3497,6 +3497,8 @@ async function composeCashflowMonthDashboard({
       }
       : liveDeadlineSummary;
   const blockers = [];
+  // 시트 형식·검산 규칙이 안 맞는 것은 결산을 막지 않고 알린다. 요청 증거(reviewWarnings)에는 이미 남는다.
+  const sheetRuleWarnings = [];
   for (const blocker of [...monthCloseStatusRead.blockers, ...sourceBlockers]) {
     if (!blockers.some((entry) => entry.code === blocker.code)) blockers.push(blocker);
   }
@@ -3530,8 +3532,8 @@ async function composeCashflowMonthDashboard({
     } else if (readOptionalText(mirror.appliedSourceRevision) !== readOptionalText(mirror.sourceRevision)) {
       blockers.push({ code: 'SHEET_SOURCE_NOT_APPLIED', message: '불러온 값을 MYSCube 시트에 반영해 주세요.' });
     }
-    blockers.push(...sheetControlBlockers(sheetFacts));
-    blockers.push(...monthSheetCalculationBlockers(sheetFacts, yearMonth));
+    sheetRuleWarnings.push(...sheetControlBlockers(sheetFacts));
+    sheetRuleWarnings.push(...monthSheetCalculationBlockers(sheetFacts, yearMonth));
     if (!completeMonthCloseCells(cells)) blockers.push({ code: 'SHEET_MONTH_INCOMPLETE', message: `선택한 월의 ${CASHFLOW_MONTH_CELL_COUNT}개 캐시플로우 값을 다시 불러와 주세요.` });
     if (!projectionMode || !actualMode) blockers.push({ code: 'AMOUNT_OUT_OF_RANGE', message: '지원 범위를 넘는 금액이 있습니다.' });
   }
@@ -3630,6 +3632,7 @@ async function composeCashflowMonthDashboard({
     capturedAt: readOptionalText(mirror?.capturedAt),
   };
   const warnings = closedSnapshot ? [] : [
+    ...sheetRuleWarnings,
     ...projectSheetWarnings(project, sheetFacts?.metadata),
     ...sheetControlWarnings(sheetFacts),
     ...monthSheetCalculationWarnings(sheetFacts, yearMonth),
