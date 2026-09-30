@@ -98,7 +98,7 @@ export async function reserveAgentBudget(db, month) {
 
 export function createSlackWorker({ db, readOverview, readSnapshot, env = process.env, fetchImpl = fetch, completeFactory = createGeminiCompletion, hermesRunner = runHermesAgent }) {
   const teamId = 'T099F304GAY';
-  const channelId = 'C0BQ6980HR6';
+  const channelIds = new Set(['C0BQ6980HR6', 'C0AAC4AHTN1']);
   const tenantId = 'mysc';
   async function slack(method, body, timeoutMs = 10000) {
     const readUser = method === 'users.info';
@@ -126,7 +126,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     return result;
   }
   async function contextFor(job) {
-    if (job.teamId !== teamId || job.channelId !== channelId) throw new Error('workspace_not_allowed');
+    if (job.teamId !== teamId || !channelIds.has(job.channelId)) throw new Error('workspace_not_allowed');
     const { user } = await slack('users.info', { user: job.slackUserId });
     const email = user?.profile?.email?.trim().toLowerCase();
     if (user?.deleted || user?.is_bot || user?.is_restricted || user?.is_ultra_restricted || user?.team_id !== teamId || !email?.endsWith('@mysc.co.kr')) throw new Error('member_unverified');
@@ -146,7 +146,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       requestedByActorId: requester.actorId };
   }
   async function finishProgress(job, status) {
-    if (job.teamId !== teamId || job.channelId !== channelId || !/^\d{1,12}\.\d{1,6}$/.test(job.progressTs || '')) return;
+    if (job.teamId !== teamId || !channelIds.has(job.channelId) || !/^\d{1,12}\.\d{1,6}$/.test(job.progressTs || '')) return;
     let failure;
     for (let attempt = 0; attempt < 2; attempt++) {
       let current;
@@ -454,7 +454,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
       answeredAt: new Date().toISOString() } });
     const body = {
-      channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
+      channel: job.channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
       text: slackText(deliveredText), blocks,
     };
     let result;
@@ -464,7 +464,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       catch (error) {
         if (!retryablePayloadRejection(error)) throw error;
         fallbackFailure = deliveryFailure(error, method);
-        result = await slack(method, { channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}),
+        result = await slack(method, { channel: job.channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}),
           thread_ts: job.threadTs, text: slackText(deliveredText) });
       }
       const answerTs = publicAnswer ? result.ts : result.message_ts;
@@ -485,7 +485,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       const recent = await db.collection('settlement_agent_jobs').orderBy('createdAt', 'desc').limit(20).get();
       const repairable = recent.docs.filter((doc) => {
         const value = doc.data();
-        return value?.teamId === teamId && value.channelId === channelId
+        return value?.teamId === teamId && channelIds.has(value.channelId)
           && ['succeeded', 'delivery_unknown', 'failed'].includes(value.status)
           && ['chat.postMessage', 'chat.postEphemeral'].includes(value.deliveryMethod)
           && value.receiptStatus !== 'succeeded' && value.receiptFailure?.definitive !== true
@@ -538,9 +538,9 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
   };
 }
 
-export async function saveSlackFeedback({ db, payload, teamId, channelId }) {
+export async function saveSlackFeedback({ db, payload, teamId, channelIds }) {
   const action = payload?.actions?.[0];
-  if (payload?.team?.id !== teamId || payload?.channel?.id !== channelId
+  if (payload?.team?.id !== teamId || !channelIds.has(payload?.channel?.id)
     || payload.actions?.length !== 1 || !['settlement_scope_yes', 'settlement_scope_no'].includes(action?.action_id)
     || !/^[a-zA-Z0-9_-]{1,100}$/.test(action?.value || '')
     || !/^\d{1,12}\.\d{1,6}$/.test(action?.action_ts || '')) return false;
@@ -548,7 +548,7 @@ export async function saveSlackFeedback({ db, payload, teamId, channelId }) {
     const jobRef = db.doc(`settlement_agent_jobs/${action.value}`);
     const job = (await tx.get(jobRef)).data();
     if (job?.status !== 'succeeded' || job.slackUserId !== payload.user?.id
-      || job.teamId !== teamId || job.channelId !== channelId || job.answerTs !== payload.container?.message_ts
+      || job.teamId !== teamId || job.channelId !== payload?.channel?.id || job.answerTs !== payload.container?.message_ts
       || !job.scopes?.length) return false;
     const refs = job.scopes.map(({ key }) => db.doc(`settlement_agent_feedback/${key}`));
     const snapshots = await Promise.all(refs.map((ref) => tx.get(ref)));
@@ -569,7 +569,8 @@ export async function saveSlackFeedback({ db, payload, teamId, channelId }) {
   });
 }
 
-export function createFeedbackIngress({ db, secret, teamId, channelId, fetchImpl = fetch }) {
+export function createFeedbackIngress({ db, secret, teamId, channelIds = ['C0BQ6980HR6'], fetchImpl = fetch }) {
+  const allowedChannels = new Set(channelIds);
   return async (req, res) => {
     const started = performance.now();
     if (!verifySlackRequest({ body: req.body, timestamp: req.get('x-slack-request-timestamp'), signature: req.get('x-slack-signature'), secret })) return res.status(401).json({ error: 'invalid_signature' });
@@ -578,7 +579,7 @@ export function createFeedbackIngress({ db, secret, teamId, channelId, fetchImpl
     catch { return res.status(400).json({ error: 'invalid_payload' }); }
     let saved = false;
     try {
-      if (!await saveSlackFeedback({ db, payload, teamId, channelId })) return res.status(403).json({ error: 'feedback_not_allowed' });
+      if (!await saveSlackFeedback({ db, payload, teamId, channelIds: allowedChannels })) return res.status(403).json({ error: 'feedback_not_allowed' });
       saved = true;
       const url = new URL(payload.response_url);
       if (url.origin !== 'https://hooks.slack.com' || url.username || url.password
