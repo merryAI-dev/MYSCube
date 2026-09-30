@@ -109,3 +109,17 @@ describe('createGoogleCalendarRooms', () => {
     expect(await rooms.windowsForDate('2026-09-30', {})).toEqual([]);
   });
 });
+
+it('distinguishes provider failure, unconfigured room and a genuinely occupied interval', async () => {
+  const rooms = createGoogleCalendarRooms({ env, fetchImpl: vi.fn(async url => url === floor6.icsUrl ? new Response('unavailable', { status: 403 }) : new Response(vevent(['UID:busy', 'DTSTART;TZID=Asia/Seoul:20261001T110000', 'DTEND;TZID=Asia/Seoul:20261001T120000']))), now: () => Date.parse('2026-09-30T00:00:00+09:00') });
+  const result = await rooms.readForDate('2026-10-01', { start: '11:00', end: '12:00', duration: 60 });
+  expect(result.windows).toEqual([]);
+  expect(result.checks).toEqual(expect.arrayContaining([{ room: floor6.name, status: 'failed', windows: [] }, { room: floor8.name, status: 'checked', windows: [] }]));
+  expect((await rooms.readForDate('2026-10-01', { room: '10층' })).checks[0].status).toBe('not_configured');
+});
+it('never treats an HTML login response as an empty, available calendar', async () => {
+  const rooms = createGoogleCalendarRooms({ env, fetchImpl: async () => new Response('<html>login</html>') });
+  const result = await rooms.readForDate('2026-10-01', {});
+  expect(result.windows).toEqual([]);
+  expect(result.checks.every(c => c.status === 'failed')).toBe(true);
+});

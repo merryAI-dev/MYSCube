@@ -9,8 +9,9 @@ const querySchema = z.object({
   capacity: z.number().int().min(1).max(100).nullable().optional(), title: z.string().trim().min(1).max(100).nullable().optional(),
   afternoon: z.boolean().optional(),
 }).strict();
-export const roomRequestSchema = z.object({ action: z.enum(['explore', 'prepare', 'clarify']), inherit: z.boolean(),
+export const roomRequestSchema = z.object({ action: z.enum(['explore', 'prepare', 'clarify', 'acknowledge']), inherit: z.boolean(),
   query: querySchema, missing: z.array(z.enum(['date', 'time', 'meridiem', 'duration', 'room', 'title', 'intent'])).max(7),
+  relatedRooms: z.array(z.string().trim().min(1).max(100)).max(5).optional(),
   assumptions: z.array(z.enum(['meridiem'])).max(1).optional(),
 }).strict();
 export const WORKING_HOURS = Object.freeze({ start: '08:00', end: '19:00' });
@@ -24,7 +25,7 @@ export const roomToolDescription = `Merryhere 회의실 탐색·예약 준비.
 시작을 바꿀 때 이전 end를 복사하지 마세요. 서버가 유지된 duration으로 다시 계산합니다. 새 날짜는 이전 시간 조건을 임의로 상속하지 마세요.
 추가 답변을 받으면 이전 미해결 조건을 문맥으로 해석하고 해결된 missing을 제거하세요. "오후만"은 오후 시간대 탐색(afternoon=true)입니다.
 조회는 explore, 명시적 예약 요청은 prepare입니다. 준비에 room/start/end/title이 부족하면 missing에 포함합니다. 취소/다른 주제는 clarify/intent.
-missing은 이번 답변 이후에도 남은 미해결 조건 전체입니다. 예약 생성은 이 도구가 하지 않으며, 호스트가 별도의 사용자 확인번호 확정 후 수행합니다.`;
+감사·인사·사용자가 직접 확인했다는 말만 있고 새 작업 요청이 없으면 acknowledge로 종료하세요. 예약 완료를 새로 판정하지 않습니다. 다른 질문이 함께 있으면 acknowledge를 쓰지 마세요.\n예약 선택과 함께 다른 방/층의 가능 여부를 물으면 선택한 방은 query.room에 유지하고 추가 조회 대상은 relatedRooms에 담으세요(예: ["6층", "8층"]).\nmissing은 이번 답변 이후에도 남은 미해결 조건 전체입니다. 예약 생성은 이 도구가 하지 않으며, 호스트가 별도의 사용자 확인번호 확정 후 수행합니다.`;
 
 export function validateRoomDate(date, now) {
   const day = Date.parse(`${date}T00:00:00+09:00`);
@@ -36,6 +37,7 @@ const minutes = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
 export function interpretRoomRequest({ previous, now, input }) {
   let value;
   try { value = roomRequestSchema.parse(input); } catch { throw new MerryhereError('request_unclear'); }
+  if (value.action === 'acknowledge') return { action: 'acknowledge', bookingContext: previous || null };
   const base = value.inherit && previous?.query ? querySchema.parse(Object.fromEntries(
     Object.entries(previous.query).filter(([key]) => Object.hasOwn(querySchema.shape, key)))) : {};
   const patch = value.query;
@@ -74,8 +76,12 @@ export function interpretRoomRequest({ previous, now, input }) {
     if (!query.end) missing.add('duration');
     if (!query.title) missing.add('title');
   }
+  for (const key of ['date', 'room', 'title']) if (query[key]) missing.delete(key);
+  if (query.start) missing.delete('time');
+  if (query.end) missing.delete('duration');
   const bookingContext = { query, missing: [...missing], requestedAction: value.action, dateDefaulted, meridiemAssumed: Boolean(meridiemAssumed && query.start) };
-  return { ...query, action: missing.size || value.action === 'clarify' ? 'clarify' : value.action, bookingContext };
+  const canExploreBeforeBooking = value.action === 'prepare' && !query.room && ![...missing].some(key => !['room', 'title'].includes(key));
+  return { ...query, relatedRooms: value.relatedRooms || [], action: canExploreBeforeBooking ? 'explore' : missing.size || value.action === 'clarify' ? 'clarify' : value.action, bookingContext };
 }
 export function meridiemNote(context) {
   const start = context?.meridiemAssumed && context.query?.start;
@@ -88,8 +94,11 @@ export function renderRoomClarification(context) {
     duration: '얼마 동안 이용할까요?', room: '어느 회의실을 예약할까요?', title: '회의명을 알려주세요.', intent: '조회 또는 예약할 조건을 알려주세요.' };
   const q = context?.query || {};
   const known = [q.date, q.room, q.start && `${q.start}${q.end ? `~${q.end}` : '부터'}`, q.capacity && `${q.capacity}명`].filter(Boolean);
+  const missing = context?.missing?.length ? context.missing : ['intent'];
+  const next = missing.filter(key => ['date', 'time', 'meridiem', 'duration'].includes(key));
+  const questions = next.length ? next : missing;
   return [context?.dateDefaulted ? '날짜를 지정하지 않아 오늘 기준입니다.' : '', meridiemNote(context), known.length ? `확인한 조건: ${known.join(' · ')} (한국시간)` : '',
-    ...[...new Set(context?.missing?.length ? context.missing : ['intent'])].map(key => labels[key])].filter(Boolean).join('\n');
+    ...[...new Set(questions)].map(key => labels[key])].filter(Boolean).join('\n');
 }
 export function availableRoomWindows(calendar, query, now) {
   const cutoff = calendar.date === kstDate(now) ? new Date(now + 9 * 3600000).toISOString().slice(11, 23) : '00:00:00.000';

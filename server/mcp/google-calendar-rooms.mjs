@@ -43,6 +43,7 @@ async function fetchIcsText(url, fetchImpl) {
   if (!response.ok) throw new Error('calendar_provider_error');
   const text = await response.text();
   if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('calendar_response_large');
+  if (!/^BEGIN:VCALENDAR\r?$/m.test(text) || !/^END:VCALENDAR\r?$/m.test(text)) throw new Error('calendar_format_changed');
   return text;
 }
 
@@ -59,20 +60,35 @@ export function createGoogleCalendarRooms({ env = process.env, fetchImpl = fetch
     return events;
   }
   const matches = (name, text) => !text || name.includes(text) || text.includes(name);
+  async function readForDate(date, query) {
+    const windows = [], checks = [];
+    for (const room of rooms) {
+      if (!matches(room.name, query.room)) continue;
+      try {
+        const events = await eventsFor(room);
+        const calendar = { date, slots: slotsForRoom(room, busyIntervalsForDate({ events, date })) };
+        const found = availableRoomWindows(calendar, { ...query, room: room.name }, now());
+        windows.push(...found);
+        checks.push({ room: room.name, status: query.capacity && room.capacity === null ? 'capacity_unknown' : 'checked', windows: found });
+      } catch { checks.push({ room: room.name, status: 'failed', windows: [] }); }
+    }
+    if (query.room && !checks.length) checks.push({ room: query.room, status: 'not_configured', windows: [] });
+    return { windows: windows.sort((a, b) => a.start.localeCompare(b.start) || a.room.localeCompare(b.room)), checks };
+  }
   return {
     available: rooms.length > 0,
-    roomNames: rooms.map((room) => room.name),
-    findRoom(text) { return rooms.find((room) => matches(room.name, text)) || null; },
-    async windowsForDate(date, query) {
-      const windows = [];
-      for (const room of rooms) {
-        if (!matches(room.name, query.room)) continue;
-        let events;
-        try { events = await eventsFor(room); } catch { continue; }
-        const calendar = { date, slots: slotsForRoom(room, busyIntervalsForDate({ events, date })) };
-        windows.push(...availableRoomWindows(calendar, { ...query, room: query.room ? room.name : undefined }, now()));
-      }
-      return windows.sort((a, b) => a.start.localeCompare(b.start) || a.room.localeCompare(b.room));
-    },
+    roomNames: rooms.map(room => room.name),
+    findRoom(text) { return text ? rooms.find(room => matches(room.name, text)) || null : null; },
+    readForDate,
+    async windowsForDate(date, query) { return (await readForDate(date, query)).windows; },
   };
+}
+
+export function renderGoogleRoomChecks(checks) {
+  return checks.map(check => {
+    if (check.status === 'failed') return `${check.room}: 캘린더 조회 실패로 가능 여부를 확인하지 못했습니다.`;
+    if (check.status === 'not_configured') return `${check.room}: 연결된 캘린더가 없어 가능 여부를 확인하지 못했습니다.`;
+    if (check.status === 'capacity_unknown') return `${check.room}: 정원 정보가 없어 요청 인원 수용 여부를 확인하지 못했습니다.`;
+    return `${check.room}: ${check.windows.length ? check.windows.map(w => `${w.start}~${w.end}`).join(', ') + ' 일정상 비어 있음' : '요청 조건에 맞는 빈 시간 없음'} (Google Calendar 조회 기준 · 예약은 Calendar에서 직접 진행)`;
+  });
 }

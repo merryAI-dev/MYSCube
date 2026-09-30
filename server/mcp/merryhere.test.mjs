@@ -383,6 +383,23 @@ describe('durable reservation through existing Slack actor', () => {
     expect((await runMerryhereBooking({ ...args, text: `회의실 예약 확정 ${intent.id}` })).answer).toContain('바뀌었습니다');
     expect(client.reserve).not.toHaveBeenCalled();
   });
+  it('persists post-submit verification failure as UNKNOWN without resubmitting', async () => {
+    const { args, records, client, calendar } = setup();
+    await runMerryhereBooking({ ...args, ...preparation });
+    const intent = [...records.values()][0];
+    client.reserve.mockImplementation(async () => { for (const slot of calendar.slots) Object.assign(slot, { state: 'booked', owned: true, reservationId: '123' }); });
+    client.reservation.mockRejectedValue(new MerryhereError('page_changed'));
+    const text = `회의실 예약 확정 ${intent.id}`;
+    const first = await runMerryhereBooking({ ...args, text });
+    expect(first).toMatchObject({ code: 'page_changed', stage: 'reconcile' });
+    expect(records.get(`merryhere_booking_intents/${intent.id}`).state).toBe('UNKNOWN');
+    await runMerryhereBooking({ ...args, text });
+    expect(client.reserve).toHaveBeenCalledTimes(1);
+    expect([...records.keys()].filter(k => k.startsWith('merryhere_booking_locks/'))).toHaveLength(2);
+    client.reservation.mockResolvedValue({ title: intent.providerTitle, name: intent.roomName, price: intent.points });
+    expect((await runMerryhereBooking({ ...args, text })).answer).toContain('예약 완료');
+    expect(client.reserve).toHaveBeenCalledTimes(1);
+  });
   it('only confirms after exact owned slots and marked booking detail match', async () => {
     const { args, records, client, calendar } = setup();
     await runMerryhereBooking({ ...args, ...preparation });
@@ -483,4 +500,13 @@ it('uses the existing Slack agent, member PK and delivery path for room explorat
   expect(JSON.parse(message.options.body).text).toContain('예약 가능 시간');
   expect(job.answer).not.toContain('secret');
   expect(calls.some(c => c.url.endsWith('/reserve'))).toBe(false);
+});
+
+it('stages explore then book independently of the example wording', () => {
+  const request = interpretRoomRequest({ now, input: { action: 'prepare', inherit: false, query: { date: '2026-10-02', start: '14:00', duration: 90 }, missing: ['room', 'title'] } });
+  expect(request.action).toBe('explore');
+  expect(request.bookingContext.requestedAction).toBe('prepare');
+  const early = interpretRoomRequest({ now, input: { action: 'prepare', inherit: false, query: { date: '2026-10-02', start: '14:00' }, missing: [] } });
+  expect(renderRoomClarification(early.bookingContext)).toContain('얼마 동안');
+  expect(renderRoomClarification(early.bookingContext)).not.toContain('회의명');
 });

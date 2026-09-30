@@ -2,7 +2,7 @@ import { it, expect, vi } from 'vitest';
 import { createSlackWorker } from './slack-runtime.mjs';
 import { memoryDb, connectMerryhere, TEST_MERRYHERE_KEY } from './slack-test-store.mjs';
 
-async function fixture({ question, turns = [], connected = true, alertFails = false }) {
+async function fixture({ question, turns = [], connected = true, alertFails = false, opsChannel = 'COPS' }) {
   const { db, records } = memoryDb();
   const identity = { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1' };
   records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
@@ -22,7 +22,7 @@ async function fixture({ question, turns = [], connected = true, alertFails = fa
     }
     return new Response('<html>provider markup changed</html>');
   });
-  const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SLACK_ALERT_CHANNEL_ID: 'COPS', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture',
+  const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SLACK_ALERT_CHANNEL_ID: 'CGENERIC', MERRYHERE_OPS_CHANNEL_ID: opsChannel, SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture',
     MERRYHERE_CREDENTIAL_KEY: TEST_MERRYHERE_KEY },
     readSnapshot: async () => ({}), completeFactory: () => complete, fetchImpl });
   return { worker, records, complete, calls, enqueue };
@@ -70,6 +70,8 @@ it.each([false, true])('alerts on provider markup drift and preserves the failur
   expect(f.records.get('merryhere_provider_alerts/page_changed').status).toBe(alertFails ? 'failed' : 'sent');
   f.enqueue('second'); await f.worker();
   expect(f.calls.filter(body => body.channel === 'COPS')).toHaveLength(1);
+  expect(f.calls.find(body => body.channel === 'COPS').text).toContain('요청 스레드: https://app.slack.com/archives/');
+  expect(f.calls.find(body => body.channel === 'COPS').text).toContain('예약 제출 전');
   if (alertFails) {
     const alert = f.records.get('merryhere_provider_alerts/page_changed');
     f.records.set('merryhere_provider_alerts/page_changed', { ...alert, nextAttemptAt: Date.now() - 1 });
@@ -78,4 +80,25 @@ it.each([false, true])('alerts on provider markup drift and preserves the failur
   }
   expect(JSON.stringify([...f.records])).not.toContain('private-password');
   expect(JSON.stringify(f.calls)).not.toContain('private-password');
+});
+
+it('does not send provider incidents to a generic alert channel', async () => {
+  const noOps = await fixture({ question: '회의실 알려줘', opsChannel: '' });
+  noOps.complete.mockResolvedValue({ tool_calls: [{ id: 'r', function: { name: 'merryhere_rooms', arguments: JSON.stringify({ action: 'explore', inherit: false, query: {}, missing: [] }) } }] });
+  await noOps.worker();
+  expect(noOps.calls.some(x => ['COPS', 'CGENERIC'].includes(x.channel))).toBe(false);
+  expect(noOps.records.get('merryhere_provider_alerts/page_changed').status).toBe('not_configured');
+});
+
+it('closes a room conversation through one model action without a provider or settlement read', async () => {
+  const f = await fixture({ question: '잘 확인했어요 감사합니다', turns: [{ question: '예약', answer: '결과 확인 필요', bookingContext: { query: { date: '2026-10-01' }, missing: [], intentId: 'a'.repeat(24) } }] });
+  f.complete.mockImplementation(async ({ tools }) => {
+    expect(tools.map(t => t.function.name)).toEqual(['merryhere_rooms']);
+    return { tool_calls: [{ id: 'r', function: { name: 'merryhere_rooms', arguments: JSON.stringify({ action: 'acknowledge', inherit: true, query: {}, missing: [] }) } }] };
+  });
+  await f.worker();
+  expect(f.complete).toHaveBeenCalledTimes(1);
+  expect(f.records.get('settlement_agent_jobs/first').answer).toContain('감사합니다');
+  expect([...f.records.keys()].some(k => k.startsWith('merryhere_booking_intents'))).toBe(false);
+  expect(f.calls.some(x => x.channel === 'COPS')).toBe(false);
 });
