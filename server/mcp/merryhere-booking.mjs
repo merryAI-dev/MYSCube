@@ -1,3 +1,4 @@
+import { renderGoogleRoomChecks } from './google-calendar-rooms.mjs';
 import { createHash } from 'node:crypto';
 import { createMerryhereClient, MerryhereError, validateBookingTime, selectBookingSlots } from './merryhere-client.mjs';
 import { interpretRoomRequest, availableRoomWindows, renderRoomClarification, meridiemNote } from './merryhere-request.mjs';
@@ -55,7 +56,7 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
     if (!localConnection && !credentials?.email) throw new MerryhereError('account_not_connected');
     const request = input ? interpretRoomRequest({ text, previous, now, input }) : parseBookingRequest(text, now);
     if (request.action === 'acknowledge') return { ...result('네, 확인해주셔서 감사합니다. 필요하시면 또 말씀해주세요.'), bookingContext: previous };
-    if (request.action === 'clarify' && !(request.relatedRooms?.length && request.date && request.start && request.end)) return { ...result(request.bookingContext ? renderRoomClarification(request.bookingContext) : help),
+    if (request.action === 'clarify' && !(request.relatedRooms?.length && request.date && request.start && request.end && !request.bookingContext.missing.some(key => ['date', 'time', 'meridiem', 'intent'].includes(key)))) return { ...result(request.bookingContext ? renderRoomClarification(request.bookingContext) : help),
       ...(request.bookingContext ? { bookingContext: request.bookingContext } : {}) };
     if (request.action === 'unsupported') return result('예약 취소·변경은 현재 Slack에서 지원하지 않습니다. Merryhere 내 예약현황에서 처리해주세요: https://merryhere.kr/mypage/reservation');
     if (['explore', 'prepare', 'clarify'].includes(request.action)) queryContext = { ...request.bookingContext, options: [] };
@@ -74,7 +75,6 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
       if (intent.state === 'CONFIRMED') return result(`예약 완료: ${summary(intent)}\n회의명: ${intent.title}\n예약번호: ${intent.reservationId}\nhttps://merryhere.kr/mypage/reservation`);
       if (intent.state === 'PREPARED' && intent.expiresAt < now) throw new MerryhereError('intent_expired');
       stage = intent.state === 'PREPARED' ? 'pre_submit' : 'reconcile';
-      await client.login();
       const unresolved = async (code = 'verification_mismatch') => {
         await db.runTransaction(async tx => {
           const current = (await tx.get(ref)).data();
@@ -87,6 +87,7 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
       const reconcile = async () => {
         stage = 'reconcile';
         try {
+          if (intent.state !== 'PREPARED') await client.login();
           const calendar = await client.calendar(intent.date);
           const slots = selectBookingSlots(calendar, intent);
           const ids = [...new Set(slots.map(s => s.reservationId))];
@@ -104,6 +105,7 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
         } catch (error) { return unresolved(error.code || 'verification_failed'); }
       };
       if (intent.state !== 'PREPARED') return reconcile();
+      await client.login();
       validateBookingTime(intent, now);
       const calendar = await client.calendar(intent.date);
       const slots = selectBookingSlots(calendar, intent);
@@ -142,6 +144,11 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
     for (const name of request.relatedRooms || []) {
       const floor = /^(\d+)층(?:\s*회의실)?$/.exec(name);
       const matches = [...new Set(calendar.slots.map(s => s.name))].filter(room => room === name || room.endsWith(`-${name}`) || floor && room.startsWith(`M${floor[1]}-`));
+      if (googleRooms?.readForDate && googleRooms.findRoom(name)) {
+        const check = await googleRooms.readForDate(request.date, { ...request, room: name });
+        related.push(...renderGoogleRoomChecks(check.checks));
+        continue;
+      }
       if (!matches.length) related.push(`${name}: Merryhere 예약표에 해당 공간 정보가 없어 가능 여부를 확인하지 못했습니다.`);
       for (const room of matches) {
         const windows = availableRoomWindows(calendar, { ...request, room }, now);
@@ -152,10 +159,14 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
     if (request.action === 'clarify') return { ...result(relatedNote + renderRoomClarification(request.bookingContext)), bookingContext: request.bookingContext };
     if (request.action === 'explore') {
       const merryhereOptions = availableRoomWindows(calendar, request, now);
-      let googleOptions = [];
+      let googleOptions = [], googleNotes = []; 
       if (googleRooms?.available) {
-        try { googleOptions = await googleRooms.windowsForDate(request.date, request); }
-        catch { /* One calendar's fetch failure should not discard an otherwise-successful Merryhere answer. */ }
+        try {
+          if (googleRooms.readForDate) {
+            const lookup = await googleRooms.readForDate(request.date, request);
+            googleOptions = lookup.windows; googleNotes = renderGoogleRoomChecks(lookup.checks);
+          } else googleOptions = await googleRooms.windowsForDate(request.date, request);
+        } catch { googleNotes = ['Google Calendar 조회 실패로 해당 회의실의 가능 여부를 확인하지 못했습니다.']; }
       }
       const options = [...merryhereOptions, ...googleOptions].sort((a, b) => a.start.localeCompare(b.start) || a.room.localeCompare(b.room));
       const shown = options.slice(0, 12);
@@ -167,6 +178,7 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
         ...(shown.length ? shown.map(w => `• ${w.room}${w.capacity ? ` (${w.capacity}인)` : ''}: ${w.start}~${w.end}`) : ['요청 조건에 맞는 예약 가능 구간이 없습니다.']),
         '이미 예약된 시간, 이용이 막힌 시간, 외부 신청만 받는 공간은 뺐습니다.',
         ...(options.length > shown.length ? ['가장 빠른 시간부터 12개 표시했습니다. 시간이나 인원으로 좁힐 수 있습니다.'] : []),
+        ...googleNotes,
         ...(googleOptions.length ? [`${googleRooms.roomNames.join(', ')}는 조회만 가능하며 Google Calendar에서 직접 예약해주세요.`] : []),
         request.bookingContext.requestedAction === 'prepare' ? '예약할 방을 선택해주세요. 회의명도 함께 알려주시면 확정 전 내용을 안내합니다. 아직 예약하지 않았습니다.' : '원하는 방과 이용 시간을 말씀해주세요. 예약 직전에 상태와 포인트를 다시 확인합니다.',
       ].join('\n') };
