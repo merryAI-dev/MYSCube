@@ -72,7 +72,7 @@ export function buildVercelProductionDeployArgs({
     pair(args, '--env', 'SLACK_SIGNING_SECRET', required(env, 'SLACK_SIGNING_SECRET'));
     pair(args, '--env', 'SETTLEMENT_AGENT_WORKER_SECRET', required(env, 'SETTLEMENT_AGENT_WORKER_SECRET'));
     pair(args, '--env', 'SETTLEMENT_HERMES_URL', env.SETTLEMENT_HERMES_URL || '');
-    pair(args, '--env', 'MERRYHERE_EXECUTION_MODE', 'local');
+    if (env.MERRYHERE_CREDENTIAL_KEY?.trim()) pair(args, '--env', 'MERRYHERE_CREDENTIAL_KEY', env.MERRYHERE_CREDENTIAL_KEY.trim());
   }
   pair(args, '--meta', 'maintenanceReadOnly', String(maintenance));
   pair(args, '--meta', 'githubCommitSha', commitSha);

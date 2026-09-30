@@ -1,8 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { parseCalendar, selectBookingSlots, validateBookingTime, createMerryhereClient, kstDate, MerryhereError } from './merryhere-client.mjs';
 import { validateRoomDate, interpretRoomRequest, availableRoomWindows } from './merryhere-request.mjs';
-import { runMerryhereBooking, merryhereAuthIssue } from './merryhere-booking.mjs';
-import { memoryDb } from './slack-test-store.mjs';
+import { runMerryhereBooking } from './merryhere-booking.mjs';
+import { memoryDb, connectMerryhere, TEST_MERRYHERE_KEY } from './slack-test-store.mjs';
 import { createSlackWorker } from './slack-runtime.mjs';
 
 const now = Date.parse('2026-09-29T13:47:00+09:00');
@@ -103,7 +103,7 @@ describe('normalized room query contract', () => {
   });
   it('keeps a clarification draft without authenticating and resolves it through a later model query', async () => {
     const clientFactory = vi.fn();
-    const args = { actor: { actorId: 'member' }, job: {}, env: { MERRYHERE_ACCOUNTS_JSON: '{"member":{"email":"fixture@example.test","password":"fixture"}}' }, now, clientFactory };
+    const args = { actor: { actorId: 'member' }, job: {}, credentials: { email: 'fixture@example.test', password: 'fixture' }, now, clientFactory };
     const first = await runMerryhereBooking({ ...args, text: '다음 주 수요일 5시부터 1시간 4명',
       input: { ...input, query: { date: '2026-10-07', duration: 60, capacity: 4 }, missing: ['meridiem'] } });
     expect(first.answer).toContain('오전인가요, 오후인가요');
@@ -174,7 +174,7 @@ describe('normalized room query contract', () => {
   });
 });
 
-it.each(['오늘 5시에 가능한 회의실 알려줘', `예약 확정 ${'a'.repeat(24)}`])('avoids model usage and provider traffic when auth is unconfigured: %s', async (question) => {
+it.each(['오늘 5시에 가능한 회의실 알려줘', `예약 확정 ${'a'.repeat(24)}`])('sends only the requester a one-time connect link without model or provider traffic: %s', async (question) => {
   const { db, records } = memoryDb();
   const identity = { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1' };
   const previous = { query: { date: '2026-09-30', start: '18:00' }, missing: [], intentId: 'a'.repeat(24) };
@@ -187,12 +187,33 @@ it.each(['오늘 5시에 가능한 회의실 알려줘', `예약 확정 ${'a'.re
     if (url.startsWith('https://slack.com/')) return Response.json({ ok: true, ts: '2.1', message_ts: '3.1' });
     throw new Error('provider must not run');
   });
-  await createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, completeFactory, fetchImpl })();
+  await createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', MERRYHERE_CREDENTIAL_KEY: TEST_MERRYHERE_KEY }, completeFactory, fetchImpl })();
   expect(completeFactory).not.toHaveBeenCalled();
   expect(fetchImpl.mock.calls.every(([url]) => url.startsWith('https://slack.com/'))).toBe(true);
   expect([...records.keys()].some(key => key.startsWith('settlement_agent_budgets/'))).toBe(false);
   expect(records.get('settlement_agent_jobs/first')).toMatchObject({ bookingContext: previous });
-  expect(records.get('settlement_agent_jobs/first').answer).toContain('서버 자동 로그인 설정이 아직 없습니다');
+  const job = records.get('settlement_agent_jobs/first');
+  expect(job.answer).toContain('[일회용 연결 링크 · 요청자에게만 전송]');
+  expect(job.deliveryMethod).toBe('chat.postEphemeral');
+  const [delivery] = fetchImpl.mock.calls.filter(([url]) => url.endsWith('chat.postEphemeral')).map(([, options]) => JSON.parse(options.body));
+  const token = /merryhere\/connect#([A-Za-z0-9_-]{43})/.exec(delivery.text)?.[1];
+  expect(delivery.user).toBe('UQA');
+  expect(token).toBeTruthy();
+  expect(JSON.stringify([...records])).not.toContain(token);
+  expect([...records.keys()].filter(key => key.startsWith('merryhere_connect_links/'))).toHaveLength(1);
+});
+
+it('explains that connecting is unavailable when the server has no credential key', async () => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member-pk', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'conversation', createdAt: new Date().toISOString(), question: '가능한 회의실' });
+  records.set('settlement_agent_threads/conversation', { ...identity, queue: ['first'], turns: [] });
+  const fetchImpl = vi.fn(async (url) => url.includes('users.info')
+    ? Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } }) : Response.json({ ok: true, ts: '2.1', message_ts: '3.1' }));
+  await createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, completeFactory: vi.fn(), fetchImpl })();
+  expect(records.get('settlement_agent_jobs/first').answer).toContain('연결 기능이 아직 준비되지 않았습니다');
+  expect([...records.keys()].some(key => key.startsWith('merryhere_connect_links/'))).toBe(false);
 });
 
 it('persists a clarification draft and sends history plus server context to the model before a provider read', async () => {
@@ -204,6 +225,7 @@ it('persists a clarification draft and sends history plus server context to the 
     const threadPath = 'settlement_agent_threads/conversation';
     const job = { ...identity, status: 'queued', attempts: 0, conversationId: 'conversation', createdAt: new Date().toISOString(), question: '오늘 5시에 가능한 회의실 알려줘' };
     records.set('orgs/mysc/members/member-pk', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
+    await connectMerryhere(db, 'member-pk');
     records.set('settlement_agent_jobs/first', job);
     records.set(threadPath, { ...identity, queue: ['first'], turns: [] });
     const providerCalls = [];
@@ -221,8 +243,7 @@ it('persists a clarification draft and sends history plus server context to the 
         ? { ...input, inherit: true, query: { start: '17:00' } }
         : { ...input, query: { date: '2026-09-29' }, missing: ['meridiem'] }) } }] };
     });
-    const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture',
-      MERRYHERE_ACCOUNTS_JSON: JSON.stringify({ 'member-pk': { email: 'provider@example.com', password: 'secret' } }) },
+    const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture', MERRYHERE_CREDENTIAL_KEY: TEST_MERRYHERE_KEY },
       completeFactory: () => completion,
       fetchImpl: async (url, options) => {
         if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
@@ -250,34 +271,17 @@ it('persists a clarification draft and sends history plus server context to the 
 });
 
 describe('durable reservation through existing Slack actor', () => {
-  it.each([
-    [undefined, 'auth_not_configured'], ['  ', 'auth_not_configured'],
-    ['not-json', 'auth_config_invalid'], ['null', 'auth_config_invalid'], ['[]', 'auth_config_invalid'],
-    ['{"member-pk":{"email":42,"password":"private-secret"}}', 'auth_config_invalid'],
-    ['{"member-pk":{"email":"test@example.com","password":42}}', 'auth_config_invalid'],
-    ['{}', 'account_not_connected'],
-  ])('distinguishes account setup failures without exposing credentials: %s', (raw, code) => {
-    const issue = merryhereAuthIssue({ MERRYHERE_ACCOUNTS_JSON: raw }, 'member-pk');
-    expect(issue.code).toBe(code);
-    expect(JSON.stringify(issue)).not.toMatch(/private-secret|test@example.com|member-pk/);
-  });
-  it('accepts only an own member entry and keeps readiness separate from login success', () => {
-    expect(merryhereAuthIssue({ MERRYHERE_ACCOUNTS_JSON: '{}' }, 'constructor').code).toBe('account_not_connected');
-    expect(merryhereAuthIssue({ MERRYHERE_ACCOUNTS_JSON: '{"member-pk":{"email":"test@example.com","password":" secret "}}' }, 'member-pk')).toBeNull();
-  });
-  it('starts missing-account onboarding without claiming browser login connects the server', async () => {
+  it('starts connection onboarding without a stored connection and never contacts the provider', async () => {
     const clientFactory = vi.fn();
-    const reply = await runMerryhereBooking({ db: {}, actor: { actorId: 'not-connected' }, job: {}, env: { MERRYHERE_ACCOUNTS_JSON: '{}' },
-      text: '가능한 회의실', input, now, clientFactory });
-    expect(reply.answer).toContain('https://merryhere.kr/auth/login');
-    expect(reply.answer).toContain('브라우저 로그인만으로 Slack 서버에 연결되지는 않습니다');
+    const reply = await runMerryhereBooking({ db: {}, actor: { actorId: 'not-connected' }, job: {}, text: '가능한 회의실', input, now, clientFactory });
+    expect(reply.code).toBe('account_not_connected');
+    expect(reply.answer).toContain('{{MERRYHERE_CONNECT_LINK}}');
     expect(reply.answer).toContain('비밀번호는 Slack에 보내지 마세요');
     expect(clientFactory).not.toHaveBeenCalled();
   });
-  it('checks account setup before asking any clarification even outside the Slack worker', async () => {
-    const reply = await runMerryhereBooking({ actor: { actorId: 'member' }, env: {}, text: '5시', now,
-      input: { ...input, missing: ['meridiem'] } });
-    expect(reply.code).toBe('auth_not_configured');
+  it('checks the connection before asking any clarification even outside the Slack worker', async () => {
+    const reply = await runMerryhereBooking({ actor: { actorId: 'member' }, text: '5시', now, input: { ...input, missing: ['meridiem'] } });
+    expect(reply.code).toBe('account_not_connected');
     expect(reply.answer).not.toContain('오전인가요');
   });
   const setup = () => {
@@ -285,7 +289,7 @@ describe('durable reservation through existing Slack actor', () => {
     const calendar = parseCalendar(html(), '2026-09-30');
     const client = { login: vi.fn(), calendar: vi.fn(async () => calendar), reserve: vi.fn(), reservation: vi.fn() };
     const args = { db, actor: { actorId: 'member-pk' }, job: { id: 'slack-job', teamId: 'T', channelId: 'C', threadTs: '1.2' },
-      env: { MERRYHERE_ACCOUNTS_JSON: JSON.stringify({ 'member-pk': { email: 'test@example.com', password: 'secret' } }) }, now, clientFactory: () => client };
+      credentials: { email: 'test@example.com', password: 'secret' }, now, clientFactory: () => client };
     return { args, records, client, calendar };
   };
   const prepare = '2026-09-30 09:00~10:00 3A 회의실 예약, 회의명: 팀 회의';
@@ -295,7 +299,7 @@ describe('durable reservation through existing Slack actor', () => {
     client.login.mockRejectedValueOnce(new MerryhereError('login_failed'));
     const failed = await runMerryhereBooking({ ...args, ...preparation });
     expect(failed.code).toBe('login_failed');
-    expect(failed.answer).toContain('로그인 정보 갱신');
+    expect(failed.answer).toContain('다시 연결');
     expect(failed.bookingContext.query).toMatchObject(preparation.input.query);
     expect(client.calendar).not.toHaveBeenCalled();
     expect(client.reserve).not.toHaveBeenCalled();
@@ -388,11 +392,11 @@ it('uses the existing Slack agent, member PK and delivery path for room explorat
   const { db, records } = memoryDb();
   const date = kstDate(Date.now());
   records.set('orgs/mysc/members/member-pk', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
+  await connectMerryhere(db, 'member-pk');
   records.set('settlement_agent_jobs/j', { status: 'queued', attempts: 0, createdAt: new Date().toISOString(),
     teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1', question: '가능한 회의실 알려줘' });
   const calls = [];
-  const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture',
-    MERRYHERE_ACCOUNTS_JSON: JSON.stringify({ 'member-pk': { email: 'provider@example.com', password: 'secret' } }) },
+  const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture', MERRYHERE_CREDENTIAL_KEY: TEST_MERRYHERE_KEY },
     completeFactory: () => async ({ tools }) => {
       expect(tools.map(t => t.function.name)).toContain('merryhere_rooms');
       return { tool_calls: [{ id: 'rooms', function: { name: 'merryhere_rooms', arguments: JSON.stringify(input) } }] };

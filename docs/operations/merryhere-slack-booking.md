@@ -30,24 +30,20 @@
 
 예약표는 선택 날짜와 예약 버튼의 날짜가 일치해야 한다. `disabled` 또는 `readonly`인 빈 셀도 blocked로 처리한다. `data-list-id` 및 예약 클래스는 기예약, `paid-slot`/`studio-outlink-slot`은 외부 신청으로 처리한다. 알 수 없는 클래스·누락·중복·잘못된 시각은 가용 상태로 보정하지 않는다.
 
-## 개인 컴퓨터 로그인과 Slack 연결
+## 계정 연결 (웹에서 한 번)
 
-운영 배포는 `MERRYHERE_EXECUTION_MODE=local`이다. 기존 Slack 에이전트는 자연어 해석·확정번호·예약 의도·잠금을 관리하고, 개인 컴퓨터의 실행기가 Merryhere HTTP 접속을 담당한다. 서버는 Merryhere 비밀번호·쿠키·CSRF를 받지 않는다. 기존 `MERRYHERE_ACCOUNTS_JSON` 주입은 제거했다. 브라우저의 기존 쿠키를 추출하지 않는다.
+운영 기본 경로는 서버 연결이다. 사용자는 명령어 없이 다음과 같이 연결한다.
 
-Node 22 이상과 프로젝트 의존성이 설치된 컴퓨터에서 다음 순서로 실행한다.
+1. 연결하지 않은 사용자가 회의실을 요청하거나 Slack에서 `회의실 계정 연결`을 보내면, 봇이 **요청자에게만 보이는**(`chat.postEphemeral`) 일회용 링크를 준다. 15분 유효, 1회 사용, 링크당 로그인 시도 5회.
+2. 링크(`/api/v1/merryhere/connect#<토큰>`)는 BFF가 직접 내려주는 별도 페이지다. 포털·관리자 화면과 무관하다. 토큰은 URL 조각(`#`)에만 있어 서버 접근 로그와 Referer에 남지 않는다. 페이지는 CSP nonce·`no-store`·`no-referrer`·프레임 금지를 적용한다.
+3. 아이디·비밀번호·동의를 제출하면 서버가 실제 Merryhere 로그인 후 예약표(로그아웃 링크 포함)를 열어 성공을 확인한다. 성공할 때만 저장한다.
+4. 저장값은 `merryhere_connections/{sha256(tenant/member)}`의 AES-256-GCM 암호문이다. AAD에 회원을 묶어 다른 회원 문서로 옮기면 복호화되지 않는다. 키는 GitHub Production 비밀값 `MERRYHERE_CREDENTIAL_KEY`(32바이트 base64)를 배포 시 전달한다. 키가 없거나 형식이 틀리면 링크 발급·저장을 거부하며 평문으로 대체 저장하지 않는다.
+5. 예약 처리 시점에만 서버 메모리에서 복호화한다. Slack 답변·작업 기록·추적 기록에는 링크 토큰·비밀번호·쿠키를 남기지 않는다(저장본은 `[일회용 연결 링크 · 요청자에게만 전송]`으로 대체).
+6. 로그인이 거부되면 연결을 `LOGIN_FAILED`로 표시하고 재연결 링크를 준다. `회의실 계정 연결 해제`는 저장값을 삭제한다.
 
-1. `npm run merryhere:local -- login`: 본인 터미널에서 이메일과 숨겨진 비밀번호를 입력한다. 실제 로그인·예약표 확인 후 세션만 저장한다. 비밀번호는 저장하지 않는다.
-2. `npm run merryhere:local -- pair`: 10분짜리 연결 코드를 발급한다. 안내된 `회의실 로컬 연결 <코드>`를 Slack에서 봇을 멘션해 보낸다.
-3. `npm run merryhere:local -- run`: 터미널에 표시된 연결 요청자의 이름·이메일을 확인하고 본인일 때만 `yes`로 승인한다. 공개 채널에서 코드를 먼저 사용한 타인에게 기기가 자동 연결되지 않는다.
-4. 실행기를 켜둔 채 Slack에서 원래 질문을 다시 보낸다. 컴퓨터가 꺼지거나 잠자기에 들어가면 Slack은 오프라인을 안내한다.
+키를 바꾸면 기존 연결은 복호화되지 않으므로 `INVALID`로 보고 재연결을 안내한다.
 
-세션 만료 시 별도 터미널에서 `login`을 다시 실행한다. 30일 기기 연결 만료 또는 새 연결이 필요할 때 `pair`부터 반복한다. Slack의 `회의실 로컬 연결 해제`는 해당 회원의 기기 capability를 폐기한다. 실행 중인 외부 예약 제출을 취소하는 명령은 아니다.
-
-파일은 `~/.myscube-merryhere/`에 디렉터리 0700·파일 0600으로 저장한다. `session.json`은 쿠키와 계정별 무작위 식별자, `connection.json`은 서버 연결 capability, `identities.json`은 계정별 식별자 매핑이다. 같은 계정으로 재로그인·재연결하면 기존 예약 확인번호를 유지할 수 있다. 다른 계정은 기존 의도를 확정하지 못한다. 이 디렉터리를 지우면 기존 계정 식별자도 사라지므로 미확인 예약은 먼저 Merryhere 실제 내역을 확인해야 한다.
-
-릴레이는 기존 `/api/v1` rewrite 아래 `/api/v1/merryhere/local/{register,poll,approve,permit,complete}`만 사용한다. 로컬에서 outbound HTTPS로 연결하며 공개 로컬 포트를 열지 않는다. 서버에는 capability 해시·소유 회원·30일 만료·heartbeat와 25초 작업만 저장한다. 작업은 한 번 claim하며 예약 제출 전에도 연결·기한을 확인한다. 결과는 날짜·슬롯·예약 상세의 제한된 필드만 검증 후 받는다. 로컬 제출 기록은 POST 전에 독점 생성해 중단·재시작 시 중복 POST를 차단한다. 지연·불명 제출은 기존 서버 UNKNOWN/reconcile 경로를 유지한다.
-
-명확한 회의실 요청은 모델 호출 전에 미연결·오프라인·로컬 로그인 필요 상태를 구분한다. 대기 중에는 10초마다, 작업을 받은 뒤 15초 동안은 750ms마다 poll하며 Gemini를 호출하지 않는다. 로컬 연결 코드는 공개 Slack 메시지와 기존 감사 이력에 남을 수 있지만 일회용이며 로컬 승인 없이는 권한을 부여하지 않는다. 장기 capability·세션은 이 이력에 포함하지 않는다.
+`MERRYHERE_EXECUTION_MODE=local`을 명시한 환경에서만 이전 개인 컴퓨터 실행기(`npm run merryhere:local`, `/api/v1/merryhere/local/*`)가 동작한다. 운영 배포는 이 값을 설정하지 않는다.
 
 ## 중복 방지와 장애 처리
 
@@ -67,4 +63,4 @@ Node 22 이상과 프로젝트 의존성이 설치된 컴퓨터에서 다음 순
 
 실제 Gemini 자연어 해석 검사는 main의 `Settlement Agent Slack Check` workflow에서 `check_rooms=true`로 수동 실행한다. 합성 대화 4회, 요청당 입력 4,000 token 상한이며 실제 Merryhere 조회·예약·Slack 메시지 발송은 없다. `scripts/check-merryhere-understanding.mjs`가 토큰 사용량과 정규화 결과를 출력한다. 로컬 Secret Manager 조회 경로는 없으며 main GitHub Actions 밖에서는 실행을 거부한다. 운영 중 자동으로 반복 실행하지 않는다.
 
-사용자 로컬 로그인·기기 승인 후 **Slack 탐색 요청 → 로컬 세션 조회 → 후속 조건 → 예약 준비/확정 → 실제 예약 내역 일치 → Slack 답변**을 검증해야 출시 완료다. provider DB PK/FK 확인은 소스/DDL 접근 후 별도로 기록한다. 배포는 저장소 정책대로 main CI 성공 후 자동 Production Deploy 경로를 사용한다.
+사용자 웹 연결 후 **Slack 탐색 요청 → 서버 로그인·조회 → 후속 조건 → 예약 준비/확정 → 실제 예약 내역 일치 → Slack 답변**을 검증해야 출시 완료다. provider DB PK/FK 확인은 소스/DDL 접근 후 별도로 기록한다. 배포는 저장소 정책대로 main CI 성공 후 자동 Production Deploy 경로를 사용한다.

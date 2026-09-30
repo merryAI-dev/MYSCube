@@ -10,11 +10,10 @@ const messages = {
   local_pair_expired: '로컬 연결 코드가 만료되었거나 이미 사용되었습니다. 개인 컴퓨터에서 npm run merryhere:local -- pair 로 새 코드를 발급해주세요.',
   local_uncertain: '로컬 실행기에 이미 예약 제출 기록이 있습니다. 다시 제출하지 않았습니다. 기존 예약 확인번호로 결과를 재조회해주세요.',
   local_account_changed: '로컬 Merryhere 로그인 계정이 요청 이후 바뀌었습니다. 이전 예약 확인번호는 원래 계정으로 로그인한 뒤 재조회해주세요. 새 계정으로 예약하려면 조건을 다시 요청해주세요.',
-  auth_not_configured: 'Merryhere 서버 자동 로그인 설정이 아직 없습니다. 관리자에게 자동 로그인 계정 연결을 요청해주세요. 연결 후 이 스레드에서 원래 요청을 다시 보내면 서버가 로그인부터 진행합니다. 기존 예약 확인번호가 있으면 같은 번호로 재조회해주세요. 이번에는 로그인·조회·예약을 시도하지 않았습니다. 비밀번호는 Slack에 보내지 마세요.',
-  auth_config_invalid: 'Merryhere 서버 계정 연결 설정에 오류가 있습니다. 관리자가 설정을 수정해야 합니다. 이번에는 로그인·회의실 조회·예약을 시도하지 않았습니다. 수정 후 원래 요청 또는 기존 예약 확인번호로 다시 요청해주세요.',
-  account_not_connected: '자동 로그인에 사용할 Merryhere 계정을 연결해주세요. 관리자에게 본인의 Slack 서버 계정 연결을 요청해주세요. 연결 후 이 스레드에서 원래 요청을 다시 보내면 자동 로그인한 뒤 조회합니다.\n로그인 확인: https://merryhere.kr/auth/login\n브라우저 로그인만으로 Slack 서버에 연결되지는 않습니다. 비밀번호는 Slack에 보내지 마세요. 이번 요청에서는 예약을 제출하지 않았습니다. 기존 예약 확인번호가 있으면 같은 번호로 재조회해주세요.',
-  login_failed: 'Merryhere 자동 로그인이 거부되었습니다. https://merryhere.kr/auth/login 에서 로그인을 확인하고, 관리자에게 서버에 연결된 로그인 정보 갱신을 요청해주세요. 비밀번호는 Slack에 보내지 마세요. 갱신 후 같은 요청을 다시 보내주세요. 이전 예약 확인번호가 있다면 반드시 같은 번호로 결과를 재조회해주세요.',
-  login_required: 'Merryhere 자동 로그인 후에도 인증 상태를 확인하지 못했습니다. https://merryhere.kr/auth/login 에서 계정을 확인하고 관리자에게 서버 계정 연결 점검을 요청해주세요. 예약 확인번호가 있다면 같은 번호로 결과를 재조회해주세요.',
+  account_not_connected: 'Merryhere 계정 연결이 필요합니다. 아래 링크에서 한 번만 연결하면 이후에는 Slack에서 바로 조회·예약할 수 있습니다.\n{{MERRYHERE_CONNECT_LINK}}\n링크는 요청하신 분에게만 보이며 15분 동안 한 번 사용할 수 있습니다. 비밀번호는 Slack에 보내지 마세요. 이번 요청에서는 조회·예약을 하지 않았습니다.',
+  login_failed: 'Merryhere 로그인이 거부되었습니다. 비밀번호가 바뀌었다면 아래 링크에서 다시 연결해주세요.\n{{MERRYHERE_CONNECT_LINK}}\n링크는 요청하신 분에게만 보이며 15분 동안 한 번 사용할 수 있습니다. 이전 예약 확인번호가 있다면 연결 후 같은 번호로 결과를 재조회해주세요.',
+  login_required: 'Merryhere 로그인 후에도 인증 상태를 확인하지 못했습니다. 아래 링크에서 계정을 다시 연결해주세요.\n{{MERRYHERE_CONNECT_LINK}}\n예약 확인번호가 있다면 연결 후 같은 번호로 결과를 재조회해주세요.',
+  connect_unavailable: 'Merryhere 계정 연결 기능이 아직 준비되지 않았습니다. 관리자에게 알려주세요. 이번 요청에서는 조회·예약을 하지 않았습니다.',
   session_expired: 'Merryhere 로그인 세션이 만료되었습니다. 같은 요청을 다시 보내면 서버가 로그인부터 다시 진행합니다. 예약 확인번호가 있다면 반드시 같은 번호를 사용해주세요. 이미 제출한 예약은 재제출하지 않고 결과만 조회합니다.',
   invalid_time: '존재하는 날짜와 30분 단위의 시작·종료 시각을 지정해주세요. 종료는 시작보다 늦어야 합니다.',
   past_time: '이미 지난 시간은 예약할 수 없습니다. 한국시간 기준으로 미래 시간을 지정해주세요.',
@@ -36,23 +35,6 @@ const messages = {
 };
 const help = '원하는 조건을 조금만 더 알려주세요. “가능한 회의실”, “다음 주 수요일 가능한 곳”, “그중 4명 가능한 곳”처럼 물어볼 수 있습니다. 시간은 한국시간 기준입니다.';
 
-function accountCredentials(env, actorId) {
-  const raw = env.MERRYHERE_ACCOUNTS_JSON;
-  if (typeof raw !== 'string' || !raw.trim()) throw new MerryhereError('auth_not_configured');
-  let accounts;
-  try { accounts = JSON.parse(raw); } catch { throw new MerryhereError('auth_config_invalid'); }
-  if (!accounts || typeof accounts !== 'object' || Array.isArray(accounts)) throw new MerryhereError('auth_config_invalid');
-  if (!Object.hasOwn(accounts, actorId)) throw new MerryhereError('account_not_connected');
-  const credentials = accounts[actorId];
-  if (!credentials || typeof credentials.email !== 'string' || !credentials.email.trim()
-    || typeof credentials.password !== 'string' || !credentials.password.trim()) throw new MerryhereError('auth_config_invalid');
-  return { email: credentials.email.trim(), password: credentials.password };
-}
-
-export function merryhereAuthIssue(env, actorId) {
-  try { accountCredentials(env, actorId); return null; }
-  catch (error) { return { status: 'partial', code: error.code, answer: messages[error.code] }; }
-}
 export function localRoomIssue(code) { return { status: 'partial', code, answer: messages[code] || messages.local_offline }; }
 
 export function isMerryhereRequest(text) { return /회의실|메리히어|merryhere|가능한\s*(?:장소|공간)/i.test(text); }
@@ -66,17 +48,17 @@ const summary = i => `${i.date} ${i.start}~${i.end} (한국시간) · ${i.roomNa
 const result = answer => ({ status: 'answered', answer });
 const uncertain = i => result(`예약 결과 확인 필요: ${summary(i)}\n예약 제출이 시작됐으나 생성 결과를 확인하지 못했습니다. 자동 재제출하지 않습니다. 같은 확인번호로 “회의실 예약 확정 ${i.id}”을 보내면 결과만 다시 조회합니다.\nMerryhere에서 직접 확인: https://merryhere.kr/mypage/reservation`);
 
-export async function runMerryhereBooking({ db, actor, job, env, text, input, previous, now = Date.now(), clientFactory = createMerryhereClient, localConnection }) {
+export async function runMerryhereBooking({ db, actor, job, text, input, previous, now = Date.now(), clientFactory = createMerryhereClient, localConnection, credentials }) {
   let queryContext;
   try {
-    const credentials = localConnection ? null : accountCredentials(env, actor.actorId);
+    if (!localConnection && !credentials?.email) throw new MerryhereError('account_not_connected');
     const request = input ? interpretRoomRequest({ text, previous, now, input }) : parseBookingRequest(text, now);
     if (request.action === 'clarify') return { ...result(request.bookingContext ? renderRoomClarification(request.bookingContext) : help),
       ...(request.bookingContext ? { bookingContext: request.bookingContext } : {}) };
     if (request.action === 'unsupported') return result('예약 취소·변경은 현재 Slack에서 지원하지 않습니다. Merryhere 내 예약현황에서 처리해주세요: https://merryhere.kr/mypage/reservation');
     if (['explore', 'prepare'].includes(request.action)) queryContext = { ...request.bookingContext, options: [] };
-    const accountKey = localConnection ? localConnection.accountKey : hash(credentials.email.toLowerCase());
-    const client = clientFactory(credentials);
+    const accountKey = localConnection ? localConnection.accountKey : credentials.accountKey || hash(credentials.email.toLowerCase());
+    const client = clientFactory(localConnection ? null : { email: credentials.email, password: credentials.password });
     const scope = { actorId: actor.actorId, teamId: job.teamId, channelId: job.channelId, threadTs: job.threadTs, accountKey };
     const refFor = id => db.doc(`merryhere_booking_intents/${id}`);
     if (request.action === 'confirm') {

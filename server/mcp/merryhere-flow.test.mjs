@@ -1,11 +1,12 @@
 import { it, expect, vi } from 'vitest';
 import { createSlackWorker } from './slack-runtime.mjs';
-import { memoryDb } from './slack-test-store.mjs';
+import { memoryDb, connectMerryhere, TEST_MERRYHERE_KEY } from './slack-test-store.mjs';
 
-function fixture({ question, turns = [], connected = true, alertFails = false }) {
+async function fixture({ question, turns = [], connected = true, alertFails = false }) {
   const { db, records } = memoryDb();
   const identity = { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1' };
   records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
+  if (connected) await connectMerryhere(db, 'member', { loginId: 'fixture@example.test', password: 'private-password' });
   const enqueue = (id) => {
     records.set(`settlement_agent_jobs/${id}`, { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(), question });
     records.set('settlement_agent_threads/thread', { ...identity, queue: [id], turns });
@@ -22,7 +23,7 @@ function fixture({ question, turns = [], connected = true, alertFails = false })
     return new Response('<html>provider markup changed</html>');
   });
   const worker = createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SLACK_ALERT_CHANNEL_ID: 'COPS', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture',
-    ...(connected ? { MERRYHERE_ACCOUNTS_JSON: '{"member":{"email":"fixture@example.test","password":"private-password"}}' } : {}) },
+    MERRYHERE_CREDENTIAL_KEY: TEST_MERRYHERE_KEY },
     readSnapshot: async () => ({}), completeFactory: () => complete, fetchImpl });
   return { worker, records, complete, calls, enqueue };
 }
@@ -31,7 +32,7 @@ const context = { query: { date: '2026-09-30' }, missing: ['meridiem'], requeste
 const turns = [{ question: '내일 6시 회의실', answer: '오전 오후?', bookingContext: context }, { question: '정산 상태', answer: '확인 결과', bookingContext: null }];
 
 it('restores the latest room context across an intervening turn and restricts unresolved followups to the room tool', async () => {
-  const f = fixture({ question: '오후 6시', turns });
+  const f = await fixture({ question: '오후 6시', turns });
   let capturedTools;
   f.complete.mockImplementation(async ({ tools }) => {
     capturedTools = tools;
@@ -45,7 +46,7 @@ it('restores the latest room context across an intervening turn and restricts un
 });
 
 it('does not block a financial topic switch on a missing room account or force a room-only toolset', async () => {
-  const f = fixture({ question: '에코 사업 9월과 8월 실적 비교해줘', turns, connected: false });
+  const f = await fixture({ question: '에코 사업 9월과 8월 실적 비교해줘', turns, connected: false });
   let capturedTools;
   f.complete.mockImplementation(async ({ tools }) => {
     capturedTools = tools;
@@ -58,7 +59,7 @@ it('does not block a financial topic switch on a missing room account or force a
 });
 
 it.each([false, true])('alerts on provider markup drift and preserves the failure reply when alert delivery fails=%s', async (alertFails) => {
-  const f = fixture({ question: '회의실 알려줘', alertFails });
+  const f = await fixture({ question: '회의실 알려줘', alertFails });
   f.complete.mockResolvedValue({ tool_calls: [{ id: 'rooms', function: { name: 'merryhere_rooms', arguments: JSON.stringify({ action: 'explore', inherit: false, query: {}, missing: [] }) } }] });
   await f.worker();
   expect(f.records.get('settlement_agent_jobs/first').answer).toContain('응답 형식이 예상과 달라');
