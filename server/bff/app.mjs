@@ -129,6 +129,8 @@ import { mountCashflowExportRoutes } from './routes/cashflow-exports.mjs';
 import { mountJvmWeeklyApiRoutes } from './routes/jvm-weekly-api.mjs';
 import { createMcpOAuthService, mountMcpOAuthRoutes } from './mcp-oauth.mjs';
 import { createLocalRoomRelay, mountLocalRoomRelay } from '../mcp/merryhere-local-relay.mjs';
+import { createMerryhereConnections } from '../mcp/merryhere-connection.mjs';
+import { mountMerryhereConnect, verifyMerryhereLogin } from '../mcp/merryhere-connect-route.mjs';
 import { mountCashflowSheetLabRoutes } from './routes/cashflow-sheet-lab.mjs';
 import { mountCashflowLaborRiskRoutes } from './routes/cashflow-labor-risk.mjs';
 import { mountCashflowPeriodPolicyRoutes } from './routes/cashflow-period-policy.mjs';
@@ -1424,6 +1426,7 @@ export function createBffApp(options = {}) {
   });
 
   if (settlementAgentEnabled && env.MERRYHERE_EXECUTION_MODE === 'local') mountLocalRoomRelay(app, createLocalRoomRelay({ db }));
+  else if (settlementAgentEnabled) mountMerryhereConnect(app, { connections: createMerryhereConnections({ db, env }), verify: verifyMerryhereLogin() });
 
   app.use('/api/v1', createApiContextMiddleware({
     authMode, verifyToken, resolveMemberIdentity,

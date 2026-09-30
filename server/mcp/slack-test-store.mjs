@@ -1,4 +1,13 @@
 import { previousYearMonth } from '../bff/cashflow-close-calendar.mjs';
+import { createMerryhereConnections } from './merryhere-connection.mjs';
+
+export const TEST_MERRYHERE_KEY = Buffer.alloc(32, 7).toString('base64');
+// Connects through the real link and sealing path; the member record must already be ACTIVE.
+export async function connectMerryhere(db, actorId, { loginId = 'provider@example.com', password = 'secret', tenantId = 'mysc' } = {}) {
+  const connections = createMerryhereConnections({ db, env: { MERRYHERE_CREDENTIAL_KEY: TEST_MERRYHERE_KEY } });
+  const link = await connections.issueLink({ tenantId, actorId }, 'fixture');
+  await connections.connect({ token: link.split('#')[1], loginId, password, consent: true }, async () => {});
+}
 export function memoryDb() {
   const records = new Map();
   const snap = (ref) => ({ id: ref.path.split('/').at(-1), ref, exists: records.has(ref.path), data: () => structuredClone(records.get(ref.path)) });

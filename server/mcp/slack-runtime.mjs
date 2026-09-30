@@ -18,7 +18,8 @@ import { resolveSettlementRequest, settlementRequestTools, isSettlementTopic } f
 import { createSlackProgress, readProgressJob, toolProgressStage } from './slack-progress.mjs';
 import { createSettlementStatusTool } from './settlement-status-report.mjs';
 import { createSupportTools } from './support-read.mjs';
-import { isMerryhereRequest, runMerryhereBooking, merryhereAuthIssue, localRoomIssue } from './merryhere-booking.mjs';
+import { isMerryhereRequest, runMerryhereBooking, localRoomIssue } from './merryhere-booking.mjs';
+import { createMerryhereConnections, CONNECT_LINK_PLACEHOLDER } from './merryhere-connection.mjs';
 import { createLocalRoomRelay, localPairCode } from './merryhere-local-relay.mjs';
 import { roomRequestSchema, roomToolDescription } from './merryhere-request.mjs';
 import { createMerryhereClient } from './merryhere-client.mjs';
@@ -181,6 +182,10 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     const localRelay = env.MERRYHERE_EXECUTION_MODE === 'local' ? createLocalRoomRelay({ db }) : null;
     const pairCode = localRelay && localPairCode(roomText);
     const disconnectLocal = localRelay && roomText === '회의실 로컬 연결 해제';
+    const connections = localRelay ? null : createMerryhereConnections({ db, env });
+    const connectAccount = !localRelay && roomText === '회의실 계정 연결';
+    const disconnectAccount = !localRelay && roomText === '회의실 계정 연결 해제';
+    const accountCommand = connectAccount || disconnectAccount;
     const previousBooking = job.turns?.findLast(turn => turn.bookingContext)?.bookingContext || null;
     const roomConfirm = /^\s*(?:회의실\s*)?예약\s*확정\s+[a-f0-9]{24}\s*$/.test(roomText);
     const settlementRequest = resolveSettlementRequest(experiment.question);
@@ -205,20 +210,27 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     let answer;
     let answerStatus;
     let bookingContext = null;
+    let connectLink = null;
+    let privateAnswer = false;
     try {
       const actor = await contextFor(job);
       const localConnection = localRelay && roomRequest && !pairCode && !disconnectLocal ? await localRelay.connection(actor) : null;
-      const roomAuthIssue = roomRequest && !pairCode && !disconnectLocal
-        ? localRelay ? localConnection.issue ? localRoomIssue(localConnection.issue) : null : merryhereAuthIssue(env, actor.actorId) : null;
+      const serverRoomIssue = async () => {
+        if (!connections.available) return localRoomIssue('connect_unavailable');
+        const status = await connections.status(actor);
+        return status === 'ACTIVE' ? null : localRoomIssue(status === 'LOGIN_FAILED' ? 'login_failed' : 'account_not_connected');
+      };
+      const roomAuthIssue = roomRequest && !pairCode && !disconnectLocal && !accountCommand
+        ? localRelay ? localConnection.issue ? localRoomIssue(localConnection.issue) : null : await serverRoomIssue() : null;
       progress.show('INTERPRET_REQUEST');
       await record({ type: 'run_start', actorId: actor.actorId, actorRole: actor.actorRole,
         readPrincipal: 'myscube-settlement-agent', permissionPolicy: 'mysc-designated-channel-company-settlement-read-v1',
-        question: job.question, model: request?.direct || roomConfirm || roomAuthIssue || pairCode || disconnectLocal ? null : 'gemini-3.6-flash', experiment: experiment.variant,
+        question: job.question, model: request?.direct || roomConfirm || roomAuthIssue || pairCode || disconnectLocal || accountCommand ? null : 'gemini-3.6-flash', experiment: experiment.variant,
         harness: request?.direct ? 'settlement-status-direct-v1' : useHermes ? 'hermes-readonly-v1' : 'settlement-read-v2' });
       if (useHermes && !env.SETTLEMENT_HERMES_URL) throw new Error('hermes_not_configured');
       const previousAnswerId = job.turns?.at(-1)?.jobId || null;
       await record({ type: 'conversation_feedback', ...observeConversationFeedback({ text: job.question, previousAnswerId }) });
-      if (!request?.direct && !roomConfirm && !roomAuthIssue && !pairCode && !disconnectLocal) {
+      if (!request?.direct && !roomConfirm && !roomAuthIssue && !pairCode && !disconnectLocal && !accountCommand) {
         if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
         await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
       }
@@ -232,10 +244,16 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         progress.show('READ_ROOMS');
         const connection = localRelay ? localConnection || await localRelay.connection(actor) : null;
         if (connection?.issue) return localRoomIssue(connection.issue);
-        const result = await runMerryhereBooking({ db, actor: await contextFor(job), job, env, text: roomText, input,
-          previous: previousBooking, localConnection: connection,
+        let credentials;
+        if (!localRelay) {
+          try { credentials = await connections.credentials(actor); }
+          catch (error) { return localRoomIssue(error.code === 'login_failed' ? 'login_failed' : 'account_not_connected'); }
+        }
+        const result = await runMerryhereBooking({ db, actor: await contextFor(job), job, text: roomText, input,
+          previous: previousBooking, localConnection: connection, credentials,
           clientFactory: credentials => localRelay ? localRelay.client(connection) : createMerryhereClient({ ...credentials, fetchImpl }) });
         bookingContext = result.bookingContext || previousBooking;
+        if (!localRelay && ['login_failed', 'login_required'].includes(result.code)) await connections.markLoginFailed(actor);
         if (result.code === 'page_changed') {
           try {
             const alertRef = db.doc('merryhere_provider_alerts/page_changed');
@@ -349,6 +367,15 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           result = { status: 'answered', answer: disconnectLocal ? '로컬 회의실 연결을 해제했습니다.'
             : '로컬 연결 승인을 요청했습니다. 컴퓨터에서 npm run merryhere:local -- run 을 실행하고 표시된 이름·이메일이 본인인지 확인해 승인해주세요. 승인 후 원래 질문을 다시 보내주세요. 로그인 세션은 컴퓨터에만 저장됩니다.' };
         } catch { result = localRoomIssue('local_pair_expired'); }
+      } else if (accountCommand) {
+        if (disconnectAccount) await connections.disconnect(actor);
+        result = disconnectAccount
+          ? { status: 'answered', answer: 'Merryhere 계정 연결을 해제했습니다. 서버에 보관한 로그인 정보를 삭제했습니다.' }
+          : connections.available
+            ? { status: 'answered', answer: `Merryhere 계정 연결 링크입니다. 아래 링크에서 아이디와 비밀번호를 한 번 입력하면 연결됩니다.\n${CONNECT_LINK_PLACEHOLDER}\n링크는 요청하신 분에게만 보이며 15분 동안 한 번 사용할 수 있습니다. 비밀번호는 Slack에 보내지 마세요.` }
+            : localRoomIssue('connect_unavailable');
+        bookingContext = previousBooking;
+        await record({ type: 'tool_result', tool: disconnectAccount ? 'merryhere_account_disconnect' : 'merryhere_account_connect_link', result: { status: result.status } });
       } else if (roomAuthIssue) {
         result = roomAuthIssue;
         bookingContext = previousBooking;
@@ -381,6 +408,11 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       }
       progress.show('PREPARE_ANSWER');
       await contextFor(job);
+      if (result.answer?.includes(CONNECT_LINK_PLACEHOLDER)) {
+        // The one-time link is delivered only to the requester and never stored in job, trace or thread records.
+        connectLink = connections?.available ? await connections.issueLink(actor, job.id) : null;
+        privateAnswer = true;
+      }
       await record({ type: 'run_result', status: result.status, answer: result.answer, answerPolicy: 'server_evidence_only' });
       answerStatus = result.status;
       answer = result.answer;
@@ -400,21 +432,23 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
     const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${roomRequest || bookingContext ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
-    const blocks = answerBlocks(text);
-    const publicAnswer = !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
+    const storedText = text.replaceAll(CONNECT_LINK_PLACEHOLDER, '[일회용 연결 링크 · 요청자에게만 전송]');
+    const deliveredText = connectLink ? text.replaceAll(CONNECT_LINK_PLACEHOLDER, connectLink) : storedText;
+    const blocks = answerBlocks(deliveredText);
+    const publicAnswer = !privateAnswer && !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     if (publicAnswer && answerStatus === 'answered' && scopes.length) blocks.push({ type: 'context', elements: [{ type: 'plain_text', text: '정정할 내용은 댓글로 편하게 알려주세요. 아래 조회 범위 평가는 선택사항입니다.' }] }, { type: 'actions', elements: [
       { type: 'button', action_id: 'settlement_scope_yes', text: { type: 'plain_text', text: '예 · 범위가 맞아요' }, value: job.id },
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
     const answerDelivery = publicAnswer ? 'public' : 'private';
     const method = publicAnswer ? 'chat.postMessage' : 'chat.postEphemeral';
-    await updateClaimedJob({ db, job, patch: { status: 'sending', answerDelivery, deliveryMethod: method, answer: text, scopes, audit, experimentVariant: experiment.variant,
+    await updateClaimedJob({ db, job, patch: { status: 'sending', answerDelivery, deliveryMethod: method, answer: storedText, scopes, audit, experimentVariant: experiment.variant,
       bookingContext,
       reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
       answeredAt: new Date().toISOString() } });
     const body = {
       channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
-      text: slackText(text), blocks,
+      text: slackText(deliveredText), blocks,
     };
     let result;
     let fallbackFailure;
@@ -424,7 +458,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         if (!retryablePayloadRejection(error)) throw error;
         fallbackFailure = deliveryFailure(error, method);
         result = await slack(method, { channel: channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}),
-          thread_ts: job.threadTs, text: slackText(text) });
+          thread_ts: job.threadTs, text: slackText(deliveredText) });
       }
       const answerTs = publicAnswer ? result.ts : result.message_ts;
       if (!/^\d{1,12}\.\d{1,6}$/.test(answerTs || '')) throw new SlackDeliveryError({ method, code: 'invalid_response' });

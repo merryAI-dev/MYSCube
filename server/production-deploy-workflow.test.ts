@@ -25,12 +25,20 @@ const env = {
 };
 
 describe('production deployment decisions', () => {
-  it.each([undefined, '', '  ', '{"member":{"email":"fixture@example.test","password":"fixture-secret"}}'])('uses local sessions without forwarding provider credentials: %s', (accounts) => {
+  it.each([undefined, '', '  ', '{"member":{"email":"fixture@example.test","password":"fixture-secret"}}'])('uses stored server connections without forwarding provider credentials: %s', (accounts) => {
     const deployment = buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance: false,
       env: { ...env, SETTLEMENT_AGENT_ENABLED: 'true', SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key', MERRYHERE_ACCOUNTS_JSON: accounts } });
-    const index = deployment.args.findIndex((arg: string) => arg.startsWith('MERRYHERE_ACCOUNTS_JSON='));
-    expect(index).toBe(-1);
-    expect(deployment.args).toContain('MERRYHERE_EXECUTION_MODE=local');
+    expect(deployment.args.findIndex((arg: string) => arg.startsWith('MERRYHERE_ACCOUNTS_JSON='))).toBe(-1);
+    expect(deployment.args.some((arg: string) => arg.startsWith('MERRYHERE_EXECUTION_MODE='))).toBe(false);
+    expect(deployment.args.some((arg: string) => arg.startsWith('MERRYHERE_CREDENTIAL_KEY='))).toBe(false);
+  });
+  it('forwards the credential encryption key only when the settlement agent runs', () => {
+    for (const settlement of [true, false]) {
+      const deployment = buildVercelProductionDeployArgs({ sourceDir: '/tmp/agent', commitSha: 'a'.repeat(40), invocation: '1-1', maintenance: false,
+        env: { ...env, SETTLEMENT_AGENT_ENABLED: String(settlement), SLACK_SIGNING_SECRET: 'signature', SETTLEMENT_AGENT_GEMINI_API_KEY: 'agent-key', SETTLEMENT_AGENT_WORKER_SECRET: 'worker-key', MERRYHERE_CREDENTIAL_KEY: ' key-material ' } });
+      expect(deployment.args.includes('MERRYHERE_CREDENTIAL_KEY=key-material')).toBe(settlement);
+    }
+    expect(readFileSync('.github/workflows/production-deploy.yml', 'utf8')).toContain('MERRYHERE_CREDENTIAL_KEY: ${{ secrets.MERRYHERE_CREDENTIAL_KEY }}');
   });
   it.each(['production-deploy.yml', 'jvm-production-deploy.yml'])('does not inject provider credentials in %s', (file) => {
     expect(readFileSync(`.github/workflows/${file}`, 'utf8')).not.toContain('MERRYHERE_ACCOUNTS_JSON:');
