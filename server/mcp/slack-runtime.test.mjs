@@ -19,7 +19,9 @@ it('reserves budget atomically per attempt and prevents terminal job overwrite',
     set: (ref, value) => data.set(ref.path, value), update: (ref, value) => data.set(ref.path, { ...data.get(ref.path), ...value }),
   }) };
   expect(typeof runtime.reserveAgentBudget).toBe('function');
-  for (let i = 0; i < 60; i++) await runtime.reserveAgentBudget(db, '2026-09');
+  data.set('settlement_agent_budgets/2026-09', { reservedKrw: 30000, attempts: 60 });
+  for (let i = 60; i < 200; i++) await runtime.reserveAgentBudget(db, '2026-09');
+  expect(data.get('settlement_agent_budgets/2026-09')).toMatchObject({ reservedKrw: 100000, attempts: 200 });
   await expect(runtime.reserveAgentBudget(db, '2026-09')).rejects.toThrow('budget');
   await expect(runtime.updateClaimedJob({ db, job: { id: 'j', leaseId: 'lease' }, patch: { status: 'failed' } })).rejects.toThrow('lease');
 });
