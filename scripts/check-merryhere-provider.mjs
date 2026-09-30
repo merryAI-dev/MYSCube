@@ -22,6 +22,8 @@ const safeFetch = async (url, options) => {
       const nodes = [];
       const visit = n => { if (n.tagName && n.tagName !== 'script') nodes.push({ tag: n.tagName, attributes: (n.attrs || []).filter(a => ['class', 'id', 'name'].includes(a.name)).map(a => [a.name, a.value]) }); for (const c of n.childNodes || []) visit(c); };
       visit(parse5.parse(body)); shape = { htmlNodes: nodes.slice(0, 80) };
+      const ajax = await fetch(url, { ...options, headers: { ...options.headers, accept: 'application/json', 'x-requested-with': 'XMLHttpRequest' } });
+      try { const value = await ajax.json(); console.log(JSON.stringify({ endpoint: '/reserveinfo', ajaxStatus: ajax.status, ajaxJsonKeys: Object.keys(value), ajaxFieldTypes: Object.fromEntries(Object.entries(value).map(([key, v]) => [key, typeof v])) })); } catch { console.log(JSON.stringify({ endpoint: '/reserveinfo', ajaxStatus: ajax.status, ajaxJson: false })); }
     }
     console.log(JSON.stringify({ endpoint: '/reserveinfo', status: response.status, contentType: response.headers.get('content-type'), ...shape }));
   }
@@ -33,7 +35,7 @@ for (const room of parseCalendarRoomsConfig(process.env)) {
     const response = await safeFetch(room.icsUrl, { redirect: 'error', signal: AbortSignal.timeout(10000) });
     const text = await response.text();
     const events = parseIcsEvents(text);
-    console.log(JSON.stringify({ calendar: room.name, events: events.length, unsupportedRules: events.filter(e => e.rrule?.unsupported).length, unsupportedZones: events.filter(e => e.dtstart.unsupported).length, busy: busyIntervalsForDate({ events, date }), ruleShapes: [...new Set((text.match(/^RRULE:.+$/gm) || []).map(line => line.replace(/(?:UNTIL|COUNT)=([^;\r]+)/g, '$&')))].filter(rule => /BYSETPOS|BYWEEKNO|BYYEARDAY|BYMONTHDAY=[^;]*,/.test(rule)).slice(0, 10), status: response.status, isIcs: text.includes('BEGIN:VCALENDAR'), windows: response.ok ? await rooms.windowsForDate(date, { room: room.name, start: '11:00', end: '12:00', duration: 60 }) : [] }));
+    console.log(JSON.stringify({ calendar: room.name, events: events.length, unsupportedRules: events.filter(e => e.rrule?.unsupported).length, unsupportedZones: events.filter(e => e.dtstart.unsupported).length, busy: busyIntervalsForDate({ events, date }), ruleShapes: [...new Set((text.match(/^RRULE:.+$/gm) || []))].filter(rule => /BYSETPOS|BYWEEKNO|BYYEARDAY|BYMONTHDAY=[^;]*,/.test(rule)).slice(0, 10), status: response.status, isIcs: text.includes('BEGIN:VCALENDAR'), windows: response.ok ? await rooms.windowsForDate(date, { room: room.name, start: '11:00', end: '12:00', duration: 60 }) : [] }));
   } catch { console.log(JSON.stringify({ calendar: room.name, error: 'calendar_fetch_failed' })); }
 }
 console.log(JSON.stringify({ configuredCalendars: rooms.roomNames }));
