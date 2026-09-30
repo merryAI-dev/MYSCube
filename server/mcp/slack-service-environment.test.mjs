@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { slackServiceEnvironment } from './slack-service-environment.mjs';
+import { slackServiceEnvironment } from '../../scripts/slack-service-environment.mjs';
 const identity = { origin: 'https://mysc-slack-agent.vercel.app', sha: 'a'.repeat(40) };
 describe('isolated Slack live environment', () => {
   it('replaces the website-only origin allowlist and preserves cron authentication', () => {
