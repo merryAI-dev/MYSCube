@@ -1,0 +1,66 @@
+name: Slack Service Deploy
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: slack-service-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: Production
+    env:
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      VERCEL_CLI_PACKAGE: vercel@50.14.0
+      LIVE_FIREBASE_PROJECT_ID: inner-platform-live-20260316
+      BFF_DEPLOY_ENV: live
+      BFF_AUTH_MODE: firebase_required
+      BFF_EDIT_LEASES_ENABLED: 'true'
+      BFF_ALLOWED_ORIGINS: https://mysc-slack-agent.vercel.app
+      JVM_WEEKLY_AUTH_MODE: strict
+      JVM_WEEKLY_FIRESTORE_PROJECT_ID: inner-platform-live-20260316
+      JVM_WEEKLY_API_BASE_URL: ${{ vars.JVM_WEEKLY_API_BASE_URL_LIVE }}
+      JVM_WEEKLY_API_ID_TOKEN_AUDIENCE: ${{ vars.JVM_WEEKLY_API_ID_TOKEN_AUDIENCE_LIVE }}
+      SLACK_ALERT_CHANNEL_ID: C0BQ6980HR6
+      SETTLEMENT_AGENT_ENABLED: 'true'
+      SETTLEMENT_HERMES_URL: ${{ vars.SETTLEMENT_HERMES_URL }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+      - name: Verify green CI, current main and deployment author
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse origin/main)" = "$TARGET_SHA"
+          test "$(git log -1 --format=%ae)" = 'ai@mysc.co.kr'
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${TARGET_SHA}&event=push" \
+            --jq '.workflow_runs | any(.conclusion == "success" and .head_branch == "main")' | grep -qx true
+      - name: Deploy isolated Slack service and verify before promotion
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_DEPLOY_TOKEN_PRODUCTION }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          JVM_WEEKLY_INTERNAL_API_TOKEN: ${{ secrets.JVM_WEEKLY_INTERNAL_API_TOKEN_LIVE }}
+          JVM_WEEKLY_API_SERVICE_ACCOUNT_JSON: ${{ secrets.JVM_WEEKLY_API_SERVICE_ACCOUNT_JSON_LIVE }}
+          SLACK_ALERT_BOT_TOKEN: ${{ secrets.SLACK_ALERT_BOT_TOKEN }}
+          SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+          SETTLEMENT_AGENT_GEMINI_API_KEY: ${{ secrets.SETTLEMENT_AGENT_GEMINI_API_KEY }}
+          MERRYHERE_CREDENTIAL_KEY: ${{ secrets.MERRYHERE_CREDENTIAL_KEY }}
+          GOOGLE_CALENDAR_ROOMS_JSON: ${{ secrets.GOOGLE_CALENDAR_ROOMS_JSON }}
+          SETTLEMENT_AGENT_WORKER_SECRET: ${{ secrets.SETTLEMENT_AGENT_WORKER_SECRET }}
+        run: node scripts/deploy-slack-service.mjs
