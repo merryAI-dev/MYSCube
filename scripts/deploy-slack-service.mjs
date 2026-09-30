@@ -41,7 +41,7 @@ env.VERCEL_PROJECT_ID = project.id;
 env.BFF_ALLOWED_ORIGINS = copied.BFF_ALLOWED_ORIGINS;
 writeFileSync('api/bff.js', "export { default } from '../server/mcp/slack-service-entry.mjs';\n");
 rmSync('api/static-asset-not-found.js');
-writeFileSync('vercel.json', JSON.stringify({ version: 2, framework: null, buildCommand: 'mkdir -p slack-dist', outputDirectory: 'slack-dist',
+writeFileSync('vercel.json', JSON.stringify({ version: 2, framework: null, buildCommand: 'node scripts/build-slack-service.mjs', outputDirectory: 'slack-dist',
   functions: { 'api/bff.js': { maxDuration: 300, regions: ['iad1'] } },
   rewrites: [{ source: '/:path*', destination: '/api/bff?__path=/:path*' }],
 }));
