@@ -198,8 +198,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     const previousBooking = job.turns?.findLast(turn => turn.bookingContext)?.bookingContext || null;
     const roomConfirm = /^\s*(?:회의실\s*)?예약\s*확정\s+[a-f0-9]{24}\s*$/.test(roomText);
     const settlementRequest = resolveSettlementRequest(experiment.question);
-    const pendingRoom = previousBooking?.missing?.some(key => key !== 'intent');
-    const roomRequest = roomConfirm || isMerryhereRequest(roomText) || (pendingRoom && !isSettlementTopic(roomText));
+    const roomRequest = roomConfirm || isMerryhereRequest(roomText) || (previousBooking && !isSettlementTopic(roomText));
     const request = roomRequest ? null : settlementRequest;
     const useHermes = experiment.variant === 'hermes' && !request?.direct && !roomRequest && !previousBooking;
     const scopes = [];
@@ -250,6 +249,10 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         return readOverview({ context, body: input });
       } });
       const booking = async (input) => {
+        if (input?.action === 'acknowledge') {
+          bookingContext = previousBooking;
+          return { status: 'answered', answer: '네, 확인해주셔서 감사합니다. 필요하시면 또 말씀해주세요.' };
+        }
         progress.show('READ_ROOMS');
         const connection = localRelay ? localConnection || await localRelay.connection(actor) : null;
         if (connection?.issue) return localRoomIssue(connection.issue);
@@ -270,19 +273,24 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
             const claimed = await db.runTransaction(async tx => {
               const prior = (await tx.get(alertRef)).data();
               if (prior?.nextAttemptAt > stamp) return false;
-              tx.set(alertRef, { jobId: job.id, status: 'pending', nextAttemptAt: stamp + 15 * 60000 });
+              tx.set(alertRef, { jobId: job.id, stage: result.stage || 'availability', channelId: job.channelId, threadTs: job.threadTs, status: 'pending', nextAttemptAt: stamp + 15 * 60000 });
               return true;
             });
             if (claimed) {
-              let status = 'sent';
-              try {
-                if (!env.SLACK_ALERT_CHANNEL_ID) throw new Error('alert_not_configured');
-                await slack('chat.postMessage', { channel: env.SLACK_ALERT_CHANNEL_ID,
-                  text: 'Merryhere 예약 화면 형식 변경이 감지되었습니다. 회의실 가용 여부를 추정하지 않고 처리를 중단했습니다. 관리자 점검이 필요합니다. 오류: page_changed',
-                  unfurl_links: false, unfurl_media: false }, 5000);
-              } catch { status = 'failed'; }
+              let status = 'not_configured';
+              if (env.MERRYHERE_OPS_CHANNEL_ID) {
+                try {
+                  const link = `https://app.slack.com/archives/${job.channelId}/p${job.threadTs.replace('.', '')}`;
+                  const phase = result.stage === 'reconcile' ? '예약 제출 후 결과 확인 실패 · 중복 제출 차단 유지'
+                    : '예약 제출 전 조회 실패 · 예약하지 않음';
+                  await slack('chat.postMessage', { channel: env.MERRYHERE_OPS_CHANNEL_ID,
+                    text: `Merryhere 점검 필요: ${phase}\n오류: page_changed · 단계: ${result.stage || 'availability'}\n요청 스레드: ${link}`,
+                    unfurl_links: false, unfurl_media: false }, 5000);
+                  status = 'sent';
+                } catch { status = 'failed'; }
+              }
               await db.runTransaction(async tx => {
-                if ((await tx.get(alertRef)).data()?.jobId === job.id) tx.update(alertRef, { status, nextAttemptAt: stamp + (status === 'sent' ? 15 : 1) * 60000 });
+                if ((await tx.get(alertRef)).data()?.jobId === job.id) tx.update(alertRef, { status, nextAttemptAt: stamp + (status === 'failed' ? 1 : 15) * 60000 });
               });
               await record({ type: 'provider_alert', provider: 'merryhere', code: 'page_changed', status });
             }

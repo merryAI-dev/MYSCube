@@ -50,15 +50,17 @@ const uncertain = i => result(`예약 결과 확인 필요: ${summary(i)}\n예�
 
 export async function runMerryhereBooking({ db, actor, job, text, input, previous, now = Date.now(), clientFactory = createMerryhereClient, localConnection, credentials, googleRooms }) {
   let queryContext;
+  let stage = 'availability';
   try {
     if (!localConnection && !credentials?.email) throw new MerryhereError('account_not_connected');
     const request = input ? interpretRoomRequest({ text, previous, now, input }) : parseBookingRequest(text, now);
-    if (request.action === 'clarify') return { ...result(request.bookingContext ? renderRoomClarification(request.bookingContext) : help),
+    if (request.action === 'acknowledge') return { ...result('네, 확인해주셔서 감사합니다. 필요하시면 또 말씀해주세요.'), bookingContext: previous };
+    if (request.action === 'clarify' && !(request.relatedRooms?.length && request.date && request.start && request.end)) return { ...result(request.bookingContext ? renderRoomClarification(request.bookingContext) : help),
       ...(request.bookingContext ? { bookingContext: request.bookingContext } : {}) };
     if (request.action === 'unsupported') return result('예약 취소·변경은 현재 Slack에서 지원하지 않습니다. Merryhere 내 예약현황에서 처리해주세요: https://merryhere.kr/mypage/reservation');
-    if (['explore', 'prepare'].includes(request.action)) queryContext = { ...request.bookingContext, options: [] };
+    if (['explore', 'prepare', 'clarify'].includes(request.action)) queryContext = { ...request.bookingContext, options: [] };
     if (request.action === 'prepare') {
-      const googleOnlyRoom = googleRooms?.findRoom(request.room);
+      const googleOnlyRoom = request.room && googleRooms?.findRoom(request.room);
       if (googleOnlyRoom) return result(`${googleOnlyRoom.name}은(는) 조회만 가능한 회의실입니다. Slack에서 예약을 준비할 수 없으니 Google Calendar에서 직접 예약해주세요. 아직 예약을 제출하지 않았습니다.`);
     }
     const accountKey = localConnection ? localConnection.accountKey : credentials.accountKey || hash(credentials.email.toLowerCase());
@@ -71,15 +73,26 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
       if (!intent || Object.entries(scope).some(([k, v]) => intent[k] !== v)) throw new MerryhereError('intent_not_found');
       if (intent.state === 'CONFIRMED') return result(`예약 완료: ${summary(intent)}\n회의명: ${intent.title}\n예약번호: ${intent.reservationId}\nhttps://merryhere.kr/mypage/reservation`);
       if (intent.state === 'PREPARED' && intent.expiresAt < now) throw new MerryhereError('intent_expired');
+      stage = intent.state === 'PREPARED' ? 'pre_submit' : 'reconcile';
       await client.login();
+      const unresolved = async (code = 'verification_mismatch') => {
+        await db.runTransaction(async tx => {
+          const current = (await tx.get(ref)).data();
+          if (current?.state === 'SUBMITTING' || current?.state === 'UNKNOWN') {
+            tx.update(ref, { state: 'UNKNOWN', verificationCode: code, verificationStage: 'reconcile' });
+          }
+        });
+        return { ...uncertain(intent), stage: 'reconcile', code };
+      };
       const reconcile = async () => {
+        stage = 'reconcile';
         try {
           const calendar = await client.calendar(intent.date);
           const slots = selectBookingSlots(calendar, intent);
           const ids = [...new Set(slots.map(s => s.reservationId))];
-          if (ids.length !== 1 || !ids[0] || !slots.every(s => s.owned)) return uncertain(intent);
+          if (ids.length !== 1 || !ids[0] || !slots.every(s => s.owned)) return unresolved();
           const detail = await client.reservation(ids[0], calendar.token);
-          if (detail.title !== intent.providerTitle || detail.name !== intent.roomName || Number(detail.price) !== intent.points) return uncertain(intent);
+          if (detail.title !== intent.providerTitle || detail.name !== intent.roomName || Number(detail.price) !== intent.points) return unresolved();
           await db.runTransaction(async tx => {
             const current = (await tx.get(ref)).data();
             if (!current || !['SUBMITTING', 'UNKNOWN', 'CONFIRMED'].includes(current.state)) throw new Error('invalid_state');
@@ -88,7 +101,7 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
             for (const lock of locks) if (lock.data()?.intentId === intent.id) tx.delete(lock.ref);
           });
           return result(`예약 완료: ${summary(intent)}\n회의명: ${intent.title}\n예약번호: ${ids[0]}\nhttps://merryhere.kr/mypage/reservation`);
-        } catch (error) { return { ...uncertain(intent), ...(error.code === 'page_changed' ? { code: error.code } : {}) }; }
+        } catch (error) { return unresolved(error.code || 'verification_failed'); }
       };
       if (intent.state !== 'PREPARED') return reconcile();
       validateBookingTime(intent, now);
@@ -125,6 +138,18 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
     }
     await client.login();
     const calendar = await client.calendar(request.date);
+    const related = [];
+    for (const name of request.relatedRooms || []) {
+      const floor = /^(\d+)층(?:\s*회의실)?$/.exec(name);
+      const matches = [...new Set(calendar.slots.map(s => s.name))].filter(room => room === name || room.endsWith(`-${name}`) || floor && room.startsWith(`M${floor[1]}-`));
+      if (!matches.length) related.push(`${name}: Merryhere 예약표에 해당 공간 정보가 없어 가능 여부를 확인하지 못했습니다.`);
+      for (const room of matches) {
+        const windows = availableRoomWindows(calendar, { ...request, room }, now);
+        related.push(`${room}: ${windows.length ? '요청 시간 전체 예약 가능' : '요청 시간 전체를 예약할 수 없음(예약·차단·외부 전용·인원 조건 포함)'}`);
+      }
+    }
+    const relatedNote = related.length ? `추가 확인:\n${related.join('\n')}\n\n` : '';
+    if (request.action === 'clarify') return { ...result(relatedNote + renderRoomClarification(request.bookingContext)), bookingContext: request.bookingContext };
     if (request.action === 'explore') {
       const merryhereOptions = availableRoomWindows(calendar, request, now);
       let googleOptions = [];
@@ -137,12 +162,13 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
       return { status: 'answered', bookingContext: { ...request.bookingContext, options: shown }, answer: [
         ...(request.bookingContext.dateDefaulted ? ['날짜를 지정하지 않아 오늘 기준으로 조회했습니다.'] : []),
         ...(meridiemNote(request.bookingContext) ? [meridiemNote(request.bookingContext)] : []),
+        ...(relatedNote ? [relatedNote.trim()] : []),
         `${request.date} · 한국시간 · 예약 가능 시간`,
         ...(shown.length ? shown.map(w => `• ${w.room}${w.capacity ? ` (${w.capacity}인)` : ''}: ${w.start}~${w.end}`) : ['요청 조건에 맞는 예약 가능 구간이 없습니다.']),
         '이미 예약된 시간, 이용이 막힌 시간, 외부 신청만 받는 공간은 뺐습니다.',
         ...(options.length > shown.length ? ['가장 빠른 시간부터 12개 표시했습니다. 시간이나 인원으로 좁힐 수 있습니다.'] : []),
         ...(googleOptions.length ? [`${googleRooms.roomNames.join(', ')}는 조회만 가능하며 Google Calendar에서 직접 예약해주세요.`] : []),
-        '원하는 방과 이용 시간을 말씀해주세요. 예약 직전에 상태와 포인트를 다시 확인합니다.',
+        request.bookingContext.requestedAction === 'prepare' ? '예약할 방을 선택해주세요. 회의명도 함께 알려주시면 확정 전 내용을 안내합니다. 아직 예약하지 않았습니다.' : '원하는 방과 이용 시간을 말씀해주세요. 예약 직전에 상태와 포인트를 다시 확인합니다.',
       ].join('\n') };
     }
     if (request.action === 'prepare' && (!request.room || !request.start || !request.end || !request.title)) return {
@@ -169,10 +195,10 @@ export async function runMerryhereBooking({ db, actor, job, text, input, previou
       if (existing.exists) return existing.data();
       tx.create(refFor(id), intent); return intent;
     });
-    return { ...result(`${meridiemNote(request.bookingContext) ? `${meridiemNote(request.bookingContext)}\n` : ''}예약 확정 전 확인: ${summary(saved)}\n회의명: ${saved.title}\n현재 전체 구간 예약 가능 · 아직 예약하지 않았습니다. 확정 시 ${saved.points}P가 차감됩니다.\n10분 이내 같은 스레드에서 “회의실 예약 확정 ${id}”을 보내주세요.`), bookingContext: { ...request.bookingContext, intentId: id, options: [] } };
+    return { ...result(`${relatedNote}${meridiemNote(request.bookingContext) ? `${meridiemNote(request.bookingContext)}\n` : ''}예약 확정 전 확인: ${summary(saved)}\n회의명: ${saved.title}\n현재 전체 구간 예약 가능 · 아직 예약하지 않았습니다. 확정 시 ${saved.points}P가 차감됩니다.\n10분 이내 같은 스레드에서 “회의실 예약 확정 ${id}”을 보내주세요.`), bookingContext: { ...request.bookingContext, intentId: id, options: [] } };
   } catch (error) {
     if (localConnection && ['login_required', 'login_failed', 'session_expired'].includes(error.code)) error = new MerryhereError('local_login_required');
-    return { status: 'partial', ...(messages[error.code] ? { code: error.code } : {}), ...(error.bookingContext || queryContext ? { bookingContext: error.bookingContext || queryContext } : {}),
+    return { status: 'partial', stage, ...(messages[error.code] ? { code: error.code } : {}), ...(error.bookingContext || queryContext ? { bookingContext: error.bookingContext || queryContext } : {}),
       answer: messages[error.code] || '예약 처리를 마치지 못했습니다. 예약이 생성됐다고 판단하지 마세요. 확인번호가 있다면 같은 번호로 결과를 조회해주세요.' };
   }
 }
