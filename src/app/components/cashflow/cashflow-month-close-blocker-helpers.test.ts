@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { describeCashflowMonthCloseIssue } from './cashflow-month-close-blocker-helpers';
+import { cashflowSheetIssueGuide, describeCashflowMonthCloseIssue, describeCashflowWeeklyCompletionNotice } from './cashflow-month-close-blocker-helpers';
+import issueGuidance from '../../../../policies/cashflow-sheet-issue-guidance.json';
+import { CASHFLOW_SHEET_LINE_LABELS } from '../../data/types';
 
 describe('describeCashflowMonthCloseIssue', () => {
   it('names the cell and the value that is not a number', () => {
@@ -73,5 +75,68 @@ describe('describeCashflowMonthCloseIssue', () => {
     expect(describeCashflowMonthCloseIssue(null)).toEqual([]);
     expect(describeCashflowMonthCloseIssue({ code: 'SHEET_FACTS_MISSING', message: '시트 검증값이 없습니다.' })).toEqual([]);
     expect(describeCashflowMonthCloseIssue({ code: 'SHEET_VALUE_INVALID', message: 'x', details: 'not-an-array' })).toEqual([]);
+  });
+});
+
+describe('describeCashflowWeeklyCompletionNotice', () => {
+  it('names each missing Projection cell by week and line', () => {
+    const lines = describeCashflowWeeklyCompletionNotice({
+      code: 'PROJECTION_WINDOW_INCOMPLETE',
+      message: '미입력',
+      missingCells: [{ yearMonth: '2026-10', weekNo: 2, lineId: 'SALES_IN' }],
+    } as never);
+    expect(lines).toEqual([`2026-10 2주차 · Projection ${CASHFLOW_SHEET_LINE_LABELS.SALES_IN} 미입력`]);
+  });
+
+  it('caps long lists and says how many more there are', () => {
+    const missingCells = Array.from({ length: 12 }, (_, index) => ({ yearMonth: '2026-10', weekNo: 1, lineId: `L${index}` }));
+    const lines = describeCashflowWeeklyCompletionNotice({ code: 'PROJECTION_WINDOW_INCOMPLETE', message: '', missingCells } as never);
+    expect(lines).toHaveLength(11);
+    expect(lines.at(-1)).toBe('외 2건');
+  });
+
+  it('names the out-of-window document and the server problem text', () => {
+    const lines = describeCashflowWeeklyCompletionNotice({
+      code: 'OUT_OF_WINDOW_WEEK_DOCUMENT_INVALID',
+      message: '',
+      count: 1,
+      documents: [{ documentId: 'p-2025-03-w1', yearMonth: '2025-03', weekNo: 1, problem: 'projection SALES_IN 값이 숫자가 아닙니다' }],
+    } as never);
+    expect(lines).toEqual(['2025-03 1주차 · projection SALES_IN 값이 숫자가 아닙니다']);
+  });
+
+  it('returns nothing for unknown notices', () => {
+    expect(describeCashflowWeeklyCompletionNotice({ code: 'OTHER', message: 'x' })).toEqual([]);
+  });
+});
+
+describe('SHEET_LAST_REFRESH_FAILED', () => {
+  it('lists the server diagnostics with their cells', () => {
+    expect(describeCashflowMonthCloseIssue({
+      code: 'SHEET_LAST_REFRESH_FAILED',
+      message: '최근 시트 불러오기가 실패해 이전에 불러온 값으로 진행합니다.',
+      details: {
+        diagnostics: [{ code: 'cashflow_week_header_invalid', sourceCell: 'E13', message: 'E13 칸의 주차 표기를 26-1-1 형식으로 맞춰 주세요.' }],
+        diagnosticCount: 3,
+      },
+    })).toEqual(['E13 칸 · E13 칸의 주차 표기를 26-1-1 형식으로 맞춰 주세요.', '외 2건']);
+  });
+});
+
+describe('cashflowSheetIssueGuide', () => {
+  it('returns one fixed fix guide per notice code and nothing for unknown codes', () => {
+    expect(cashflowSheetIssueGuide('SHEET_VALUE_INVALID')).toContain('빈칸');
+    expect(cashflowSheetIssueGuide('PROJECTION_WINDOW_INCOMPLETE')).toContain('Projection');
+    expect(cashflowSheetIssueGuide('UNKNOWN_CODE')).toBe('');
+    expect(cashflowSheetIssueGuide(undefined)).toBe('');
+  });
+
+  it('covers every notice code the month close and weekly screens can show', () => {
+    const codes = [
+      'SHEET_VALUE_INVALID', 'SHEET_CONTROL_TOTAL_INCOMPLETE', 'SHEET_CONTROL_TOTAL_INVALID', 'SHEET_CONTROL_TOTAL_MISMATCH',
+      'SHEET_CALCULATION_CHECK_MISSING', 'SHEET_CALCULATION_VALUE_INVALID', 'SHEET_CALCULATION_MISMATCH',
+      'SHEET_LAST_REFRESH_FAILED', 'SHEET_MONTH_INCOMPLETE', 'PROJECTION_WINDOW_INCOMPLETE', 'OUT_OF_WINDOW_WEEK_DOCUMENT_INVALID',
+    ];
+    expect(Object.keys(issueGuidance.guides).sort()).toEqual([...codes].sort());
   });
 });

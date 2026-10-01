@@ -163,7 +163,19 @@ export interface CashflowSheetLabPreviewResult {
   cashflowSnapshotError?: { code: string; message: string } | null;
 }
 
+export interface CashflowSheetFormulaMismatchNotice {
+  yearMonth: string;
+  mode: string;
+  weekNo: number;
+  field: 'depositTotal' | 'withdrawalTotal' | 'balance' | string;
+  reported?: number | string;
+  calculated?: number | string;
+  sourceCell?: string;
+}
+
 export interface CashflowSheetLabApplyResult {
+  /** 반영은 됐지만 시트 합계·잔액이 정산 엔진 계산과 다른 칸. */
+  formulaMismatches?: CashflowSheetFormulaMismatchNotice[];
   projectId: string;
   spreadsheetId: string;
   spreadsheetTitle: string;
@@ -485,6 +497,16 @@ export interface CashflowSheetLabStageResult {
   skippedInvalidWeekCount?: number;
   skippedInvalidWeeks?: string[];
   blockedMonths?: string[];
+  /** 시트 형식 때문에 이번 반영에서 뺀 달. 이유와 칸 위치는 서버가 준 그대로다. */
+  excludedMonths?: Array<{
+    yearMonth: string;
+    reason: 'INVALID_CELLS' | 'MONTH_INCOMPLETE' | 'AFTER_BLOCKED_MONTH';
+    message: string;
+    cells?: Array<{ sourceCell: string; rawValue: string }>;
+    cellCount?: number;
+  }>;
+  /** 이번 반영에서 뺀 연간 연도. */
+  excludedYears?: Array<{ year: number; reason: string; message: string }>;
   closedMonthDifferences?: Array<{
     yearMonth: string;
     differenceCount: number;
@@ -869,4 +891,59 @@ export async function probeCashflowSheetFreshnessViaBff(params: {
     },
   );
   return response.data;
+}
+
+export type CashflowSheetStep = 'refresh' | 'stage' | 'apply';
+
+const CASHFLOW_SHEET_PHASE_LABELS: Record<CashflowSheetStep | 'save', string> = {
+  refresh: '① 시트 불러오기',
+  stage: '② 반영 검토',
+  apply: '③ 반영',
+  save: '④ 정산 엔진 저장',
+};
+
+/** 시트 반영 오류가 어느 단계에서 났는지. 반영 중 정산 엔진이 거절·검증 실패한 경우는 저장 단계로 본다. */
+export function cashflowSheetErrorPhase(step: CashflowSheetStep, error: unknown): string {
+  const code = typeof (error as { code?: unknown })?.code === 'string' ? (error as { code: string }).code : '';
+  if (step === 'apply' && /^(cashflow_jvm_|jvm_)/.test(code)) return CASHFLOW_SHEET_PHASE_LABELS.save;
+  return CASHFLOW_SHEET_PHASE_LABELS[step];
+}
+
+/** 이번 반영에서 뺀 달·연도를 사람이 읽는 줄로 편다. 서버 문구와 칸 위치를 그대로 쓴다. */
+export function describeCashflowSheetExclusions(stage: Pick<CashflowSheetLabStageResult, 'excludedMonths' | 'excludedYears'> | null | undefined): string[] {
+  const lines: string[] = [];
+  const months = stage?.excludedMonths || [];
+  const direct = months.filter((month) => month.reason !== 'AFTER_BLOCKED_MONTH');
+  for (const month of direct) {
+    const cells = (month.cells || []).slice(0, 5)
+      .map((cell) => (cell.rawValue ? `${cell.sourceCell}('${cell.rawValue}')` : cell.sourceCell))
+      .join(', ');
+    const more = (month.cellCount || 0) > 5 ? ` 외 ${(month.cellCount || 0) - 5}칸` : '';
+    lines.push(`${month.message}${cells ? ` 확인할 칸: ${cells}${more}` : ''}`);
+  }
+  const following = months.filter((month) => month.reason === 'AFTER_BLOCKED_MONTH').map((month) => month.yearMonth);
+  if (following.length > 0) {
+    lines.push(`${following[0]}${following.length > 1 ? `~${following[following.length - 1]}` : ''}은 앞 달 잔액을 이어받을 수 없어 이번 반영에서 뺐습니다.`);
+  }
+  for (const year of stage?.excludedYears || []) lines.push(year.message);
+  return lines;
+}
+
+const FORMULA_FIELD_LABELS: Record<string, string> = { depositTotal: '입금 합계', withdrawalTotal: '출금 합계', balance: '잔액' };
+const MODE_LABELS: Record<string, string> = { projection: 'Projection', actual: 'Actual' };
+
+function formatWon(value: unknown): string {
+  const amount = Number(value);
+  return Number.isFinite(amount) ? `${amount.toLocaleString('ko-KR')}원` : String(value ?? '');
+}
+
+/** 반영 후 합계·잔액 불일치를 "어느 주차 · 어느 칸 · 시트 값 · 계산 값" 줄로 편다. */
+export function describeCashflowSheetFormulaMismatches(mismatches: CashflowSheetFormulaMismatchNotice[] | null | undefined): string[] {
+  const list = mismatches || [];
+  const lines = list.slice(0, 10).map((mismatch) => {
+    const field = FORMULA_FIELD_LABELS[mismatch.field] || mismatch.field;
+    const where = `${mismatch.yearMonth} ${mismatch.weekNo}주차 ${MODE_LABELS[mismatch.mode] || mismatch.mode} ${field}${mismatch.sourceCell ? `(${mismatch.sourceCell})` : ''}`;
+    return `${where}: 시트 ${formatWon(mismatch.reported)} · 항목 합으로 계산 ${formatWon(mismatch.calculated)}`;
+  });
+  return list.length > 10 ? [...lines, `외 ${list.length - 10}건`] : lines;
 }

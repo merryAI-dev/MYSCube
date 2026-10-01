@@ -1,5 +1,8 @@
 package dev.merryai.innerplatform.weekly.api;
 
+import java.util.List;
+import java.util.Map;
+
 public record CashflowWeeklyUpdateCompletionResponse(
     boolean ok,
     String commandName,
@@ -22,8 +25,14 @@ public record CashflowWeeklyUpdateCompletionResponse(
     String complianceStatus,
     String operationId,
     String auditId,
-    String updateResult
+    String updateResult,
+    List<Map<String, Object>> notices
 ) {
+    public CashflowWeeklyUpdateCompletionResponse {
+        notices = notices == null ? List.of() : List.copyOf(notices);
+    }
+
+
     public CashflowWeeklyUpdateCompletionResponse(
         boolean ok, String commandName, String projectId, String yearMonth, int weekNo, String completedAt,
         String completedBy, boolean alreadyCompleted, String status, long revision, long reopenCount,
@@ -32,6 +41,6 @@ public record CashflowWeeklyUpdateCompletionResponse(
     ) {
         this(ok, commandName, projectId, yearMonth, weekNo, completedAt, completedBy, alreadyCompleted, status,
             revision, reopenCount, snapshotHash, sourceRevision, targetRevision, reopenedAt, reopenedBy,
-            reopenReason, "", "", "", "", "");
+            reopenReason, "", "", "", "", "", List.of());
     }
 }

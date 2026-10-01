@@ -430,3 +430,35 @@ describe('sheets cashflow readonly client', () => {
   });
 
 });
+
+describe('describeCashflowSheetExclusions', () => {
+  it('keeps the server reason, the cells and the following months in one readable list', async () => {
+    const { describeCashflowSheetExclusions } = await import('./sheets-cashflow-readonly-client');
+    expect(describeCashflowSheetExclusions({
+      excludedMonths: [
+        { yearMonth: '2026-05', reason: 'INVALID_CELLS', message: '2026-05에 숫자로 읽을 수 없는 칸이 있습니다.', cells: [{ sourceCell: 'Y15', rawValue: '확인 필요' }], cellCount: 1 },
+        { yearMonth: '2026-06', reason: 'AFTER_BLOCKED_MONTH', message: 'x' },
+        { yearMonth: '2026-12', reason: 'AFTER_BLOCKED_MONTH', message: 'x' },
+      ],
+      excludedYears: [{ year: 2028, reason: 'AFTER_BLOCKED_MONTH', message: '2026-05 이후 잔액을 이어받는 연도라 이번 반영에서 뺐습니다.' }],
+    })).toEqual([
+      "2026-05에 숫자로 읽을 수 없는 칸이 있습니다. 확인할 칸: Y15('확인 필요')",
+      '2026-06~2026-12은 앞 달 잔액을 이어받을 수 없어 이번 반영에서 뺐습니다.',
+      '2026-05 이후 잔액을 이어받는 연도라 이번 반영에서 뺐습니다.',
+    ]);
+  });
+
+  it('says nothing when nothing was excluded', async () => {
+    const { describeCashflowSheetExclusions } = await import('./sheets-cashflow-readonly-client');
+    expect(describeCashflowSheetExclusions({})).toEqual([]);
+  });
+});
+
+describe('describeCashflowSheetFormulaMismatches', () => {
+  it('names the week, the cell, the sheet value and the engine value', async () => {
+    const { describeCashflowSheetFormulaMismatches } = await import('./sheets-cashflow-readonly-client');
+    expect(describeCashflowSheetFormulaMismatches([{
+      yearMonth: '2026-01', mode: 'projection', weekNo: 1, field: 'depositTotal', reported: 6_800_000, calculated: 6_700_000, sourceCell: 'E22',
+    }])).toEqual(['2026-01 1주차 Projection 입금 합계(E22): 시트 6,800,000원 · 항목 합으로 계산 6,700,000원']);
+  });
+});

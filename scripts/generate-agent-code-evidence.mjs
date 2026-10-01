@@ -6,6 +6,7 @@ const root = new URL('../', import.meta.url);
 const definitions = [
   { topic: 'accounting', path: 'server/bff/cashflow-coordinates.mjs', anchor: 'export function weekOrdinal(', lines: 7 },
   { topic: 'accounting', path: 'server/bff/cashflow-coordinates.mjs', anchor: 'export const ANNUAL_COLUMNS_BEFORE', lines: 3 },
+  { topic: 'sheet_validation', path: 'server/bff/routes/jvm-weekly-api.mjs', anchor: '    sheetRuleWarnings.push(...sheetControlBlockers(sheetFacts));', lines: 2 },
   { topic: 'sheet_validation', path: 'server/bff/routes/jvm-weekly-api.mjs', anchor: '  if (projectionRows.length !== 19 || actualRows.length !== 19)', lines: 14 },
   { topic: 'sheet_validation', path: 'server/bff/cashflow-sheet-snapshot.mjs', anchor: '    matches: value === null || computed === null ? null : value === computed,', lines: 1 },
   { topic: 'connectivity', path: 'server/bff/cashflow-project-scope.mjs', anchor: 'export function isProjectInActorScope(', lines: 5 },

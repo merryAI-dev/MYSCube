@@ -12,14 +12,18 @@ describe('CashflowProjectSheet schedule bar', () => {
   // 원래대로 돌아오니 반영이 된 줄 안다. 성공은 토스트, 오류는 그 자리 인라인 배너(2026-08-19 결정).
   it('never ends a sheet stage or apply in silence', () => {
     expect(source).toContain('const [sheetOperationError, setSheetOperationError] = useState');
-    expect(source).toContain('function sheetOperationErrorMessage(error: unknown): string');
-    // 검토 실패 · 인증 재시도 실패 · 반영에서 어느 분기도 못 받은 오류, 셋 다 말한다.
-    expect(source.match(/setSheetOperationError\(sheetOperationErrorMessage\(/g)?.length).toBe(3);
+    expect(source).toContain('function sheetOperationErrorMessage(error: unknown, step: CashflowSheetStep): string');
+    // 불러오기 실패·인증 재시도 실패, 검토 실패·인증 재시도 실패, 반영에서 어느 분기도 못 받은 오류, 다섯 다 말한다.
+    expect(source.match(/setSheetOperationError\(sheetOperationErrorMessage\(/g)?.length).toBe(5);
+    // 어느 단계에서 난 오류인지 붙인다.
+    expect(source).toContain("sheetOperationErrorMessage(error, 'refresh')");
+    expect(source).toContain("sheetOperationErrorMessage(error, 'stage')");
+    expect(source).toContain("sheetOperationErrorMessage(finalError, 'apply')");
     // 반영할 수 없는 범위와 "이미 최신" 도 조용히 끝나지 않는다.
     expect(source).toContain('반영할 수 없는 시트 범위가 있습니다.');
     expect(source).toContain("toast.success('MYSCube가 이미 시트 최신값과 같습니다.');");
     // 새 시도는 지난 오류를 지우고 시작한다.
-    expect(source.match(/setSheetOperationError\(''\)/g)?.length).toBe(2);
+    expect(source.match(/setSheetOperationError\(''\)/g)?.length).toBe(3);
     expect(source).toContain('{sheetOperationError ? (');
   });
 

@@ -898,6 +898,33 @@ describe('Java weekly cashflow client', () => {
     expect(error.message).not.toMatch(/Cashflow|closed|cannot be changed/i);
   });
 
+  it('names the week record that is not canonical from the engine details, never its English text', async () => {
+    const fetchImpl = vi.fn(async () => chunkedResponse([
+      JSON.stringify({
+        code: 'cashflow_week_document_invalid',
+        message: 'Cashflow month contains malformed or non-canonical week documents; migration is required before applying.',
+        details: { documentId: 'project-a-2026-05-w3', yearMonth: '2026-05', weekNo: 3, problem: 'projection SALES_IN 값이 숫자가 아닙니다' },
+      }),
+    ], { status: 409 }));
+    const client = createJavaWeeklyClient({ env: liveEnv(), fetchImpl });
+
+    const error = await client.requestJson({
+      context,
+      method: 'POST',
+      path: '/api/v1/cashflow/project-a/weekly-update-complete',
+      command: 'complete_cashflow_weekly_update',
+      body: { idempotencyKey: 'week-document-invalid' },
+    }).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      statusCode: 409,
+      code: 'cashflow_week_document_invalid',
+      message: '2026-05 3주차 주차 기록이 표준 형태가 아닙니다: projection SALES_IN 값이 숫자가 아닙니다. 관리자에게 기록 정리를 요청해 주세요.',
+      details: { documentId: 'project-a-2026-05-w3', yearMonth: '2026-05', weekNo: 3 },
+    });
+    expect(error.message).not.toMatch(/malformed|non-canonical|migration/i);
+  });
+
   it('replaces a technical authority contract error with a recovery guide', async () => {
     const fetchImpl = vi.fn(async () => chunkedResponse([
       JSON.stringify({

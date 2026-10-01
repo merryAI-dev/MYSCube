@@ -33,6 +33,8 @@ import { useAuth } from '../../data/auth-store';
 import { useFirebase } from '../../lib/firebase-context';
 import { getAuthInstance } from '../../lib/firebase';
 import {
+  describeApiError,
+  formatApiErrorDescription,
   resolveApiErrorMessage,
   resolveCashflowWeeklyCompletionErrorMessage,
 } from '../../platform/api-error-message';
@@ -83,6 +85,11 @@ import {
   type CashflowSheetLabShareAccountResult,
   type CashflowSheetLabStageResult,
   type CashflowFormulaMismatch,
+  type CashflowSheetStep,
+  cashflowSheetErrorPhase,
+  describeCashflowSheetExclusions,
+  describeCashflowSheetFormulaMismatches,
+  type CashflowSheetLabApplyResult,
 } from '../../lib/sheets-cashflow-readonly-client';
 import {
   buildCashflowMonthCloseDraftInput,
@@ -109,7 +116,7 @@ import {
   type CashflowActivityCursor,
   type CashflowActivityMutation,
 } from './cashflow-activity-loader';
-import { describeCashflowMonthCloseIssue } from './cashflow-month-close-blocker-helpers';
+import { cashflowSheetIssueGuide, describeCashflowMonthCloseIssue, describeCashflowWeeklyCompletionNotice } from './cashflow-month-close-blocker-helpers';
 import { buildSheetApplyNotice } from './cashflow-sheet-apply-notice';
 import { pickCashflowMonthCloseNotice } from './cashflow-month-close-notice';
 import { CashflowScheduleBar } from './CashflowScheduleBar';
@@ -364,12 +371,14 @@ function bffErrorCode(error: unknown): string {
  * 토스트도 안 뜬다"). 문구는 서버 코드에 대한 공용 안내를 그대로 쓴다 - 여기서 새로 짓지 않는다.
  * 이 화면의 오류는 토스트가 아니라 그 자리 인라인 배너로 남긴다(2026-08-19 결정).
  */
-function sheetOperationErrorMessage(error: unknown): string {
+function sheetOperationErrorMessage(error: unknown, step: CashflowSheetStep): string {
   const status = error instanceof PlatformApiError
     ? error.status
     : Number((error as { status?: number })?.status) || 400;
   const code = error instanceof PlatformApiError ? error.code : bffErrorCode(error);
-  return resolveApiErrorPresentation(code, status).guide;
+  const fallback = resolveApiErrorPresentation(code, status).guide;
+  // 서버가 쓴 문구를 그대로 두고, 어느 단계에서 났는지와 문의용 코드를 붙인다.
+  return formatApiErrorDescription(describeApiError(error, { fallback, phase: cashflowSheetErrorPhase(step, error) }));
 }
 
 export function CashflowProjectSheet({
@@ -512,6 +521,7 @@ export function CashflowProjectSheet({
   const [weeklyConfirmBusy, setWeeklyConfirmBusy] = useState(false);
   // 완료 요청·회수·확정이 실제로 접수됐다는 확인. 상태 배지만으로는 "내가 누른 것이 먹혔는지" 가 안 보인다.
   const [weeklyActionNotice, setWeeklyActionNotice] = useState('');
+  const [weeklyCompletionNotices, setWeeklyCompletionNotices] = useState<Array<{ code: string; message: string; lines: string[] }>>([]);
   const [weeklyProjectionWarning, setWeeklyProjectionWarning] = useState<WeeklyProjectionValidation | null>(null);
   const [weeklyHistoryOpen, setWeeklyHistoryOpen] = useState(false);
   const [weeklyComplianceHistory, setWeeklyComplianceHistory] = useState<CashflowWeeklyComplianceItem[]>([]);
@@ -531,6 +541,7 @@ export function CashflowProjectSheet({
   const [reopenReason, setReopenReason] = useState('');
   const [sheetRefreshLoading, setSheetRefreshLoading] = useState(false);
   // 시트 검토·반영이 실패한 이유. 성공만 토스트로 알리고 오류는 그 자리에 남긴다.
+  const [sheetExclusionNotice, setSheetExclusionNotice] = useState<string[]>([]);
   const [sheetOperationError, setSheetOperationError] = useState('');
   const [sheetReviewDialogOpen, setSheetReviewDialogOpen] = useState(false);
   const [lateSheetApply, setLateSheetApply] = useState<CashflowSheetLabStageResult | null>(null);
@@ -962,6 +973,7 @@ export function CashflowProjectSheet({
     }
     setWeeklyCompletionError('');
     setWeeklyProjectionWarning(null);
+    setWeeklyCompletionNotices([]);
     setWeeklyUpdateResult('');
     setWeeklyCompletionOpen(true);
   }, [savedExecutiveApproverId]);
@@ -1025,6 +1037,11 @@ export function CashflowProjectSheet({
         ? '이미 완료 요청된 주입니다. 현재 상태를 다시 불러왔어요.'
         : '주간 정산 완료 요청을 보냈어요. 조직장 확정을 기다립니다.');
       if (!result.alreadyCompleted) toast.success('주간 정산 완료 요청을 보냈어요.');
+      setWeeklyCompletionNotices((result.notices || []).map((notice) => ({
+        code: notice.code,
+        message: notice.message,
+        lines: describeCashflowWeeklyCompletionNotice(notice),
+      })));
       setWeeklyProjectionWarning(null);
       setWeeklyUpdateResult('');
       logCashflowSettlement({
@@ -1529,6 +1546,17 @@ export function CashflowProjectSheet({
       lines: describeCashflowMonthCloseIssue(blocker),
     }))
   ), [monthCloseResult?.dashboard?.validation?.blockers]);
+
+  // 시트 형식·검산 경고는 결산을 막지 않는다. 어느 칸을 고칠지 알 수 있게 알림으로만 보여준다.
+  const monthCloseSheetWarnings = useMemo(() => (
+    (monthCloseResult?.dashboard?.validation?.warnings || [])
+      .filter((warning) => warning.code.startsWith('SHEET_'))
+      .map((warning) => ({
+        code: warning.code,
+        message: warning.message,
+        lines: describeCashflowMonthCloseIssue(warning),
+      }))
+  ), [monthCloseResult?.dashboard?.validation?.warnings]);
 
   // 일정 진행 바. 마감·완료 시각·초과 판정은 서버 값이고, 여기서는 단계 상태만 고른다.
   const weeklyScheduleSteps = useMemo(() => {
@@ -2134,6 +2162,8 @@ export function CashflowProjectSheet({
       return null;
     }
     const startedAt = Date.now();
+    setSheetOperationError('');
+    setSheetExclusionNotice([]);
     const refreshIdempotencyKey = `cashflow-sheet-refresh:${projectId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     const refreshMirror = (actor: NonNullable<Awaited<ReturnType<typeof resolveBffActor>>>) => (
       refreshCashflowSheetLabMirrorViaBff({
@@ -2212,6 +2242,7 @@ export function CashflowProjectSheet({
             durationMs: Date.now() - startedAt,
             error: retryError,
           });
+          setSheetOperationError(sheetOperationErrorMessage(retryError, 'refresh'));
           return null;
         }
       }
@@ -2223,6 +2254,7 @@ export function CashflowProjectSheet({
         durationMs: Date.now() - startedAt,
         error,
       });
+      setSheetOperationError(sheetOperationErrorMessage(error, 'refresh'));
       return null;
     } finally {
       setSheetRefreshLoading(false);
@@ -2251,9 +2283,14 @@ export function CashflowProjectSheet({
     const applyIdempotencyKey = `cashflow-sheet-apply-stage:${projectId}:${Date.now()}:${Math.random().toString(16).slice(2)}`;
     // 건수·내용은 검토 단계의 변경 후보로 말한다. 서버의 appliedLineCount 는 다시 쓴 월의
     // 전체 셀 수(월당 160)라 "2건 바꿨는데 160건" 이 된다.
-    const notifySheetApplied = () => {
+    const notifySheetApplied = (result: CashflowSheetLabApplyResult) => {
       const notice = buildSheetApplyNotice({ stagedLineCount: stage.stagedLineCount, candidates: stage.candidates });
       toast.success(notice.title, notice.lines.length > 0 ? { description: notice.lines.join('\n') } : undefined);
+      const mismatchLines = describeCashflowSheetFormulaMismatches(result.formulaMismatches);
+      setSheetExclusionNotice([
+        ...describeCashflowSheetExclusions(stage),
+        ...(mismatchLines.length ? ['합계·잔액이 시트와 다른 칸이 있어요. 반영은 했고, 이 달 결산 전에 시트를 확인해 주세요.', ...mismatchLines] : []),
+      ]);
     };
     const apply = async (actor: NonNullable<Awaited<ReturnType<typeof resolveBffActor>>>) => {
       return applyCashflowSheetLabViaBff({
@@ -2312,7 +2349,7 @@ export function CashflowProjectSheet({
       }
       const result = await apply(actor);
       await rememberApplyResult(result);
-      notifySheetApplied();
+      notifySheetApplied(result);
       logCashflowSettlement({ phase: 'success', operation: 'cashflow.sheet_apply', projectId, summary: { appliedLineCount: result.appliedLineCount } });
     } catch (error) {
       let finalError = error;
@@ -2322,7 +2359,7 @@ export function CashflowProjectSheet({
           if (!actor?.idToken) throw error;
           const result = await apply(actor);
           await rememberApplyResult(result);
-          notifySheetApplied();
+          notifySheetApplied(result);
           logCashflowSettlement({ phase: 'success', operation: 'cashflow.sheet_apply', projectId, summary: { appliedLineCount: result.appliedLineCount, authRetried: true } });
           return;
         } catch (retryError) {
@@ -2383,7 +2420,7 @@ export function CashflowProjectSheet({
         setSheetApplyResumeRequired(false);
         setLateSheetPendingApprovalAccepted(false);
         toast.error(resolveApiErrorMessage(finalError, '시트 값을 반영하지 못했습니다. 잠시 후 다시 시도해 주세요.'));
-        setSheetOperationError(sheetOperationErrorMessage(finalError));
+        setSheetOperationError(sheetOperationErrorMessage(finalError, 'apply'));
       }
     } finally {
       setSheetStageApplyLoading(false);
@@ -2437,7 +2474,7 @@ export function CashflowProjectSheet({
         const blockedMonths = (contractIssue?.blockedMonths || result.blockedMonths || []).join(', ');
         const message = contractIssue
           ? `${contractIssue.message}${blockedMonths ? ` 확인할 월: ${blockedMonths}` : ''}`
-          : `반영할 수 없는 시트 범위가 있습니다.${blockedMonths ? ` 확인할 월: ${blockedMonths}` : ''}`;
+          : `반영할 수 없는 시트 범위가 있습니다.${blockedMonths ? ` 확인할 월: ${blockedMonths}` : ''}${describeCashflowSheetExclusions(result).length ? ` ${describeCashflowSheetExclusions(result).join(' ')}` : ''}`;
         toast.error(message);
         setSheetOperationError(message);
         return;
@@ -2498,13 +2535,13 @@ export function CashflowProjectSheet({
           return;
         } catch (retryError) {
           toast.error(resolveApiErrorMessage(retryError, '시트 변경 검토를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.'));
-          setSheetOperationError(sheetOperationErrorMessage(retryError));
+          setSheetOperationError(sheetOperationErrorMessage(retryError, 'stage'));
           return;
         }
       } else {
         toast.error(resolveApiErrorMessage(error, '시트 변경 검토를 시작하지 못했습니다. 잠시 후 다시 시도해 주세요.'));
       }
-      setSheetOperationError(sheetOperationErrorMessage(error));
+      setSheetOperationError(sheetOperationErrorMessage(error, 'stage'));
     } finally {
       setSheetRefreshLoading(false);
     }
@@ -3491,6 +3528,14 @@ export function CashflowProjectSheet({
               {sheetOperationError}
             </div>
           ) : null}
+          {sheetExclusionNotice.length > 0 ? (
+            <div role="status" className="rounded-md border border-border bg-background p-3 text-[12px] leading-5 text-card-foreground">
+              <div className="font-bold text-red-700">시트 반영은 됐지만 확인할 부분이 있어요. 시트를 고친 뒤 다시 불러와 주세요.</div>
+              <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                {sheetExclusionNotice.map((line) => <li key={line}>- {line}</li>)}
+              </ul>
+            </div>
+          ) : null}
 
           {portalMode ? renderPortalSettlementPanel() : (
           <section data-cashflow-settlement-actions className={`grid gap-px overflow-hidden rounded-md border border-border bg-border ${compact ? '' : 'md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]'}`}>
@@ -3545,6 +3590,27 @@ export function CashflowProjectSheet({
                 </div>
                 {weeklyWithdrawError ? <div role="alert" className="mt-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-[12px] leading-5 text-red-800">{weeklyWithdrawError}</div> : null}
                 {weeklyActionNotice && !weeklyWithdrawError ? <div role="status" className="mt-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-[12px] leading-5 text-emerald-900">{weeklyActionNotice}</div> : null}
+                {weeklyCompletionNotices.length > 0 ? (
+                  <div role="status" className="mt-2 rounded-md border border-border bg-background px-3 py-2 text-[12px] leading-5 text-card-foreground">
+                    <div className="flex items-center gap-1.5 font-bold text-red-700">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      주간 정산은 완료 요청됐어요. 아래 항목을 확인해 주세요
+                    </div>
+                    <ul className="mt-1 space-y-0.5">
+                      {weeklyCompletionNotices.map((notice) => (
+                        <li key={notice.code}>
+                          · {notice.message}
+                          {notice.lines.length > 0 ? (
+                            <ul className="mt-0.5 ml-3 space-y-0.5 text-muted-foreground">
+                              {notice.lines.map((line) => <li key={line}>- {line}</li>)}
+                            </ul>
+                          ) : null}
+                          {cashflowSheetIssueGuide(notice.code) ? <div className="mt-0.5 ml-3 text-muted-foreground">고치는 법: {cashflowSheetIssueGuide(notice.code)}</div> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
                 {weeklyScheduleSteps.length > 0 ? <CashflowScheduleBar steps={weeklyScheduleSteps} className="mt-3" /> : null}
                 <div className="mt-3 flex items-center gap-4 text-[12px] text-muted-foreground">
                   <span>누적 미준수 <strong className="ml-1 text-red-700">{deadlineSummaryUnavailable ? '확인 불가' : formatCashflowCount(monthCloseResult?.dashboard?.deadlineSummary?.missedCount, '회')}</strong></span>
@@ -3592,6 +3658,7 @@ export function CashflowProjectSheet({
                                   {blocker.lines.map((line) => <li key={line}>- {line}</li>)}
                                 </ul>
                               ) : null}
+                              {cashflowSheetIssueGuide(blocker.code) ? <div className="mt-0.5 ml-3 text-red-700">고치는 법: {cashflowSheetIssueGuide(blocker.code)}</div> : null}
                             </li>
                           ))}
                         </ul>
@@ -3602,6 +3669,27 @@ export function CashflowProjectSheet({
                         className={`mt-1 text-[12px] leading-4 ${monthCloseNotice.tone === 'attention' ? 'font-semibold text-red-700' : 'text-muted-foreground'}`}
                       >
                         {monthCloseNotice.text}
+                      </div>
+                    ) : null}
+                    {monthCloseSheetWarnings.length > 0 ? (
+                      <div role="status" className="mt-2 rounded-md border border-border bg-background px-3 py-2 text-[12px] leading-5 text-card-foreground">
+                        <div className="flex items-center gap-1.5 font-bold text-red-700">
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                          시트에서 확인할 항목이 있어요 (월 결산은 진행할 수 있어요)
+                        </div>
+                        <ul className="mt-1 space-y-0.5">
+                          {monthCloseSheetWarnings.map((warning) => (
+                            <li key={warning.code}>
+                              · {warning.message}
+                              {warning.lines.length > 0 ? (
+                                <ul className="mt-0.5 ml-3 space-y-0.5 text-muted-foreground">
+                                  {warning.lines.map((line) => <li key={line}>- {line}</li>)}
+                                </ul>
+                              ) : null}
+                              {cashflowSheetIssueGuide(warning.code) ? <div className="mt-0.5 ml-3 text-muted-foreground">고치는 법: {cashflowSheetIssueGuide(warning.code)}</div> : null}
+                            </li>
+                          ))}
+                        </ul>
                       </div>
                     ) : null}
                   </div>

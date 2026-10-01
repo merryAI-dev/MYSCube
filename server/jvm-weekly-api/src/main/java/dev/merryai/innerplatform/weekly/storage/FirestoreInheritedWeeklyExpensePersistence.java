@@ -44,6 +44,7 @@ import dev.merryai.innerplatform.weekly.api.MigrateCashflowSettlementCycleHeadV2
 import dev.merryai.innerplatform.weekly.api.NormalizeLegacyCashflowSettlementCycleRequest;
 import dev.merryai.innerplatform.weekly.observability.CashflowReadMetrics;
 import dev.merryai.innerplatform.weekly.api.TrustedActorContext;
+import dev.merryai.innerplatform.weekly.api.CashflowWeekDocumentInvalidException;
 import dev.merryai.innerplatform.weekly.api.WeeklyExpenseConflictException;
 import dev.merryai.innerplatform.weekly.api.CashflowSettledWeekChangeConfirmation;
 import dev.merryai.innerplatform.weekly.api.CashflowSettledWeekChangeConfirmationExpiredException;
@@ -84,6 +85,7 @@ import java.util.Base64;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -3791,41 +3793,60 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             Map.entry("missingCells", List.copyOf(missingCells))
         );
         String projectionValidationEvidenceHash = hashCanonicalJson(projectionValidationEvidence);
-        if (!missingCells.isEmpty() && !request.ignoreProjectionValidation()) {
-            Map<String, Object> details = new LinkedHashMap<>(projectionValidationEvidence);
-            details.put("evidenceHash", projectionValidationEvidenceHash);
-            throw new WeeklyExpenseEditLeaseException(
-                409,
-                "cashflow_projection_window_incomplete",
-                "대상 주차와 그 이후 15개 재무주차의 Projection 값을 모두 입력해 주세요.",
-                Map.copyOf(details)
-            );
+        // Projection 누락은 주정산을 막지 않는다. 누락 증거(건수·해시)는 완료 기록에 남기고 응답으로 알린다.
+        // ignoreProjectionValidation 은 옛 화면 호환을 위해 받기만 하고 판정에 쓰지 않는다.
+        boolean projectionValidationOverride = !missingCells.isEmpty();
+        List<Map<String, Object>> notices = new ArrayList<>();
+        if (!missingCells.isEmpty()) {
+            Map<String, Object> notice = new LinkedHashMap<>(projectionValidationEvidence);
+            notice.remove("tenantId");
+            notice.put("code", "PROJECTION_WINDOW_INCOMPLETE");
+            notice.put("message", "대상 주차부터 16개 재무주차 중 Projection 미입력 " + missingCells.size() + "칸이 있습니다.");
+            notice.put("evidenceHash", projectionValidationEvidenceHash);
+            notices.add(Collections.unmodifiableMap(notice));
         }
-        if (request.ignoreProjectionValidation() && (
-            !projectionValidationEvidenceHash.equals(text(request.projectionValidationEvidenceHash(), ""))
-            || request.projectionValidationIssueCount() != missingCells.size()
-        )) {
-            Map<String, Object> details = new LinkedHashMap<>(projectionValidationEvidence);
-            details.put("evidenceHash", projectionValidationEvidenceHash);
-            throw new WeeklyExpenseEditLeaseException(
-                409,
-                "cashflow_projection_window_changed",
-                "Projection 검증 결과가 변경되었습니다. 최신 결과를 다시 확인해 주세요.",
-                Map.copyOf(details)
-            );
-        }
-        boolean projectionValidationOverride = request.ignoreProjectionValidation() && !missingCells.isEmpty();
         if (lockedCompletion != null) {
             syncWeeklySettlementStatus(actor, projectId, request.yearMonth(), request.weekNo(), lockedCompletion);
             return toWeeklyCompletionRecord(
                 projectId, request.yearMonth(), request.weekNo(), lockedCompletion, true
             );
         }
+        // 이번 주정산이 보는 범위(대상 주 + 16주 창) 안의 문서만 엄격히 검사한다.
+        // 창 밖 문서의 이상은 막지 않고 어떤 문서의 무엇이 문제인지 알린다. 전역 targetRevision 계산은 그대로다.
+        Set<String> windowWeekIds = new HashSet<>();
+        for (CashflowWeekScope scope : projectionValidationWindow) {
+            windowWeekIds.add(cashflowWeekId(projectId, scope.yearMonth(), scope.weekNo()));
+        }
+        List<Map<String, Object>> outOfWindowDocuments = new ArrayList<>();
         for (Map.Entry<String, Map<String, Object>> entry : projectWeeks.entrySet()) {
             WeekDocParts parts = parseCashflowWeekId(projectId, entry.getKey());
-            requireCanonicalCashflowMonthDocument(
+            if (windowWeekIds.contains(entry.getKey())) {
+                requireCanonicalCashflowMonthDocument(
+                    projectId, parts.yearMonth(), parts.weekNo(), entry.getKey(), entry.getValue()
+                );
+                continue;
+            }
+            String problem = cashflowMonthDocumentProblem(
                 projectId, parts.yearMonth(), parts.weekNo(), entry.getKey(), entry.getValue()
             );
+            if (problem != null) {
+                outOfWindowDocuments.add(Map.of(
+                    "documentId", entry.getKey(),
+                    "yearMonth", parts.yearMonth(),
+                    "weekNo", parts.weekNo(),
+                    "problem", problem
+                ));
+            }
+        }
+        if (!outOfWindowDocuments.isEmpty()) {
+            outOfWindowDocuments.sort(Comparator.comparing(item -> String.valueOf(item.get("documentId"))));
+            notices.add(Map.of(
+                "code", "OUT_OF_WINDOW_WEEK_DOCUMENT_INVALID",
+                "message", "이번 주정산 범위 밖 주차 문서 " + outOfWindowDocuments.size()
+                    + "건이 표준 형태가 아닙니다. 이번 주정산에는 영향이 없습니다.",
+                "documents", List.copyOf(outOfWindowDocuments.subList(0, Math.min(50, outOfWindowDocuments.size()))),
+                "count", outOfWindowDocuments.size()
+            ));
         }
         String weekId = cashflowWeekId(projectId, request.yearMonth(), request.weekNo());
         Map<String, Object> week = projectWeeks.getOrDefault(
@@ -3927,7 +3948,8 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         set(ref, completion);
         set(versionRef, version);
         syncWeeklySettlementStatus(actor, projectId, request.yearMonth(), request.weekNo(), completion);
-        return toWeeklyCompletionRecord(projectId, request.yearMonth(), request.weekNo(), completion, false);
+        return toWeeklyCompletionRecord(projectId, request.yearMonth(), request.weekNo(), completion, false)
+            .withNotices(notices);
     }
 
     private CashflowSettlementStatusRecord syncWeeklySettlementStatus(
@@ -5853,41 +5875,58 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         String docId,
         Map<String, Object> document
     ) {
+        String problem = cashflowMonthDocumentProblem(projectId, yearMonth, expectedWeekNo, docId, document);
+        if (problem != null) {
+            throw new CashflowWeekDocumentInvalidException(docId, yearMonth, expectedWeekNo, problem);
+        }
+    }
+
+    // 주차 문서가 표준 형태가 아닌 이유를 돌려준다. 문제가 없으면 null.
+    private String cashflowMonthDocumentProblem(
+        String projectId,
+        String yearMonth,
+        int expectedWeekNo,
+        String docId,
+        Map<String, Object> document
+    ) {
         if (!projectId.equals(text(document.get("projectId"), ""))
             || !yearMonth.equals(text(document.get("yearMonth"), ""))
             || expectedWeekNo < 1
             || expectedWeekNo > CashflowSheetLabApplyRequest.FINANCE_WEEK_COUNT
             || exactInteger(document.get("weekNo")) != expectedWeekNo
             || !docId.equals(cashflowWeekId(projectId, yearMonth, expectedWeekNo))) {
-            throw malformedCashflowMonth();
+            return "문서 ID와 프로젝트·연월·주차가 맞지 않습니다";
         }
-        requireNumericAmountField(document, "projection");
-        requireNumericAmountField(document, "actual");
+        for (String field : List.of("projection", "actual")) {
+            if (!document.containsKey(field)) continue;
+            String problem = numericAmountsProblem(document.get(field));
+            if (problem != null) return field + " " + problem;
+        }
         if (document.containsKey("weeklyExpenseActualBySheet")) {
-            Object value = document.get("weeklyExpenseActualBySheet");
-            if (!(value instanceof Map<?, ?> sources)) throw malformedCashflowMonth();
-            for (Object amounts : sources.values()) {
-                requireNumericAmounts(amounts);
+            if (!(document.get("weeklyExpenseActualBySheet") instanceof Map<?, ?> sources)) {
+                return "weeklyExpenseActualBySheet 형식이 올바르지 않습니다";
+            }
+            for (Map.Entry<?, ?> source : sources.entrySet()) {
+                String problem = numericAmountsProblem(source.getValue());
+                if (problem != null) return "weeklyExpenseActualBySheet." + source.getKey() + " " + problem;
             }
         }
+        return null;
     }
 
-    private void requireNumericAmountField(Map<String, Object> document, String field) {
-        if (document.containsKey(field)) requireNumericAmounts(document.get(field));
-    }
-
-    private void requireNumericAmounts(Object value) {
-        if (!(value instanceof Map<?, ?> amounts)) throw malformedCashflowMonth();
-        for (Object amount : amounts.values()) {
-            if (!(amount instanceof Number number) || !isFinite(number)) {
-                throw malformedCashflowMonth();
+    private String numericAmountsProblem(Object value) {
+        if (!(value instanceof Map<?, ?> amounts)) return "금액 묶음 형식이 올바르지 않습니다";
+        for (Map.Entry<?, ?> entry : amounts.entrySet()) {
+            if (!(entry.getValue() instanceof Number number) || !isFinite(number)) {
+                return entry.getKey() + " 값이 숫자가 아닙니다";
             }
             try {
                 new BigDecimal(number.toString()).longValueExact();
             } catch (ArithmeticException | NumberFormatException error) {
-                throw malformedCashflowMonth();
+                return entry.getKey() + " 값이 원 단위 정수가 아닙니다";
             }
         }
+        return null;
     }
 
     private int exactInteger(Object value) {
@@ -7377,7 +7416,8 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             text(document.get("updateResult"), ""),
             bool(document.get("projectionValidationOverride")),
             intValue(document.get("projectionValidationIssueCount"), 0),
-            text(document.get("projectionValidationEvidenceHash"), "")
+            text(document.get("projectionValidationEvidenceHash"), ""),
+            List.of()
         );
     }
 

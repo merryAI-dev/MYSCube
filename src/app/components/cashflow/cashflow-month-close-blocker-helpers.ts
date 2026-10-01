@@ -1,4 +1,5 @@
 import { CASHFLOW_SHEET_LINE_LABELS, type CashflowSheetLineId } from '../../data/types';
+import issueGuidance from '../../../../policies/cashflow-sheet-issue-guidance.json';
 
 // 서버는 막는 사유마다 어느 칸인지(셀 주소·주차·구분)까지 보내는데 화면은 첫 줄 문장만 쓰고 버렸다.
 // 담당자가 시트 전체를 뒤지지 않도록, 받은 값을 그대로 사람이 읽는 한 줄로 옮긴다.
@@ -98,6 +99,19 @@ function managementLines(details: unknown): string[] {
   return detail ? [detail] : [];
 }
 
+// 서버가 남긴 양식 진단을 칸 위치와 서버 문구 그대로 옮긴다.
+function refreshFailureLines(details: unknown): string[] {
+  const record = asRecord(details);
+  const diagnostics = asArray(record.diagnostics).map(asRecord);
+  const lines = diagnostics.map((diagnostic) => {
+    const where = cell(diagnostic.sourceCell);
+    const what = text(diagnostic.message) || text(diagnostic.code);
+    return `${where ? `${where} · ` : ''}${what}`;
+  }).filter(Boolean);
+  const total = Number(record.diagnosticCount);
+  return Number.isSafeInteger(total) && total > lines.length ? [...lines, `외 ${total - lines.length}건`] : lines;
+}
+
 /** 서버가 준 막는 사유·경고 하나를 "무엇이 · 어디서 · 왜" 한 줄들로 편다. */
 export function describeCashflowMonthCloseIssue(issue: CashflowMonthCloseIssue | null | undefined): string[] {
   if (!issue) return [];
@@ -107,5 +121,45 @@ export function describeCashflowMonthCloseIssue(issue: CashflowMonthCloseIssue |
   if (code === 'SHEET_CALCULATION_MISMATCH') return calculationLines(issue.details, 'mismatch');
   if (code === 'SHEET_CONTROL_TOTAL_MISMATCH') return controlTotalLines(issue.details);
   if (code.startsWith('MANAGEMENT_CHECK_')) return managementLines(issue.details);
+  if (code === 'SHEET_LAST_REFRESH_FAILED') return refreshFailureLines(issue.details);
   return [];
+}
+
+const NOTICE_LIST_LIMIT = 10;
+
+function limited(lines: string[], total: number): string[] {
+  const shown = lines.slice(0, NOTICE_LIST_LIMIT);
+  return total > shown.length ? [...shown, `외 ${total - shown.length}건`] : shown;
+}
+
+/** 주정산 완료 응답의 알림을 "어느 주차 · 어느 항목" 한 줄들로 편다. 서버가 준 값만 옮긴다. */
+export function describeCashflowWeeklyCompletionNotice(notice: CashflowMonthCloseIssue | null | undefined): string[] {
+  if (!notice) return [];
+  const record = asRecord(notice);
+  const code = text(notice.code);
+  if (code === 'PROJECTION_WINDOW_INCOMPLETE') {
+    const cells = asArray(record.missingCells).map(asRecord);
+    return limited(cells.map((cell) => {
+      const weekNo = Number(cell.weekNo);
+      const week = `${text(cell.yearMonth)}${Number.isSafeInteger(weekNo) ? ` ${weekNo}주차` : ''}`;
+      return `${week} · Projection ${lineLabel(cell)} 미입력`;
+    }), cells.length);
+  }
+  if (code === 'OUT_OF_WINDOW_WEEK_DOCUMENT_INVALID') {
+    const documents = asArray(record.documents).map(asRecord);
+    const total = Number(record.count);
+    return limited(documents.map((doc) => {
+      const weekNo = Number(doc.weekNo);
+      const week = `${text(doc.yearMonth)}${Number.isSafeInteger(weekNo) && weekNo > 0 ? ` ${weekNo}주차` : ''}`;
+      return `${week || text(doc.documentId)} · ${text(doc.problem)}`;
+    }), Number.isSafeInteger(total) ? total : documents.length);
+  }
+  return [];
+}
+
+const ISSUE_GUIDES: Record<string, string> = issueGuidance.guides;
+
+/** 알림 코드에 붙일 '고치는 법'. policies/cashflow-sheet-issue-guidance.json 한 곳에서 관리한다. 없으면 빈 문자열. */
+export function cashflowSheetIssueGuide(code: string | null | undefined): string {
+  return (code && ISSUE_GUIDES[code]) || '';
 }

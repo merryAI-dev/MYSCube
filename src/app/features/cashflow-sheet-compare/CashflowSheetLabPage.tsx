@@ -20,6 +20,9 @@ import {
   type CashflowSheetLabMirrorResult,
   type CashflowSheetLabStageResult,
   type CashflowFormulaMismatch,
+  cashflowSheetErrorPhase,
+  describeCashflowSheetExclusions,
+  describeCashflowSheetFormulaMismatches,
 } from '../../lib/sheets-cashflow-readonly-client';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
@@ -35,12 +38,14 @@ import {
 import { rememberRecentPortalProject } from '../../platform/portal-recent-projects';
 import { recordDevtoolsLog } from '../../platform/devtools-transaction-log';
 import { resolveApiErrorPresentation } from '../../platform/api-error-messages';
+import { describeApiError, formatApiErrorDescription } from '../../platform/api-error-message';
+import { PlatformApiError } from '../../platform/api-client';
 import { resolvePortalProjectContextSync, resolvePortalProjectResourcePath } from '../../platform/portal-project-selection';
 import { CashflowSheetSyncOverlay, type CashflowSheetSyncOperation } from '../../components/cashflow/CashflowSheetSyncOverlay';
 import { CashflowFormulaMismatchDialog } from '../../components/cashflow/CashflowFormulaMismatchDialog';
 import { shouldApplyCashflowSheetLabProjectResult } from './cashflow-sheet-lab-project-scope';
 
-function formatError(error: unknown) {
+function formatError(error: unknown, phase = '') {
   const apiError = error as { body?: { code?: string; error?: string; message?: string; statusCode?: number }; requestId?: string; status?: number };
   const code = getErrorCode(error);
   if (code === 'google_sheets_not_configured') {
@@ -48,6 +53,10 @@ function formatError(error: unknown) {
   }
   if (code === 'google_sheet_service_account_forbidden') {
     return '시트를 시스템 계정에 공유해 주세요. 공유 후 다시 연동하면 됩니다.';
+  }
+  // 서버가 사람에게 쓴 문구를 그대로 보여 주고, 단계와 문의용 코드를 붙인다.
+  if (error instanceof PlatformApiError) {
+    return formatApiErrorDescription(describeApiError(error, { fallback: '시트 구조를 확인하지 못했습니다.', phase }));
   }
   const bodyMessage = apiError?.body?.message;
   if (code) {
@@ -656,7 +665,7 @@ export function CashflowSheetLabPage() {
         durationMs: Date.now() - startedAt,
         ...errorDiagnostics(error),
       }, 'warn');
-      setErrorMessage(formatError(error));
+      setErrorMessage(formatError(error, cashflowSheetErrorPhase('refresh', error)));
       if (getErrorCode(error) === 'google_sheet_service_account_forbidden') {
         void handleLoadShareAccount();
       }
@@ -765,7 +774,7 @@ export function CashflowSheetLabPage() {
         const blockedMonths = (contractIssue?.blockedMonths || staged.blockedMonths || []).join(', ');
         setErrorMessage(contractIssue
           ? `${contractIssue.message}${blockedMonths ? ` 확인할 월: ${blockedMonths}` : ''}${contractIssue.requestId !== 'unknown' ? ` (요청 ID: ${contractIssue.requestId})` : ''}`
-          : `반영할 수 없는 시트 범위가 있습니다.${blockedMonths ? ` 확인할 월: ${blockedMonths}` : ''}`);
+          : `반영할 수 없는 시트 범위가 있습니다.${blockedMonths ? ` 확인할 월: ${blockedMonths}` : ''}${describeCashflowSheetExclusions(staged).length ? ` ${describeCashflowSheetExclusions(staged).join(' ')}` : ''}`);
         return;
       }
       if (staged.stagedLineCount === 0) {
@@ -852,7 +861,12 @@ export function CashflowSheetLabPage() {
       setClosedMonthPendingApprovalAccepted(false);
       setPendingApprovalStage(null);
       setFormulaMismatchPrompt(null);
-      setStatusMessage(`시트 값 ${result.appliedLineCount.toLocaleString()}건으로 MYSCube를 덮어썼습니다.`);
+      const mismatchLines = describeCashflowSheetFormulaMismatches(result.formulaMismatches);
+      const exclusions = [
+        ...describeCashflowSheetExclusions(staged),
+        ...(mismatchLines.length ? [`시트 합계 검산이 맞지 않는 칸(반영은 했고 이 달 결산 전에 시트를 확인해 주세요): ${mismatchLines.join(' / ')}`] : []),
+      ];
+      setStatusMessage(`시트 값 ${result.appliedLineCount.toLocaleString()}건으로 MYSCube를 덮어썼습니다.${exclusions.length ? ` 확인할 부분: ${exclusions.join(' ')}` : ''}`);
       logCashflowLab('apply.sheet_values.ok', {
         projectId: requestedProjectId,
         spreadsheetId: result.spreadsheetId,
@@ -942,12 +956,12 @@ export function CashflowSheetLabPage() {
         setClosedMonthFormulaAccepted(acceptFormulaMismatches);
         setClosedMonthPendingApprovalAccepted(acceptPendingApprovalDifferences);
         setApplyResumeRequired(true);
-        setErrorMessage(`${formatError(error)} 같은 검토본으로 이어서 완료할 수 있습니다.`);
+        setErrorMessage(`${formatError(error, cashflowSheetErrorPhase(activeStep, error))} 같은 검토본으로 이어서 완료할 수 있습니다.`);
       } else {
         if (activeStep === 'apply' && ['cashflow_sheet_config_changed', 'cashflow_sheet_mirror_stale', 'cashflow_sheet_mirror_revision_conflict'].includes(getErrorCode(error))) {
           closeClosedMonthDialog();
         }
-        setErrorMessage(formatError(error));
+        setErrorMessage(formatError(error, cashflowSheetErrorPhase(activeStep, error)));
       }
     } finally {
       if (isCurrentRequest()) setLoadingOperation(null);

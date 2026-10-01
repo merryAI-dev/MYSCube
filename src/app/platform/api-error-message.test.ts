@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import { PlatformApiError } from './api-client';
 import {
+  describeApiError,
+  formatApiErrorDescription,
   resolveApiErrorMessage,
   resolveCashflowMonthReopenErrorMessage,
   resolveCashflowWeeklyCompletionErrorMessage,
@@ -109,5 +111,74 @@ describe('resolveApiErrorMessage', () => {
 
     expect(message).toBe(expected);
     expect(message).not.toMatch(/Firestore|JVM|revision|invariant|adapter|line/i);
+  });
+});
+
+describe('server message pass-through', () => {
+  it('shows a Korean server message as-is and appends the mapped fix guide', () => {
+    const error = new PlatformApiError('Conflict', 409, 'req_month', {
+      error: 'cashflow_sheet_month_incomplete',
+      message: '2026-05 시트 값이 월 전체 구조를 충족하지 않습니다. 월 1주차부터 다시 연동해 주세요.',
+    });
+
+    const message = resolveApiErrorMessage(error, 'fallback');
+
+    expect(message.startsWith('2026-05 시트 값이 월 전체 구조를 충족하지 않습니다.')).toBe(true);
+    expect(message).toContain(resolveApiErrorPresentation('cashflow_sheet_month_incomplete', 409).guide);
+  });
+
+  it('shows a Korean server message for a code without a guide instead of the generic text', () => {
+    const error = new PlatformApiError('Bad Request', 400, 'req_range', {
+      error: 'cashflow_week_range_not_in_sheet',
+      message: '시작/종료 주차가 시트 헤더에 없습니다: 26-1-1',
+    });
+
+    expect(resolveApiErrorMessage(error, 'fallback')).toBe('시작/종료 주차가 시트 헤더에 없습니다: 26-1-1');
+  });
+
+  it.each([
+    ['a 5xx Korean message', 502, 'JVM 월 결산 재오픈 상태를 다시 확인하지 못했습니다.'],
+    ['a Korean message naming internals', 409, 'JVM 응답의 revision 이 다릅니다.'],
+    ['an English engine message', 409, 'Cashflow month contains malformed or non-canonical week documents.'],
+  ])('still hides %s', (_label, status, serverMessage) => {
+    const error = new PlatformApiError('failed', status, 'req_hidden', {
+      error: 'cashflow_sheet_stage_run_blocked',
+      message: serverMessage,
+    });
+
+    expect(resolveApiErrorMessage(error, 'fallback')).not.toContain(serverMessage);
+  });
+
+  it('describes the phase, the server message, the guide and the reference code', () => {
+    const error = new PlatformApiError('Conflict', 409, 'req_abc', {
+      error: 'cashflow_sheet_month_incomplete',
+      message: '2026-05 시트 값이 월 전체 구조를 충족하지 않습니다.',
+    });
+
+    const description = describeApiError(error, { fallback: 'fallback', phase: '② 반영 검토' });
+
+    expect(description).toMatchObject({
+      phase: '② 반영 검토',
+      message: '2026-05 시트 값이 월 전체 구조를 충족하지 않습니다.',
+      code: 'cashflow_sheet_month_incomplete',
+      requestId: 'req_abc',
+    });
+    expect(formatApiErrorDescription(description)).toBe(
+      `[② 반영 검토] 2026-05 시트 값이 월 전체 구조를 충족하지 않습니다. ${description.guide} (문의용: cashflow_sheet_month_incomplete · 요청 ID req_abc)`,
+    );
+  });
+
+  it('passes a Korean server message through weekly completion and month reopen', () => {
+    const weekly = new PlatformApiError('Conflict', 409, 'req_w', {
+      error: 'cashflow_weekly_confirm_not_submitted',
+      message: '완료 요청된 주간 정산만 확정할 수 있습니다.',
+    });
+    const reopen = new PlatformApiError('Conflict', 409, 'req_r', {
+      error: 'cashflow_month_reopen_conflict',
+      message: '변경되었거나 처리된 재오픈 요청입니다.',
+    });
+
+    expect(resolveCashflowWeeklyCompletionErrorMessage(weekly, 'fallback')).toContain('완료 요청된 주간 정산만 확정할 수 있습니다.');
+    expect(resolveCashflowMonthReopenErrorMessage(reopen, 'fallback')).toContain('변경되었거나 처리된 재오픈 요청입니다.');
   });
 });

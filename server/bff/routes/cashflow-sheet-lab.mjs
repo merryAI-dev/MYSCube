@@ -54,6 +54,13 @@ const CASHFLOW_SHEET_SNAPSHOT_MONTHS_COLLECTION_ID = 'cashflow_sheet_snapshot_mo
 const CASHFLOW_SHEET_SNAPSHOT_YEARS_COLLECTION_ID = 'cashflow_sheet_snapshot_years';
 const CASHFLOW_SHEET_REFRESH_RUNS_COLLECTION_ID = 'cashflow_sheet_refresh_runs';
 const CASHFLOW_SHEET_STAGE_RUNS_COLLECTION_ID = 'cashflow_sheet_stage_runs';
+// 시트 내용이 양식·주차 규칙에 안 맞아 불러오기를 거절한 오류. 시트를 고치기 전까지 반복되는 규칙 문제다.
+const SHEET_RULE_REFRESH_ERROR_CODES = new Set([
+  'cashflow_sheet_template_unsupported',
+  'cashflow_sheet_tab_unsupported',
+  'cashflow_week_range_not_in_sheet',
+  'cashflow_sheet_source_year_mismatch',
+]);
 const CASHFLOW_SHEET_STAGE_MONTHS_COLLECTION_ID = 'cashflow_sheet_stage_months';
 const CASHFLOW_SHEET_STAGE_YEARS_COLLECTION_ID = 'cashflow_sheet_stage_years';
 const CASHFLOW_MODES = ['projection', 'actual'];
@@ -1549,14 +1556,18 @@ function monthCalculationChecks(mirror, yearMonth) {
   return checks.length === 10 ? checks : [];
 }
 
-function cashflowFormulaPreflightInput(mirror) {
+// scope 는 검토 단계가 정한 이번 반영 범위다. untilMonth 이후 달과 excludedYears 연도는 검산 근거에서 뺀다.
+// 정산 엔진은 기준 연도가 1~12월 전부가 아니면 이후 연도 검산을 하지 않는다.
+function cashflowFormulaPreflightInput(mirror, scope = {}) {
   const sourceYear = Number(mirror?.sourceYear);
   if (!Number.isSafeInteger(sourceYear)) {
     throw createHttpError(409, '시트의 기준 연도를 확인할 수 없습니다. 시트 값을 다시 불러와 주세요.', 'cashflow_sheet_formula_evidence_incomplete');
   }
+  const untilMonth = readOptionalText(scope?.untilMonth);
+  const excludedYears = new Set((Array.isArray(scope?.excludedYears) ? scope.excludedYears : []).map(Number));
   const annualCells = [];
   const annualYears = [...new Set((mirror?.annualCells || []).map((cell) => Number(cell?.year)))]
-    .filter(Number.isSafeInteger)
+    .filter((year) => Number.isSafeInteger(year) && !excludedYears.has(year))
     .sort((left, right) => left - right);
   for (const year of annualYears) {
     const validated = validateCompletePinnedYear(
@@ -1580,7 +1591,9 @@ function cashflowFormulaPreflightInput(mirror) {
     withdrawal_total: 'withdrawalTotal',
     balance: 'balance',
   };
-  const annualDerivedCells = (mirror?.annualDerivedCells || []).map((cell) => {
+  const annualDerivedCells = (mirror?.annualDerivedCells || [])
+    .filter((cell) => !excludedYears.has(Number(cell?.year)))
+    .map((cell) => {
     const year = Number(cell?.year);
     const periodKind = readOptionalText(cell?.periodKind);
     const field = fieldByKind[readOptionalText(cell?.derivedKind)];
@@ -1622,7 +1635,8 @@ function cashflowFormulaPreflightInput(mirror) {
   const cellsByMonth = groupPinnedCellsByMonth((mirror?.cells || [])
     .filter((cell) => Number(readOptionalText(cell?.yearMonth).slice(0, 4)) === sourceYear));
   const months = [];
-  const yearMonths = [...cellsByMonth.keys()].sort();
+  const yearMonths = [...cellsByMonth.keys()].sort()
+    .filter((yearMonth) => !untilMonth || yearMonth < untilMonth);
   for (const yearMonth of yearMonths) {
     const validated = validateCompletePinnedMonth(yearMonth, cellsByMonth.get(yearMonth) || []);
     const calculationChecks = monthCalculationChecks(mirror, yearMonth);
@@ -1929,9 +1943,20 @@ async function buildPinnedAnnualChangeCandidates({
       && year !== weeklyYear))].sort((left, right) => left - right);
   const documents = [];
   const candidates = [];
+  const excludedYears = [];
   for (const year of annualYears) {
     const sourceCells = (mirror?.annualCells || []).filter((cell) => Number(cell?.year) === year);
     const validated = validateCompletePinnedYear(year, sourceCells);
+    // 주별 연도 이후 연도는 주별 값에 쓰이지 않는다. 불완전하면 그 연도만 건너뛰고 알린다.
+    // 이전 연도는 1월 기초 잔액의 근거라 지금처럼 막는다.
+    if (!validated.ok && Number.isSafeInteger(weeklyYear) && year > weeklyYear) {
+      excludedYears.push({
+        year,
+        reason: 'ANNUAL_INCOMPLETE',
+        message: `${year}년 연간 합계가 Projection·Actual 전체 항목을 충족하지 않아 이번 반영에서 뺐습니다.`,
+      });
+      continue;
+    }
     if (!validated.ok) {
       throw createHttpError(
         409,
@@ -1995,7 +2020,7 @@ async function buildPinnedAnnualChangeCandidates({
       now,
     }));
   }
-  return { candidates, documents, stagedYears: documents.map((document) => document.year) };
+  return { candidates, documents, stagedYears: documents.map((document) => document.year), excludedYears };
 }
 
 function normalizeAppliedAmount(value) {
@@ -2923,9 +2948,14 @@ async function applyStagedCashflowSheetLab({
   const pendingApprovalAffectedMonths = acceptPendingApprovalDifferences
     ? buildPendingApprovalAffectedMonths(stageRun.pendingApprovalDifferences)
     : [];
+  // 합계·잔액 불일치는 반영을 막지 않고 알린다(2026-09-30 결정, 수식 검증 계약 개정). 이어서 하는 반영은
+  // 처음 요청 그대로 둔다. 불일치 목록은 정산 엔진의 검산 결과로 응답에 담는다.
+  // 배포 전에 멈춘 반영(APPLYING·재전송)은 그때 요청 그대로 판정해야 이어서 할 수 있다.
   const acceptFormulaMismatches = storedApplyInput
     ? storedApplyInput.acceptFormulaMismatches === true
-    : parsed.acceptFormulaMismatches === true;
+    : (resuming || replaying)
+      ? parsed.acceptFormulaMismatches === true
+      : true;
   const applyRequestHash = stableHash({
     stagedRunId,
     applyRiskCandidates,
@@ -3087,7 +3117,7 @@ async function applyStagedCashflowSheetLab({
     }
   }
   if (stagedYears.length > 0) {
-    const preflightInput = cashflowFormulaPreflightInput(mirror);
+    const preflightInput = cashflowFormulaPreflightInput(mirror, stageRun.sheetScope);
     await javaWeeklyClient.validateCashflowSheetFormulas({
       context,
       projectId,
@@ -3614,6 +3644,7 @@ async function applyStagedCashflowSheetLab({
     verifiedLineCount,
     canonicalReadbackVerifiedCellCount,
     formulaValidation: verifiedFormulaValidation,
+    formulaMismatches: formulaMismatchesFromChecks(verifiedFormulaValidation),
     firebaseResult: {
       ok: true,
       commandName: CASHFLOW_SHEET_APPLY_COMMAND,
@@ -3722,6 +3753,60 @@ async function applyStagedCashflowSheetLab({
     }, 'warn');
   }
   return finalizedResponse;
+}
+
+// 정산 엔진이 다시 계산한 주차 합계·잔액이 시트 값과 다른 칸.
+function formulaMismatchesFromChecks(checks) {
+  const mismatches = [];
+  for (const check of Array.isArray(checks) ? checks : []) {
+    const matches = check?.matches && typeof check.matches === 'object' ? check.matches : {};
+    for (const field of ['depositTotal', 'withdrawalTotal', 'balance']) {
+      if (matches[field] !== false) continue;
+      mismatches.push(stripUndefinedDeep({
+        yearMonth: readOptionalText(check.yearMonth),
+        mode: readOptionalText(check.mode),
+        weekNo: Number(check.weekNo),
+        field,
+        reported: check.reported?.[field],
+        calculated: check.calculated?.[field],
+        sourceCell: readOptionalText(check.sourceCells?.[field]),
+      }));
+    }
+  }
+  return mismatches;
+}
+
+function stageRunStatus({ pendingBlocked, sheetBlocked, candidateCount }) {
+  if (pendingBlocked) return 'BLOCKED';
+  if (candidateCount > 0) return 'READY';
+  return sheetBlocked ? 'BLOCKED' : 'NO_CHANGES';
+}
+
+// 이번 반영에서 뺀 달과 이유. 서버가 가진 칸 위치와 원문을 그대로 담는다.
+function sheetExcludedMonths({ mirror, blockedMonths, candidates, firstSheetBlockedMonth }) {
+  const blocked = new Set(blockedMonths || []);
+  const invalidByMonth = new Map();
+  for (const cell of mirror?.cells || []) {
+    if (cell?.state !== 'INVALID') continue;
+    const yearMonth = readOptionalText(cell.yearMonth);
+    const list = invalidByMonth.get(yearMonth) || [];
+    list.push({ sourceCell: readOptionalText(cell.sourceCell), rawValue: readOptionalText(cell.rawValue).slice(0, 80) });
+    invalidByMonth.set(yearMonth, list);
+  }
+  const months = new Set([...blocked]);
+  for (const candidate of candidates) {
+    const yearMonth = readOptionalText(candidate.yearMonth);
+    if (yearMonth && yearMonth >= firstSheetBlockedMonth) months.add(yearMonth);
+  }
+  return [...months].sort().map((yearMonth) => {
+    const invalidCells = invalidByMonth.get(yearMonth) || [];
+    if (!blocked.has(yearMonth)) {
+      return { yearMonth, reason: 'AFTER_BLOCKED_MONTH', message: `${firstSheetBlockedMonth} 이후라 잔액을 이어받을 수 없어 이번 반영에서 뺐습니다.` };
+    }
+    return invalidCells.length > 0
+      ? { yearMonth, reason: 'INVALID_CELLS', message: `${yearMonth}에 숫자로 읽을 수 없는 칸이 있습니다.`, cells: invalidCells.slice(0, 20), cellCount: invalidCells.length }
+      : { yearMonth, reason: 'MONTH_INCOMPLETE', message: `${yearMonth} 시트 값이 월 전체 구조를 충족하지 않습니다.` };
+  });
 }
 
 async function stagePinnedCashflowSheetLab({
@@ -3875,16 +3960,51 @@ async function stagePinnedCashflowSheetLab({
   }));
   const finalBuildStartedAt = cashflowStageMetricNow(performanceNow);
   const pendingBlockedMonths = new Set(pendingApproval.blockedMonths || []);
+  // 시트 형식 때문에 못 읽는 달이 있으면 그 달부터 뒤는 이월 잔액을 믿을 수 없어 이번 반영에서 뺀다.
+  // 앞 달은 반영하고, 뺀 달과 이유를 알린다. 결재 중 회차로 막힌 경우(보호)는 이전처럼 run 전체를 막는다.
+  const firstSheetBlockedMonth = [...(weekly.blockedMonths || [])].sort()[0] || '';
+  const sheetWeeklyYear = Number(mirror?.sheetContract?.weeklyYear ?? mirror?.weeklyYear);
+  const excludedBySheet = (candidate) => {
+    if (!firstSheetBlockedMonth) return false;
+    if (readOptionalText(candidate.scope) === 'annual') {
+      return Number.isSafeInteger(sheetWeeklyYear) && Number(candidate.year) > sheetWeeklyYear;
+    }
+    return readOptionalText(candidate.yearMonth) >= firstSheetBlockedMonth;
+  };
   const candidatesForStage = candidates.filter((candidate) => {
     if (pendingApproval.blockAllCandidates) return false;
+    if (excludedBySheet(candidate)) return false;
     if (readOptionalText(candidate.scope) === 'annual') return true;
     return !pendingBlockedMonths.has(readOptionalText(candidate.yearMonth));
   });
+  const excludedMonths = firstSheetBlockedMonth
+    ? sheetExcludedMonths({ mirror, blockedMonths: weekly.blockedMonths, candidates, firstSheetBlockedMonth })
+    : [];
+  const excludedYears = [...(annual.excludedYears || [])];
+  if (firstSheetBlockedMonth && Number.isSafeInteger(sheetWeeklyYear)) {
+    for (const year of new Set(annual.candidates.map((candidate) => Number(candidate.year)))) {
+      if (year > sheetWeeklyYear && !excludedYears.some((item) => item.year === year)) {
+        excludedYears.push({ year, reason: 'AFTER_BLOCKED_MONTH', message: `${firstSheetBlockedMonth} 이후 잔액을 이어받는 연도라 이번 반영에서 뺐습니다.` });
+      }
+    }
+  }
+  excludedYears.sort((left, right) => left.year - right.year);
+  const sheetScope = {
+    untilMonth: firstSheetBlockedMonth,
+    excludedYears: excludedYears.map((item) => item.year),
+  };
   const stageAttemptId = randomUUID();
   const candidateManifestHash = cashflowChangeCandidateManifestHash(candidatesForStage);
   const annualForStage = pendingApproval.blockAllCandidates
     ? { candidates: [], documents: [], stagedYears: [] }
-    : annual;
+    : firstSheetBlockedMonth && Number.isSafeInteger(sheetWeeklyYear)
+      ? {
+        ...annual,
+        candidates: annual.candidates.filter((candidate) => Number(candidate.year) <= sheetWeeklyYear),
+        documents: annual.documents.filter((document) => Number(document?.year) <= sheetWeeklyYear),
+        stagedYears: (annual.stagedYears || []).filter((year) => Number(year) <= sheetWeeklyYear),
+      }
+      : annual;
   const blockedMonths = [...new Set([
     ...weekly.blockedMonths,
     ...pendingApproval.blockedMonths,
@@ -3939,7 +4059,14 @@ async function stagePinnedCashflowSheetLab({
     replaceAllActualSources: Boolean(parsed.replaceAllActualSources),
     activeWeekRange: mirror.activeWeekRange,
     runId,
-    status: blockedMonths.length > 0 || pendingApproval.contractIssues.length > 0 ? 'BLOCKED' : candidatesForStage.length === 0 ? 'NO_CHANGES' : 'READY',
+    status: stageRunStatus({
+      pendingBlocked: pendingApproval.blockedMonths.length > 0 || pendingApproval.contractIssues.length > 0,
+      sheetBlocked: weekly.blockedMonths.length > 0,
+      candidateCount: candidatesForStage.length,
+    }),
+    excludedMonths,
+    excludedYears,
+    sheetScope,
     stagedLineCount: candidatesForStage.length,
     projectionLineCount,
     actualLineCount,
@@ -3992,6 +4119,9 @@ async function stagePinnedCashflowSheetLab({
     stagedMonths,
     calculationMonths,
     stagedYears: annualForStage.stagedYears,
+    excludedMonths,
+    excludedYears,
+    sheetScope,
     openingBalanceCells,
     appliedAnnualYears: Array.isArray(mirror.appliedAnnualYears) ? mirror.appliedAnnualYears.map(Number) : [],
     appliedWeeklyYears: Array.isArray(mirror.appliedWeeklyYears) ? mirror.appliedWeeklyYears.map(Number) : [],
@@ -4499,10 +4629,14 @@ export function mountCashflowSheetLabRoutes(app, {
           diagnosticCount: Number(normalized?.diagnosticCount) || diagnostics.length,
         } : {}),
       };
+      // 시트 규칙이 안 맞아 불러오기를 못 한 경우는 그 불러오기만 건너뛴다. 이미 고정한 값의 상태는 두고
+      // 실패 내용만 남겨, 그 값으로 하는 월결산·주정산이 멈추지 않게 한다. 통신 오류는 지금처럼 STALE 이다.
+      const keepPreviousStatus = SHEET_RULE_REFRESH_ERROR_CODES.has(lastRefreshError.code)
+        && readOptionalText(previousMirror?.status) === 'FRESH';
       const mirror = previousMirror?.sourceRevision
         ? {
           ...previousMirror,
-          status: 'STALE',
+          status: keepPreviousStatus ? 'FRESH' : 'STALE',
           lastRefreshAttemptAt: attemptedAt,
           lastRefreshError,
           lastRefreshIdempotencyKey: parsed.idempotencyKey,
