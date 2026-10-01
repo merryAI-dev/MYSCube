@@ -54,6 +54,7 @@ import { ACCOUNT_TYPE_LABELS, type AccountType } from '../../data/types';
 import { CashflowCanonicalSummary } from './CashflowCanonicalSummary';
 import {
   chunkCashflowExportProjectIds,
+  loadCashflowExportChunksInSequence,
   findCashflowExportSettlementStatus,
   resolveCashflowExportRecentWeeks,
   type CashflowExportRecentWeek,
@@ -156,6 +157,7 @@ interface CashflowExportOperationsState {
   settlementResults: CashflowSettlementStatusesResult[];
   statusErrors: Record<string, boolean>;
   summaryErrors: Record<string, boolean>;
+  pendingProjectIds: Record<string, boolean>;
 }
 
 function settlementErrorKey(projectId: string, yearMonth: string) {
@@ -211,7 +213,7 @@ export function CashflowExportPage() {
   const [multiProjectVariant, setMultiProjectVariant] = useState<'combined' | 'multi-sheet'>('multi-sheet');
   const [downloadPreparing, setDownloadPreparing] = useState(false);
   const [operationsState, setOperationsState] = useState<CashflowExportOperationsState>({
-    key: '', loading: false, overviewItems: {}, settlementResults: [], statusErrors: {}, summaryErrors: {},
+    key: '', loading: false, overviewItems: {}, settlementResults: [], statusErrors: {}, summaryErrors: {}, pendingProjectIds: {},
   });
 
   const canExport = hasPermission((user?.role || 'viewer') as any, 'cashflow:export');
@@ -313,11 +315,33 @@ export function CashflowExportPage() {
     orgId, operationsActor?.uid || '', operationsActor?.role || '', targetProjectIdsKey,
     previousWeek?.yearMonth || '', previousWeek?.period || '', currentWeek?.yearMonth || '', currentWeek?.period || '',
   ]);
-  const scopedOperations = operationsState.key === operationsKey ? operationsState : {
+  const operationsWillLoad = Boolean(
+    canExport && bffEnabled && operationsActor?.idToken && targetProjectIds.length > 0 && currentWeek && previousWeek,
+  );
+  const scopedOperations: CashflowExportOperationsState = operationsState.key === operationsKey ? operationsState : {
     key: operationsKey,
-    loading: Boolean(canExport && bffEnabled && operationsActor?.idToken && targetProjectIds.length > 0 && currentWeek && previousWeek),
+    loading: operationsWillLoad,
     overviewItems: {}, settlementResults: [], statusErrors: {}, summaryErrors: {},
+    pendingProjectIds: operationsWillLoad ? Object.fromEntries(targetProjectIds.map((projectId) => [projectId, true])) : {},
   };
+
+  const operationsPendingCount = Object.keys(scopedOperations.pendingProjectIds).length;
+  const operationsFailedCount = targetProjectIds.filter((projectId) => (
+    !scopedOperations.pendingProjectIds[projectId]
+    && (scopedOperations.summaryErrors[projectId]
+      || recentWeeks.some((week) => scopedOperations.statusErrors[settlementErrorKey(projectId, week.yearMonth)]))
+  )).length;
+  const operationsProgress = operationsPendingCount > 0
+    ? {
+      tone: 'status' as const,
+      text: `사업 ${targetProjectIds.length}개 중 ${targetProjectIds.length - operationsPendingCount}개를 불러왔습니다. 나머지는 10개씩 차례로 불러옵니다.`,
+    }
+    : operationsFailedCount > 0
+      ? {
+        tone: 'alert' as const,
+        text: `사업 ${operationsFailedCount}개는 주정산 또는 시트 정보를 불러오지 못했습니다. 다른 사업은 정상으로 표시됩니다. 화면을 새로 고치면 다시 불러옵니다.`,
+      }
+      : null;
 
   const workbookVariant: CashflowExportWorkbookVariant = multiProjectVariant;
   const periodSummary = summarizeCashflowYearMonths(yearMonths);
@@ -338,88 +362,100 @@ export function CashflowExportPage() {
     const projectIds = JSON.parse(targetProjectIdsKey) as string[];
     if (!canExport || !bffEnabled || !operationsActor?.idToken || projectIds.length === 0 || !currentWeek || !previousWeek) {
       setOperationsState({
-        key: operationsKey, loading: false, overviewItems: {}, settlementResults: [], statusErrors: {}, summaryErrors: {},
+        key: operationsKey, loading: false, overviewItems: {}, settlementResults: [], statusErrors: {}, summaryErrors: {}, pendingProjectIds: {},
       });
       return;
     }
 
     let active = true;
-    const chunks = chunkCashflowExportProjectIds(projectIds);
     setOperationsState({
-      key: operationsKey, loading: true, overviewItems: {}, settlementResults: [], statusErrors: {}, summaryErrors: {},
+      key: operationsKey,
+      loading: true,
+      overviewItems: {},
+      settlementResults: [],
+      statusErrors: {},
+      summaryErrors: {},
+      pendingProjectIds: Object.fromEntries(projectIds.map((projectId) => [projectId, true])),
     });
-    const currentRequests = chunks.map((projectIdsChunk) => fetchCashflowWeeklyOverviewViaBff({
-      tenantId: orgId,
-      actor: operationsActor,
-      projectIds: projectIdsChunk,
-      yearMonth: currentWeek.yearMonth,
-    }));
-    const previousRequests = previousWeek.yearMonth === currentWeek.yearMonth
-      ? []
-      : chunks.map((projectIdsChunk) => fetchCashflowSettlementStatusesBatchViaBff({
-        tenantId: orgId,
-        actor: operationsActor,
-        projectIds: projectIdsChunk,
-        yearMonth: previousWeek.yearMonth,
-      }));
+    const loadPreviousWeek = previousWeek.yearMonth !== currentWeek.yearMonth;
 
-    void Promise.all([
-      Promise.allSettled(currentRequests),
-      Promise.allSettled(previousRequests),
-    ]).then(([currentResults, previousResults]) => {
-      if (!active) return;
-      const requestedIds = new Set(projectIds);
-      const overviewItems: Record<string, CashflowWeeklyOverviewItem> = {};
-      const settlementResults: CashflowSettlementStatusesResult[] = [];
-      const statusErrors: Record<string, boolean> = {};
-      const summaryErrors: Record<string, boolean> = {};
+    void loadCashflowExportChunksInSequence({
+      chunks: chunkCashflowExportProjectIds(projectIds),
+      isActive: () => active,
+      loadChunk: (chunk) => Promise.all([
+        fetchCashflowWeeklyOverviewViaBff({
+          tenantId: orgId,
+          actor: operationsActor,
+          projectIds: chunk,
+          yearMonth: currentWeek.yearMonth,
+        }).then((value) => ({ status: 'fulfilled' as const, value }), (reason) => ({ status: 'rejected' as const, reason })),
+        loadPreviousWeek
+          ? fetchCashflowSettlementStatusesBatchViaBff({
+            tenantId: orgId,
+            actor: operationsActor,
+            projectIds: chunk,
+            yearMonth: previousWeek.yearMonth,
+          }).then((value) => ({ status: 'fulfilled' as const, value }), (reason) => ({ status: 'rejected' as const, reason }))
+          : null,
+      ]),
+      onChunk: (chunk, settled) => {
+        const requestedIds = new Set(chunk);
+        const overviewItems: Record<string, CashflowWeeklyOverviewItem> = {};
+        const settlementResults: CashflowSettlementStatusesResult[] = [];
+        const statusErrors: Record<string, boolean> = {};
+        const summaryErrors: Record<string, boolean> = {};
+        const [currentResult, previousResult] = settled.status === 'fulfilled'
+          ? settled.value
+          : [{ status: 'rejected' as const, reason: settled.reason }, loadPreviousWeek ? { status: 'rejected' as const, reason: settled.reason } : null];
 
-      currentResults.forEach((result, index) => {
-        const chunk = chunks[index];
-        if (result.status === 'rejected') {
+        if (currentResult.status === 'rejected') {
           chunk.forEach((projectId) => {
             statusErrors[settlementErrorKey(projectId, currentWeek.yearMonth)] = true;
             summaryErrors[projectId] = true;
           });
-          return;
+        } else {
+          currentResult.value.items.forEach((item) => {
+            if (!requestedIds.has(item.projectId)) return;
+            overviewItems[item.projectId] = item;
+            if (item.settlementStatuses) settlementResults.push(item.settlementStatuses);
+          });
+          currentResult.value.errors.forEach((error) => {
+            if (requestedIds.has(error.projectId)) summaryErrors[error.projectId] = true;
+          });
         }
-        result.value.items.forEach((item) => {
-          overviewItems[item.projectId] = item;
-          if (item.settlementStatuses) settlementResults.push(item.settlementStatuses);
-        });
-        result.value.errors.forEach((error) => {
-          summaryErrors[error.projectId] = true;
-        });
-      });
 
-      previousResults.forEach((result, index) => {
-        const chunk = chunks[index];
-        if (result.status === 'rejected') {
+        if (previousResult?.status === 'rejected') {
           chunk.forEach((projectId) => {
             statusErrors[settlementErrorKey(projectId, previousWeek.yearMonth)] = true;
           });
-          return;
+        } else if (previousResult) {
+          previousResult.value.items.forEach((item) => {
+            if (requestedIds.has(item.projectId) && item.yearMonth === previousWeek.yearMonth) {
+              settlementResults.push(item);
+            }
+          });
+          previousResult.value.errors.forEach((error) => {
+            if (requestedIds.has(error.projectId) && error.code === 'STATUS_UNAVAILABLE') {
+              statusErrors[settlementErrorKey(error.projectId, previousWeek.yearMonth)] = true;
+            }
+          });
         }
-        result.value.items.forEach((item) => {
-          if (requestedIds.has(item.projectId) && item.yearMonth === previousWeek.yearMonth) {
-            settlementResults.push(item);
-          }
-        });
-        result.value.errors.forEach((error) => {
-          if (requestedIds.has(error.projectId) && error.code === 'STATUS_UNAVAILABLE') {
-            statusErrors[settlementErrorKey(error.projectId, previousWeek.yearMonth)] = true;
-          }
-        });
-      });
 
-      setOperationsState({
-        key: operationsKey,
-        loading: false,
-        overviewItems,
-        settlementResults,
-        statusErrors,
-        summaryErrors,
-      });
+        setOperationsState((current) => {
+          if (current.key !== operationsKey) return current;
+          const pendingProjectIds = { ...current.pendingProjectIds };
+          chunk.forEach((projectId) => { delete pendingProjectIds[projectId]; });
+          return {
+            key: operationsKey,
+            loading: Object.keys(pendingProjectIds).length > 0,
+            overviewItems: { ...current.overviewItems, ...overviewItems },
+            settlementResults: [...current.settlementResults, ...settlementResults],
+            statusErrors: { ...current.statusErrors, ...statusErrors },
+            summaryErrors: { ...current.summaryErrors, ...summaryErrors },
+            pendingProjectIds,
+          };
+        });
+      },
     });
 
     return () => { active = false; };
@@ -849,6 +885,15 @@ export function CashflowExportPage() {
           <p className="text-[11px] text-stone-600">
             최근 두 주의 주정산 상태와 시트에서 마지막으로 불러온 저장값을 함께 확인합니다.
           </p>
+          {operationsProgress ? (
+            <p
+              data-testid="cashflow-export-operations-progress"
+              role={operationsProgress.tone === 'alert' ? 'alert' : 'status'}
+              className={`text-[11px] ${operationsProgress.tone === 'alert' ? 'text-amber-800' : 'text-stone-500'}`}
+            >
+              {operationsProgress.text}
+            </p>
+          ) : null}
         </CardHeader>
         <CardContent className="p-0">
           <div
@@ -877,14 +922,9 @@ export function CashflowExportPage() {
                 </tr>
               </thead>
               <tbody>
-                {scopedOperations.loading ? (
-                  <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-stone-500">
-                      <Loader2 className="mr-2 inline h-4 w-4 animate-spin" /> 주정산과 시트 저장값을 불러오는 중입니다.
-                    </td>
-                  </tr>
-                ) : targetProjects.map((project) => {
+                {targetProjects.map((project) => {
                   const overviewItem = scopedOperations.overviewItems[project.id];
+                  const pending = Boolean(scopedOperations.pendingProjectIds[project.id]);
                   const summaryError = Boolean(scopedOperations.summaryErrors[project.id]);
                   return (
                     <tr key={project.id} className="border-b border-stone-100 align-top hover:bg-stone-50/70">
@@ -898,14 +938,16 @@ export function CashflowExportPage() {
                               key={`${project.id}:${week.yearMonth}:${week.period}`}
                               week={week}
                               item={findCashflowExportSettlementStatus(scopedOperations.settlementResults, project.id, week)}
-                              loading={false}
+                              loading={pending}
                               error={Boolean(scopedOperations.statusErrors[settlementErrorKey(project.id, week.yearMonth)])}
                             />
                           ))}
                         </div>
                       </td>
                       <td className="px-3 py-3 text-center">
-                        {summaryError ? (
+                        {pending ? (
+                          <span role="status" className="text-stone-500">불러오는 중…</span>
+                        ) : summaryError ? (
                           <span role="alert" className="text-amber-800">시트 현황을 불러오지 못함</span>
                         ) : overviewItem?.projectionActualSummary ? (
                           <CashflowCanonicalSummary summary={overviewItem.projectionActualSummary} />
@@ -914,7 +956,9 @@ export function CashflowExportPage() {
                         )}
                       </td>
                       <td className="px-3 py-3 text-stone-600">
-                        {summaryError
+                        {pending
+                          ? <span role="status" className="text-stone-500">불러오는 중…</span>
+                          : summaryError
                           ? <span role="alert" className="text-amber-800">시트 현황을 불러오지 못함</span>
                           : overviewItem?.sheetCapturedAt
                             ? formatDateTime(overviewItem.sheetCapturedAt)
@@ -935,7 +979,7 @@ export function CashflowExportPage() {
                     </tr>
                   );
                 })}
-                {!scopedOperations.loading && targetProjects.length === 0 ? (
+                {targetProjects.length === 0 ? (
                   <tr><td colSpan={7} className="px-4 py-10 text-center text-stone-500">조건에 맞는 사업이 없습니다.</td></tr>
                 ) : null}
               </tbody>

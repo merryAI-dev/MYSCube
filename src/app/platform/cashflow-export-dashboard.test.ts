@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   chunkCashflowExportProjectIds,
   findCashflowExportSettlementStatus,
+  loadCashflowExportChunksInSequence,
   resolveCashflowExportRecentWeeks,
 } from './cashflow-export-dashboard';
 
@@ -25,10 +26,52 @@ describe('cashflow export operations dashboard', () => {
     expect(resolveCashflowExportRecentWeeks('not-a-date')).toEqual([]);
   });
 
-  it('chunks the maximum BFF request size without dropping the 101st project', () => {
-    const projectIds = Array.from({ length: 101 }, (_, index) => `p${index + 1}`);
-    expect(chunkCashflowExportProjectIds(projectIds).map((chunk) => chunk.length)).toEqual([100, 1]);
+  it('chunks 10 projects per request without dropping the last project', () => {
+    const projectIds = Array.from({ length: 71 }, (_, index) => `p${index + 1}`);
+    const chunks = chunkCashflowExportProjectIds(projectIds);
+    expect(chunks.map((chunk) => chunk.length)).toEqual([10, 10, 10, 10, 10, 10, 10, 1]);
+    expect(chunks.flat()).toEqual(projectIds);
     expect(chunkCashflowExportProjectIds([])).toEqual([]);
+  });
+
+  it('loads chunks one at a time and keeps going after a failed chunk', async () => {
+    const chunks = [['p1'], ['p2'], ['p3']];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const seen: Array<[string, string]> = [];
+    await loadCashflowExportChunksInSequence({
+      chunks,
+      isActive: () => true,
+      loadChunk: async (chunk) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await Promise.resolve();
+        inFlight -= 1;
+        if (chunk[0] === 'p2') throw new Error('jvm_weekly_api_unreachable');
+        return chunk[0];
+      },
+      onChunk: (chunk, result) => { seen.push([chunk[0], result.status]); },
+    });
+    expect(maxInFlight).toBe(1);
+    expect(seen).toEqual([['p1', 'fulfilled'], ['p2', 'rejected'], ['p3', 'fulfilled']]);
+  });
+
+  it('stops sending and reporting once the screen scope changes', async () => {
+    let active = true;
+    const loaded: string[] = [];
+    const reported: string[] = [];
+    await loadCashflowExportChunksInSequence({
+      chunks: [['p1'], ['p2'], ['p3']],
+      isActive: () => active,
+      loadChunk: async (chunk) => {
+        loaded.push(chunk[0]);
+        if (chunk[0] === 'p2') active = false;
+        return chunk[0];
+      },
+      onChunk: (chunk) => { reported.push(chunk[0]); },
+    });
+    expect(loaded).toEqual(['p1', 'p2']);
+    expect(reported).toEqual(['p1']);
   });
 
   it('joins a status only by exact project, month, and week period', () => {

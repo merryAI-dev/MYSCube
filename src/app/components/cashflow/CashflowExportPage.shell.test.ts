@@ -29,6 +29,14 @@ describe('CashflowExportPage authoritative export surface', () => {
     expect(source).toContain('sortBy,');
   });
 
+  it('loads operations 10 projects at a time and marks only the failed chunk', () => {
+    expect(source).toContain('loadCashflowExportChunksInSequence');
+    expect(source).toContain('chunks: chunkCashflowExportProjectIds(projectIds)');
+    expect(source).not.toContain('Promise.allSettled(currentRequests)');
+    expect(source).toContain('loading={pending}');
+    expect(source).toContain('data-testid="cashflow-export-operations-progress"');
+  });
+
   it('shows the canonical two-week operations table without client-side financial differences', () => {
     expect(source).toContain('fetchCashflowWeeklyOverviewViaBff');
     expect(source).toContain('fetchCashflowSettlementStatusesBatchViaBff');
