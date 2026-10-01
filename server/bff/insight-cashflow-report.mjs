@@ -1,4 +1,4 @@
-import { createCashflowEvidenceQuery } from './cashflow-evidence-query.mjs';
+import { createCashflowEvidenceQuery, readEvidenceHttpQuery } from './cashflow-evidence-query.mjs';
 import { summarizeAccountingRows } from '../mcp/accounting-report.mjs';
 import { createHttpError } from './bff-utils.mjs';
 export function createInsightCashflowReport({ db, now = () => new Date().toISOString(), readSnapshot, release, pageQuery }) {
@@ -31,5 +31,5 @@ export function createInsightCashflowReport({ db, now = () => new Date().toISOSt
 }
 export function mountInsightCashflowReport(app, { asyncHandler, ...dependencies }) {
   const query = createInsightCashflowReport(dependencies);
-  app.get('/api/v1/insight-cashflow-report', asyncHandler(async (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json(await query(req.context, req.query)); }));
+  app.get('/api/v1/insight-cashflow-report', asyncHandler(async (req, res) => { res.setHeader('Cache-Control', 'no-store'); res.json(await query(req.context, readEvidenceHttpQuery(req.query))); }));
 }

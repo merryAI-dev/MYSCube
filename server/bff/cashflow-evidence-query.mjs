@@ -11,6 +11,11 @@ export const evidenceQuery = z.object({
   after: z.string().min(1).max(100).regex(/^[^/]+$/).optional(),
 }).strict();
 
+export function readEvidenceHttpQuery(query) {
+  const { __path: forwardedPath, ...input } = query;
+  return input;
+}
+
 export function createCashflowEvidenceQuery({ db, readSnapshot, now = () => new Date().toISOString(), release = '', readBudgetMs = 5000 }) {
   return async (context, raw, signal) => {
     const parsed = evidenceQuery.safeParse(raw);
@@ -97,7 +102,7 @@ export function mountCashflowEvidenceRoutes(app, { db, readSnapshot, now, releas
   app.get('/api/v1/cashflow-evidence', asyncHandler(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     const signal = AbortSignal.timeout(25000);
-    res.json(await query(req.context, req.query, signal));
+    res.json(await query(req.context, readEvidenceHttpQuery(req.query), signal));
   }));
   app.get('/api/v1/cashflow-evidence/diagnostics', asyncHandler(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
