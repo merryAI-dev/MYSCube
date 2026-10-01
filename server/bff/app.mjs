@@ -10,6 +10,7 @@ import { createReliabilityService, mountReliabilityRoutes } from './reliability-
 import { reliabilityResponseMiddleware } from './reliability-middleware.mjs';
 import { createSlackIngress } from '../mcp/slack-ingress.mjs';
 import { createFeedbackIngress, createSlackWorker, verifySettlementWorkerToken } from '../mcp/slack-runtime.mjs';
+import { createSettlementReminderWorker } from '../mcp/settlement-reminders.mjs';
 import { randomUUID } from 'node:crypto';
 import { createFirestoreDb, isFirestoreEmulatorEnabled, resolveProjectId } from './firestore.mjs';
 import {
@@ -1790,6 +1791,15 @@ export function createBffApp(options = {}) {
   });
   if (settlementAgentEnabled) {
     runSettlementWorker = createSlackWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview, readSnapshot: jvmReadPort.readCashflowSnapshot });
+    const runReminders = createSettlementReminderWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview, fetchImpl: options.fetchImpl || globalThis.fetch });
+    app.get('/api/internal/workers/settlement-reminders/run', asyncHandler(async (req, res) => {
+      if (!verifySettlementWorkerToken({ authorization: req.header('authorization'), secret: env.SETTLEMENT_AGENT_WORKER_SECRET,
+        disabled: workerAuthPolicy.schedulerOwner === 'disabled' || maintenanceReadOnly || readOptionalText(env.BFF_WORKERS_ENABLED).toLowerCase() === 'false' })) {
+        throw createHttpError(401, 'Worker authorization failed', 'unauthorized_worker');
+      }
+      res.setHeader('cache-control', 'no-store');
+      res.json({ ok: true, ...await runReminders() });
+    }));
     app.get('/api/internal/workers/settlement-agent/run', asyncHandler(async (req, res) => {
       if (!verifySettlementWorkerToken({ authorization: req.header('authorization'), secret: env.SETTLEMENT_AGENT_WORKER_SECRET,
         disabled: workerAuthPolicy.schedulerOwner === 'disabled' || maintenanceReadOnly || readOptionalText(env.BFF_WORKERS_ENABLED).toLowerCase() === 'false' })) {

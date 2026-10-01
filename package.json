@@ -12,7 +12,7 @@
     "deploy:prod:verify": "node ./deploy-prod-align.mjs --verify-only",
     "dev": "vite",
     "dev:local": "VITE_DEV_AUTH_HARNESS_ENABLED=true VITE_DEMO_LOGIN_ENABLED=true VITE_FIREBASE_AUTH_ENABLED=false VITE_FIRESTORE_CORE_ENABLED=false vite",
-    "test": "vitest run",
+    "test": "npm run test:settlement:reminders && vitest run",
     "test:watch": "vitest",
     "test:e2e": "npx playwright test --config playwright.harness.config.mjs",
     "test:e2e:cashflow-export": "npx playwright test --config playwright.cashflow-export.config.mjs",
@@ -73,7 +73,8 @@
     "policy:firestore-ownership": "node scripts/verify-firestore-ownership.mjs",
     "policy:jvm-roles:write": "node scripts/extract_jvm_command_roles.mjs --write",
     "typecheck": "node scripts/verify-typecheck-baseline.mjs",
-    "typecheck:baseline": "node scripts/verify-typecheck-baseline.mjs --update"
+    "typecheck:baseline": "node scripts/verify-typecheck-baseline.mjs --update",
+    "test:settlement:reminders": "node --test server/mcp/settlement-reminders.*-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
