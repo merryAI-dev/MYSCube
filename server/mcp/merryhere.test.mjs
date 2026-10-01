@@ -30,6 +30,12 @@ describe('Merryhere provider contract', () => {
     expect(() => parseCalendar(html(slotHtml(0).replace('class=""', 'class="new-blocked-class"')), '2026-09-30')).toThrow('page_changed');
     expect(() => selectBookingSlots(parseCalendar(html(slotHtml(0)), '2026-09-30'), { roomId: '9', start: '09:00', end: '10:00' })).toThrow('slot_missing');
   });
+  it('accepts the observed own-booking my marker without accepting unknown free states', () => {
+    const own = slotHtml(0).replace('class=""', 'class="my my-reserve"');
+    expect(parseCalendar(html(own), '2026-09-30').slots[0]).toMatchObject({ state: 'booked', owned: true });
+    expect(() => parseCalendar(html(slotHtml(0).replace('class=""', 'class="my"')), '2026-09-30')).toThrow('page_changed');
+    expect(() => parseCalendar(html(own.replace('my my-reserve', 'my my-reserve unknown-role')), '2026-09-30')).toThrow('page_changed');
+  });
   it('logs in using CSRF and cookie rotation, without forwarding credentials to other origins', async () => {
     const fetchImpl = vi.fn().mockResolvedValueOnce(new Response('<form action="/auth/login" method="post"><input name="_token" value="login-csrf"></form>', { headers: { 'set-cookie': 'session=before; Secure; HttpOnly' } }))
       .mockResolvedValueOnce(new Response('', { status: 302, headers: { location: 'https://evil.example/', 'set-cookie': 'session=after; Secure; HttpOnly' } }));

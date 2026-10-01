@@ -42,13 +42,14 @@ export function parseCalendar(html, date) {
     const minutes = t => Number(t.slice(0, 2)) * 60 + Number(t.slice(3));
     if (minutes(end) - minutes(start) !== 30 || !Number.isSafeInteger(Number(parts[2])) || !Number.isSafeInteger(Number(parts[3]))) fail('page_changed');
     const classes = (a.class || '').trim().split(/\s+/).filter(Boolean);
-    if (classes.some(c => !['free-slot', 'paid-slot', 'studio-outlink-slot', 'my-reserve', 'my-group', 'other-reserve'].includes(c))) fail('page_changed');
+    if (classes.some(c => !['free-slot', 'paid-slot', 'studio-outlink-slot', 'my', 'my-reserve', 'my-group', 'other-reserve'].includes(c))) fail('page_changed');
+    if (classes.includes('my') && !classes.includes('my-reserve')) fail('page_changed');
     const external = classes.includes('paid-slot') || classes.includes('studio-outlink-slot');
     const booked = Boolean(a['data-list-id']) || classes.includes('my-reserve') || classes.includes('other-reserve');
     if (!/^\d+$/.test(a['data-cnt'] || '')) fail('page_changed');
     return { roomId: parts[1], ordinal: Number(parts[2]), points: Number(parts[3]), name: a['data-name'], capacity: Number(a['data-cnt']), start, end,
       state: booked ? 'booked' : external ? 'external' : ('disabled' in a || 'readonly' in a) ? 'blocked' : 'available',
-      reservationId: a['data-list-id'] || null, owned: classes.includes('my-reserve') && !classes.includes('my-group') };
+      reservationId: a['data-list-id'] || null, owned: classes.includes('my-reserve') && !classes.includes('my-group') && !classes.includes('other-reserve') };
   });
   if (!slots.length || new Set(slots.map(s => `${s.roomId}/${s.ordinal}`)).size !== slots.length) fail('page_changed');
   return { date, slots, token: tokenFrom(html, '/reserve') };
