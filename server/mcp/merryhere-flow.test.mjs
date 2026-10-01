@@ -1,4 +1,8 @@
-import { it, expect, vi } from 'vitest';
+import { it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+// 예약 가능 기간("오늘부터 4주")은 오늘 날짜로 판정한다. 픽스처가 2026-09-30 기준이라 Date 만 그날로 고정한다.
+beforeEach(() => { vi.useFakeTimers({ toFake: ['Date'] }); vi.setSystemTime(new Date('2026-09-30T01:00:00.000Z')); });
+afterEach(() => { vi.useRealTimers(); });
 import { createSlackWorker } from './slack-runtime.mjs';
 import { memoryDb, connectMerryhere, TEST_MERRYHERE_KEY } from './slack-test-store.mjs';
 
