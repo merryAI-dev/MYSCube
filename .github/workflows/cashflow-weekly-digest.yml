@@ -1,0 +1,43 @@
+# Vercel 크론이 2026-07-14 이후 새 스케줄을 등록하지 않아(원인 미규명) 여기서 대신 깨운다.
+# 워커 자체는 라이브 BFF 에 있고 이 워크플로는 시각에 맞춰 호출만 한다.
+name: Cashflow weekly digest
+
+on:
+  schedule:
+    # 19:00 KST = 10:00 UTC
+    - cron: '0 10 * * *'
+    # 23:59 KST = 14:59 UTC
+    - cron: '59 14 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: cashflow-weekly-digest
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send digest
+        env:
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          DIGEST_URL: https://myscube.myscguard.app/api/internal/workers/cashflow-weekly-digest/run
+        run: |
+          set -euo pipefail
+          test -n "${CRON_SECRET}" || { echo "Missing repository secret: CRON_SECRET" >&2; exit 1; }
+
+          # Cloudflare 가 기본 curl UA 를 봇으로 보고 403 을 준다. 실제 브라우저 UA 를 쓴다.
+          body="$(mktemp)"
+          status="$(curl -sS -o "${body}" -w '%{http_code}' \
+            -H "authorization: Bearer ${CRON_SECRET}" \
+            -A 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36' \
+            "${DIGEST_URL}")"
+
+          echo "status=${status}"
+          cat "${body}"
+          echo
+
+          if [ "${status}" != "200" ]; then
+            echo "다이제스트 워커 호출이 실패했습니다 (${status})." >&2
+            exit 1
+          fi
