@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual, createHash } from 'node:crypto';
+import { isMonthClosePreviewCommand } from './month-close-preview-command.mjs';
 
 export function verifySlackRequest({ body, timestamp, signature, secret, now = Date.now() }) {
   if (!secret || !Buffer.isBuffer(body) || !/^\d+$/.test(timestamp || '')
@@ -50,7 +51,7 @@ export function createSlackIngress({ db, secret, teamId, channelIds = ['C0BQ6980
       });
       const followUp = async () => {
         const receiptTimeout = Math.min(800, Math.floor(2400 - (performance.now() - started)));
-        if (accepted === 'created' && botToken && receiptTimeout > 0) {
+        if (accepted === 'created' && botToken && receiptTimeout > 0 && !isMonthClosePreviewCommand(event.text)) {
           try {
             const receipt = await fetchImpl('https://slack.com/api/chat.postMessage', {
               method: 'POST', headers: { authorization: `Bearer ${botToken}`, 'content-type': 'application/json' },

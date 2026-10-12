@@ -24,7 +24,8 @@ import { createLocalRoomRelay, localPairCode } from './merryhere-local-relay.mjs
 import { roomRequestSchema, roomToolDescription } from './merryhere-request.mjs';
 import { createMerryhereClient } from './merryhere-client.mjs';
 import { createGoogleCalendarRooms } from './google-calendar-rooms.mjs';
-import { assertMonthCloseRequest, buildMonthCloseReminderPlan } from './month-close-reminders.mjs';
+import { buildMonthCloseReminderPlan } from './month-close-reminders.mjs';
+import { isMonthClosePreviewCommand, parseMonthClosePreviewCommand } from './month-close-preview-command.mjs';
 
 // Weekday and minute are needed for relative dates ("다음 주 수요일") and for refusing an already-past assumed time.
 export function roomClock(date) {
@@ -43,17 +44,7 @@ export function slackText(text) {
   return formatted.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
-const monthClosePreviewPrefix = /^\s*(?:<@[A-Z0-9]+>\s*)?월결산\s+리마인드\s+미리보기(?:\s|$)/;
-export function parseMonthClosePreviewCommand(value) {
-  const source = typeof value === 'string' ? value.trim() : '';
-  if (!monthClosePreviewPrefix.test(source)) return null;
-  const match = source.match(/^\s*(?:<@[A-Z0-9]+>\s*)?월결산\s+리마인드\s+미리보기\s+(20\d{2}-(?:0[1-9]|1[0-2]))\s+제출\s+(20\d{2}-\d{2}-\d{2})\s+([01]\d|2[0-3]):([0-5]\d)\s+승인\s+(20\d{2}-\d{2}-\d{2})\s+([01]\d|2[0-3]):([0-5]\d)\s*$/);
-  if (!match) return { error: 'month_close_preview_usage' };
-  try {
-    return { input: assertMonthCloseRequest({ yearMonth: match[1], submissionDeadlineAt: `${match[2]}T${match[3]}:${match[4]}:00+09:00`,
-      approvalDeadlineAt: `${match[5]}T${match[6]}:${match[7]}:00+09:00` }) };
-  } catch { return { error: 'month_close_preview_usage' }; }
-}
+export { parseMonthClosePreviewCommand } from './month-close-preview-command.mjs';
 
 export function selectSlackHarness(question, turns = []) {
   const tag = (text) => String(text).match(/\[(hermes|baseline)\]/i)?.[1].toLowerCase();
@@ -454,7 +445,8 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         connectLink = connections?.available ? await connections.issueLink(actor, job.id) : null;
         privateAnswer = true;
       }
-      await record({ type: 'run_result', status: result.status, answer: result.answer, answerPolicy: 'server_evidence_only' });
+      await record({ type: 'run_result', status: result.status,
+        answer: monthClosePreview ? '[private month-close preview omitted]' : result.answer, answerPolicy: 'server_evidence_only' });
       answerStatus = result.status;
       answer = result.answer;
     } catch (error) {
@@ -487,7 +479,9 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     ] });
     const answerDelivery = publicAnswer ? 'public' : 'private';
     const method = publicAnswer ? 'chat.postMessage' : 'chat.postEphemeral';
-    await updateClaimedJob({ db, job, patch: { status: 'sending', answerDelivery, deliveryMethod: method, answer: storedText, scopes, audit, experimentVariant: experiment.variant,
+    const historyVisibility = monthClosePreview ? 'private' : 'conversation';
+    const persistedAnswer = monthClosePreview ? '[private answer omitted]' : storedText;
+    await updateClaimedJob({ db, job, patch: { status: 'sending', answerDelivery, deliveryMethod: method, answer: persistedAnswer, historyVisibility, scopes, audit, experimentVariant: experiment.variant,
       bookingContext,
       reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
       answeredAt: new Date().toISOString() } });
@@ -657,7 +651,10 @@ export async function claimSlackJob({ db, jobId, now = Date.now() }) {
     if (job.attempts >= 3) { await finishConversation(tx, db, { ...job, id: jobId }, 'failed'); tx.update(ref, { status: 'failed', reason: 'attempt_limit' }); return null; }
     const leaseId = randomUUID();
     tx.update(ref, { status: 'running', leaseId, leaseUntil: now + 180_000, attempts: job.attempts + 1 });
-    return { ...job, id: jobId, leaseId, turns: thread?.turns || [] };
+    // Legacy turns predate visibility labels. Exclude recognizable preview commands and all explicitly private turns;
+    // preserve unrelated legacy conversation context such as existing room-booking state.
+    return { ...job, id: jobId, leaseId, turns: (thread?.turns || []).filter((turn) => turn?.contextVisibility !== 'private'
+      && !isMonthClosePreviewCommand(turn?.question)) };
   });
 }
 
@@ -677,7 +674,7 @@ async function finishConversation(tx, db, job, status) {
   const thread = (await tx.get(ref)).data();
   if (!thread || thread.queue[0] !== job.id) throw new Error('conversation_order_lost');
   tx.update(ref, { queue: thread.queue.slice(1),
-    turns: status === 'succeeded' ? [...thread.turns, { jobId: job.id, question: job.question, answer: job.answer,
+    turns: status === 'succeeded' && job.historyVisibility !== 'private' ? [...thread.turns, { contextVisibility: 'conversation', jobId: job.id, question: job.question, answer: job.answer,
       ...(job.bookingContext ? { bookingContext: job.bookingContext } : {}),
       ...(job.experimentVariant ? { experimentVariant: job.experimentVariant } : {}) }].slice(-6) : thread.turns });
 }
