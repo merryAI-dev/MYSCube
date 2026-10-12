@@ -24,6 +24,7 @@ import { createLocalRoomRelay, localPairCode } from './merryhere-local-relay.mjs
 import { roomRequestSchema, roomToolDescription } from './merryhere-request.mjs';
 import { createMerryhereClient } from './merryhere-client.mjs';
 import { createGoogleCalendarRooms } from './google-calendar-rooms.mjs';
+import { assertMonthCloseRequest, buildMonthCloseReminderPlan } from './month-close-reminders.mjs';
 
 // Weekday and minute are needed for relative dates ("다음 주 수요일") and for refusing an already-past assumed time.
 export function roomClock(date) {
@@ -40,6 +41,18 @@ export function slackText(text) {
     .replace(/^([ \t]*)[-*][ \t]+/gm, '$1• ')
     .replace(/\n{3,}/g, '\n\n')).join('');
   return formatted.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+}
+
+const monthClosePreviewPrefix = /^\s*(?:<@[A-Z0-9]+>\s*)?월결산\s+리마인드\s+미리보기(?:\s|$)/;
+export function parseMonthClosePreviewCommand(value) {
+  const source = typeof value === 'string' ? value.trim() : '';
+  if (!monthClosePreviewPrefix.test(source)) return null;
+  const match = source.match(/^\s*(?:<@[A-Z0-9]+>\s*)?월결산\s+리마인드\s+미리보기\s+(20\d{2}-(?:0[1-9]|1[0-2]))\s+제출\s+(20\d{2}-\d{2}-\d{2})\s+([01]\d|2[0-3]):([0-5]\d)\s+승인\s+(20\d{2}-\d{2}-\d{2})\s+([01]\d|2[0-3]):([0-5]\d)\s*$/);
+  if (!match) return { error: 'month_close_preview_usage' };
+  try {
+    return { input: assertMonthCloseRequest({ yearMonth: match[1], submissionDeadlineAt: `${match[2]}T${match[3]}:${match[4]}:00+09:00`,
+      approvalDeadlineAt: `${match[5]}T${match[6]}:${match[7]}:00+09:00` }) };
+  } catch { return { error: 'month_close_preview_usage' }; }
 }
 
 export function selectSlackHarness(question, turns = []) {
@@ -197,6 +210,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     const accountCommand = connectAccount || disconnectAccount;
     const previousBooking = job.turns?.findLast(turn => turn.bookingContext)?.bookingContext || null;
     const roomConfirm = /^\s*(?:회의실\s*)?예약\s*확정\s+[a-f0-9]{24}\s*$/.test(roomText);
+    const monthClosePreview = parseMonthClosePreviewCommand(job.question);
     const settlementRequest = resolveSettlementRequest(experiment.question);
     const roomRequest = roomConfirm || isMerryhereRequest(roomText) || (previousBooking && !isSettlementTopic(roomText));
     const request = roomRequest ? null : settlementRequest;
@@ -222,6 +236,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     let privateAnswer = false;
     try {
       const actor = await contextFor(job);
+      if (monthClosePreview) privateAnswer = true;
       const localConnection = localRelay && roomRequest && !pairCode && !disconnectLocal ? await localRelay.connection(actor) : null;
       const serverRoomIssue = async () => {
         if (!connections.available) return localRoomIssue('connect_unavailable');
@@ -233,12 +248,12 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       progress.show('INTERPRET_REQUEST');
       await record({ type: 'run_start', actorId: actor.actorId, actorRole: actor.actorRole,
         readPrincipal: 'myscube-settlement-agent', permissionPolicy: 'mysc-designated-channel-company-settlement-read-v1',
-        question: job.question, model: request?.direct || roomConfirm || roomAuthIssue || pairCode || disconnectLocal || accountCommand ? null : 'gemini-3.6-flash', experiment: experiment.variant,
-        harness: request?.direct ? 'settlement-status-direct-v1' : useHermes ? 'hermes-readonly-v1' : 'settlement-read-v2' });
+        question: job.question, model: monthClosePreview || request?.direct || roomConfirm || roomAuthIssue || pairCode || disconnectLocal || accountCommand ? null : 'gemini-3.6-flash', experiment: experiment.variant,
+        harness: monthClosePreview ? 'month-close-reminder-preview-v1' : request?.direct ? 'settlement-status-direct-v1' : useHermes ? 'hermes-readonly-v1' : 'settlement-read-v2' });
       if (useHermes && !env.SETTLEMENT_HERMES_URL) throw new Error('hermes_not_configured');
       const previousAnswerId = job.turns?.at(-1)?.jobId || null;
       await record({ type: 'conversation_feedback', ...observeConversationFeedback({ text: job.question, previousAnswerId }) });
-      if (!request?.direct && !roomConfirm && !roomAuthIssue && !pairCode && !disconnectLocal && !accountCommand) {
+      if (!monthClosePreview && !request?.direct && !roomConfirm && !roomAuthIssue && !pairCode && !disconnectLocal && !accountCommand) {
         if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
         await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
       }
@@ -347,7 +362,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       tools.push(...createSupportTools({ db, job, authorize: () => contextFor(job), revision: env.VERCEL_GIT_COMMIT_SHA }));
       tools.push({ name: 'agent_capabilities', description: '데이터 조감도/catalog: 조회 가능한 데이터·필드·도구·제한을 확인합니다. 어떤 데이터가 있는지 묻거나 필요한 도구를 모를 때 사용하세요. 이미 아는 조회에 매번 호출할 필요는 없습니다. 사업명 검색으로 권한을 추정하지 않습니다.',
         schema: z.object({}).strict(), execute: async () => { await contextFor(job); return {
-          channel: '0_전사_공지_08_myscube', capabilities: ['전사 등록 사업 이름 검색', '전사 주정산·월결산 상태 조회', '등록 사업 기준 미완료·기한 경과 목록과 조직장 조회'],
+          channel: '0_전사_공지_08_myscube', capabilities: ['전사 등록 사업 이름 검색', '전사 주정산·월결산 상태 조회', '등록 사업 기준 미완료·기한 경과 목록과 조직장 조회', 'admin·finance 요청자의 비공개 월결산 리마인드 미리보기'],
           dataSources: [
             { name: '프로젝트 원장', authority: 'MYSCube BFF', fields: ['사업명', 'CIC', '조직장'], tools: ['project_search', 'settlement_report'], note: '등록 사업 기준입니다. 검색 결과가 잘리면 전체 목록이 아닙니다.' },
             { name: '주정산', authority: 'JVM', fields: ['주차별 상태', '실무자 제출 시각', '조직장 승인 시각', '마감 시각'], tools: ['cashflow_status', 'settlement_report'], note: '운영 주기월 기준. 기록이 없으면 시각을 추정하지 않습니다.' },
@@ -357,7 +372,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
             { name: '오류·QA 진단', authority: '저장된 에이전트 실행 기록과 검토된 코드 설명', fields: ['실행 단계', '오류 코드', '답변 검토', '조회 경로·조치 안내'], tools: ['agent_diagnostics', 'system_knowledge'], note: '전체 서버 로그가 아니며, 코드 설명은 실제 장애 발생 증거와 구분합니다.' },
           ],
           tools: tools.filter((tool) => !tool.observationOnly).map(({ name, description }) => ({ name, description })),
-          limits: ['다른 Slack 채널의 대화는 조회하지 않습니다.', '승인·금액·파일 변경과 삭제는 할 수 없습니다.', '정산 의무 대상·종료 제외 정책은 아직 연결되지 않았습니다.', '시트 원문·수식을 직접 읽거나 시트를 새로 동기화하지 않습니다. JVM 반영 금액은 accounting_read로 조회합니다.', '임의 코드 실행·파일 접근·비밀값·전체 Cloud Logging 조회는 제공하지 않습니다.'],
+          limits: ['다른 Slack 채널의 대화는 조회하지 않습니다.', '승인·금액·파일 변경과 삭제는 할 수 없습니다.', '월결산 리마인드 미리보기는 공지를 발송하지 않으며 admin·finance 역할에만 비공개로 표시합니다.', '시트 원문·수식을 직접 읽거나 시트를 새로 동기화하지 않습니다. JVM 반영 금액은 accounting_read로 조회합니다.', '임의 코드 실행·파일 접근·비밀값·전체 Cloud Logging 조회는 제공하지 않습니다.'],
         }; }, render: (result) => [`현재 ${result.channel} 채널에서 요청을 받고 있어요.`, ...result.capabilities.map((value) => `- ${value}`), ...result.dataSources.map((source) => `- ${source.name}: ${source.fields.join(' · ')}. ${source.note}`), ...result.limits].join('\n') });
       tools.push({ name: 'project_search', description: '사업명을 검색해 정산 조회에 사용할 프로젝트 ID를 확인합니다. 결과가 잘렸으면 전체 목록이 아닙니다.',
         schema: z.object({ query: z.string().trim().min(1).max(100) }).strict(),
@@ -377,7 +392,16 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         };
       }
       let result;
-      if (pairCode || disconnectLocal) {
+      if (monthClosePreview) {
+        if (monthClosePreview.error) throw new Error(monthClosePreview.error);
+        if (!['admin', 'finance'].includes(actor.actorRole)) throw new Error('month_close_preview_not_allowed');
+        progress.show('READ_SETTLEMENT');
+        const plan = await buildMonthCloseReminderPlan({ db, readOverview, input: monthClosePreview.input, tenantId: actor.tenantId,
+          actorContext: actor, preview: true, sourceRevision: env.SLACK_SERVICE_RELEASE || env.VERCEL_GIT_COMMIT_SHA || 'local-unreleased' });
+        await record({ type: 'tool_result', tool: 'month_close_reminder_preview', input: monthClosePreview.input,
+          result: { complete: plan.complete, beforeClose: plan.beforeClose.length, approvalRequired: plan.approvalRequired.length, unknown: plan.unknown.length } });
+        result = { status: plan.complete ? 'answered' : 'partial', answer: plan.text };
+      } else if (pairCode || disconnectLocal) {
         try {
           if (disconnectLocal) await localRelay.disconnect(actor);
           else await localRelay.pair(actor, pairCode);
@@ -443,12 +467,16 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           ? '조회할 내용이 많아 한 번에 정리하지 못했어요. 사업이나 기간을 나누어 다시 요청해주세요. 정산이 미완료라는 뜻은 아닙니다.'
         : error.message === 'budget_exhausted'
           ? '이번 달 에이전트 사용 한도에 도달했어요. MYSCube에서 직접 확인하시거나 관리자에게 문의해주세요.'
+        : error.message === 'month_close_preview_usage'
+          ? '사용법: `월결산 리마인드 미리보기 YYYY-MM 제출 YYYY-MM-DD HH:mm 승인 YYYY-MM-DD HH:mm`\n예: `월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59` (한국시간)\n2026-10 주기의 대상은 9월 월결산입니다. 아직 Slack 공지는 발송하지 않았습니다.'
+        : error.message === 'month_close_preview_not_allowed'
+          ? '이 미리보기는 MYSCube의 admin 또는 finance 역할만 요청할 수 있어요. 아무 공지도 발송하지 않았습니다.'
           : '조회 도중 처리를 마치지 못했어요. 정산이 미완료라는 뜻은 아닙니다. 사업과 기간을 좁혀 다시 요청해주세요. 같은 문제가 반복되면 이 스레드를 관리자에게 공유해주세요.';
     } finally {
       await progress.close();
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${roomRequest || bookingContext ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
+    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${monthClosePreview ? '월결산 리마인드 비공개 미리보기' : roomRequest || bookingContext ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
     const storedText = text.replaceAll(CONNECT_LINK_PLACEHOLDER, '[일회용 연결 링크 · 요청자에게만 전송]');
     const deliveredText = connectLink ? text.replaceAll(CONNECT_LINK_PLACEHOLDER, connectLink) : storedText;
     const blocks = answerBlocks(deliveredText);

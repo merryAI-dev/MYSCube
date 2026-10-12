@@ -1,7 +1,62 @@
 import { it, expect, vi } from 'vitest';
 import { createHmac } from 'node:crypto';
 import * as runtime from './slack-runtime.mjs';
-import { memoryDb } from './slack-test-store.mjs';
+import { memoryDb, statusOverview } from './slack-test-store.mjs';
+
+it('parses only the explicit Korean month-close preview command in KST', () => {
+  expect(runtime.parseMonthClosePreviewCommand('<@UBOT> 월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59')).toEqual({ input: {
+    yearMonth: '2026-10', submissionDeadlineAt: '2026-10-10T23:59:00+09:00', approvalDeadlineAt: '2026-10-13T23:59:00+09:00',
+  } });
+  expect(runtime.parseMonthClosePreviewCommand('월결산 현황')).toBeNull();
+  expect(runtime.parseMonthClosePreviewCommand('월결산 리마인드 미리보기')).toEqual({ error: 'month_close_preview_usage' });
+  expect(runtime.parseMonthClosePreviewCommand('월결산 리마인드 미리보기 2026-10 제출 2026-10-10 18:00 승인 2026-10-09 18:00')).toEqual({ error: 'month_close_preview_usage' });
+});
+
+it('delivers an authorized month-close preview only to the verified requester without invoking the model', async () => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
+  records.set('orgs/mysc/projects/a', { name: 'A사업', cic: 'CIC1', department: 'CIC1', managerId: 'manager-a', status: 'IN_PROGRESS', contractEnd: '2026-12-31' });
+  records.set('orgs/mysc/persons/person-a', { uid: 'manager-a', name: '담당자' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(),
+    question: '월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const calls = []; const completeFactory = vi.fn(); const observed = [];
+  const fetchImpl = vi.fn(async (url, options) => {
+    if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+    calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+    return Response.json({ ok: true, ts: '2.1', message_ts: '3.1' });
+  });
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, completeFactory, fetchImpl,
+    readOverview: async (request) => { observed.push(request); return statusOverview(request); } });
+  await worker();
+  expect(completeFactory).not.toHaveBeenCalled();
+  expect(observed[0].context).toMatchObject({ actorId: 'member', actorRole: 'finance', authSource: 'slack_verified' });
+  const delivery = calls.find((call) => call.method === 'chat.postEphemeral');
+  expect(delivery.body).toMatchObject({ channel: identity.channelId, user: identity.slackUserId, thread_ts: identity.threadTs });
+  expect(delivery.body.text).toContain('비공개 미리보기입니다. Slack에는 발송되지 않았습니다.');
+  expect(calls.some((call) => call.method === 'chat.postMessage' && call.body.text.includes('[9월분 월결산 확인]'))).toBe(false);
+});
+
+it('denies the private month-close preview before any canonical read for non-admin/finance members', async () => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'viewer', status: 'ACTIVE' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(),
+    question: '월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const calls = []; const readOverview = vi.fn();
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, readOverview, fetchImpl: async (url, options) => {
+    if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+    calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+    return Response.json({ ok: true, ts: '2.1', message_ts: '3.1' });
+  } });
+  await worker();
+  expect(readOverview).not.toHaveBeenCalled();
+  const delivery = calls.find((call) => call.method === 'chat.postEphemeral');
+  expect(delivery.body.text).toContain('admin 또는 finance 역할만');
+  expect(calls.some((call) => call.method === 'chat.postMessage' && call.body.text.includes('[9월분 월결산 확인]'))).toBe(false);
+});
 
 it('accepts only the dedicated scheduler bearer and fails closed when disabled', () => {
   const check = runtime.verifySettlementWorkerToken;
