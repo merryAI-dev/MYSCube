@@ -57,6 +57,7 @@ const CashflowWeeklyPage = lazyRoute(() => import('./components/cashflow/Cashflo
 const CashflowAnalyticsPage = lazyRoute(() => import('./components/cashflow/CashflowAnalyticsPage'), 'CashflowAnalyticsPage');
 const CashflowExportPage = lazyRoute(() => import('./components/cashflow/CashflowExportPage'), 'CashflowExportPage');
 const CashflowPeriodPolicyPage = lazyRoute(() => import('./components/cashflow/CashflowPeriodPolicyPage'), 'CashflowPeriodPolicyPage');
+const MonthCloseReminderPreviewPage = lazyRoute(() => import('./components/cashflow/MonthCloseReminderPreviewPage'), 'MonthCloseReminderPreviewPage');
 const ProjectCashflowSheetPage = lazyRoute(() => import('./components/cashflow/ProjectCashflowSheetPage'), 'ProjectCashflowSheetPage');
 const EvidenceQueuePage = lazyRoute(() => import('./components/evidence/EvidenceQueuePage'), 'EvidenceQueuePage');
 const AuditLogPage = lazyRoute(() => import('./components/audit/AuditLogPage'), 'AuditLogPage');
@@ -147,6 +148,7 @@ export const router = createBrowserRouter([
       { path: 'cashflow/weekly', element: <S C={CashflowWeeklyPage} /> },
       { path: 'cashflow/analytics', element: <S C={CashflowAnalyticsPage} /> },
       { path: 'cashflow/export', element: <S C={CashflowExportPage} /> },
+      { path: 'cashflow/month-close-reminder-preview', element: <S C={MonthCloseReminderPreviewPage} /> },
       { path: 'axr', element: <Navigate to="/axr/cashflow-period-policy" replace /> },
       { path: 'axr/cashflow-period-policy', element: <S C={CashflowPeriodPolicyPage} /> },
       { path: 'cashflow/projects', element: <S C={CashflowPage} /> },
