@@ -62,6 +62,15 @@ test('preview covers 101 projects in 100-sized canonical pages and uses ERP mana
   assert.equal(result.approvalRequired.length, 1); assert.match(result.text, /합성 사업 0\(담당자 A\)/); assert.equal(db.writes.length, 0);
 });
 
+test('authenticated preview preserves the caller tenant and actor context', async () => {
+  const actorContext = { tenantId: 'tenant-a', actorId: 'admin-a', actorRole: 'admin', actorEmail: 'admin@example.test', requestId: 'request-a' };
+  let observed;
+  const plan = await buildMonthCloseReminderPlan({ db: fakeDb([base]), tenantId: 'tenant-a', actorContext, input, preview: true, now: () => now,
+    readOverview: async (request) => { observed = request.context; return overview(request.body.projectIds); } });
+  assert.deepEqual(observed, actorContext);
+  assert.equal(plan.beforeClose.length, 1);
+});
+
 test('missing manager and unhealthy canonical state are 확인 필요 and block text', async () => {
   let plan = await buildMonthCloseReminderPlan({ db: fakeDb([base], {}), input, preview: true, now: () => now, readOverview: async ({ body }) => overview(body.projectIds) });
   assert.equal(plan.complete, false); assert.match(plan.text, /확인 필요/); assert.equal(plan.unknown[0].reason, 'manager_mapping_unknown');

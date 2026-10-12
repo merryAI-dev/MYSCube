@@ -64,6 +64,15 @@ describe('internal worker endpoints (cron)', () => {
     await request(app).post(path).set('Authorization', `Bearer ${LONG_CRON_SECRET}`).send({}).expect(401);
     expect(db.collection).not.toHaveBeenCalled();
   });
+  it('limits the ERP-authenticated month-close preview to admin and finance', async () => {
+    const env = { BFF_DEPLOY_ENV: 'local', SETTLEMENT_AGENT_ENABLED: 'true', SLACK_ALERT_BOT_TOKEN: 'fixture', SLACK_SIGNING_SECRET: 'fixture' };
+    const path = '/api/v1/cashflow/month-close-reminder-preview';
+    const app = createTestApp({ env });
+    const asRole = (role: string) => request(app).post(path).set('x-tenant-id', 'mysc').set('x-actor-id', `${role}-a`).set('x-actor-role', role).set('x-actor-email', `${role}@mysc.co.kr`).set('idempotency-key', `preview-${role}-request`).send({});
+    await asRole('viewer').expect(403);
+    await asRole('admin').expect(400);
+    await asRole('finance').expect(400);
+  });
   it('keeps the Live maintenance probe open while workers stay disabled', async () => {
     const app = createTestApp({
       projectId: LIVE_PROJECT_ID,

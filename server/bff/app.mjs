@@ -11,7 +11,7 @@ import { reliabilityResponseMiddleware } from './reliability-middleware.mjs';
 import { createSlackIngress } from '../mcp/slack-ingress.mjs';
 import { createFeedbackIngress, createSlackWorker, verifySettlementWorkerToken } from '../mcp/slack-runtime.mjs';
 import { createSettlementReminderWorker } from '../mcp/settlement-reminders.mjs';
-import { createMonthCloseReminderWorker } from '../mcp/month-close-reminders.mjs';
+import { assertMonthCloseRequest, buildMonthCloseReminderPlan, createMonthCloseReminderWorker } from '../mcp/month-close-reminders.mjs';
 import { randomUUID } from 'node:crypto';
 import { createFirestoreDb, isFirestoreEmulatorEnabled, resolveProjectId } from './firestore.mjs';
 import {
@@ -1790,6 +1790,21 @@ export function createBffApp(options = {}) {
     cashflowSlackService,
     mcpOAuthService,
   });
+  app.post('/api/v1/cashflow/month-close-reminder-preview', asyncHandler(async (req, res) => {
+    assertActorRoleAllowed(req, ['admin', 'finance'], 'preview month-close reminders');
+    try { assertMonthCloseRequest(req.body); } catch { throw createHttpError(400, 'Invalid month-close preview request', 'month_close_request_invalid'); }
+    res.setHeader('cache-control', 'no-store');
+    const plan = await buildMonthCloseReminderPlan({
+      db,
+      readOverview: jvmReadPort.readWeeklyOverview,
+      input: req.body,
+      tenantId: req.context.tenantId,
+      actorContext: req.context,
+      preview: true,
+      sourceRevision: env.SLACK_SERVICE_RELEASE || env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA || 'local-unreleased',
+    });
+    res.json({ ok: true, status: plan.complete ? 'preview' : 'blocked_incomplete', plan });
+  }));
   if (settlementAgentEnabled) {
     runSettlementWorker = createSlackWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview, readSnapshot: jvmReadPort.readCashflowSnapshot });
     const runReminders = createSettlementReminderWorker({ db, env, readOverview: jvmReadPort.readWeeklyOverview, fetchImpl: options.fetchImpl || globalThis.fetch });

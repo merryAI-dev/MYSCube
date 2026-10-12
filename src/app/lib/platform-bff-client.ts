@@ -2119,6 +2119,7 @@ export interface PlatformApiClientLike {
     headers?: HeadersInit;
     idempotencyKey?: string;
     requestId?: string;
+    signal?: AbortSignal;
     retries?: number;
     timeoutMs?: number;
   }): Promise<{ data: T }>;
@@ -2143,6 +2144,57 @@ export interface PlatformApiClientLike {
     retries?: number;
     timeoutMs?: number;
   }): Promise<{ data: T }>;
+}
+
+export interface MonthCloseReminderPreviewResult {
+  ok: true;
+  status: 'preview' | 'blocked_incomplete';
+  plan: {
+    policy: string;
+    request: { yearMonth: string; submissionDeadlineAt: string; approvalDeadlineAt: string };
+    targetYearMonth: string;
+    complete: boolean;
+    beforeClose: Array<{ projectId: string; name: string; organization: string; managerName: string }>;
+    approvalRequired: Array<{ projectId: string; name: string; organization: string; managerName: string }>;
+    completed: number;
+    excluded: Array<{ projectId: string; reason: string }>;
+    unknown: Array<{ projectId: string; name?: string; organization?: string; managerName?: string; reason: string }>;
+    registered: number;
+    eligible: number;
+    checkedAt: string;
+    text: string;
+    provenance: { sourceRevision: string };
+  };
+}
+
+export async function fetchMonthCloseReminderPreviewViaBff(params: {
+  tenantId: string;
+  actor: ActorLike;
+  yearMonth: string;
+  submissionDeadlineAt: string;
+  approvalDeadlineAt: string;
+  signal?: AbortSignal;
+  client?: PlatformApiClientLike;
+}): Promise<MonthCloseReminderPreviewResult> {
+  const response = await resolveClient(params.client).post<MonthCloseReminderPreviewResult>(
+    '/api/v1/cashflow/month-close-reminder-preview',
+    {
+      tenantId: params.tenantId,
+      actor: toRequestActor(params.actor),
+      body: {
+        yearMonth: params.yearMonth,
+        submissionDeadlineAt: params.submissionDeadlineAt,
+        approvalDeadlineAt: params.approvalDeadlineAt,
+      },
+      signal: params.signal,
+      retries: 0,
+      timeoutMs: 30000,
+    },
+  );
+  if (!response.data?.ok || typeof response.data.plan?.text !== 'string') {
+    throw new Error('월결산 리마인드 미리보기 응답이 올바르지 않습니다.');
+  }
+  return response.data;
 }
 
 const DEFAULT_BFF_BASE_URL = 'http://127.0.0.1:8787';
