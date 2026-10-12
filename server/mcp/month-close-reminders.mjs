@@ -31,16 +31,16 @@ function projectShape(project) {
 
 export function selectMonthCloseProjects(projects, targetYearMonth) {
   const nameIds = new Map();
-  for (const project of projects) {
+  for (const project of projects.filter((candidate) => !END_STATUSES.has(text(candidate.status)))) {
     const name = text(project.name);
     if (name) nameIds.set(name, new Set([...(nameIds.get(name) || []), project.projectId]));
   }
   const eligible = []; const excluded = []; const unknown = [];
   for (const project of projects) {
+    if (END_STATUSES.has(text(project.status))) { excluded.push({ projectId: project.projectId, reason: 'ended_project' }); continue; }
     const shaped = projectShape(project);
     if (!shaped) { unknown.push({ projectId: project.projectId, name: text(project.name) || '사업명 확인 필요', organization: normalizeReminderOrg(project.cic) || normalizeReminderOrg(project.department) || '조직 확인 필요', reason: 'project_mapping_unknown' }); continue; }
     if (nameIds.get(shaped.name)?.size !== 1) { unknown.push({ ...shaped, reason: 'duplicate_business_name' }); continue; }
-    if (END_STATUSES.has(shaped.status)) { excluded.push({ projectId: shaped.projectId, reason: 'ended_project' }); continue; }
     if (!ACTIVE_STATUSES.has(shaped.status)) { unknown.push({ ...shaped, reason: 'project_status_unknown' }); continue; }
     if (shaped.contractEnd && (!/^20\d{2}-\d{2}-\d{2}$/.test(shaped.contractEnd) || shaped.contractEnd < `${targetYearMonth}-01`)) {
       unknown.push({ ...shaped, reason: 'project_period_conflict' }); continue;
@@ -128,6 +128,10 @@ export async function deliverMonthCloseReminder({ db, slack, plan, destination, 
     tx.set(ref, { status: 'sending', policy: MONTH_CLOSE_REMINDER_POLICY, tenantId, destination, cycleYearMonth: plan.request.yearMonth,
       targetYearMonth: plan.targetYearMonth, payloadHash: hash(plan.text), provenance: plan.provenance, createdAt: new Date(now()).toISOString() }); return true; });
   if (!reserved) return { status: 'already_reserved', id };
+  if (now() - Date.parse(plan.checkedAt) > 60000 || now() < Date.parse(plan.checkedAt)) {
+    await ref.update({ status: 'blocked_stale', updatedAt: new Date(now()).toISOString() });
+    return { status: 'blocked_stale', id };
+  }
   try {
     const response = await slack('chat.postMessage', { channel: destination, text: plan.text, mrkdwn: false, parse: 'none', link_names: false, unfurl_links: false, unfurl_media: false });
     if (response.ok !== true || response.channel !== destination || !/^\d{1,12}\.\d{1,6}$/.test(response.ts || '')) fail('delivery_response_unknown');
