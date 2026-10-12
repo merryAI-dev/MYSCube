@@ -2,6 +2,9 @@ const routes = new Map([
   ['/api/slack/events', ['POST']],
   ['/api/slack/interactions', ['POST']],
   ['/api/internal/workers/settlement-agent/run', ['GET']],
+  ['/api/internal/workers/settlement-reminders/run', ['GET']],
+  ['/api/internal/workers/settlement-month-close-reminders/preview', ['POST']],
+  ['/api/internal/workers/settlement-month-close-reminders/run', ['GET']],
   ['/api/v1/merryhere/connect', ['GET', 'POST']],
   ...['register', 'poll', 'approve', 'permit', 'complete'].map(action => [`/api/v1/merryhere/local/${action}`, ['POST']]),
 ]);

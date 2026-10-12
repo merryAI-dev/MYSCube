@@ -53,6 +53,17 @@ describe('internal worker endpoints (cron)', () => {
     }
     expect(get).toHaveBeenCalledTimes(1);
   });
+  it('keeps month-close preview behind the isolated worker token', async () => {
+    const db = { collection: vi.fn(() => { throw new Error('Preview must not read before auth'); }),
+      doc: () => { throw new Error('Preview must not read before auth'); }, runTransaction: () => { throw new Error('Preview must not write'); } };
+    const env = { BFF_DEPLOY_ENV: 'local', BFF_SCHEDULER_OWNER: 'vercel', CRON_SECRET: LONG_CRON_SECRET,
+      SETTLEMENT_AGENT_ENABLED: 'true', SETTLEMENT_AGENT_WORKER_SECRET: 'agent-only', SLACK_ALERT_BOT_TOKEN: 'fixture', SLACK_SIGNING_SECRET: 'fixture' };
+    const path = '/api/internal/workers/settlement-month-close-reminders/preview';
+    const app = createTestApp({ db, env });
+    await request(app).post(path).send({}).expect(401);
+    await request(app).post(path).set('Authorization', `Bearer ${LONG_CRON_SECRET}`).send({}).expect(401);
+    expect(db.collection).not.toHaveBeenCalled();
+  });
   it('keeps the Live maintenance probe open while workers stay disabled', async () => {
     const app = createTestApp({
       projectId: LIVE_PROJECT_ID,

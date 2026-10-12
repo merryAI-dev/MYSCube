@@ -13,6 +13,8 @@ describe('separate Slack service boundary', () => {
     expect(request('/api/bff?__path=/api/slack/events', 'POST')).toMatchObject({ passed: true, url: '/api/slack/events' });
     expect(request('/api/slack/interactions', 'POST').passed).toBe(true);
     expect(request('/api/internal/workers/settlement-agent/run').passed).toBe(true);
+    expect(request('/api/internal/workers/settlement-month-close-reminders/run').passed).toBe(true);
+    expect(request('/api/internal/workers/settlement-month-close-reminders/preview', 'POST').passed).toBe(true);
     expect(request('/api/v1/merryhere/connect', 'POST').passed).toBe(true);
   });
   it.each(['/api/v1/projects', '/api/v1/health', '/', '/api/bff', '/api/bff?__path=/api/v1/projects', '/api/slack/events/extra', '/api/v1/merryhere/connect/extra'])('denies unrelated path %s', path => {
