@@ -31,6 +31,14 @@ export function MonthCloseReminderPreviewPage() {
   const controller = useRef<AbortController | null>(null);
   const allowed = user?.role === 'admin' || user?.role === 'finance';
 
+  const invalidatePreview = () => {
+    sequence.current += 1;
+    controller.current?.abort();
+    setLoading(false);
+    setError('');
+    setResult(null);
+  };
+
   const run = async () => {
     if (!user || !allowed || loading) return;
     const request = ++sequence.current;
@@ -68,9 +76,9 @@ export function MonthCloseReminderPreviewPage() {
   return <div className="space-y-5">
     <PageHeader icon={BellRing} iconGradient="linear-gradient(135deg, #0f766e, #2dd4bf)" title="월결산 리마인드 미리보기" description="실제 DB의 canonical 월결산 상태로 문안을 만들며 Slack 발송이나 데이터 변경은 하지 않습니다." />
     <Card><CardHeader><CardTitle>조회 기준</CardTitle></CardHeader><CardContent className="grid gap-4 md:grid-cols-3">
-      <div className="space-y-2"><Label htmlFor="cycle">결산 주기 월</Label><Input id="cycle" type="month" value={yearMonth} onChange={(event) => setYearMonth(event.target.value)} disabled={loading} /></div>
-      <div className="space-y-2"><Label htmlFor="submission">제출 마감 (한국시간)</Label><Input id="submission" type="datetime-local" value={submissionDeadline} onChange={(event) => setSubmissionDeadline(event.target.value)} disabled={loading} /></div>
-      <div className="space-y-2"><Label htmlFor="approval">조직장 승인 마감 (한국시간)</Label><Input id="approval" type="datetime-local" value={approvalDeadline} onChange={(event) => setApprovalDeadline(event.target.value)} disabled={loading} /></div>
+      <div className="space-y-2"><Label htmlFor="cycle">결산 주기 월</Label><Input id="cycle" type="month" value={yearMonth} onChange={(event) => { invalidatePreview(); setYearMonth(event.target.value); }} disabled={loading} /></div>
+      <div className="space-y-2"><Label htmlFor="submission">제출 마감 (한국시간)</Label><Input id="submission" type="datetime-local" value={submissionDeadline} onChange={(event) => { invalidatePreview(); setSubmissionDeadline(event.target.value); }} disabled={loading} /></div>
+      <div className="space-y-2"><Label htmlFor="approval">조직장 승인 마감 (한국시간)</Label><Input id="approval" type="datetime-local" value={approvalDeadline} onChange={(event) => { invalidatePreview(); setApprovalDeadline(event.target.value); }} disabled={loading} /></div>
       <div className="md:col-span-3"><Button type="button" onClick={() => void run()} disabled={loading || !yearMonth || !submissionDeadline || !approvalDeadline} className="gap-2">{loading ? <Loader2 className="h-4 w-4 animate-spin" /> : result ? <RefreshCw className="h-4 w-4" /> : <BellRing className="h-4 w-4" />}{loading ? '실제 상태 조회 중…' : result ? '다시 생성' : '미리보기 생성'}</Button></div>
     </CardContent></Card>
     {error ? <Alert variant="destructive"><AlertTitle>미리보기를 만들 수 없습니다</AlertTitle><AlertDescription className="space-y-3"><p>{error}</p><Button type="button" variant="outline" size="sm" onClick={() => void run()}>재시도</Button></AlertDescription></Alert> : null}

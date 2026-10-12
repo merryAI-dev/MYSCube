@@ -23,5 +23,8 @@ describe('month-close reminder preview UI safety contract', () => {
     expect(source).toContain('재시도');
     expect(source).toContain('result.plan.unknown.map');
     expect(source).toContain('navigator.clipboard.writeText(result.plan.text)');
+    expect(source).toContain('const invalidatePreview = () =>');
+    expect(source.match(/invalidatePreview\(\); set/g)).toHaveLength(3);
+    expect(source).toContain('setResult(null)');
   });
 });
