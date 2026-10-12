@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { MONTH_CLOSE_REMINDER_POLICY, selectMonthCloseProjects, classifyMonthClose, buildMonthCloseReminderPlan,
+import { MONTH_CLOSE_REMINDER_POLICY, assertMonthCloseRequest, selectMonthCloseProjects, classifyMonthClose, buildMonthCloseReminderPlan,
   deliverMonthCloseReminder, createMonthCloseReminderWorker } from './month-close-reminders.mjs';
 import { SOURCE_CHANNEL } from './settlement-reminders.mjs';
 
@@ -8,6 +8,14 @@ const input = { yearMonth: '2026-10', submissionDeadlineAt: '2026-10-10T14:59:00
 const now = Date.parse('2026-10-12T00:00:00Z');
 const base = { projectId: 'active-a', name: '합성 사업 A', cic: 'CIC1', department: 'CIC1', managerId: 'manager-a', status: 'IN_PROGRESS', contractEnd: '2026-12-31' };
 const projects = [base, { ...base, projectId: 'ended', name: '합성 종료 사업', status: 'COMPLETED' }];
+
+test('month-close deadlines reject impossible calendar dates instead of Date.parse normalization', () => {
+  assert.throws(() => assertMonthCloseRequest({
+    ...input,
+    submissionDeadlineAt: '2026-09-31T18:00:00+09:00',
+  }), /month_close_request_invalid/);
+  assert.deepEqual(assertMonthCloseRequest(input), input);
+});
 
 function overview(ids, stateById = {}) {
   return { version: '5', yearMonth: '2026-10', monthCloseTargetYearMonth: '2026-09', monthCloseTargetLabel: '9월', errors: [], items: ids.map((projectId) => {
