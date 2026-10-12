@@ -1,13 +1,18 @@
 import { assertMonthCloseRequest, validCalendarDate } from './month-close-reminders.mjs';
 
 const prefix = /^\s*(?:<@[A-Z0-9]+>\s*)?월결산\s+리마인드\s+미리보기(?:\s|$)/;
+const chatGptProvenanceSuffix = /\n\s*\*다음을 사용하여 보냄\*\s+<@U0BHJEU5REW\|ChatGPT>\s*$/;
+
+function stripObservedChatGptProvenance(value) {
+  return value.replace(chatGptProvenanceSuffix, '').trim();
+}
 
 export function isMonthClosePreviewCommand(value) {
   return prefix.test(typeof value === 'string' ? value.trim() : '');
 }
 
 export function parseMonthClosePreviewCommand(value) {
-  const source = typeof value === 'string' ? value.trim() : '';
+  const source = stripObservedChatGptProvenance(typeof value === 'string' ? value.trim() : '');
   if (!isMonthClosePreviewCommand(source)) return null;
   const match = source.match(/^\s*(?:<@[A-Z0-9]+>\s*)?월결산\s+리마인드\s+미리보기\s+(20\d{2}-(?:0[1-9]|1[0-2]))\s+제출\s+(20\d{2}-\d{2}-\d{2})\s+([01]\d|2[0-3]):([0-5]\d)\s+승인\s+(20\d{2}-\d{2}-\d{2})\s+([01]\d|2[0-3]):([0-5]\d)\s*$/);
   if (!match) return { error: 'month_close_preview_usage' };
