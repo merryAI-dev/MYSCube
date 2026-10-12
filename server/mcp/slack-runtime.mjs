@@ -146,7 +146,9 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     const member = members.docs[0].data();
     if (member.status !== 'ACTIVE') throw new Error('member_inactive');
     const context = { tenantId, actorId: members.docs[0].id, actorRole: member.role, actorEmail: email, actorName: member.name || '', authSource: 'slack_verified', requestId: job.id };
-    assertActorRoleAllowed({ context }, ROUTE_ROLES.readCore, 'read settlement agent projects');
+    // The approved READ channel authorizes any uniquely matched ACTIVE MYSC member.
+    // Other channels retain the existing role policy.
+    if (job.channelId !== monthPreviewPublicChannelId) assertActorRoleAllowed({ context }, ROUTE_ROLES.readCore, 'read settlement agent projects');
     return context;
   }
   async function readContextFor(job) {
@@ -460,7 +462,9 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       progress.show('PREPARE_ANSWER');
       const finalActor = await contextFor(job);
       if (monthClosePreview && !openReadChannel && !['admin', 'finance'].includes(finalActor.actorRole)) throw new Error('month_close_preview_not_allowed');
-      if (result.answer?.includes(CONNECT_LINK_PLACEHOLDER)) {
+      const connectLinkAllowed = !openReadChannel && (connectAccount
+        || (roomRequest && ['account_not_connected', 'login_failed', 'login_required'].includes(result.code)));
+      if (connectLinkAllowed && result.answer?.includes(CONNECT_LINK_PLACEHOLDER)) {
         // The one-time link is delivered only to the requester and never stored in job, trace or thread records.
         connectLink = connections?.available ? await connections.issueLink(actor, job.id) : null;
         privateAnswer = true;

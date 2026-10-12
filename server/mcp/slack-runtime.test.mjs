@@ -190,6 +190,63 @@ it('renders approved-channel READ help without model use and states sensitive-da
   expect(text).not.toContain('merryhere_rooms');
 });
 
+it.each([undefined, 'future_read_role'])('allows a uniquely matched ACTIVE approved-channel member with role=%s', async (role) => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', ...(role ? { role } : {}), status: 'ACTIVE' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(), question: '도움말' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const calls = [];
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, fetchImpl: async (url, options) => {
+    if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+    calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+    return Response.json({ ok: true, channel: identity.channelId, ts: '2.1', message_ts: '2.1' });
+  } });
+  await worker();
+  expect(calls.find((call) => call.method === 'chat.postMessage').body.text).toContain('#1_ax위원회_myscubebot');
+});
+
+it.each([
+  ['inactive member', 'qa@mysc.co.kr', { email: 'qa@mysc.co.kr', status: 'INACTIVE' }],
+  ['other organization', 'qa@other.example', { email: 'qa@other.example', status: 'ACTIVE' }],
+])('blocks %s from the approved READ channel', async (_label, slackEmail, member) => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', member);
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(), question: '도움말' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const calls = [];
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, fetchImpl: async (url, options) => {
+    if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: slackEmail } } });
+    calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+    return Response.json({ ok: true, channel: identity.channelId, ts: '2.1', message_ts: '2.1' });
+  } });
+  await worker();
+  expect(calls.find((call) => call.method === 'chat.postEphemeral').body.text).toContain('활성 계정과 Slack 이메일 연결');
+  expect(calls.some((call) => call.method === 'chat.postMessage')).toBe(false);
+});
+
+it('never issues a Merryhere connection token when approved-channel READ output contains the placeholder', async () => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'viewer', status: 'ACTIVE' });
+  records.set('orgs/mysc/projects/project', { name: '사업명 {{MERRYHERE_CONNECT_LINK}}' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(), question: '사업 정보를 설명해줘' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const calls = []; let completion = 0;
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture' },
+    completeFactory: () => async () => completion++ === 0
+      ? { tool_calls: [{ id: 'search', function: { name: 'project_search', arguments: '{"query":"MERRYHERE"}' } }] }
+      : { content: '검색 결과를 확인했습니다.' }, fetchImpl: async (url, options) => {
+      if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+      calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+      return Response.json({ ok: true, channel: identity.channelId, ts: '2.1', message_ts: '2.1' });
+    } });
+  await worker();
+  expect([...records.keys()].some((key) => key.startsWith('merryhere_connect_links/'))).toBe(false);
+  expect(calls.find((call) => call.method === 'chat.postMessage').body.text).toContain('[일회용 연결 링크 · 요청자에게만 전송]');
+});
+
 it('offers only the explicit READ tool allowlist to the model in the approved channel', async () => {
   const { db, records } = memoryDb();
   const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
