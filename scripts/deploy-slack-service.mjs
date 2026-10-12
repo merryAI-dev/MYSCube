@@ -49,10 +49,18 @@ writeFileSync('vercel.json', JSON.stringify({ version: 2, framework: null, build
 const deployment = await deployVercelProductionCandidate({ sourceDir: process.cwd(), commitSha: sha, invocation: `${env.GITHUB_RUN_ID}-${env.GITHUB_RUN_ATTEMPT}`, maintenance: false });
 const identity = await api(`/v13/deployments/${deployment.deploymentHost}`);
 if (identity.projectId !== project.id || identity.meta?.githubCommitSha !== sha) throw new Error('Candidate identity mismatch');
-function verify(base) {
-  execFileSync('node', ['scripts/check-settlement-runtime.mjs'], { env: { ...env, SETTLEMENT_CANARY_BASE_URL: base }, stdio: 'inherit' });
+async function verify(base, { attempts = 1, delayMs = 0 } = {}) {
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      execFileSync('node', ['scripts/check-settlement-runtime.mjs'], { env: { ...env, SETTLEMENT_CANARY_BASE_URL: base }, stdio: 'inherit' });
+      return;
+    } catch (error) {
+      if (attempt === attempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
-verify(deployment.deploymentUrl);
+await verify(deployment.deploymentUrl);
 for (const path of ['/api/v1/projects', '/api/v1/health', '/']) {
   const response = await fetch(`${deployment.deploymentUrl}${path}`, { redirect: 'manual' });
   if (response.status !== 404) throw new Error(`Unrelated route exposed: ${path}`);
@@ -65,7 +73,9 @@ if (latestMain !== sha) {
 const prior = await api(`/v4/aliases/${name}.vercel.app`);
 try {
   await api(`/v2/deployments/${identity.id}/aliases`, 'POST', { alias: `${name}.vercel.app` });
-  verify(origin);
+  // Vercel alias reads can briefly reach the prior deployment after the API accepts
+  // the reassignment. Bound the convergence wait and roll back if it never settles.
+  await verify(origin, { attempts: 6, delayMs: 2000 });
   const health = await (await fetch(`${origin}/healthz`)).json();
   if (health.release !== sha || health.service !== name) throw new Error('Stable service identity mismatch');
 } catch (error) {
