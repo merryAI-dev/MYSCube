@@ -24,7 +24,7 @@ Slack → Vercel BFF 서명 검증 → Firestore job 저장 → Vercel waitUntil
 
 `project_search`는 이름 필드만 최대 1,000문서에서 검색해 최대 20개 결과와 잘림 여부를 반환한다. 전체 사업 집계가 아니다. Slack의 `cashflow_status`는 최대 100사업, 운영 주기월과 월결산 대상월을 분리한다. 모델의 최종 자연어 수치 대신 검증한 BFF/JVM 값을 코드로 출력한다.
 
-Slack에서 확인한 MYSC 이메일이 유일한 ACTIVE 구성원과 일치해야 한다. 기존 BFF readCore 역할 검사를 매 조회·최종 정상 응답 직전에 수행한다. 모델에 역할·tenant·토큰·DB 경로를 입력시키지 않는다. 채널 관리자 승인에 따라 지정 채널의 정상 조회 결과는 `chat.postMessage`로 공개하며 채널 구성원 모두가 볼 수 있다. 계정·권한 등 실패 안내는 `chat.postEphemeral`로 질문자에게만 보낸다. 기존 비공개 답변을 소급 공개하지 않는다. 승인·시트·금액·Drive 변경 도구는 없다.
+Slack에서 확인한 MYSC 이메일이 유일한 ACTIVE 구성원과 일치해야 한다. 기존 BFF readCore 역할 검사를 매 조회·최종 정상 응답 직전에 수행한다. 모델에 역할·tenant·토큰·DB 경로를 입력시키지 않는다. 채널 관리자 승인에 따라 지정 채널의 정상 조회 결과는 `chat.postMessage`로 공개하며 채널 구성원 모두가 볼 수 있다. 월결산 리마인드 미리보기는 검증된 이벤트 요청자의 Slack user ID만 `channel`로 지정한 `chat.postMessage` 개인 DM으로 전달하고, DM 전송 실패 시 원 채널에 본문을 공개하지 않는다. 이 DM의 채널 ID와 메시지 ts만 job에 남기며 본문은 저장하지 않는다. 그 밖의 계정·권한 등 실패 안내는 `chat.postEphemeral`로 질문자에게만 보낸다. 기존 비공개 답변을 소급 공개하지 않는다. 승인·시트·금액·Drive 변경 도구는 없다.
 
 임원진 채널에 승인된 전사 조회는 내부 `myscube-settlement-agent` principal의 기존 `auditor` 프로젝트 범위를 고정 `readOverview` 함수에만 사용한다. 질문자의 개인 역할은 변경하지 않으며 실제 요청자를 trace와 요청 context에 별도 기록한다. 서비스 principal은 이메일을 전달하지 않아 JVM의 `workspace_user` 전환을 받지 않는다. 기존 auditor 역할 자체가 모든 API에서 읽기 전용이라는 뜻은 아니다. 안전 경계는 이 워커가 승인·쓰기 API를 노출하지 않는 고정 capability다. 다른 채널·미연결/비활성/중복 계정에는 적용하지 않는다.
 

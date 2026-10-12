@@ -391,7 +391,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           actorContext: actor, preview: true, sourceRevision: env.SLACK_SERVICE_RELEASE || env.VERCEL_GIT_COMMIT_SHA || 'local-unreleased' });
         await record({ type: 'tool_result', tool: 'month_close_reminder_preview', input: monthClosePreview.input,
           result: { complete: plan.complete, beforeClose: plan.beforeClose.length, approvalRequired: plan.approvalRequired.length, unknown: plan.unknown.length } });
-        result = { status: plan.complete ? 'answered' : 'partial', answer: plan.text };
+        result = { status: plan.complete ? 'answered' : 'partial', answer: `${plan.text}\n결과 전달: 요청자 개인 DM` };
       } else if (pairCode || disconnectLocal) {
         try {
           if (disconnectLocal) await localRelay.disconnect(actor);
@@ -478,17 +478,18 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
     const answerDelivery = publicAnswer ? 'public' : 'private';
-    const method = publicAnswer ? 'chat.postMessage' : 'chat.postEphemeral';
+    const persistentPrivateAnswer = monthClosePreview;
+    const method = publicAnswer || persistentPrivateAnswer ? 'chat.postMessage' : 'chat.postEphemeral';
     const historyVisibility = monthClosePreview ? 'private' : 'conversation';
     const persistedAnswer = monthClosePreview ? '[private answer omitted]' : storedText;
     await updateClaimedJob({ db, job, patch: { status: 'sending', answerDelivery, deliveryMethod: method, answer: persistedAnswer, historyVisibility, scopes, audit, experimentVariant: experiment.variant,
       bookingContext,
       reportSnapshots: reportSnapshots.length <= 5 && JSON.stringify(reportSnapshots).length <= 200000 ? reportSnapshots : [],
       answeredAt: new Date().toISOString() } });
-    const body = {
-      channel: job.channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
-      text: slackText(deliveredText), blocks,
-    };
+    const body = persistentPrivateAnswer
+      ? { channel: job.slackUserId, text: slackText(deliveredText), blocks }
+      : { channel: job.channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}), thread_ts: job.threadTs,
+          text: slackText(deliveredText), blocks };
     let result;
     let fallbackFailure;
     try {
@@ -496,11 +497,14 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       catch (error) {
         if (!retryablePayloadRejection(error)) throw error;
         fallbackFailure = deliveryFailure(error, method);
-        result = await slack(method, { channel: job.channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}),
-          thread_ts: job.threadTs, text: slackText(deliveredText) });
+        result = await slack(method, persistentPrivateAnswer
+          ? { channel: job.slackUserId, text: slackText(deliveredText) }
+          : { channel: job.channelId, ...(!publicAnswer ? { user: job.slackUserId } : {}),
+              thread_ts: job.threadTs, text: slackText(deliveredText) });
       }
-      const answerTs = publicAnswer ? result.ts : result.message_ts;
+      const answerTs = method === 'chat.postMessage' ? result.ts : result.message_ts;
       if (!/^\d{1,12}\.\d{1,6}$/.test(answerTs || '')) throw new SlackDeliveryError({ method, code: 'invalid_response' });
+      if (persistentPrivateAnswer && !/^D[A-Z0-9]+$/.test(result.channel || '')) throw new SlackDeliveryError({ method, code: 'invalid_response', definitive: true });
     } catch (error) {
       const failure = deliveryFailure(error, method);
       const status = failure.definitive ? 'failed' : 'delivery_unknown';
@@ -508,7 +512,9 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       await finishProgress(job, status);
       return;
     }
-    await updateClaimedJob({ db, job, patch: { status: 'succeeded', answerTs: publicAnswer ? result.ts : result.message_ts,
+    const answerTs = method === 'chat.postMessage' ? result.ts : result.message_ts;
+    await updateClaimedJob({ db, job, patch: { status: 'succeeded', answerTs,
+      ...(persistentPrivateAnswer ? { answerChannelId: result.channel } : {}),
       ...(fallbackFailure ? { deliveryFallback: fallbackFailure } : {}) } });
     await finishProgress(job, 'succeeded');
   }

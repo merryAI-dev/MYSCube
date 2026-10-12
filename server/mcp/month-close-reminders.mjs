@@ -32,24 +32,33 @@ function projectShape(project) {
 }
 
 export function selectMonthCloseProjects(projects, _targetYearMonth, nowIso = new Date().toISOString()) {
+  const contractEndPresent = (project) => project.contractEnd !== undefined && project.contractEnd !== null && project.contractEnd !== '';
+  const contractEndInvalid = (project) => contractEndPresent(project) && !validCalendarDate(project.contractEnd);
+  const ended = (project) => END_STATUSES.has(text(project.status))
+    || (!contractEndInvalid(project) && isProjectContractEnded(project.contractEnd, nowIso));
   const nameIds = new Map();
-  for (const project of projects.filter((candidate) => !END_STATUSES.has(text(candidate.status)))) {
+  for (const project of projects.filter((candidate) => !ended(candidate))) {
     const name = text(project.name);
     if (name) nameIds.set(name, new Set([...(nameIds.get(name) || []), project.projectId]));
   }
   const eligible = []; const excluded = []; const unknown = [];
   for (const project of projects) {
-    if (END_STATUSES.has(text(project.status)) || isProjectContractEnded(project.contractEnd, nowIso)) {
+    if (END_STATUSES.has(text(project.status))) {
+      excluded.push({ projectId: project.projectId, reason: 'ended_project' }); continue;
+    }
+    if (contractEndInvalid(project)) {
+      const shaped = projectShape(project);
+      unknown.push(shaped ? { ...shaped, reason: 'project_period_conflict' }
+        : { projectId: project.projectId, name: text(project.name) || '사업명 확인 필요', organization: normalizeReminderOrg(project.cic) || normalizeReminderOrg(project.department) || '조직 확인 필요', reason: 'project_period_conflict' });
+      continue;
+    }
+    if (isProjectContractEnded(project.contractEnd, nowIso)) {
       excluded.push({ projectId: project.projectId, reason: 'ended_project' }); continue;
     }
     const shaped = projectShape(project);
     if (!shaped) { unknown.push({ projectId: project.projectId, name: text(project.name) || '사업명 확인 필요', organization: normalizeReminderOrg(project.cic) || normalizeReminderOrg(project.department) || '조직 확인 필요', reason: 'project_mapping_unknown' }); continue; }
     if (nameIds.get(shaped.name)?.size !== 1) { unknown.push({ ...shaped, reason: 'duplicate_business_name' }); continue; }
     if (!ACTIVE_STATUSES.has(shaped.status)) { unknown.push({ ...shaped, reason: 'project_status_unknown' }); continue; }
-    const contractEndPresent = project.contractEnd !== undefined && project.contractEnd !== null && project.contractEnd !== '';
-    if (contractEndPresent && !validCalendarDate(project.contractEnd)) {
-      unknown.push({ ...shaped, reason: 'project_period_conflict' }); continue;
-    }
     eligible.push(shaped);
   }
   return { eligible, excluded, unknown };
@@ -84,7 +93,7 @@ const formatKst = (value) => new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/
 export function renderMonthCloseReminder({ request, targetYearMonth, beforeClose, approvalRequired, unknown, checkedAt, preview }) {
   const group = (title, rows) => rows.length ? [`\n[${title}]`, ...rows.sort((a, b) => a.organization.localeCompare(b.organization, 'ko') || a.name.localeCompare(b.name, 'ko'))
     .map((row) => `- [${safe(row.organization)}] ${safe(row.name)}(${safe(row.managerName)})`)] : [];
-  return [`[${Number(targetYearMonth.slice(5))}월분 월결산 확인]`, preview ? '비공개 미리보기입니다. Slack에는 발송되지 않았습니다.' : '월결산 제출 및 조직장 승인 대상을 안내합니다.',
+  return [`[${Number(targetYearMonth.slice(5))}월분 월결산 확인]`, preview ? '비공개 미리보기입니다. 실제 공지는 발송되지 않습니다.' : '월결산 제출 및 조직장 승인 대상을 안내합니다.',
     ...group('결산 전', beforeClose), ...group('조직장 승인 필요', approvalRequired),
     ...(unknown.length ? ['\n[확인 필요]', ...unknown.sort((a, b) => String(a.organization).localeCompare(String(b.organization), 'ko') || String(a.name).localeCompare(String(b.name), 'ko'))
       .map((row) => `- [${safe(row.organization || '조직 확인 필요')}] ${safe(row.name || '사업명 확인 필요')}(${safe(row.managerName || '담당자 확인 필요')}) · ${safe(row.reason)}`)] : []),
