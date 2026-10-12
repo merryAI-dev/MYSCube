@@ -7,6 +7,16 @@ it('parses only the explicit Korean month-close preview command in KST', () => {
   expect(runtime.parseMonthClosePreviewCommand('<@UBOT> 월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59')).toEqual({ input: {
     yearMonth: '2026-10', submissionDeadlineAt: '2026-10-10T23:59:00+09:00', approvalDeadlineAt: '2026-10-13T23:59:00+09:00',
   } });
+  expect(runtime.parseMonthClosePreviewCommand('<@UBOT> 월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59\n\n*다음을 사용하여 보냄* <@U0BHJEU5REW|ChatGPT>')).toEqual({ input: {
+    yearMonth: '2026-10', submissionDeadlineAt: '2026-10-10T23:59:00+09:00', approvalDeadlineAt: '2026-10-13T23:59:00+09:00',
+  } });
+  for (const suffix of [
+    '\n임의 후행 명령',
+    '\n2026-11 제출 2026-11-10 23:59 승인 2026-11-13 23:59',
+    '\n*다음을 사용하여 보냄* <@UOTHER|ChatGPT>',
+    '\n*다음을 사용하여 보냄* <@U0BHJEU5REW|Other>',
+    '\n*다음을 사용하여 보냄* <@U0BHJEU5REW|ChatGPT>\n추가 텍스트',
+  ]) expect(runtime.parseMonthClosePreviewCommand(`월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59${suffix}`)).toEqual({ error: 'month_close_preview_usage' });
   expect(runtime.parseMonthClosePreviewCommand('월결산 현황')).toBeNull();
   expect(runtime.parseMonthClosePreviewCommand('월결산 리마인드 미리보기')).toEqual({ error: 'month_close_preview_usage' });
   expect(runtime.parseMonthClosePreviewCommand('월결산 리마인드 미리보기 2026-10 제출 2026-09-31 23:59 승인 2026-10-13 23:59')).toEqual({ error: 'month_close_preview_usage' });
@@ -20,7 +30,7 @@ it('delivers an authorized month-close preview only to the verified requester wi
   records.set('orgs/mysc/projects/a', { name: 'A사업', cic: 'CIC1', department: 'CIC1', managerId: 'manager-a', status: 'IN_PROGRESS', contractEnd: '2026-12-31' });
   records.set('orgs/mysc/persons/person-a', { uid: 'manager-a', name: '담당자' });
   records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(),
-    question: '월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59' });
+    question: '월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59\n\n*다음을 사용하여 보냄* <@U0BHJEU5REW|ChatGPT>' });
   records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
   const calls = []; const completeFactory = vi.fn(); const observed = [];
   const fetchImpl = vi.fn(async (url, options) => {
