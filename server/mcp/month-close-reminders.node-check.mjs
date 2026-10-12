@@ -38,6 +38,13 @@ test('monthly inventory excludes ended and isolates duplicates or stale active p
   assert.equal(selectMonthCloseProjects(projects, '2026-09').excluded.length, 1);
   assert.equal(selectMonthCloseProjects(duplicate, '2026-09').unknown.length, 2);
   assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '2026-08-31' }], '2026-09').unknown[0].reason, 'project_period_conflict');
+  const malformedEnded = { projectId: 'ended-bad', name: '합성 사업 A', status: 'COMPLETED', cic: '', department: '' };
+  const selected = selectMonthCloseProjects([base, malformedEnded], '2026-09');
+  assert.equal(selected.excluded.length, 1); assert.equal(selected.eligible.length, 1); assert.equal(selected.unknown.length, 0);
+  for (const contractEnd of ['2026-02-30', '2026-99-99', 20260930]) {
+    assert.equal(selectMonthCloseProjects([{ ...base, contractEnd }], '2026-09').unknown[0].reason, 'project_period_conflict');
+  }
+  assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '' }], '2026-09').eligible.length, 1);
 });
 
 test('canonical monthly state never uses weekly status', () => {
@@ -73,6 +80,17 @@ test('monthly receipt is independent and suppresses uncertain retries', async ()
   let sends = 0; const deliver = () => deliverMonthCloseReminder({ db, plan: preview, destination: SOURCE_CHANNEL, now: () => now, slack: async () => { sends++; throw new Error('accepted then timeout'); } });
   assert.equal((await deliver()).status, 'delivery_unknown'); assert.equal((await deliver()).status, 'already_reserved'); assert.equal(sends, 1);
   assert.ok(db.writes.every((path) => path.startsWith('settlement_reminder_deliveries/'))); assert.equal(preview.policy, MONTH_CLOSE_REMINDER_POLICY);
+});
+
+test('delivery freshness is rechecked after receipt reservation', async () => {
+  let clock = now; let sent = false; const updates = [];
+  const plan = { preview: false, complete: true, beforeClose: [base], approvalRequired: [], text: '합성 월결산 알림', checkedAt: new Date(now).toISOString(),
+    request: input, targetYearMonth: '2026-09', provenance: {} };
+  const ref = { async update(value) { updates.push(value); } };
+  const result = await deliverMonthCloseReminder({ plan, destination: SOURCE_CHANNEL, now: () => clock,
+    db: { doc: () => ref, async runTransaction() { clock += 61000; return true; } },
+    slack: async () => { sent = true; return {}; } });
+  assert.equal(result.status, 'blocked_stale'); assert.equal(sent, false); assert.equal(updates[0].status, 'blocked_stale');
 });
 
 test('repeating worker defaults disabled and dry-run never posts', async () => {
