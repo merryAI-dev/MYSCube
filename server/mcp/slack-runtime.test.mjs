@@ -37,19 +37,25 @@ it('delivers an authorized month-close preview only to the verified requester wi
   const fetchImpl = vi.fn(async (url, options) => {
     if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
     calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
-    return Response.json({ ok: true, ts: '2.1', message_ts: '3.1' });
+    return Response.json({ ok: true, channel: 'DQA', ts: '2.1', message_ts: '3.1' });
   });
   const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, completeFactory, fetchImpl,
     readOverview: async (request) => { observed.push(request); return statusOverview(request); } });
   await worker();
   expect(completeFactory).not.toHaveBeenCalled();
   expect(observed[0].context).toMatchObject({ actorId: 'member', actorRole: 'finance', authSource: 'slack_verified' });
-  const delivery = calls.find((call) => call.method === 'chat.postEphemeral');
-  expect(delivery.body).toMatchObject({ channel: identity.channelId, user: identity.slackUserId, thread_ts: identity.threadTs });
-  expect(delivery.body.text).toContain('비공개 미리보기입니다. Slack에는 발송되지 않았습니다.');
-  expect(calls.some((call) => call.method === 'chat.postMessage' && call.body.text.includes('[9월분 월결산 확인]'))).toBe(false);
+  const delivery = calls.find((call) => call.method === 'chat.postMessage');
+  expect(delivery.body).toMatchObject({ channel: identity.slackUserId });
+  expect(delivery.body).not.toHaveProperty('user');
+  expect(delivery.body).not.toHaveProperty('thread_ts');
+  expect(delivery.body.text).toContain('비공개 미리보기입니다. 요청자 개인 DM으로만 전달됩니다.');
+  expect(calls.filter((call) => call.method === 'chat.postMessage')).toHaveLength(1);
   expect(records.get('settlement_agent_threads/thread').turns).toEqual([]);
   expect(records.get('settlement_agent_jobs/first').answer).toBe('[private answer omitted]');
+  expect(records.get('settlement_agent_jobs/first')).toMatchObject({
+    answerDelivery: 'private', deliveryMethod: 'chat.postMessage', answerChannelId: 'DQA', answerTs: '2.1',
+    answerPermalink: 'https://app.slack.com/archives/DQA/p21',
+  });
   expect(JSON.stringify([...records].filter(([key]) => key.includes('/trace/')))).not.toContain('A사업');
 });
 
@@ -79,13 +85,15 @@ it('denies the private month-close preview before any canonical read for non-adm
   const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, readOverview, fetchImpl: async (url, options) => {
     if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
     calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
-    return Response.json({ ok: true, ts: '2.1', message_ts: '3.1' });
+    return Response.json({ ok: true, channel: 'DQA', ts: '2.1', message_ts: '3.1' });
   } });
   await worker();
   expect(readOverview).not.toHaveBeenCalled();
-  const delivery = calls.find((call) => call.method === 'chat.postEphemeral');
+  const delivery = calls.find((call) => call.method === 'chat.postMessage');
+  expect(delivery.body).toMatchObject({ channel: identity.slackUserId });
+  expect(delivery.body).not.toHaveProperty('thread_ts');
   expect(delivery.body.text).toContain('admin 또는 finance 역할만');
-  expect(calls.some((call) => call.method === 'chat.postMessage' && call.body.text.includes('[9월분 월결산 확인]'))).toBe(false);
+  expect(calls.filter((call) => call.method === 'chat.postMessage')).toHaveLength(1);
 });
 
 it('accepts only the dedicated scheduler bearer and fails closed when disabled', () => {
