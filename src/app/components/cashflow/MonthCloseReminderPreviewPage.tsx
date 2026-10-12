@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { BellRing, Clipboard, Loader2, RefreshCw, ShieldAlert } from 'lucide-react';
 import { toast } from 'sonner';
 import { useAuth } from '../../data/auth-store';
@@ -18,6 +18,20 @@ const currentCycle = () => { const now = new Date(); return `${now.getFullYear()
 const defaultLocalDeadline = (day: number) => { const [year, month] = currentCycle().split('-'); return `${year}-${month}-${pad(day)}T23:59`; };
 const toIso = (local: string) => new Date(`${local}:00+09:00`).toISOString();
 
+export function invalidateMonthClosePreviewSession(input: {
+  sequence: { current: number };
+  controller: { current: AbortController | null };
+  setLoading: (value: boolean) => void;
+  setError: (value: string) => void;
+  setResult: (value: MonthCloseReminderPreviewResult | null) => void;
+}) {
+  input.sequence.current += 1;
+  input.controller.current?.abort();
+  input.setLoading(false);
+  input.setError('');
+  input.setResult(null);
+}
+
 export function MonthCloseReminderPreviewPage() {
   const { user } = useAuth();
   const { orgId } = useFirebase();
@@ -32,12 +46,16 @@ export function MonthCloseReminderPreviewPage() {
   const allowed = user?.role === 'admin' || user?.role === 'finance';
 
   const invalidatePreview = () => {
-    sequence.current += 1;
-    controller.current?.abort();
-    setLoading(false);
-    setError('');
-    setResult(null);
+    invalidateMonthClosePreviewSession({ sequence, controller, setLoading, setError, setResult });
   };
+
+  useEffect(() => {
+    invalidateMonthClosePreviewSession({ sequence, controller, setLoading, setError, setResult });
+    return () => {
+      sequence.current += 1;
+      controller.current?.abort();
+    };
+  }, [orgId, user?.uid, user?.role]);
 
   const run = async () => {
     if (!user || !allowed || loading) return;

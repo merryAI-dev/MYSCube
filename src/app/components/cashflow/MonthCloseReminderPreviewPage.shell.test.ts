@@ -15,6 +15,8 @@ describe('month-close reminder preview UI safety contract', () => {
     expect(source).toContain('controller.current?.abort()');
     expect(source).toContain('request === sequence.current');
     expect(source).toContain('request !== sequence.current');
+    expect(source).toContain('}, [orgId, user?.uid, user?.role])');
+    expect(source.match(/controller\.current\?\.abort\(\)/g)?.length).toBeGreaterThanOrEqual(2);
   });
 
   it('supports month/deadline changes, retry, unknown details and copying exact text', () => {
