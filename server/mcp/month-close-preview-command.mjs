@@ -1,7 +1,7 @@
 import { assertMonthCloseRequest, validCalendarDate } from './month-close-reminders.mjs';
 
 const prefix = /^\s*(?:<@[A-Z0-9]+>\s*)?월결산\s+리마인드\s+미리보기(?:\s|$)/;
-const chatGptProvenanceSuffix = /\n\s*\*다음을 사용하여 보냄\*\s+<@U0BHJEU5REW\|ChatGPT>\s*$/;
+const chatGptProvenanceSuffix = / \*다음을 사용하여 보냄\* <@U0BHJEU5REW>$/;
 
 function stripObservedChatGptProvenance(value) {
   return value.replace(chatGptProvenanceSuffix, '').trim();
