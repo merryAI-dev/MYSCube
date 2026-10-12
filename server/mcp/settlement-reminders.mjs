@@ -63,7 +63,7 @@ export async function readRegisteredProjects(db, tenantId) {
   let cursor;
   const projects = [];
   for (let pages = 0; pages < 100; pages++) {
-    let query = db.collection(`orgs/${tenantId}/projects`).orderBy('__name__').select('name', 'cic', 'department', 'managerId', 'trashedAt');
+    let query = db.collection(`orgs/${tenantId}/projects`).orderBy('__name__').select('name', 'cic', 'department', 'managerId', 'status', 'contractEnd', 'trashedAt');
     if (cursor) query = query.startAfter(cursor);
     const page = await query.limit(100).get();
     for (const doc of page.docs) if (!doc.data().trashedAt) projects.push({ ...doc.data(), projectId: doc.id });

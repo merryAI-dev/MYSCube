@@ -26,7 +26,7 @@ await api(`/v9/projects/${project.id}`, 'PATCH', { ssoProtection: null, framewor
 // Copy only the existing server configuration; credentials never leave this runner or Vercel.
 const source = await api(`/v9/projects/${env.VERCEL_PROJECT_ID}/env?target=production`);
 const selected = source.envs.filter(item => item.target?.includes('production') && !item.gitBranch
-  && /^(FIREBASE_|BFF_|JVM_|SETTLEMENT_|MERRYHERE_|GOOGLE_CALENDAR_ROOMS_JSON$)/.test(item.key));
+  && /^(FIREBASE_|BFF_|JVM_|SETTLEMENT_|MONTH_CLOSE_|MERRYHERE_|GOOGLE_CALENDAR_ROOMS_JSON$)/.test(item.key));
 const copied = {};
 for (const item of selected) {
   const value = await api(`/v1/projects/${env.VERCEL_PROJECT_ID}/env/${item.id}`);

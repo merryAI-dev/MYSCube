@@ -74,7 +74,7 @@
     "policy:jvm-roles:write": "node scripts/extract_jvm_command_roles.mjs --write",
     "typecheck": "node scripts/verify-typecheck-baseline.mjs",
     "typecheck:baseline": "node scripts/verify-typecheck-baseline.mjs --update",
-    "test:settlement:reminders": "node --test server/mcp/settlement-reminders.*-check.mjs"
+    "test:settlement:reminders": "node --test server/mcp/settlement-reminders.*-check.mjs server/mcp/month-close-reminders.*-check.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",

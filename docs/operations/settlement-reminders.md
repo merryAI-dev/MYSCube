@@ -109,9 +109,54 @@ WEEK_5). A short month fragment containing no Thursday receives no Thursday run;
 any alternative deadline for that fragment needs explicit policy confirmation.
 
 Weekly approval (Sunday EOD), monthly submission (10th EOD for prior month), and
-monthly approval (month-end EOD) are deliberately inactive and not scheduled here.
+monthly approval are separate from the weekly policy. The month-close worker below
+is deliberately inactive and has no scheduler until its operating time is approved.
 Existing Friday 13:00 approval reminders/core deadline rules remain untouched.
 Before rollout, reconcile possible duplicate/conflicting existing notifications.
+
+## Prior-month close reminder
+
+The authenticated Slack service also exposes:
+
+- `POST /api/internal/workers/settlement-month-close-reminders/preview`
+- `GET /api/internal/workers/settlement-month-close-reminders/run`
+
+Both remain inside the existing worker-secret route boundary and reuse the injected
+`jvmReadPort.readWeeklyOverview`; no probe identity, JVM invoker grant, or new secret
+is required. The preview body contains `yearMonth`, `submissionDeadlineAt`, and
+`approvalDeadlineAt`. For cycle `2026-10`, the validated canonical target is exactly
+`2026-09`. Preview is always read-only and `deliverMonthCloseReminder` rejects it.
+
+The month-close path enumerates every non-trashed project with document-ID pagination,
+excludes ERP statuses `COMPLETED` and `COMPLETED_PENDING_PAYMENT`, and isolates unknown
+status, stale active contract period, conflicting organization, duplicate business
+name, missing/ambiguous `managerId -> persons.uid`, and non-OK canonical state. It
+does not infer responsibility from the requester. Canonical `businessState` maps as:
+
+- `NOT_REQUESTED`, `REOPENED`, `REJECTED`, `WITHDRAWN`: 결산 전
+- `SUBMITTED`: 조직장 승인 필요
+- `LOCKED`: 완료, omitted from reminders
+- `REOPEN_REQUESTED`, `INCONSISTENT`, or non-`OK` health: 확인 필요; sending blocked
+
+The response and message use `사업명(담당자명)` and group by canonical project
+organization. It rereads inventory and manager mappings after canonical batches,
+preserves hashes/revisions in the delivery receipt, and uses a monthly policy key
+that cannot collide with weekly receipts. Dry-run and disabled execution never write
+or post. Unknown states fail closed instead of disappearing from the result.
+
+Activation settings are independent of the weekly feature:
+
+- `MONTH_CLOSE_REMINDERS_ENABLED=true` enables planning; unset is disabled
+- `MONTH_CLOSE_REMINDERS_SEND=true` separately enables posting; leave unset now
+- `MONTH_CLOSE_REMINDERS_CYCLE`, `MONTH_CLOSE_REMINDERS_SUBMISSION_DEADLINE`, and
+  `MONTH_CLOSE_REMINDERS_APPROVAL_DEADLINE` define the reviewed cycle/deadlines
+- `MONTH_CLOSE_REMINDERS_POLICY_APPROVED=month-close-prior-month-v1` is the final gate
+- `MONTH_CLOSE_REMINDERS_DESTINATION=C0BQ6980HR6` is the fixed existing destination
+
+No monthly cron is created by this change because the automatic send time is not yet
+approved. Adding or enabling one is a separate production operation. The deployed
+preview endpoint can be invoked only with the existing worker bearer secret; never
+paste that secret into logs or chat.
 
 ## Preview and receipts
 
@@ -173,7 +218,7 @@ by the patch; a disposable local replacement is used only for validation.
 
 ### Local gate results (2026-10-01)
 
-- Focused reminder tests: 32 passed
+- Focused weekly + monthly reminder tests: 39 passed
 - Full Vitest: 456 files passed, 19 skipped; 4,782 tests passed, 318 skipped
 - Production build: passed (existing large-chunk warnings)
 - Typecheck baseline: passed, no new errors (187 known errors across 30 files)
