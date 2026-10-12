@@ -65,10 +65,10 @@ it('delivers an authorized month-close preview only to the verified requester wi
   expect(JSON.stringify([...records].filter(([key]) => key.includes('/trace/')))).not.toContain('A사업');
 });
 
-it('posts an authorized month-close preview only to the approved request thread and verifies its permalink', async () => {
+it('lets an ACTIVE viewer post a month-close preview only to the approved request thread and verifies its permalink', async () => {
   const { db, records } = memoryDb();
   const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1791782928.927269' };
-  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'admin', status: 'ACTIVE' });
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'viewer', status: 'ACTIVE' });
   records.set('orgs/mysc/projects/a', { name: 'A사업', cic: 'CIC1', department: 'CIC1', managerId: 'manager-a', status: 'IN_PROGRESS', contractEnd: '2026-12-31' });
   records.set('orgs/mysc/persons/person-a', { uid: 'manager-a', name: '담당자' });
   records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(),
@@ -118,7 +118,7 @@ it('does not fall back to DM when the approved preview thread post fails', async
     deliveryFailure: { code: 'transport_error', definitive: false }, answer: '[private answer omitted]' });
 });
 
-it('rechecks admin or finance immediately before an approved-channel preview is exposed', async () => {
+it('rechecks ACTIVE membership immediately before an approved-channel preview is exposed', async () => {
   const { db, records } = memoryDb();
   const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
   records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'admin', status: 'ACTIVE' });
@@ -130,7 +130,7 @@ it('rechecks admin or finance immediately before an approved-channel preview is 
   const calls = [];
   const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' },
     readOverview: async (request) => {
-      records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'viewer', status: 'ACTIVE' });
+      records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'viewer', status: 'INACTIVE' });
       return statusOverview(request);
     }, fetchImpl: async (url, options) => {
       if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
@@ -140,11 +140,79 @@ it('rechecks admin or finance immediately before an approved-channel preview is 
   await worker();
   expect(calls).toHaveLength(1);
   expect(calls[0]).toMatchObject({ method: 'chat.postEphemeral', body: { channel: identity.channelId, user: identity.slackUserId, thread_ts: identity.threadTs } });
-  expect(calls[0].body.text).toContain('admin 또는 finance 역할만');
+  expect(calls[0].body.text).toContain('활성 계정과 Slack 이메일 연결');
   expect(calls[0].body.text).not.toContain('A사업');
   expect(records.get('settlement_agent_jobs/first')).toMatchObject({ status: 'succeeded', answerDelivery: 'private', deliveryMethod: 'chat.postEphemeral',
     answer: '[private answer omitted]', historyVisibility: 'private' });
   expect(records.get('settlement_agent_jobs/first')).not.toHaveProperty('answerPermalink');
+});
+
+it('blocks Merryhere reservation and account operations in the approved READ channel before model or provider use', async () => {
+  for (const question of ['회의실 계정 연결', '회의실 예약 확정 abcdefabcdefabcdefabcdef', '내일 3시 회의실 예약해줘']) {
+    const { db, records } = memoryDb();
+    const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
+    records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'pm', status: 'ACTIVE' });
+    records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(), question });
+    records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+    const completeFactory = vi.fn(); const calls = [];
+    const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, completeFactory,
+      fetchImpl: async (url, options) => {
+        if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+        calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+        return Response.json({ ok: true, channel: identity.channelId, ts: '2.1', message_ts: '2.1' });
+      } });
+    await worker();
+    expect(completeFactory).not.toHaveBeenCalled();
+    expect(calls.find((call) => call.method === 'chat.postMessage').body.text).toContain('READ 전용');
+    expect([...records.keys()].some((key) => key.startsWith('merryhere_'))).toBe(false);
+  }
+});
+
+it('renders approved-channel READ help without model use and states sensitive-data exclusions', async () => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'pm', status: 'ACTIVE' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(), question: '도움말' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const completeFactory = vi.fn(); const calls = [];
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, completeFactory,
+    fetchImpl: async (url, options) => {
+      if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+      calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+      return Response.json({ ok: true, channel: identity.channelId, ts: '2.1', message_ts: '2.1' });
+    } });
+  await worker();
+  expect(completeFactory).not.toHaveBeenCalled();
+  const text = calls.find((call) => call.method === 'chat.postMessage').body.text;
+  expect(text).toContain('#1_ax위원회_myscubebot');
+  expect(text).toContain('개인 급여·HR');
+  expect(text).toContain('쓰기·예약·승인·삭제·권한 변경');
+  expect(text).not.toContain('merryhere_rooms');
+});
+
+it('offers only the explicit READ tool allowlist to the model in the approved channel', async () => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'pm', status: 'ACTIVE' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(), question: '이번 달 회사 현황을 요약해줘' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  let names = [];
+  const completeFactory = () => async ({ tools }) => {
+    names = tools.map((tool) => tool.function.name);
+    return { content: '조회 가능한 범위에서 정리했습니다.' };
+  };
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture', SETTLEMENT_AGENT_GEMINI_API_KEY: 'fixture' }, completeFactory,
+    readSnapshot: async () => ({}), fetchImpl: async (url, options) => {
+      if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+      return Response.json({ ok: true, channel: identity.channelId, ts: '2.1', message_ts: '2.1' });
+    } });
+  await worker();
+  expect(names).toEqual(expect.arrayContaining(['cashflow_status', 'settlement_status_report', 'settlement_report', 'reformat_report',
+    'accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief', 'agent_diagnostics', 'system_knowledge', 'agent_capabilities', 'project_search']));
+  expect(names).not.toContain('merryhere_rooms');
+  expect(names.every((name) => ['cashflow_status', 'settlement_status_report', 'settlement_report', 'reformat_report', 'accounting_read',
+    'accounting_report', 'accounting_compare', 'cfo_brief', 'agent_diagnostics', 'system_knowledge', 'agent_capabilities', 'project_search',
+    'clarify_request', 'observe_feedback'].includes(name))).toBe(true);
 });
 
 it.each([
