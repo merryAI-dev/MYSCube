@@ -20,6 +20,9 @@ describe('admin nav access control', () => {
     expect(canShowAdminNavItem('finance', '/cashflow')).toBe(true);
     expect(canShowAdminNavItem('pm', '/cashflow')).toBe(false);
     expect(canShowAdminNavItem('viewer', '/cashflow')).toBe(false);
+    expect(canShowAdminNavItem('admin', '/cashflow/month-close-reminder-preview')).toBe(true);
+    expect(canShowAdminNavItem('finance', '/cashflow/month-close-reminder-preview')).toBe(true);
+    expect(canShowAdminNavItem('pm', '/cashflow/month-close-reminder-preview')).toBe(false);
   });
 
   it('allows finance to access finance export surfaces but not admin settings', () => {

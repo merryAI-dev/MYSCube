@@ -90,7 +90,7 @@ export function renderMonthCloseReminder({ request, targetYearMonth, beforeClose
     `상태 확인 ${formatKst(checkedAt)} · MYSCube canonical 월결산 기준`].join('\n');
 }
 
-export async function buildMonthCloseReminderPlan({ db, readOverview, input, tenantId = 'mysc', now = Date.now, preview = true, sourceRevision = 'local-unreleased' }) {
+export async function buildMonthCloseReminderPlan({ db, readOverview, input, tenantId = 'mysc', actorContext, now = Date.now, preview = true, sourceRevision = 'local-unreleased' }) {
   const request = assertMonthCloseRequest(input);
   const inventory = await readRegisteredProjects(db, tenantId);
   const expectedTarget = new Date(`${request.yearMonth}-01T00:00:00Z`); expectedTarget.setUTCMonth(expectedTarget.getUTCMonth() - 1);
@@ -102,7 +102,10 @@ export async function buildMonthCloseReminderPlan({ db, readOverview, input, ten
   const checkedAt = new Date(now()).toISOString();
   for (let offset = 0; offset < managed.rows.length; offset += 100) {
     const batch = managed.rows.slice(offset, offset + 100); const projectIds = batch.map((row) => row.projectId);
-    const overview = assertOverview(await readOverview({ context: { tenantId, actorId: 'myscube-settlement-agent', actorRole: 'auditor', actorEmail: '', actorName: '월결산 알림', authSource: 'settlement_agent_read', requestId: hash([tenantId, request.yearMonth, checkedAt]) }, body: { yearMonth: request.yearMonth, projectIds } }), { yearMonth: request.yearMonth, projectIds });
+    const context = actorContext
+      ? { ...actorContext, tenantId, requestId: actorContext.requestId || hash([tenantId, request.yearMonth, checkedAt]) }
+      : { tenantId, actorId: 'myscube-settlement-agent', actorRole: 'auditor', actorEmail: '', actorName: '월결산 알림', authSource: 'settlement_agent_read', requestId: hash([tenantId, request.yearMonth, checkedAt]) };
+    const overview = assertOverview(await readOverview({ context, body: { yearMonth: request.yearMonth, projectIds } }), { yearMonth: request.yearMonth, projectIds });
     if (overview.monthCloseTargetYearMonth !== targetYearMonth) fail('month_close_target_mismatch');
     for (const row of batch) {
       const item = overview.items.find((candidate) => candidate.projectId === row.projectId); const state = classifyMonthClose(item);
@@ -144,10 +147,10 @@ export async function deliverMonthCloseReminder({ db, slack, plan, destination, 
 
 export function createMonthCloseReminderWorker({ db, readOverview, env = process.env, fetchImpl = fetch, now = Date.now }) {
   const slack = createReminderSlackClient({ token: env.SLACK_ALERT_BOT_TOKEN, fetchImpl });
-  return async ({ preview = false, input } = {}) => {
+  return async ({ preview = false, input, actorContext, tenantId } = {}) => {
     if (!preview && env.MONTH_CLOSE_REMINDERS_ENABLED !== 'true') return { status: 'disabled' };
     const configured = input || { yearMonth: env.MONTH_CLOSE_REMINDERS_CYCLE, submissionDeadlineAt: env.MONTH_CLOSE_REMINDERS_SUBMISSION_DEADLINE, approvalDeadlineAt: env.MONTH_CLOSE_REMINDERS_APPROVAL_DEADLINE };
-    const plan = await buildMonthCloseReminderPlan({ db, readOverview, input: configured, now, preview, sourceRevision: env.SLACK_SERVICE_RELEASE || env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA || 'local-unreleased' });
+    const plan = await buildMonthCloseReminderPlan({ db, readOverview, input: configured, actorContext, tenantId, now, preview, sourceRevision: env.SLACK_SERVICE_RELEASE || env.VERCEL_GIT_COMMIT_SHA || env.GITHUB_SHA || 'local-unreleased' });
     if (preview) return { status: plan.complete ? 'preview' : 'blocked_incomplete', plan };
     const summary = { complete: plan.complete, beforeClose: plan.beforeClose.length, approvalRequired: plan.approvalRequired.length, unknown: plan.unknown.length };
     if (!plan.complete) return { status: 'blocked_incomplete', ...summary };

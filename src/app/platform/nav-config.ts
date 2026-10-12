@@ -2,7 +2,7 @@ import type { LucideIcon } from 'lucide-react';
 import {
   LayoutDashboard, FolderKanban, BarChart3,
   Building2, Shield, UserCog,
-  ListChecks, ArrowLeftRight, CalendarRange, Hash, Users,
+  ListChecks, ArrowLeftRight, CalendarRange, Hash, Users, BellRing,
 } from 'lucide-react';
 
 export interface NavItem {
@@ -30,6 +30,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: '/projects', icon: FolderKanban, label: '통합 대시보드' },
       { to: '/projects/migration-audit', icon: ArrowLeftRight, label: '프로젝트 등록/승인' },
       { to: '/cashflow', icon: BarChart3, label: '현금흐름 승인' },
+      { to: '/cashflow/month-close-reminder-preview', icon: BellRing, label: '월결산 리마인드 미리보기' },
       { to: '/participation', icon: Shield, label: '참여율 관리' },
     ],
   },
