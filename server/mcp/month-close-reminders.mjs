@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { assertOverview } from './cashflow-status.mjs';
 import { SOURCE_CHANNEL, createReminderSlackClient, normalizeReminderOrg, readRegisteredProjects } from './settlement-reminders.mjs';
+import { isProjectContractEnded, isRealIsoCalendarDate } from '../../src/app/platform/project-period-state.mjs';
 
 export const MONTH_CLOSE_REMINDER_POLICY = 'month-close-prior-month-v1';
 const END_STATUSES = new Set(['COMPLETED', 'COMPLETED_PENDING_PAYMENT']);
@@ -10,9 +11,8 @@ const text = (value) => typeof value === 'string' ? value.trim() : '';
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (code) => { throw new Error(code); };
 const safe = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replace(/[\r\n]/g, ' ');
-const instant = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value));
-const validDate = (value) => typeof value === 'string' && /^20\d{2}-\d{2}-\d{2}$/.test(value)
-  && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+export const validCalendarDate = isRealIsoCalendarDate;
+const instant = (value) => typeof value === 'string' && validCalendarDate(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
 
 export function assertMonthCloseRequest(input) {
   const yearMonth = text(input?.yearMonth);
@@ -31,23 +31,34 @@ function projectShape(project) {
     status: text(project.status), contractEnd: text(project.contractEnd) };
 }
 
-export function selectMonthCloseProjects(projects, targetYearMonth) {
+export function selectMonthCloseProjects(projects, _targetYearMonth, nowIso = new Date().toISOString()) {
+  const contractEndPresent = (project) => project.contractEnd !== undefined && project.contractEnd !== null && project.contractEnd !== '';
+  const contractEndInvalid = (project) => contractEndPresent(project) && !validCalendarDate(project.contractEnd);
+  const ended = (project) => END_STATUSES.has(text(project.status))
+    || (!contractEndInvalid(project) && isProjectContractEnded(project.contractEnd, nowIso));
   const nameIds = new Map();
-  for (const project of projects.filter((candidate) => !END_STATUSES.has(text(candidate.status)))) {
+  for (const project of projects.filter((candidate) => !ended(candidate))) {
     const name = text(project.name);
     if (name) nameIds.set(name, new Set([...(nameIds.get(name) || []), project.projectId]));
   }
   const eligible = []; const excluded = []; const unknown = [];
   for (const project of projects) {
-    if (END_STATUSES.has(text(project.status))) { excluded.push({ projectId: project.projectId, reason: 'ended_project' }); continue; }
+    if (END_STATUSES.has(text(project.status))) {
+      excluded.push({ projectId: project.projectId, reason: 'ended_project' }); continue;
+    }
+    if (contractEndInvalid(project)) {
+      const shaped = projectShape(project);
+      unknown.push(shaped ? { ...shaped, reason: 'project_period_conflict' }
+        : { projectId: project.projectId, name: text(project.name) || '사업명 확인 필요', organization: normalizeReminderOrg(project.cic) || normalizeReminderOrg(project.department) || '조직 확인 필요', reason: 'project_period_conflict' });
+      continue;
+    }
+    if (isProjectContractEnded(project.contractEnd, nowIso)) {
+      excluded.push({ projectId: project.projectId, reason: 'ended_project' }); continue;
+    }
     const shaped = projectShape(project);
     if (!shaped) { unknown.push({ projectId: project.projectId, name: text(project.name) || '사업명 확인 필요', organization: normalizeReminderOrg(project.cic) || normalizeReminderOrg(project.department) || '조직 확인 필요', reason: 'project_mapping_unknown' }); continue; }
     if (nameIds.get(shaped.name)?.size !== 1) { unknown.push({ ...shaped, reason: 'duplicate_business_name' }); continue; }
     if (!ACTIVE_STATUSES.has(shaped.status)) { unknown.push({ ...shaped, reason: 'project_status_unknown' }); continue; }
-    const contractEndPresent = project.contractEnd !== undefined && project.contractEnd !== null && project.contractEnd !== '';
-    if ((contractEndPresent && !validDate(project.contractEnd)) || (shaped.contractEnd && shaped.contractEnd < `${targetYearMonth}-01`)) {
-      unknown.push({ ...shaped, reason: 'project_period_conflict' }); continue;
-    }
     eligible.push(shaped);
   }
   return { eligible, excluded, unknown };
@@ -82,7 +93,7 @@ const formatKst = (value) => new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/
 export function renderMonthCloseReminder({ request, targetYearMonth, beforeClose, approvalRequired, unknown, checkedAt, preview }) {
   const group = (title, rows) => rows.length ? [`\n[${title}]`, ...rows.sort((a, b) => a.organization.localeCompare(b.organization, 'ko') || a.name.localeCompare(b.name, 'ko'))
     .map((row) => `- [${safe(row.organization)}] ${safe(row.name)}(${safe(row.managerName)})`)] : [];
-  return [`[${Number(targetYearMonth.slice(5))}월분 월결산 확인]`, preview ? '비공개 미리보기입니다. Slack에는 발송되지 않았습니다.' : '월결산 제출 및 조직장 승인 대상을 안내합니다.',
+  return [`[${Number(targetYearMonth.slice(5))}월분 월결산 확인]`, preview ? '월결산 미리보기입니다. 실제 정기 공지는 발송되지 않습니다.' : '월결산 제출 및 조직장 승인 대상을 안내합니다.',
     ...group('결산 전', beforeClose), ...group('조직장 승인 필요', approvalRequired),
     ...(unknown.length ? ['\n[확인 필요]', ...unknown.sort((a, b) => String(a.organization).localeCompare(String(b.organization), 'ko') || String(a.name).localeCompare(String(b.name), 'ko'))
       .map((row) => `- [${safe(row.organization || '조직 확인 필요')}] ${safe(row.name || '사업명 확인 필요')}(${safe(row.managerName || '담당자 확인 필요')}) · ${safe(row.reason)}`)] : []),
@@ -95,11 +106,11 @@ export async function buildMonthCloseReminderPlan({ db, readOverview, input, ten
   const inventory = await readRegisteredProjects(db, tenantId);
   const expectedTarget = new Date(`${request.yearMonth}-01T00:00:00Z`); expectedTarget.setUTCMonth(expectedTarget.getUTCMonth() - 1);
   const targetYearMonth = expectedTarget.toISOString().slice(0, 7);
-  const selected = selectMonthCloseProjects(inventory, targetYearMonth);
+  const checkedAt = new Date(now()).toISOString();
+  const selected = selectMonthCloseProjects(inventory, targetYearMonth, checkedAt);
   const managed = await attachManagers(db, tenantId, selected.eligible);
   const unknown = [...selected.unknown, ...managed.unknown];
   const beforeClose = []; const approvalRequired = []; const completeRows = []; const snapshots = [];
-  const checkedAt = new Date(now()).toISOString();
   for (let offset = 0; offset < managed.rows.length; offset += 100) {
     const batch = managed.rows.slice(offset, offset + 100); const projectIds = batch.map((row) => row.projectId);
     const context = actorContext
@@ -115,7 +126,7 @@ export async function buildMonthCloseReminderPlan({ db, readOverview, input, ten
     }
   }
   const refreshed = await readRegisteredProjects(db, tenantId);
-  const refreshedSelected = selectMonthCloseProjects(refreshed, targetYearMonth);
+  const refreshedSelected = selectMonthCloseProjects(refreshed, targetYearMonth, checkedAt);
   const refreshedManaged = await attachManagers(db, tenantId, refreshedSelected.eligible);
   if (hash(refreshed) !== hash(inventory) || hash(refreshedManaged) !== hash(managed)) fail('roster_changed');
   const complete = unknown.length === 0;
