@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { REMINDER_POLICY, SOURCE_CHANNEL, reminderWindow, resolveObligations, reconcileSlackEvidence,
-  readDeadlineSlackHistory, buildReminderPlan, deliverReminder, createSettlementReminderWorker, createReminderSlackClient } from './settlement-reminders.mjs';
+  readDeadlineSlackHistory, buildReminderPlan, deliverReminder, createSettlementReminderWorker, createReminderSlackClient,
+  resolveReminderManagers } from './settlement-reminders.mjs';
 
 const cutoff = Date.parse('2026-10-01T15:00:00.000Z');
 const window = reminderWindow(cutoff);
-const registered = [{ projectId: 'p1', name: '사업 하나', cic: 'CIC 2', department: 'CIC2' }];
+const registered = [{ projectId: 'p1', name: '사업 하나', cic: 'CIC 2', department: 'CIC2', managerId: 'u1' }];
 const policy = { version: 1, policy: REMINDER_POLICY, yearMonth: '2026-10', weekNo: 1, reviewedBy: 'owner', reviewedAt: '2026-10-01T12:00:00Z', projects: [{ projectId: 'p1', obligation: 'required', reason: '운영 대상 확인' }] };
 const clone = (value) => structuredClone(value);
 function overview(ids, status = 'WAITING_FOR_UPDATE') {
@@ -18,8 +19,11 @@ function overview(ids, status = 'WAITING_FOR_UPDATE') {
 }
 function fakeDb(projects = registered, obligation = policy) {
   const store = new Map(); const writes = [];
-  const db = { store, writes, collection(path) { assert.match(path, /^orgs\/mysc\/projects$/); let start = 0; let limit = 100;
-    return { orderBy() { return this; }, select() { return this; }, startAfter(doc) { start = projects.findIndex((item) => item.projectId === doc.id) + 1; return this; }, limit(value) { limit = value; return this; }, async get() { return { docs: projects.slice(start, start + limit).map((item) => ({ id: item.projectId, data: () => item })) }; } }; },
+  const db = { store, writes, collection(path) { let start = 0; let limit = 100; let managerId = '';
+    assert.match(path, /^orgs\/mysc\/(projects|persons)$/);
+    return { orderBy() { return this; }, where(_field, _op, value) { managerId = value; return this; }, select() { return this; }, startAfter(doc) { start = projects.findIndex((item) => item.projectId === doc.id) + 1; return this; }, limit(value) { limit = value; return this; }, async get() { return path.endsWith('/persons')
+      ? { docs: managerId === 'u1' ? [{ id: 'person-1', data: () => ({ name: '담당자' }) }] : [] }
+      : { docs: projects.slice(start, start + limit).map((item) => ({ id: item.projectId, data: () => item })) }; } }; },
     doc(path) { return { path, async get() { if (path.startsWith('settlement_reminder_obligations/')) return { data: () => obligation };
       return { exists: store.has(path), data: () => store.get(path) }; }, async update(patch) { writes.push(path); store.set(path, { ...store.get(path), ...patch }); } }; },
     async runTransaction(fn) { return fn({ get: (ref) => ref.get(), set(ref, data) { writes.push(ref.path); store.set(ref.path, data); } }); } };
@@ -49,6 +53,14 @@ test('explicit obligations, exemptions and organization normalization; registrat
   assert.throws(() => resolveObligations([...registered, { projectId: 'p2' }], policy, window), /coverage/);
   assert.throws(() => resolveObligations([{ ...registered[0], department: 'CIC3' }], policy, window), /mapping/);
   const exempt = clone(policy); exempt.projects[0].obligation = 'exempt'; assert.deepEqual(resolveObligations(registered, exempt, window), []);
+});
+test('manager UID must resolve uniquely and reminder renders business(manager)', async () => {
+  const db = fakeDb();
+  assert.equal((await resolveReminderManagers(db, 'mysc', registered))[0].managerName, '담당자');
+  const plan = await buildReminderPlan({ ...planArgs(), db });
+  assert.match(plan.text, /사업 하나\(담당자\)/);
+  const missing = fakeDb([{ ...registered[0], managerId: 'missing' }]);
+  await assert.rejects(resolveReminderManagers(missing, 'mysc', [{ ...registered[0], managerId: 'missing' }]), /manager_mapping_unknown/);
 });
 test('full Slack pagination includes threads and rejects partial or looping cursors', async () => {
   const root = { ts: `${Number(window.oldest) + 1}.000001`, text: 'root', reply_count: 1 };
@@ -156,7 +168,7 @@ test('receipt keeps durable policy and canonical evidence tied to the source rev
   assert.equal(plan.provenance.sourceRevision, args.sourceRevision);
   assert.deepEqual(plan.provenance.policySnapshot, policy);
   assert.equal(plan.provenance.canonicalSnapshots[0].state, 'WAITING_FOR_UPDATE');
-  for (const field of ['policyHash', 'inventoryHash', 'slackHash', 'canonicalHash']) assert.match(plan.provenance[field], /^[a-f0-9]{64}$/);
+  for (const field of ['policyHash', 'inventoryHash', 'managerHash', 'slackHash', 'canonicalHash']) assert.match(plan.provenance[field], /^[a-f0-9]{64}$/);
   const result = await deliverReminder({ db: args.db, plan, destination: SOURCE_CHANNEL, now: () => cutoff,
     slack: async () => ({ ok: true, channel: SOURCE_CHANNEL, ts: '1790866800.000001' }) });
   assert.equal(result.status, 'succeeded');

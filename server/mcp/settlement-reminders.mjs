@@ -63,7 +63,7 @@ export async function readRegisteredProjects(db, tenantId) {
   let cursor;
   const projects = [];
   for (let pages = 0; pages < 100; pages++) {
-    let query = db.collection(`orgs/${tenantId}/projects`).orderBy('__name__').select('name', 'cic', 'department', 'trashedAt');
+    let query = db.collection(`orgs/${tenantId}/projects`).orderBy('__name__').select('name', 'cic', 'department', 'managerId', 'trashedAt');
     if (cursor) query = query.startAfter(cursor);
     const page = await query.limit(100).get();
     for (const doc of page.docs) if (!doc.data().trashedAt) projects.push({ ...doc.data(), projectId: doc.id });
@@ -71,6 +71,22 @@ export async function readRegisteredProjects(db, tenantId) {
     cursor = page.docs.at(-1);
   }
   fail('project_inventory_incomplete');
+}
+
+export async function resolveReminderManagers(db, tenantId, projects) {
+  const cache = new Map();
+  for (const project of projects) {
+    const managerId = text(project.managerId);
+    if (!managerId || managerId.includes('/')) fail('manager_mapping_unknown');
+    if (!cache.has(managerId)) {
+      const snapshot = await db.collection(`orgs/${tenantId}/persons`).where('uid', '==', managerId).select('name').limit(2).get();
+      if (snapshot.docs.length !== 1) fail('manager_mapping_unknown');
+      const name = text(snapshot.docs[0].data().name);
+      if (!name) fail('manager_mapping_unknown');
+      cache.set(managerId, name);
+    }
+  }
+  return projects.map((project) => ({ ...project, managerName: cache.get(text(project.managerId)) }));
 }
 
 export function resolveObligations(projects, policy, window) {
@@ -94,7 +110,7 @@ export function resolveObligations(projects, policy, window) {
     const organization = cic || department;
     if (!organization || (cic && department && cic !== department) || !text(project.name)
       || !/^[^/]{1,120}$/.test(project.projectId)) fail('project_mapping_unknown');
-    return [{ projectId: project.projectId, name: text(project.name), organization }];
+    return [{ projectId: project.projectId, name: text(project.name), organization, managerId: text(project.managerId) }];
   });
 }
 
@@ -192,7 +208,7 @@ export function renderReminder({ window, rows, checkedAt }) {
   for (const row of rows) groups.set(row.organization, [...(groups.get(row.organization) || []), row]);
   return [`[주정산 제출 확인] ${window.yearMonth} ${window.weekNo}주차 (${window.weekStart}~${window.weekEnd})`,
     window.preview ? '마감 전 미리보기: 현재 업데이트 대기인 사업이며 기한 위반 명단이 아닙니다.' : '목요일 마감 이후 현재 정산 상태가 업데이트 대기인 사업입니다.',
-    ...[...groups].sort(([a], [b]) => a.localeCompare(b, 'ko')).flatMap(([org, group]) => [`\n[${safeLabel(org)}]`, ...group.sort((a, b) => a.name.localeCompare(b.name, 'ko')).map((row) => `- ${safeLabel(row.name)}`)]),
+    ...[...groups].sort(([a], [b]) => a.localeCompare(b, 'ko')).flatMap(([org, group]) => [`\n[${safeLabel(org)}]`, ...group.sort((a, b) => a.name.localeCompare(b.name, 'ko')).map((row) => `- ${safeLabel(row.name)}(${safeLabel(row.managerName)})`)]),
     `\n상태 확인: ${formatKst(checkedAt)} · 마감 ${formatKst(window.cutoff)}`,
     '조회 시점 기준이며 과거 마감 시점의 미준수 판정이 아닙니다.'].join('\n');
 }
@@ -202,7 +218,7 @@ export async function buildReminderPlan({ db, tenantId = 'mysc', window, readOve
   const projects = await readRegisteredProjects(db, tenantId);
   const policyRef = db.doc(`settlement_reminder_obligations/${tenantId}`);
   const policy = (await policyRef.get()).data();
-  const eligible = resolveObligations(projects, policy, window);
+  const eligible = await resolveReminderManagers(db, tenantId, resolveObligations(projects, policy, window));
   const messages = await readDeadlineSlackHistory(slack, window);
   const evidence = reconcileSlackEvidence(messages, eligible, window);
   const rows = [];
@@ -231,11 +247,14 @@ export async function buildReminderPlan({ db, tenantId = 'mysc', window, readOve
     }
   }
   // Inventory and eligibility may change while external reads are in flight.
-  if (hash(await readRegisteredProjects(db, tenantId)) !== hash(projects) || hash((await policyRef.get()).data()) !== hash(policy)) fail('roster_changed');
+  const refreshedProjects = await readRegisteredProjects(db, tenantId);
+  const refreshedEligible = await resolveReminderManagers(db, tenantId, resolveObligations(refreshedProjects, policy, window));
+  if (hash(refreshedProjects) !== hash(projects) || hash(refreshedEligible) !== hash(eligible)
+    || hash((await policyRef.get()).data()) !== hash(policy)) fail('roster_changed');
   const checkedAt = new Date(canonicalReadStarted).toISOString();
   const complete = unknown.length === 0 && conflicts.length === 0;
   return { window, rows, unknown, conflicts, complete, checkedAt, registered: projects.length, eligible: eligible.length,
-    historyCount: messages.length, provenance: { sourceRevision, policyHash: hash(policy), inventoryHash: hash(projects),
+    historyCount: messages.length, provenance: { sourceRevision, policyHash: hash(policy), inventoryHash: hash(projects), managerHash: hash(eligible.map(({ projectId, managerName }) => ({ projectId, managerName }))),
       slackHash: hash(messages), canonicalHash: hash(canonicalSnapshots), policySnapshot: policy,
       canonicalSnapshots, slackEvidence: Object.fromEntries(evidence), cutoff: window.cutoff, checkedAt }, text: complete ? renderReminder({ window, rows, checkedAt }) : null };
 }

@@ -8,8 +8,8 @@ import {
 const at = '2026-10-01T15:05:00.000Z';
 const window = reminderWindow(Date.parse(at));
 const ts = (iso) => `${Date.parse(iso) / 1000}.000001`;
-const project = { projectId: 'alpha', name: '알파 사업', cic: 'AXR team' };
-const eligible = [{ projectId: 'alpha', name: '알파 사업', organization: 'AXR팀' }];
+const project = { projectId: 'alpha', name: '알파 사업', cic: 'AXR team', managerId: 'user-alpha' };
+const eligible = [{ projectId: 'alpha', name: '알파 사업', organization: 'AXR팀', managerId: 'user-alpha' }];
 const policy = { version: 1, policy: REMINDER_POLICY, yearMonth: window.yearMonth, weekNo: window.weekNo,
   reviewedBy: 'reviewer', reviewedAt: '2026-09-30T00:00:00Z',
   projects: [{ projectId: 'alpha', obligation: 'required', reason: 'Explicit weekly obligation' }] };

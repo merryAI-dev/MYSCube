@@ -11,6 +11,9 @@ credential or authentication endpoint is introduced.
    complete document-ID pagination. Registration does **not** establish obligation.
 2. Join the reviewed explicit obligation registry below. Missing projects, unknown
    obligations, expiry, contradictory CIC/department or unnamed projects stop work.
+   Resolve each required project's `managerId` to exactly one tenant person `uid`
+   and select only that person's display name. Missing, duplicate or blank matches
+   block the batch; the notice renders `사업명(담당자명)` without exposing IDs.
 3. At the deadline, read Slack history in `C0BQ6980HR6`. Slack indexes parent roots
    by their creation time, so roots before the finance period are also enumerated;
    replies are then read only for the period through the fixed cutoff. Old roots
