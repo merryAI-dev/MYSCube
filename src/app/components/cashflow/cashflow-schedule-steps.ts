@@ -5,6 +5,8 @@
 // 늦게라도 끝낸 일은 완료로 남기고(보조 라벨로만 초과 표기), 지금 행동이 필요한 것만 빨간색.
 // 조직장 마감 초과는 표시만 하고 미준수로 세지 않는다 - 누적은 실무자 마감 기준뿐.
 
+import { isProjectContractEnded } from '../../platform/project-period-state.mjs';
+
 export type ScheduleStepState = 'done' | 'done_late' | 'current' | 'overdue' | 'upcoming';
 
 export interface ScheduleStep {
@@ -149,7 +151,7 @@ export function formatProjectPeriod(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(to)) return range;
   const days = daysUntil(`${to}T00:00:00+09:00`, nowIso);
   if (days === null) return range;
-  if (days < 0) return `${range} · 종료됨`;
+  if (isProjectContractEnded(to, nowIso)) return `${range} · 종료됨`;
   if (days === 0) return `${range} · 오늘 종료`;
   if (days <= 30) return `${range} · 종료 D-${days}`;
   return range;

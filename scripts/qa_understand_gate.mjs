@@ -79,7 +79,7 @@ expectContains('firebase/firestore.rules', 'isCatchallExcludedPath(collection, d
 expectContains('src/app/data/project-department-options.ts', 'sortOrder: number');
 expectContains('src/app/data/project-department-options.ts', '.sort((a, b) => {');
 expectContains('src/app/data/project-department-options.ts', '`${baseId}-${nextCount}`');
-expectContains('src/app/components/settings/SettingsPage.tsx', "const PRIMARY_SETTINGS_TABS = ['members', 'tenants'] as const;");
+expectContains('src/app/components/settings/SettingsPage.tsx', "const PRIMARY_SETTINGS_TABS = ['members', 'tenants', 'organizations'] as const;");
 expectContains('src/app/components/settings/SettingsPage.tsx', '관리자에게 필요한 멤버DB와 조직DB만 관리합니다');
 expectNotContains('src/app/components/settings/SettingsPage.tsx', 'renderProjectSelectionValuesCard');
 expectNotContains('src/app/components/settings/SettingsPage.tsx', 'handleMoveDepartment');
