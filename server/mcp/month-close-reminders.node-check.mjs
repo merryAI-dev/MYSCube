@@ -41,10 +41,13 @@ test('monthly inventory shares the current KST ended rule and isolates invalid p
   assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '2026-08-31' }], '2026-09', asOf).excluded[0].reason, 'ended_project');
   assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '2026-10-11' }], '2026-09', asOf).excluded[0].reason, 'ended_project');
   assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '2026-10-12' }], '2026-09', asOf).eligible.length, 1);
+  const sameNameEnded = [{ ...base }, { ...base, projectId: 'ended-by-date', contractEnd: '2026-10-11' }];
+  const withoutEndedDuplicate = selectMonthCloseProjects(sameNameEnded, '2026-09', asOf);
+  assert.equal(withoutEndedDuplicate.eligible.length, 1); assert.equal(withoutEndedDuplicate.excluded.length, 1); assert.equal(withoutEndedDuplicate.unknown.length, 0);
   const malformedEnded = { projectId: 'ended-bad', name: '합성 사업 A', status: 'COMPLETED', cic: '', department: '' };
   const selected = selectMonthCloseProjects([base, malformedEnded], '2026-09', asOf);
   assert.equal(selected.excluded.length, 1); assert.equal(selected.eligible.length, 1); assert.equal(selected.unknown.length, 0);
-  for (const contractEnd of ['2026-02-30', '2026-99-99', 20260930]) {
+  for (const contractEnd of ['2026-02-30', '2026-99-99', '2026-08-31garbage', 20260930]) {
     assert.equal(selectMonthCloseProjects([{ ...base, contractEnd }], '2026-09', asOf).unknown[0].reason, 'project_period_conflict');
   }
   assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '' }], '2026-09', asOf).eligible.length, 1);

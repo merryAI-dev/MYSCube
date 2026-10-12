@@ -37,6 +37,7 @@ it('delivers an authorized month-close preview only to the verified requester wi
   const fetchImpl = vi.fn(async (url, options) => {
     if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
     calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+    if (calls.length === 1) return Response.json({ ok: false, error: 'invalid_blocks' });
     return Response.json({ ok: true, channel: 'DQA', ts: '2.1', message_ts: '3.1' });
   });
   const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, completeFactory, fetchImpl,
@@ -44,19 +45,50 @@ it('delivers an authorized month-close preview only to the verified requester wi
   await worker();
   expect(completeFactory).not.toHaveBeenCalled();
   expect(observed[0].context).toMatchObject({ actorId: 'member', actorRole: 'finance', authSource: 'slack_verified' });
-  const delivery = calls.find((call) => call.method === 'chat.postMessage');
+  const delivery = calls.at(-1);
   expect(delivery.body).toMatchObject({ channel: identity.slackUserId });
-  expect(delivery.body).not.toHaveProperty('user');
-  expect(delivery.body).not.toHaveProperty('thread_ts');
+  for (const call of calls) {
+    expect(call.method).toBe('chat.postMessage');
+    expect(call.body).toMatchObject({ channel: identity.slackUserId });
+    expect(call.body).not.toHaveProperty('user');
+    expect(call.body).not.toHaveProperty('thread_ts');
+  }
   expect(delivery.body.text).toContain('비공개 미리보기입니다. 요청자 개인 DM으로만 전달됩니다.');
-  expect(calls.filter((call) => call.method === 'chat.postMessage')).toHaveLength(1);
+  expect(calls).toHaveLength(2);
   expect(records.get('settlement_agent_threads/thread').turns).toEqual([]);
   expect(records.get('settlement_agent_jobs/first').answer).toBe('[private answer omitted]');
   expect(records.get('settlement_agent_jobs/first')).toMatchObject({
     answerDelivery: 'private', deliveryMethod: 'chat.postMessage', answerChannelId: 'DQA', answerTs: '2.1',
-    answerPermalink: 'https://app.slack.com/archives/DQA/p21',
+    deliveryFallback: { method: 'chat.postMessage', code: 'invalid_blocks', definitive: true },
   });
   expect(JSON.stringify([...records].filter(([key]) => key.includes('/trace/')))).not.toContain('A사업');
+});
+
+it.each([
+  ['rejects a non-DM Slack response', async () => Response.json({ ok: true, channel: 'COTHER', ts: '2.1' }), 'failed', 'invalid_response'],
+  ['keeps an ambiguous DM transport failure private', async () => { throw new TypeError('network down'); }, 'delivery_unknown', 'transport_error'],
+])('%s without a public fallback', async (_label, deliver, status, code) => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
+  records.set('orgs/mysc/projects/a', { name: 'A사업', cic: 'CIC1', department: 'CIC1', managerId: 'manager-a', status: 'IN_PROGRESS', contractEnd: '2026-12-31' });
+  records.set('orgs/mysc/persons/person-a', { uid: 'manager-a', name: '담당자' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(),
+    question: '월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const calls = [];
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' },
+    readOverview: async (request) => statusOverview(request), fetchImpl: async (url, options) => {
+      if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+      calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+      return deliver();
+    } });
+  await worker();
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ method: 'chat.postMessage', body: { channel: identity.slackUserId } });
+  expect(calls[0].body).not.toHaveProperty('thread_ts');
+  expect(records.get('settlement_agent_jobs/first')).toMatchObject({ status, deliveryFailure: { code }, answer: '[private answer omitted]' });
+  expect(records.get('settlement_agent_jobs/first')).not.toHaveProperty('answerChannelId');
 });
 
 it('excludes legacy unlabelled/private preview turns from a later general model context', async () => {

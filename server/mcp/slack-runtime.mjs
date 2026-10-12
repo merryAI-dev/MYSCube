@@ -504,7 +504,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       }
       const answerTs = method === 'chat.postMessage' ? result.ts : result.message_ts;
       if (!/^\d{1,12}\.\d{1,6}$/.test(answerTs || '')) throw new SlackDeliveryError({ method, code: 'invalid_response' });
-      if (persistentPrivateAnswer && !/^D[A-Z0-9]+$/.test(result.channel || '')) throw new SlackDeliveryError({ method, code: 'invalid_response' });
+      if (persistentPrivateAnswer && !/^D[A-Z0-9]+$/.test(result.channel || '')) throw new SlackDeliveryError({ method, code: 'invalid_response', definitive: true });
     } catch (error) {
       const failure = deliveryFailure(error, method);
       const status = failure.definitive ? 'failed' : 'delivery_unknown';
@@ -514,8 +514,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     }
     const answerTs = method === 'chat.postMessage' ? result.ts : result.message_ts;
     await updateClaimedJob({ db, job, patch: { status: 'succeeded', answerTs,
-      ...(persistentPrivateAnswer ? { answerChannelId: result.channel,
-        answerPermalink: `https://app.slack.com/archives/${result.channel}/p${answerTs.replace('.', '')}` } : {}),
+      ...(persistentPrivateAnswer ? { answerChannelId: result.channel } : {}),
       ...(fallbackFailure ? { deliveryFallback: fallbackFailure } : {}) } });
     await finishProgress(job, 'succeeded');
   }
