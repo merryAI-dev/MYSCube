@@ -41,6 +41,10 @@ test('monthly inventory excludes ended and isolates duplicates or stale active p
   const malformedEnded = { projectId: 'ended-bad', name: '합성 사업 A', status: 'COMPLETED', cic: '', department: '' };
   const selected = selectMonthCloseProjects([base, malformedEnded], '2026-09');
   assert.equal(selected.excluded.length, 1); assert.equal(selected.eligible.length, 1); assert.equal(selected.unknown.length, 0);
+  for (const contractEnd of ['2026-02-30', '2026-99-99', 20260930]) {
+    assert.equal(selectMonthCloseProjects([{ ...base, contractEnd }], '2026-09').unknown[0].reason, 'project_period_conflict');
+  }
+  assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '' }], '2026-09').eligible.length, 1);
 });
 
 test('canonical monthly state never uses weekly status', () => {

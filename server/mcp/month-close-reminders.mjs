@@ -11,6 +11,8 @@ const hash = (value) => createHash('sha256').update(JSON.stringify(value)).diges
 const fail = (code) => { throw new Error(code); };
 const safe = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replace(/[\r\n]/g, ' ');
 const instant = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value));
+const validDate = (value) => typeof value === 'string' && /^20\d{2}-\d{2}-\d{2}$/.test(value)
+  && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
 
 export function assertMonthCloseRequest(input) {
   const yearMonth = text(input?.yearMonth);
@@ -42,7 +44,8 @@ export function selectMonthCloseProjects(projects, targetYearMonth) {
     if (!shaped) { unknown.push({ projectId: project.projectId, name: text(project.name) || '사업명 확인 필요', organization: normalizeReminderOrg(project.cic) || normalizeReminderOrg(project.department) || '조직 확인 필요', reason: 'project_mapping_unknown' }); continue; }
     if (nameIds.get(shaped.name)?.size !== 1) { unknown.push({ ...shaped, reason: 'duplicate_business_name' }); continue; }
     if (!ACTIVE_STATUSES.has(shaped.status)) { unknown.push({ ...shaped, reason: 'project_status_unknown' }); continue; }
-    if (shaped.contractEnd && (!/^20\d{2}-\d{2}-\d{2}$/.test(shaped.contractEnd) || shaped.contractEnd < `${targetYearMonth}-01`)) {
+    const contractEndPresent = project.contractEnd !== undefined && project.contractEnd !== null && project.contractEnd !== '';
+    if ((contractEndPresent && !validDate(project.contractEnd)) || (shaped.contractEnd && shaped.contractEnd < `${targetYearMonth}-01`)) {
       unknown.push({ ...shaped, reason: 'project_period_conflict' }); continue;
     }
     eligible.push(shaped);
