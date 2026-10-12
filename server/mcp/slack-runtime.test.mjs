@@ -53,7 +53,8 @@ it('delivers an authorized month-close preview only to the verified requester wi
     expect(call.body).not.toHaveProperty('user');
     expect(call.body).not.toHaveProperty('thread_ts');
   }
-  expect(delivery.body.text).toContain('비공개 미리보기입니다. 요청자 개인 DM으로만 전달됩니다.');
+  expect(delivery.body.text).toContain('비공개 미리보기입니다. 실제 공지는 발송되지 않습니다.');
+  expect(delivery.body.text).toContain('결과 전달: 요청자 개인 DM');
   expect(calls).toHaveLength(2);
   expect(records.get('settlement_agent_threads/thread').turns).toEqual([]);
   expect(records.get('settlement_agent_jobs/first').answer).toBe('[private answer omitted]');

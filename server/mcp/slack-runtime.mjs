@@ -391,7 +391,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           actorContext: actor, preview: true, sourceRevision: env.SLACK_SERVICE_RELEASE || env.VERCEL_GIT_COMMIT_SHA || 'local-unreleased' });
         await record({ type: 'tool_result', tool: 'month_close_reminder_preview', input: monthClosePreview.input,
           result: { complete: plan.complete, beforeClose: plan.beforeClose.length, approvalRequired: plan.approvalRequired.length, unknown: plan.unknown.length } });
-        result = { status: plan.complete ? 'answered' : 'partial', answer: plan.text };
+        result = { status: plan.complete ? 'answered' : 'partial', answer: `${plan.text}\n결과 전달: 요청자 개인 DM` };
       } else if (pairCode || disconnectLocal) {
         try {
           if (disconnectLocal) await localRelay.disconnect(actor);
