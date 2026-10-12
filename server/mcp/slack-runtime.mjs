@@ -105,6 +105,10 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
   const teamId = 'T099F304GAY';
   const channelIds = new Set(['C0BQ6980HR6', 'C0AAC4AHTN1', 'C0C6DLPBJ00']);
   const monthPreviewPublicChannelId = 'C0C6DLPBJ00';
+  const openReadChannelId = monthPreviewPublicChannelId;
+  const openReadToolNames = new Set(['cashflow_status', 'settlement_status_report', 'settlement_report', 'reformat_report',
+    'accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief', 'agent_diagnostics', 'system_knowledge',
+    'agent_capabilities', 'project_search', 'clarify_request', 'observe_feedback']);
   const tenantId = 'mysc';
   const googleRooms = createGoogleCalendarRooms({ env, fetchImpl });
   async function slack(method, body, timeoutMs = 10000) {
@@ -203,8 +207,13 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
     const previousBooking = job.turns?.findLast(turn => turn.bookingContext)?.bookingContext || null;
     const roomConfirm = /^\s*(?:회의실\s*)?예약\s*확정\s+[a-f0-9]{24}\s*$/.test(roomText);
     const monthClosePreview = parseMonthClosePreviewCommand(job.question);
+    const openReadChannel = job.channelId === openReadChannelId;
+    const helpRequest = openReadChannel && /^(?:도움말|help|무엇을|뭘|어떤).*(?:할 수|지원|가능)|^(?:도움말|help)$/i.test(roomText);
     const settlementRequest = resolveSettlementRequest(experiment.question);
-    const roomRequest = roomConfirm || isMerryhereRequest(roomText) || (previousBooking && !isSettlementTopic(roomText));
+    const requestedRoomOperation = roomConfirm || Boolean(pairCode) || disconnectLocal || accountCommand || isMerryhereRequest(roomText)
+      || (previousBooking && !isSettlementTopic(roomText));
+    const blockedRoomOperation = openReadChannel && requestedRoomOperation;
+    const roomRequest = !blockedRoomOperation && requestedRoomOperation;
     const request = roomRequest ? null : settlementRequest;
     const useHermes = experiment.variant === 'hermes' && !request?.direct && !roomRequest && !previousBooking;
     const scopes = [];
@@ -245,7 +254,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       if (useHermes && !env.SETTLEMENT_HERMES_URL) throw new Error('hermes_not_configured');
       const previousAnswerId = job.turns?.at(-1)?.jobId || null;
       await record({ type: 'conversation_feedback', ...observeConversationFeedback({ text: job.question, previousAnswerId }) });
-      if (!monthClosePreview && !request?.direct && !roomConfirm && !roomAuthIssue && !pairCode && !disconnectLocal && !accountCommand) {
+      if (!monthClosePreview && !request?.direct && !roomConfirm && !roomAuthIssue && !pairCode && !disconnectLocal && !accountCommand && !blockedRoomOperation && !helpRequest) {
         if (!env.SETTLEMENT_AGENT_GEMINI_API_KEY) throw new Error('model_not_configured');
         await reserveAgentBudget(db, new Date().toISOString().slice(0, 7));
       }
@@ -354,7 +363,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       tools.push(...createSupportTools({ db, job, authorize: () => contextFor(job), revision: env.VERCEL_GIT_COMMIT_SHA }));
       tools.push({ name: 'agent_capabilities', description: '데이터 조감도/catalog: 조회 가능한 데이터·필드·도구·제한을 확인합니다. 어떤 데이터가 있는지 묻거나 필요한 도구를 모를 때 사용하세요. 이미 아는 조회에 매번 호출할 필요는 없습니다. 사업명 검색으로 권한을 추정하지 않습니다.',
         schema: z.object({}).strict(), execute: async () => { await contextFor(job); return {
-          channel: '0_전사_공지_08_myscube', capabilities: ['전사 등록 사업 이름 검색', '전사 주정산·월결산 상태 조회', '등록 사업 기준 미완료·기한 경과 목록과 조직장 조회', 'admin·finance 요청자의 비공개 월결산 리마인드 미리보기'],
+          channel: openReadChannel ? '#1_ax위원회_myscubebot' : '지정 MYSCube 채널', capabilities: ['전사 등록 사업 이름·조직·담당자·조직장 조회', '전사 주정산·월결산 상태와 제출·승인 시각 조회', '사업·주차·월별 P/A 입출금·잔액 및 급여비 집계·비교', '지정 채널 구성원의 월결산 리마인드 미리보기'],
           dataSources: [
             { name: '프로젝트 원장', authority: 'MYSCube BFF', fields: ['사업명', 'CIC', '조직장'], tools: ['project_search', 'settlement_report'], note: '등록 사업 기준입니다. 검색 결과가 잘리면 전체 목록이 아닙니다.' },
             { name: '주정산', authority: 'JVM', fields: ['주차별 상태', '실무자 제출 시각', '조직장 승인 시각', '마감 시각'], tools: ['cashflow_status', 'settlement_report'], note: '운영 주기월 기준. 기록이 없으면 시각을 추정하지 않습니다.' },
@@ -363,8 +372,8 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
             ...(readSnapshot ? [{ name: '회계 원장', authority: 'JVM', fields: ['전체 사업·CIC별 P/A 조회·원화 합계', 'Projection·Actual 항목별 금액', '주차별 입금·출금·누적잔액', '원장 버전', '고정 시트 좌표', '항목별 계획 대비 실적 차이', '음수 잔액·미기록 주차', '조회 범위 내 사업별 차액 순위', '선택 사업 기간 비교·후속 조치안', 'CFO 브리핑·변동 사업 추가 분석'], tools: ['accounting_read', 'accounting_report', 'accounting_compare', 'cfo_brief'], note: '원장 단위는 내규상 KRW입니다. 시트에서 JVM에 반영된 금액이며 Google Sheets 실시간 값은 아닙니다.' }] : []),
             { name: '오류·QA 진단', authority: '저장된 에이전트 실행 기록과 검토된 코드 설명', fields: ['실행 단계', '오류 코드', '답변 검토', '조회 경로·조치 안내'], tools: ['agent_diagnostics', 'system_knowledge'], note: '전체 서버 로그가 아니며, 코드 설명은 실제 장애 발생 증거와 구분합니다.' },
           ],
-          tools: tools.filter((tool) => !tool.observationOnly).map(({ name, description }) => ({ name, description })),
-          limits: ['다른 Slack 채널의 대화는 조회하지 않습니다.', '승인·금액·파일 변경과 삭제는 할 수 없습니다.', '월결산 리마인드 미리보기는 공지를 발송하지 않으며 admin·finance 역할에만 비공개로 표시합니다.', '시트 원문·수식을 직접 읽거나 시트를 새로 동기화하지 않습니다. JVM 반영 금액은 accounting_read로 조회합니다.', '임의 코드 실행·파일 접근·비밀값·전체 Cloud Logging 조회는 제공하지 않습니다.'],
+          tools: tools.filter((tool) => !tool.observationOnly && (!openReadChannel || openReadToolNames.has(tool.name))).map(({ name, description }) => ({ name, description })),
+          limits: ['다른 Slack 채널의 대화는 조회하지 않습니다.', '쓰기·예약·승인·삭제·권한 변경은 할 수 없습니다.', '개인 급여·HR, 첨부·증빙 링크, 연락처, 계좌, 자격증명·토큰·비밀·비공개 설정은 제공하지 않습니다.', '시트 원문·수식을 직접 읽거나 시트를 새로 동기화하지 않습니다. JVM 반영 금액은 accounting_read로 조회합니다.', '임의 코드 실행·파일 접근·원시 DB·일반 API·전체 Cloud Logging 조회는 제공하지 않습니다.'],
         }; }, render: (result) => [`현재 ${result.channel} 채널에서 요청을 받고 있어요.`, ...result.capabilities.map((value) => `- ${value}`), ...result.dataSources.map((source) => `- ${source.name}: ${source.fields.join(' · ')}. ${source.note}`), ...result.limits].join('\n') });
       tools.push({ name: 'project_search', description: '사업명을 검색해 정산 조회에 사용할 프로젝트 ID를 확인합니다. 결과가 잘렸으면 전체 목록이 아닙니다.',
         schema: z.object({ query: z.string().trim().min(1).max(100) }).strict(),
@@ -384,16 +393,22 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         };
       }
       let result;
-      if (monthClosePreview) {
+      if (blockedRoomOperation) {
+        result = { status: 'answered', answer: '이 채널은 MYSCube 회사 데이터 READ 전용입니다. 회의실 예약·확정·계정 연결 또는 해제는 여기서 실행하지 않습니다.' };
+      } else if (monthClosePreview) {
         if (monthClosePreview.error) throw new Error(monthClosePreview.error);
-        if (!['admin', 'finance'].includes(actor.actorRole)) throw new Error('month_close_preview_not_allowed');
+        if (!openReadChannel && !['admin', 'finance'].includes(actor.actorRole)) throw new Error('month_close_preview_not_allowed');
         progress.show('READ_SETTLEMENT');
         const plan = await buildMonthCloseReminderPlan({ db, readOverview, input: monthClosePreview.input, tenantId: actor.tenantId,
           actorContext: actor, preview: true, sourceRevision: env.SLACK_SERVICE_RELEASE || env.VERCEL_GIT_COMMIT_SHA || 'local-unreleased' });
         await record({ type: 'tool_result', tool: 'month_close_reminder_preview', input: monthClosePreview.input,
           result: { complete: plan.complete, beforeClose: plan.beforeClose.length, approvalRequired: plan.approvalRequired.length, unknown: plan.unknown.length } });
         result = { status: plan.complete ? 'answered' : 'partial',
-          answer: `${plan.text}\n결과 전달: ${job.channelId === monthPreviewPublicChannelId ? '요청 스레드' : '요청자 개인 DM'}` };
+          answer: `${plan.text}\n노출 범위: ${job.channelId === monthPreviewPublicChannelId ? '이 요청 스레드의 채널 구성원' : '요청자 개인 DM'}` };
+      } else if (helpRequest) {
+        const tool = tools.find((candidate) => candidate.name === 'agent_capabilities');
+        const evidence = await tool.execute({});
+        result = { status: 'answered', answer: tool.render(evidence) };
       } else if (pairCode || disconnectLocal) {
         try {
           if (disconnectLocal) await localRelay.disconnect(actor);
@@ -428,9 +443,11 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
           onUsage: async (usage) => record({ type: 'usage', phase: 'answer', input: usage.promptTokenCount || 0, output: usage.candidatesTokenCount || 0, thinking: usage.thoughtsTokenCount || 0 }),
         });
         const runAgent = useHermes ? hermesRunner : runSettlementAgent;
+        const availableTools = openReadChannel ? tools.filter((tool) => openReadToolNames.has(tool.name))
+          : roomRequest ? tools.filter(t => t.name === 'merryhere_rooms') : settlementRequestTools(tools, request);
         result = await runAgent({ env, question: experiment.question, history: (job.turns || []).flatMap((turn) => [
           { role: 'user', content: selectSlackHarness(turn.question).question }, { role: 'assistant', content: turn.answer },
-        ]), tools: roomRequest ? tools.filter(t => t.name === 'merryhere_rooms') : settlementRequestTools(tools, request), complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
+        ]), tools: availableTools, complete, maxSteps: 4, signal: AbortSignal.timeout(100000),
           loadFeedback: async (scope) => {
             scope = { ...scope, experimentVariant: experiment.variant };
             const key = feedbackScopeKey(job, scope);
@@ -441,7 +458,8 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         });
       }
       progress.show('PREPARE_ANSWER');
-      await contextFor(job);
+      const finalActor = await contextFor(job);
+      if (monthClosePreview && !openReadChannel && !['admin', 'finance'].includes(finalActor.actorRole)) throw new Error('month_close_preview_not_allowed');
       if (result.answer?.includes(CONNECT_LINK_PLACEHOLDER)) {
         // The one-time link is delivered only to the requester and never stored in job, trace or thread records.
         connectLink = connections?.available ? await connections.issueLink(actor, job.id) : null;
@@ -470,7 +488,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       await progress.close();
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${monthClosePreview ? '월결산 리마인드 비공개 미리보기' : roomRequest || bookingContext ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
+    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${monthClosePreview ? job.channelId === monthPreviewPublicChannelId ? '월결산 리마인드 채널 미리보기' : '월결산 리마인드 개인 미리보기' : roomRequest || bookingContext ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
     const storedText = text.replaceAll(CONNECT_LINK_PLACEHOLDER, '[일회용 연결 링크 · 요청자에게만 전송]');
     const deliveredText = connectLink ? text.replaceAll(CONNECT_LINK_PLACEHOLDER, connectLink) : storedText;
     const blocks = answerBlocks(deliveredText);
@@ -479,9 +497,10 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       { type: 'button', action_id: 'settlement_scope_yes', text: { type: 'plain_text', text: '예 · 범위가 맞아요' }, value: job.id },
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
-    const publicMonthClosePreview = Boolean(monthClosePreview) && job.channelId === monthPreviewPublicChannelId;
+    const publicMonthClosePreview = Boolean(monthClosePreview) && job.channelId === monthPreviewPublicChannelId
+      && !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     const answerDelivery = publicAnswer || publicMonthClosePreview ? 'public' : 'private';
-    const persistentPrivateAnswer = Boolean(monthClosePreview) && !publicMonthClosePreview;
+    const persistentPrivateAnswer = Boolean(monthClosePreview) && job.channelId !== monthPreviewPublicChannelId;
     const method = publicAnswer || publicMonthClosePreview || persistentPrivateAnswer ? 'chat.postMessage' : 'chat.postEphemeral';
     const historyVisibility = monthClosePreview ? 'private' : 'conversation';
     const persistedAnswer = monthClosePreview ? '[private answer omitted]' : storedText;
