@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { assertOverview } from './cashflow-status.mjs';
 import { SOURCE_CHANNEL, createReminderSlackClient, normalizeReminderOrg, readRegisteredProjects } from './settlement-reminders.mjs';
+import { isProjectContractEnded, isRealIsoCalendarDate } from '../../src/app/platform/project-period-state.mjs';
 
 export const MONTH_CLOSE_REMINDER_POLICY = 'month-close-prior-month-v1';
 const END_STATUSES = new Set(['COMPLETED', 'COMPLETED_PENDING_PAYMENT']);
@@ -10,8 +11,7 @@ const text = (value) => typeof value === 'string' ? value.trim() : '';
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (code) => { throw new Error(code); };
 const safe = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replace(/[\r\n]/g, ' ');
-export const validCalendarDate = (value) => typeof value === 'string' && /^20\d{2}-\d{2}-\d{2}$/.test(value)
-  && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+export const validCalendarDate = isRealIsoCalendarDate;
 const instant = (value) => typeof value === 'string' && validCalendarDate(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
 
 export function assertMonthCloseRequest(input) {
@@ -31,7 +31,7 @@ function projectShape(project) {
     status: text(project.status), contractEnd: text(project.contractEnd) };
 }
 
-export function selectMonthCloseProjects(projects, targetYearMonth) {
+export function selectMonthCloseProjects(projects, _targetYearMonth, nowIso = new Date().toISOString()) {
   const nameIds = new Map();
   for (const project of projects.filter((candidate) => !END_STATUSES.has(text(candidate.status)))) {
     const name = text(project.name);
@@ -39,13 +39,15 @@ export function selectMonthCloseProjects(projects, targetYearMonth) {
   }
   const eligible = []; const excluded = []; const unknown = [];
   for (const project of projects) {
-    if (END_STATUSES.has(text(project.status))) { excluded.push({ projectId: project.projectId, reason: 'ended_project' }); continue; }
+    if (END_STATUSES.has(text(project.status)) || isProjectContractEnded(project.contractEnd, nowIso)) {
+      excluded.push({ projectId: project.projectId, reason: 'ended_project' }); continue;
+    }
     const shaped = projectShape(project);
     if (!shaped) { unknown.push({ projectId: project.projectId, name: text(project.name) || '사업명 확인 필요', organization: normalizeReminderOrg(project.cic) || normalizeReminderOrg(project.department) || '조직 확인 필요', reason: 'project_mapping_unknown' }); continue; }
     if (nameIds.get(shaped.name)?.size !== 1) { unknown.push({ ...shaped, reason: 'duplicate_business_name' }); continue; }
     if (!ACTIVE_STATUSES.has(shaped.status)) { unknown.push({ ...shaped, reason: 'project_status_unknown' }); continue; }
     const contractEndPresent = project.contractEnd !== undefined && project.contractEnd !== null && project.contractEnd !== '';
-    if ((contractEndPresent && !validCalendarDate(project.contractEnd)) || (shaped.contractEnd && shaped.contractEnd < `${targetYearMonth}-01`)) {
+    if (contractEndPresent && !validCalendarDate(project.contractEnd)) {
       unknown.push({ ...shaped, reason: 'project_period_conflict' }); continue;
     }
     eligible.push(shaped);
@@ -95,11 +97,11 @@ export async function buildMonthCloseReminderPlan({ db, readOverview, input, ten
   const inventory = await readRegisteredProjects(db, tenantId);
   const expectedTarget = new Date(`${request.yearMonth}-01T00:00:00Z`); expectedTarget.setUTCMonth(expectedTarget.getUTCMonth() - 1);
   const targetYearMonth = expectedTarget.toISOString().slice(0, 7);
-  const selected = selectMonthCloseProjects(inventory, targetYearMonth);
+  const checkedAt = new Date(now()).toISOString();
+  const selected = selectMonthCloseProjects(inventory, targetYearMonth, checkedAt);
   const managed = await attachManagers(db, tenantId, selected.eligible);
   const unknown = [...selected.unknown, ...managed.unknown];
   const beforeClose = []; const approvalRequired = []; const completeRows = []; const snapshots = [];
-  const checkedAt = new Date(now()).toISOString();
   for (let offset = 0; offset < managed.rows.length; offset += 100) {
     const batch = managed.rows.slice(offset, offset + 100); const projectIds = batch.map((row) => row.projectId);
     const context = actorContext
@@ -115,7 +117,7 @@ export async function buildMonthCloseReminderPlan({ db, readOverview, input, ten
     }
   }
   const refreshed = await readRegisteredProjects(db, tenantId);
-  const refreshedSelected = selectMonthCloseProjects(refreshed, targetYearMonth);
+  const refreshedSelected = selectMonthCloseProjects(refreshed, targetYearMonth, checkedAt);
   const refreshedManaged = await attachManagers(db, tenantId, refreshedSelected.eligible);
   if (hash(refreshed) !== hash(inventory) || hash(refreshedManaged) !== hash(managed)) fail('roster_changed');
   const complete = unknown.length === 0;

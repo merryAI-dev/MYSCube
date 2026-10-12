@@ -33,18 +33,21 @@ function fakeDb(rows = projects, managerNames = { 'manager-a': '담당자 A' }) 
     async runTransaction(fn) { return fn({ get: (ref) => ref.get(), set(ref, data) { writes.push(ref.path); store.set(ref.path, data); } }); } };
 }
 
-test('monthly inventory excludes ended and isolates duplicates or stale active periods', () => {
+test('monthly inventory shares the current KST ended rule and isolates invalid periods', () => {
+  const asOf = '2026-10-12T00:00:00Z';
   const duplicate = [{ ...base }, { ...base, projectId: 'active-b' }];
-  assert.equal(selectMonthCloseProjects(projects, '2026-09').excluded.length, 1);
-  assert.equal(selectMonthCloseProjects(duplicate, '2026-09').unknown.length, 2);
-  assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '2026-08-31' }], '2026-09').unknown[0].reason, 'project_period_conflict');
+  assert.equal(selectMonthCloseProjects(projects, '2026-09', asOf).excluded.length, 1);
+  assert.equal(selectMonthCloseProjects(duplicate, '2026-09', asOf).unknown.length, 2);
+  assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '2026-08-31' }], '2026-09', asOf).excluded[0].reason, 'ended_project');
+  assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '2026-10-11' }], '2026-09', asOf).excluded[0].reason, 'ended_project');
+  assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '2026-10-12' }], '2026-09', asOf).eligible.length, 1);
   const malformedEnded = { projectId: 'ended-bad', name: '합성 사업 A', status: 'COMPLETED', cic: '', department: '' };
-  const selected = selectMonthCloseProjects([base, malformedEnded], '2026-09');
+  const selected = selectMonthCloseProjects([base, malformedEnded], '2026-09', asOf);
   assert.equal(selected.excluded.length, 1); assert.equal(selected.eligible.length, 1); assert.equal(selected.unknown.length, 0);
   for (const contractEnd of ['2026-02-30', '2026-99-99', 20260930]) {
-    assert.equal(selectMonthCloseProjects([{ ...base, contractEnd }], '2026-09').unknown[0].reason, 'project_period_conflict');
+    assert.equal(selectMonthCloseProjects([{ ...base, contractEnd }], '2026-09', asOf).unknown[0].reason, 'project_period_conflict');
   }
-  assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '' }], '2026-09').eligible.length, 1);
+  assert.equal(selectMonthCloseProjects([{ ...base, contractEnd: '' }], '2026-09', asOf).eligible.length, 1);
 });
 
 test('canonical monthly state never uses weekly status', () => {
