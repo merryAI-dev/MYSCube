@@ -65,6 +65,58 @@ it('delivers an authorized month-close preview only to the verified requester wi
   expect(JSON.stringify([...records].filter(([key]) => key.includes('/trace/')))).not.toContain('A사업');
 });
 
+it('posts an authorized month-close preview only to the approved request thread and verifies its permalink', async () => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1791782928.927269' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'admin', status: 'ACTIVE' });
+  records.set('orgs/mysc/projects/a', { name: 'A사업', cic: 'CIC1', department: 'CIC1', managerId: 'manager-a', status: 'IN_PROGRESS', contractEnd: '2026-12-31' });
+  records.set('orgs/mysc/persons/person-a', { uid: 'manager-a', name: '담당자' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(),
+    question: '월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const calls = [];
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' },
+    readOverview: async (request) => statusOverview(request), fetchImpl: async (url, options) => {
+      if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+      const call = { method: url.split('/').at(-1), body: JSON.parse(options.body) }; calls.push(call);
+      if (call.method === 'chat.getPermalink') return Response.json({ ok: true, permalink: 'https://themysc.slack.com/archives/C0C6DLPBJ00/p1791783205202689' });
+      return Response.json({ ok: true, channel: identity.channelId, ts: '1791783205.202689' });
+    } });
+  await worker();
+  expect(calls[0]).toMatchObject({ method: 'chat.postMessage', body: { channel: identity.channelId, thread_ts: identity.threadTs } });
+  expect(calls[0].body).not.toHaveProperty('user');
+  expect(calls[0].body.text).toContain('결과 전달: 요청 스레드');
+  expect(calls[1]).toEqual({ method: 'chat.getPermalink', body: { channel: identity.channelId, message_ts: '1791783205.202689' } });
+  expect(records.get('settlement_agent_jobs/first')).toMatchObject({ status: 'succeeded', answerDelivery: 'public', deliveryMethod: 'chat.postMessage',
+    answer: '[private answer omitted]', historyVisibility: 'private', answerChannelId: identity.channelId, answerTs: '1791783205.202689',
+    answerPermalink: 'https://themysc.slack.com/archives/C0C6DLPBJ00/p1791783205202689' });
+  expect(records.get('settlement_agent_threads/thread').turns).toEqual([]);
+});
+
+it('does not fall back to DM when the approved preview thread post fails', async () => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'finance', status: 'ACTIVE' });
+  records.set('orgs/mysc/projects/a', { name: 'A사업', cic: 'CIC1', department: 'CIC1', managerId: 'manager-a', status: 'IN_PROGRESS', contractEnd: '2026-12-31' });
+  records.set('orgs/mysc/persons/person-a', { uid: 'manager-a', name: '담당자' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(),
+    question: '월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const calls = [];
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' }, readOverview: async (request) => statusOverview(request),
+    fetchImpl: async (url, options) => {
+      if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+      calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+      throw new TypeError('network down');
+    } });
+  await worker();
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ method: 'chat.postMessage', body: { channel: identity.channelId, thread_ts: identity.threadTs } });
+  expect(calls[0].body.channel).not.toBe(identity.slackUserId);
+  expect(records.get('settlement_agent_jobs/first')).toMatchObject({ status: 'delivery_unknown', answerDelivery: 'public',
+    deliveryFailure: { code: 'transport_error', definitive: false }, answer: '[private answer omitted]' });
+});
+
 it.each([
   ['rejects a non-DM Slack response', async () => Response.json({ ok: true, channel: 'COTHER', ts: '2.1' }), 'failed', 'invalid_response'],
   ['keeps an ambiguous DM transport failure private', async () => { throw new TypeError('network down'); }, 'delivery_unknown', 'transport_error'],
