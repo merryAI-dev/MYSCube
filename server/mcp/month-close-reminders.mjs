@@ -10,9 +10,9 @@ const text = (value) => typeof value === 'string' ? value.trim() : '';
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const fail = (code) => { throw new Error(code); };
 const safe = (value) => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replace(/[\r\n]/g, ' ');
-const instant = (value) => typeof value === 'string' && Number.isFinite(Date.parse(value));
-const validDate = (value) => typeof value === 'string' && /^20\d{2}-\d{2}-\d{2}$/.test(value)
+export const validCalendarDate = (value) => typeof value === 'string' && /^20\d{2}-\d{2}-\d{2}$/.test(value)
   && Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value;
+const instant = (value) => typeof value === 'string' && validCalendarDate(value.slice(0, 10)) && Number.isFinite(Date.parse(value));
 
 export function assertMonthCloseRequest(input) {
   const yearMonth = text(input?.yearMonth);
@@ -45,7 +45,7 @@ export function selectMonthCloseProjects(projects, targetYearMonth) {
     if (nameIds.get(shaped.name)?.size !== 1) { unknown.push({ ...shaped, reason: 'duplicate_business_name' }); continue; }
     if (!ACTIVE_STATUSES.has(shaped.status)) { unknown.push({ ...shaped, reason: 'project_status_unknown' }); continue; }
     const contractEndPresent = project.contractEnd !== undefined && project.contractEnd !== null && project.contractEnd !== '';
-    if ((contractEndPresent && !validDate(project.contractEnd)) || (shaped.contractEnd && shaped.contractEnd < `${targetYearMonth}-01`)) {
+    if ((contractEndPresent && !validCalendarDate(project.contractEnd)) || (shaped.contractEnd && shaped.contractEnd < `${targetYearMonth}-01`)) {
       unknown.push({ ...shaped, reason: 'project_period_conflict' }); continue;
     }
     eligible.push(shaped);

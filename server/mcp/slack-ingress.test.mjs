@@ -21,6 +21,14 @@ function store() {
   }) };
 }
 describe('Slack ingress', () => {
+  it('does not post a public receipt for requester-private month-close preview commands', async () => {
+    const db = store(); const fetchImpl = vi.fn(); const res = response();
+    const handler = createSlackIngress({ db, secret, teamId: 'T1', channelIds: ['C0BQ6980HR6'], botToken: 'fixture', fetchImpl, now: () => now });
+    await handler(request({ team_id: 'T1', event_id: 'E-private', type: 'event_callback', event: { type: 'app_mention', user: 'U1',
+      text: '<@UBOT> 월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59', channel: 'C0BQ6980HR6', ts: '1.1' } }), res);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect([...db.documents.values()].some((value) => value.status === 'queued')).toBe(true);
+  });
   it('posts a public thread receipt only after new durable acceptance, never duplicates', async () => {
     const db = store();
     const fetchImpl = vi.fn(async (url, options) => {

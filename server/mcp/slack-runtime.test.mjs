@@ -9,6 +9,7 @@ it('parses only the explicit Korean month-close preview command in KST', () => {
   } });
   expect(runtime.parseMonthClosePreviewCommand('월결산 현황')).toBeNull();
   expect(runtime.parseMonthClosePreviewCommand('월결산 리마인드 미리보기')).toEqual({ error: 'month_close_preview_usage' });
+  expect(runtime.parseMonthClosePreviewCommand('월결산 리마인드 미리보기 2026-10 제출 2026-09-31 23:59 승인 2026-10-13 23:59')).toEqual({ error: 'month_close_preview_usage' });
   expect(runtime.parseMonthClosePreviewCommand('월결산 리마인드 미리보기 2026-10 제출 2026-10-10 18:00 승인 2026-10-09 18:00')).toEqual({ error: 'month_close_preview_usage' });
 });
 
@@ -36,6 +37,24 @@ it('delivers an authorized month-close preview only to the verified requester wi
   expect(delivery.body).toMatchObject({ channel: identity.channelId, user: identity.slackUserId, thread_ts: identity.threadTs });
   expect(delivery.body.text).toContain('비공개 미리보기입니다. Slack에는 발송되지 않았습니다.');
   expect(calls.some((call) => call.method === 'chat.postMessage' && call.body.text.includes('[9월분 월결산 확인]'))).toBe(false);
+  expect(records.get('settlement_agent_threads/thread').turns).toEqual([]);
+  expect(records.get('settlement_agent_jobs/first').answer).toBe('[private answer omitted]');
+  expect(JSON.stringify([...records].filter(([key]) => key.includes('/trace/')))).not.toContain('A사업');
+});
+
+it('excludes legacy unlabelled/private preview turns from a later general model context', async () => {
+  const { db, records } = memoryDb();
+  records.set('settlement_agent_jobs/follow-up', { status: 'queued', attempts: 0, conversationId: 'thread', teamId: 'T099F304GAY',
+    channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1', question: '일반 후속 질문' });
+  records.set('settlement_agent_threads/thread', { teamId: 'T099F304GAY', channelId: 'C0BQ6980HR6', slackUserId: 'UQA', threadTs: '1.1',
+    queue: ['follow-up'], turns: [
+      { jobId: 'legacy-private', question: '월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59', answer: '민감 사업명과 담당자' },
+      { contextVisibility: 'private', jobId: 'private', question: 'preview', answer: '다른 민감 결과' },
+      { contextVisibility: 'conversation', jobId: 'public', question: '공개 질문', answer: '공개 답변' },
+    ] });
+  const claimed = await runtime.claimSlackJob({ db, jobId: 'follow-up' });
+  expect(claimed.turns).toEqual([{ contextVisibility: 'conversation', jobId: 'public', question: '공개 질문', answer: '공개 답변' }]);
+  expect(JSON.stringify(claimed.turns)).not.toMatch(/민감|preview/);
 });
 
 it('denies the private month-close preview before any canonical read for non-admin/finance members', async () => {
