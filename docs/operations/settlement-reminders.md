@@ -166,7 +166,7 @@ by the patch; a disposable local replacement is used only for validation.
 
 ### Local gate results (2026-10-01)
 
-- Focused reminder tests: 30 passed
+- Focused reminder tests: 31 passed
 - Full Vitest: 456 files passed, 19 skipped; 4,782 tests passed, 318 skipped
 - Production build: passed (existing large-chunk warnings)
 - Typecheck baseline: passed, no new errors (187 known errors across 30 files)
