@@ -26,4 +26,6 @@ if (feedback.status !== 403 || (await feedback.json()).error !== 'feedback_not_a
 if ((await signed('/api/slack/interactions', form, 'application/x-www-form-urlencoded', true)).status !== 401) throw new Error('Tampered form was not rejected');
 const worker = await request('/api/internal/workers/settlement-agent/run');
 if (worker.status !== 401 || (await worker.json()).error !== 'unauthorized_worker') throw new Error(`Worker auth probe failed: ${worker.status}`);
-console.log(JSON.stringify({ signedJson: true, signedForm: true, tamperingRejected: true, workerAuthRequired: true, businessWrites: false }));
+const monthPreview = await request('/api/internal/workers/settlement-month-close-reminders/preview', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+if (monthPreview.status !== 401 || (await monthPreview.json()).error !== 'unauthorized_worker') throw new Error(`Month preview auth probe failed: ${monthPreview.status}`);
+console.log(JSON.stringify({ signedJson: true, signedForm: true, tamperingRejected: true, workerAuthRequired: true, monthPreviewAuthRequired: true, businessWrites: false }));
