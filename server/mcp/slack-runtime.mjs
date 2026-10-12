@@ -393,7 +393,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         await record({ type: 'tool_result', tool: 'month_close_reminder_preview', input: monthClosePreview.input,
           result: { complete: plan.complete, beforeClose: plan.beforeClose.length, approvalRequired: plan.approvalRequired.length, unknown: plan.unknown.length } });
         result = { status: plan.complete ? 'answered' : 'partial',
-          answer: `${plan.text}\n결과 전달: ${job.channelId === monthPreviewPublicChannelId ? '요청 스레드' : '요청자 개인 DM'}` };
+          answer: `${plan.text}\n노출 범위: ${job.channelId === monthPreviewPublicChannelId ? '이 요청 스레드의 채널 구성원' : '요청자 개인 DM'}` };
       } else if (pairCode || disconnectLocal) {
         try {
           if (disconnectLocal) await localRelay.disconnect(actor);
@@ -441,7 +441,8 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
         });
       }
       progress.show('PREPARE_ANSWER');
-      await contextFor(job);
+      const finalActor = await contextFor(job);
+      if (monthClosePreview && !['admin', 'finance'].includes(finalActor.actorRole)) throw new Error('month_close_preview_not_allowed');
       if (result.answer?.includes(CONNECT_LINK_PLACEHOLDER)) {
         // The one-time link is delivered only to the requester and never stored in job, trace or thread records.
         connectLink = connections?.available ? await connections.issueLink(actor, job.id) : null;
@@ -470,7 +471,7 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       await progress.close();
     }
     const queriedAt = new Intl.DateTimeFormat('ko-KR', { timeZone: 'Asia/Seoul', dateStyle: 'short', timeStyle: 'short' }).format(new Date());
-    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${monthClosePreview ? '월결산 리마인드 비공개 미리보기' : roomRequest || bookingContext ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
+    const text = `${answer.slice(0, 38000)}${answer.length > 38000 ? '\n표시 한도로 일부 내용은 생략했습니다. 사업 범위를 좁혀 조회해 주세요.' : ''}\n응답 작성: ${queriedAt} (한국시간)\n${monthClosePreview ? job.channelId === monthPreviewPublicChannelId ? '월결산 리마인드 채널 미리보기' : '월결산 리마인드 개인 미리보기' : roomRequest || bookingContext ? 'Merryhere 회의실 도구' : request?.direct ? '정산 상태 직접 조회' : useHermes ? '실험 B · Hermes + Gemini' : '실험 A · 기존 실행기 + Gemini'}`;
     const storedText = text.replaceAll(CONNECT_LINK_PLACEHOLDER, '[일회용 연결 링크 · 요청자에게만 전송]');
     const deliveredText = connectLink ? text.replaceAll(CONNECT_LINK_PLACEHOLDER, connectLink) : storedText;
     const blocks = answerBlocks(deliveredText);
@@ -479,9 +480,10 @@ export function createSlackWorker({ db, readOverview, readSnapshot, env = proces
       { type: 'button', action_id: 'settlement_scope_yes', text: { type: 'plain_text', text: '예 · 범위가 맞아요' }, value: job.id },
       { type: 'button', action_id: 'settlement_scope_no', text: { type: 'plain_text', text: '아니요 · 범위가 달라요' }, value: job.id },
     ] });
-    const publicMonthClosePreview = Boolean(monthClosePreview) && job.channelId === monthPreviewPublicChannelId;
+    const publicMonthClosePreview = Boolean(monthClosePreview) && job.channelId === monthPreviewPublicChannelId
+      && !audit.some((entry) => entry.type === 'failure' || entry.outcome === 'rejected');
     const answerDelivery = publicAnswer || publicMonthClosePreview ? 'public' : 'private';
-    const persistentPrivateAnswer = Boolean(monthClosePreview) && !publicMonthClosePreview;
+    const persistentPrivateAnswer = Boolean(monthClosePreview) && job.channelId !== monthPreviewPublicChannelId;
     const method = publicAnswer || publicMonthClosePreview || persistentPrivateAnswer ? 'chat.postMessage' : 'chat.postEphemeral';
     const historyVisibility = monthClosePreview ? 'private' : 'conversation';
     const persistedAnswer = monthClosePreview ? '[private answer omitted]' : storedText;

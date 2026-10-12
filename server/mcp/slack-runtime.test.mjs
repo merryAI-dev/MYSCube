@@ -53,8 +53,8 @@ it('delivers an authorized month-close preview only to the verified requester wi
     expect(call.body).not.toHaveProperty('user');
     expect(call.body).not.toHaveProperty('thread_ts');
   }
-  expect(delivery.body.text).toContain('비공개 미리보기입니다. 실제 공지는 발송되지 않습니다.');
-  expect(delivery.body.text).toContain('결과 전달: 요청자 개인 DM');
+  expect(delivery.body.text).toContain('월결산 미리보기입니다. 실제 정기 공지는 발송되지 않습니다.');
+  expect(delivery.body.text).toContain('노출 범위: 요청자 개인 DM');
   expect(calls).toHaveLength(2);
   expect(records.get('settlement_agent_threads/thread').turns).toEqual([]);
   expect(records.get('settlement_agent_jobs/first').answer).toBe('[private answer omitted]');
@@ -85,7 +85,8 @@ it('posts an authorized month-close preview only to the approved request thread 
   await worker();
   expect(calls[0]).toMatchObject({ method: 'chat.postMessage', body: { channel: identity.channelId, thread_ts: identity.threadTs } });
   expect(calls[0].body).not.toHaveProperty('user');
-  expect(calls[0].body.text).toContain('결과 전달: 요청 스레드');
+  expect(calls[0].body.text).toContain('노출 범위: 이 요청 스레드의 채널 구성원');
+  expect(calls[0].body.text).toContain('월결산 리마인드 채널 미리보기');
   expect(calls[1]).toEqual({ method: 'chat.getPermalink', body: { channel: identity.channelId, message_ts: '1791783205.202689' } });
   expect(records.get('settlement_agent_jobs/first')).toMatchObject({ status: 'succeeded', answerDelivery: 'public', deliveryMethod: 'chat.postMessage',
     answer: '[private answer omitted]', historyVisibility: 'private', answerChannelId: identity.channelId, answerTs: '1791783205.202689',
@@ -115,6 +116,35 @@ it('does not fall back to DM when the approved preview thread post fails', async
   expect(calls[0].body.channel).not.toBe(identity.slackUserId);
   expect(records.get('settlement_agent_jobs/first')).toMatchObject({ status: 'delivery_unknown', answerDelivery: 'public',
     deliveryFailure: { code: 'transport_error', definitive: false }, answer: '[private answer omitted]' });
+});
+
+it('rechecks admin or finance immediately before an approved-channel preview is exposed', async () => {
+  const { db, records } = memoryDb();
+  const identity = { teamId: 'T099F304GAY', channelId: 'C0C6DLPBJ00', slackUserId: 'UQA', threadTs: '1.1' };
+  records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'admin', status: 'ACTIVE' });
+  records.set('orgs/mysc/projects/a', { name: 'A사업', cic: 'CIC1', department: 'CIC1', managerId: 'manager-a', status: 'IN_PROGRESS', contractEnd: '2026-12-31' });
+  records.set('orgs/mysc/persons/person-a', { uid: 'manager-a', name: '담당자' });
+  records.set('settlement_agent_jobs/first', { ...identity, status: 'queued', attempts: 0, conversationId: 'thread', createdAt: new Date().toISOString(),
+    question: '월결산 리마인드 미리보기 2026-10 제출 2026-10-10 23:59 승인 2026-10-13 23:59' });
+  records.set('settlement_agent_threads/thread', { ...identity, queue: ['first'], turns: [] });
+  const calls = [];
+  const worker = runtime.createSlackWorker({ db, env: { SLACK_ALERT_BOT_TOKEN: 'fixture' },
+    readOverview: async (request) => {
+      records.set('orgs/mysc/members/member', { email: 'qa@mysc.co.kr', role: 'viewer', status: 'ACTIVE' });
+      return statusOverview(request);
+    }, fetchImpl: async (url, options) => {
+      if (url.includes('users.info')) return Response.json({ ok: true, user: { team_id: identity.teamId, profile: { email: 'qa@mysc.co.kr' } } });
+      calls.push({ method: url.split('/').at(-1), body: JSON.parse(options.body) });
+      return Response.json({ ok: true, message_ts: '2.1' });
+    } });
+  await worker();
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toMatchObject({ method: 'chat.postEphemeral', body: { channel: identity.channelId, user: identity.slackUserId, thread_ts: identity.threadTs } });
+  expect(calls[0].body.text).toContain('admin 또는 finance 역할만');
+  expect(calls[0].body.text).not.toContain('A사업');
+  expect(records.get('settlement_agent_jobs/first')).toMatchObject({ status: 'succeeded', answerDelivery: 'private', deliveryMethod: 'chat.postEphemeral',
+    answer: '[private answer omitted]', historyVisibility: 'private' });
+  expect(records.get('settlement_agent_jobs/first')).not.toHaveProperty('answerPermalink');
 });
 
 it.each([
