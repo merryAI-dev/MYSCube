@@ -72,6 +72,13 @@ resolution or automatic rewriting of financial project fields is done.
 
 Nothing in this change creates a scheduler or turns on sending.
 
+`scripts/configure-settlement-reminder-scheduler.mjs` prepares a distinct
+`myscube-settlement-reminders-weekly` Cloud Scheduler job with Friday 00:00
+Asia/Seoul cadence, no Scheduler retry, the existing worker bearer contract and
+the reminder-only route. It creates the job paused and never alters or reuses the
+minute recovery job. Running the script, granting its operator Scheduler create
+permission, and resuming the job are separate production changes requiring approval.
+
 - `SETTLEMENT_REMINDERS_ENABLED` defaults off; `true` enables reads/planning
 - `SETTLEMENT_REMINDERS_SEND` defaults off; leave unset for dry runs
 - `SETTLEMENT_REMINDERS_POLICY_APPROVED=weekly-submission-thursday-kst-v1` is an
@@ -166,7 +173,7 @@ by the patch; a disposable local replacement is used only for validation.
 
 ### Local gate results (2026-10-01)
 
-- Focused reminder tests: 31 passed
+- Focused reminder tests: 32 passed
 - Full Vitest: 456 files passed, 19 skipped; 4,782 tests passed, 318 skipped
 - Production build: passed (existing large-chunk warnings)
 - Typecheck baseline: passed, no new errors (187 known errors across 30 files)

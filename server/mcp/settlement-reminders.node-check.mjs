@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { REMINDER_POLICY, SOURCE_CHANNEL, reminderWindow, resolveObligations, reconcileSlackEvidence,
   readDeadlineSlackHistory, buildReminderPlan, deliverReminder, createSettlementReminderWorker, createReminderSlackClient,
   resolveReminderManagers } from './settlement-reminders.mjs';
+import { buildSettlementReminderScheduler } from './settlement-reminder-scheduler.mjs';
 
 const cutoff = Date.parse('2026-10-01T15:00:00.000Z');
 const window = reminderWindow(cutoff);
@@ -31,6 +32,17 @@ function fakeDb(projects = registered, obligation = policy) {
 }
 const emptySlack = async () => ({ ok: true, messages: [] });
 const planArgs = () => ({ db: fakeDb(), window, slack: emptySlack, readOverview: async ({ body }) => overview(body.projectIds), now: () => cutoff });
+
+test('dedicated weekly scheduler contract is separate, Friday midnight KST and paused by setup', () => {
+  const { job } = buildSettlementReminderScheduler({ workerSecret: 'a'.repeat(64) });
+  assert.match(job.name, /myscube-settlement-reminders-weekly$/);
+  assert.equal(job.schedule, '0 0 * * 5');
+  assert.equal(job.timeZone, 'Asia/Seoul');
+  assert.equal(job.retryConfig.retryCount, 0);
+  assert.match(job.httpTarget.uri, /\/api\/internal\/workers\/settlement-reminders\/run$/);
+  assert.doesNotMatch(job.httpTarget.uri, /settlement-agent\/run$/);
+  assert.throws(() => buildSettlementReminderScheduler({ workerSecret: 'weak' }), /missing_worker_secret/);
+});
 
 test('Thursday EOD is Friday 00:00 KST with explicit October finance intervals', () => {
   const expected = [['01', '04'], ['05', '11'], ['12', '18'], ['19', '25'], ['26', '31']];
