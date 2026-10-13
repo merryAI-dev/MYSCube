@@ -752,6 +752,66 @@ async function readAssignedProjectRequests({ db, tenantId, actorId }) {
   };
 }
 
+// 사업 등록·변경 요청 목록. 관리자·재무는 조직 전체를, 그 밖의 구성원은 hasProjectRequestAccess 로
+// 접근할 수 있는 사업의 요청과 본인이 올리거나 승인자로 지정된 요청을 본다. 응답의 scope 로 범위를 밝힌다.
+async function readOrganizationProjectRequests({ db, tenantId, actorId, status, requestKind }) {
+  const member = await readProjectAttachmentMember({ db, tenantId, actorId });
+  const organizationWide = ['admin', 'finance'].includes(normalizeRole(member?.role));
+  const readCollection = async (collectionName) => {
+    const snapshot = await db.collection(`orgs/${tenantId}/${collectionName}`).get();
+    return new Map(snapshot.docs.map((doc) => [doc.id, { ...(doc.data() || {}), id: doc.id }]));
+  };
+  const [canonicalRequests, legacyRequests, projectSnapshot] = await Promise.all([
+    readCollection('project_requests'),
+    readCollection('projectRequests'),
+    db.collection(`orgs/${tenantId}/projects`).get(),
+  ]);
+  const requests = await preferCanonicalProjectRequests({ db, tenantId, canonicalRequests, legacyRequests });
+  const projects = new Map(projectSnapshot.docs.map((doc) => [doc.id, doc.data() || {}]));
+  const normalizedActorId = readOptionalText(actorId);
+  const wantedStatus = readOptionalText(status).toUpperCase();
+  const wantedKind = readOptionalText(requestKind).toUpperCase();
+  const items = requests.flatMap((request) => {
+    const payload = resolveProjectRequestPayloadForReview(request);
+    const projectId = readOptionalText(request.targetProjectId || request.approvedProjectId);
+    const project = projects.get(projectId) || {};
+    const visible = organizationWide
+      || readOptionalText(request.requestedBy) === normalizedActorId
+      || readOptionalText(payload?.executiveApproverId) === normalizedActorId
+      || (projectId && hasProjectRequestAccess({ actorId, member, projectId, project }));
+    const kind = readOptionalText(request.requestKind).toUpperCase() || 'REGISTRATION';
+    const requestStatus = readOptionalText(request.status).toUpperCase();
+    if (!visible || (wantedStatus && requestStatus !== wantedStatus) || (wantedKind && kind !== wantedKind)) return [];
+    return [{
+      id: request.id,
+      requestKind: kind,
+      status: requestStatus || null,
+      projectId: projectId || null,
+      projectName: readOptionalText(payload?.name) || readOptionalText(project.name) || null,
+      cic: readOptionalText(payload?.cic) || readOptionalText(project.cic) || null,
+      department: readOptionalText(payload?.department) || readOptionalText(project.department) || null,
+      managerName: readOptionalText(payload?.managerName) || readOptionalText(project.managerName) || null,
+      executiveApproverName: readOptionalText(payload?.executiveApproverName) || readOptionalText(project.executiveApproverName) || null,
+      requestedByName: readOptionalText(request.requestedByName) || null,
+      requestedAt: readOptionalText(request.requestedAt) || null,
+      reviewedByName: readOptionalText(request.reviewedByName) || null,
+      reviewedAt: readOptionalText(request.reviewedAt) || null,
+      reviewComment: readOptionalText(request.reviewComment) || null,
+    }];
+  });
+  const countBy = (key) => items.reduce((counts, item) => ({ ...counts, [item[key] || 'UNKNOWN']: (counts[item[key] || 'UNKNOWN'] || 0) + 1 }), {});
+  return {
+    scope: organizationWide ? 'ORGANIZATION' : 'ACCESSIBLE_PROJECTS',
+    scopeNote: organizationWide
+      ? '조직 전체 사업 등록·변경 요청입니다.'
+      : '관리자·재무가 아니므로 접근 가능한 사업과 본인 관련 요청만 포함합니다. 조직 전체 건수로 보고하면 안 됩니다.',
+    total: items.length,
+    countsByStatus: countBy('status'),
+    countsByKind: countBy('requestKind'),
+    items,
+  };
+}
+
 function sendPrivateProjectAttachment(res, downloaded, attachment, objectName) {
   const buffer = Buffer.isBuffer(downloaded?.buffer)
     ? downloaded.buffer
@@ -3146,6 +3206,15 @@ export function mountProjectRoutes(app, {
     const { items, projects } = await readAssignedProjectRequests({ db, tenantId, actorId });
     res.setHeader('cache-control', 'private, no-store');
     res.status(200).json({ items, projects });
+  }));
+
+  app.get('/api/v1/project-requests', asyncHandler(async (req, res) => {
+    const { tenantId, actorId } = req.context;
+    const result = await readOrganizationProjectRequests({
+      db, tenantId, actorId, status: req.query.status, requestKind: req.query.requestKind,
+    });
+    res.setHeader('cache-control', 'private, no-store');
+    res.status(200).json(result);
   }));
 
   app.post('/api/v1/project-requests/pending-changes', asyncHandler(async (req, res) => {

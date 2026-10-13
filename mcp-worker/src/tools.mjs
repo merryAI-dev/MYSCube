@@ -6,23 +6,22 @@ import { API_CATALOG, API_CATALOG_VERSION, PROJECT_FIELDS, catalogView, projectI
 // 모든 도구는 읽기 전용이고, 데이터는 로그인한 구성원의 토큰으로 MYSCube BFF 에서만 읽는다.
 // 권한 판단은 BFF 가 앱 화면과 똑같이 한다.
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
+// MCP 쪽에는 건수 상한을 두지 않는다. 남는 제약은 BFF 가 강제하는 것뿐이고, 그것도 여기서 나눠 부른다.
+// BFF /api/v1/projects 는 요청당 200건까지 준다.
 const PROJECT_PAGE_SIZE = 200;
-const PROJECT_MAX_PAGES = 10;
-const SEARCH_RESULT_LIMIT = 20;
-const MAX_RESULT_CHARS = 100_000;
+// BFF weekly-overview 는 요청당 100개 사업까지 받는다.
+const OVERVIEW_BATCH = 100;
+const PROJECT_SUMMARY_FIELDS = Object.freeze(['name', 'shortName', 'cic', 'status', 'phase', 'department', 'teamName', 'managerName',
+  'clientOrg', 'contractStart', 'contractEnd', 'contractAmount', 'currency', 'settlementType', 'isSettled']);
 
 const INSTRUCTIONS = [
   'MYSCube 사업관리 데이터를 읽기 전용으로 조회합니다. 결과는 로그인한 구성원이 MYSCube 화면에서 볼 수 있는 범위와 같습니다.',
-  '사업 이름만 알면 project_search로 projectId를 먼저 찾으세요. 금액 단위는 원(KRW)입니다.',
+  '사업 이름만 알면 project_search로 projectId를 먼저 찾으세요. 전체 사업을 훑어야 하면(전수조사, 집계) project_list로 모든 사업을 한 번에 받으세요. 금액 단위는 원(KRW)입니다.',
   '전용 도구로 답할 수 없으면 api_catalog에서 맞는 조회를 찾아 api_read로 실행하세요. 목록 결과에 nextCursor가 있으면 cursor로 다음 페이지를 받습니다.',
 ].join(' ');
 
 function ok(data) {
-  const text = JSON.stringify(data);
-  if (text.length <= MAX_RESULT_CHARS) return { content: [{ type: 'text', text }] };
-  return { content: [{ type: 'text', text: JSON.stringify({ truncated: true,
-    message: `결과가 ${MAX_RESULT_CHARS}자를 넘어 잘랐습니다. limit를 줄이거나 범위를 좁혀 다시 조회하세요.`,
-    partial: text.slice(0, MAX_RESULT_CHARS) }) }] };
+  return { content: [{ type: 'text', text: JSON.stringify(data) }] };
 }
 
 function fail(error, fallback) {
@@ -45,28 +44,68 @@ export function createMyscubeMcpServer({ bff }) {
     projectsPromise ||= (async () => {
       const items = [];
       let cursor;
-      for (let page = 0; page < PROJECT_MAX_PAGES; page++) {
+      const seen = new Set();
+      for (;;) {
         const body = await bff.get('/api/v1/projects', { limit: PROJECT_PAGE_SIZE, cursor });
         items.push(...(body?.items || []));
         cursor = body?.nextCursor;
         if (!cursor) return { items, complete: true };
+        if (seen.has(cursor)) return { items, complete: false };
+        seen.add(cursor);
       }
-      return { items, complete: false };
     })();
     return projectsPromise;
   }
 
+  function pick(project, fields) {
+    const view = { projectId: project.id };
+    for (const field of fields) if (project[field] !== undefined) view[field] = project[field];
+    return view;
+  }
+
+  function page(items, offset, size, complete) {
+    const slice = size === undefined ? items.slice(offset) : items.slice(offset, offset + size);
+    const next = offset + slice.length;
+    return { total: items.length, offset, count: slice.length, items: slice,
+      nextOffset: next < items.length ? next : null, complete: complete && next >= items.length };
+  }
+
+  const offset = z.number().int().min(0).optional().describe('건너뛸 건수. 이전 응답의 nextOffset을 넣으면 다음 페이지입니다.');
+
+  tool(server, 'project_list', {
+    title: '전체 사업 목록',
+    description: '권한 있는 모든 사업을 한 번에 돌려줍니다. 전수조사, CIC·상태별 집계, 이름이 기억나지 않는 사업 찾기에 쓰세요. total은 조건에 맞는 전체 건수이고, complete가 true면 빠진 사업이 없습니다. offset·limit은 나눠 받고 싶을 때만 쓰세요.',
+    input: {
+      status: z.string().max(40).optional().describe('사업 상태로 거르기. 예: IN_PROGRESS, CONTRACT_PENDING, COMPLETED'),
+      cic: z.string().max(100).optional().describe('CIC 이름으로 거르기(정확히 일치)'),
+      includeTrashed: z.boolean().optional().describe('true면 삭제된 사업도 포함합니다(기본 제외).'),
+      offset,
+      limit: z.number().int().min(1).optional().describe('나눠 받을 때 한 번에 받을 건수. 비우면 전부'),
+    },
+  }, async ({ status, cic, includeTrashed = false, offset: start = 0, limit }) => {
+    const { items, complete } = await listProjects();
+    const rows = items.filter((item) => (includeTrashed || !item.trashedAt) && (!status || item.status === status) && (!cic || item.cic === cic))
+      .map((item) => ({ ...pick(item, PROJECT_SUMMARY_FIELDS), ...(item.trashedAt ? { trashed: true } : {}) }));
+    return page(rows, start, limit, complete);
+  });
+
   tool(server, 'project_search', {
     title: '사업 검색',
-    description: '사업명이나 약칭의 일부로 사업을 찾아 projectId, 사업명, CIC, 상태를 돌려줍니다. 최대 20건이며 truncated가 true면 검색어를 더 구체적으로 바꾸세요.',
-    input: { query: z.string().trim().min(1).max(100).describe('사업명 또는 약칭의 일부') },
-  }, async ({ query }) => {
-    const needle = query.toLowerCase();
+    description: '사업명, 약칭, 공식 계약명, 그룹웨어 등록명, 발주기관, 담당자, 사업 코드, CIC의 일부로 사업을 찾아 맞는 사업을 모두 돌려줍니다. 여러 사업을 훑어야 할 때는 검색을 반복하지 말고 project_list를 쓰세요.',
+    input: {
+      query: z.string().trim().min(1).max(100).describe('찾을 단어. 공백으로 나누면 모든 단어를 포함하는 사업만 찾습니다.'),
+      includeTrashed: z.boolean().optional().describe('true면 삭제된 사업도 포함합니다(기본 제외).'),
+      offset,
+      limit: z.number().int().min(1).optional().describe('나눠 받을 때 한 번에 받을 건수. 비우면 전부'),
+    },
+  }, async ({ query, includeTrashed = false, offset: start = 0, limit }) => {
+    const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
     const { items, complete } = await listProjects();
-    const matches = items.filter((item) => !item.trashedAt
-      && [item.name, item.shortName].some((value) => typeof value === 'string' && value.toLowerCase().includes(needle)))
-      .map((item) => ({ projectId: item.id, name: item.name || '', shortName: item.shortName || null, cic: item.cic || null, status: item.status || null }));
-    return { items: matches.slice(0, SEARCH_RESULT_LIMIT), truncated: !complete || matches.length > SEARCH_RESULT_LIMIT };
+    const searchable = ['name', 'shortName', 'officialContractName', 'groupwareName', 'clientOrg', 'managerName', 'projectCode', 'cic', 'department', 'teamName'];
+    const rows = items.filter((item) => (includeTrashed || !item.trashedAt) && terms.every((term) => searchable
+      .some((field) => typeof item[field] === 'string' && item[field].toLowerCase().includes(term))))
+      .map((item) => ({ ...pick(item, ['name', 'shortName', 'cic', 'status', 'managerName', 'clientOrg']), ...(item.trashedAt ? { trashed: true } : {}) }));
+    return page(rows, start, limit, complete);
   });
 
   tool(server, 'project_get', {
@@ -75,18 +114,27 @@ export function createMyscubeMcpServer({ bff }) {
     input: { projectId },
   }, async ({ projectId: id }) => {
     const { items } = await listProjects();
-    const project = items.find((item) => item.id === id && !item.trashedAt);
+    const project = items.find((item) => item.id === id);
     if (!project) throw new Error('사업을 찾을 수 없습니다. project_search로 projectId를 확인하세요.');
-    const view = { projectId: id };
-    for (const field of PROJECT_FIELDS) if (project[field] !== undefined) view[field] = project[field];
-    return view;
+    return { ...pick(project, PROJECT_FIELDS), ...(project.trashedAt ? { trashed: true } : {}) };
   });
 
   tool(server, 'cashflow_status', {
     title: '정산 현황',
-    description: '여러 사업의 한 달 주정산 상태, 월결산 상태, 계획(P)과 실적(A)의 차액을 한 번에 조회합니다.',
-    input: { yearMonth, projectIds: z.array(projectId).min(1).max(100).describe('조회할 projectId 목록(최대 100개)') },
-  }, ({ yearMonth: month, projectIds }) => bff.post('/api/v1/cashflow/weekly-overview', { yearMonth: month, projectIds }));
+    description: '사업들의 한 달 주정산 상태, 월결산 상태, 계획(P)과 실적(A)의 차액을 조회합니다. projectIds를 비우면 삭제되지 않은 모든 사업을 조회합니다(전수조사). 내부적으로 100개씩 나눠 조회해 합칩니다.',
+    input: {
+      yearMonth,
+      projectIds: z.array(projectId).min(1).optional().describe('조회할 projectId 목록. 비우면 전체 사업'),
+    },
+  }, async ({ yearMonth: month, projectIds }) => {
+    const ids = projectIds || (await listProjects()).items.filter((item) => !item.trashedAt).map((item) => item.id);
+    const batches = [];
+    for (let index = 0; index < ids.length; index += OVERVIEW_BATCH) batches.push(ids.slice(index, index + OVERVIEW_BATCH));
+    const results = [];
+    for (const batch of batches) results.push(await bff.post('/api/v1/cashflow/weekly-overview', { yearMonth: month, projectIds: batch }));
+    const [first = {}] = results;
+    return { ...first, projectCount: ids.length, items: results.flatMap((result) => result?.items || []), errors: results.flatMap((result) => result?.errors || []) };
+  });
 
   tool(server, 'accounting_read', {
     title: '사업 입출금',

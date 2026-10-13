@@ -3122,6 +3122,66 @@ describe('project route helpers', () => {
     expect(new Set(requestQueryLimits)).toEqual(new Set([500]));
   });
 
+  it('lists project requests organization-wide for admin/finance and only accessible ones for other members', async () => {
+    const rows: Record<string, Array<Record<string, any>>> = {
+      project_requests: [
+        { id: 'reg-pending', requestKind: 'REGISTRATION', status: 'PENDING', requestedBy: 'someone', requestedByName: '김요청',
+          requestedByEmail: 'kim@mysc.co.kr', requestedAt: '2026-10-01T00:00:00.000Z',
+          payload: { name: '신규 사업', cic: 'CIC1', managerName: '김담당', executiveApproverId: 'head-b', executiveApproverName: '박승인' } },
+        { id: 'change-own-project', requestKind: 'CHANGE', status: 'PENDING', targetProjectId: 'project-mine', requestedAt: '2026-10-02T00:00:00.000Z',
+          proposedSnapshot: { name: '내 사업(변경)' } },
+        { id: 'reg-rejected', requestKind: 'REGISTRATION', status: 'REJECTED', requestedBy: 'pm-a', reviewedByName: '관리자',
+          reviewedAt: '2026-05-27T00:00:00.000Z', reviewComment: '테스트 목업데이터', payload: { name: '테스트 사업' } },
+      ],
+      projectRequests: [
+        { id: 'legacy-change', requestKind: 'CHANGE', status: 'APPROVED', targetProjectId: 'project-other', requestedAt: '2026-01-01T00:00:00.000Z' },
+      ],
+      projects: [
+        { id: 'project-mine', name: '내 사업', cic: 'CIC2', managerId: 'pm-a' },
+        { id: 'project-other', name: '다른 사업', cic: 'CIC3' },
+      ],
+    };
+    const members: Record<string, Record<string, any>> = {
+      'admin-a': { uid: 'admin-a', role: 'admin', status: 'ACTIVE' },
+      'pm-a': { uid: 'pm-a', role: 'pm', status: 'ACTIVE' },
+    };
+    const db = {
+      collection: vi.fn((path: string) => ({
+        get: vi.fn(async () => ({ docs: (rows[path.split('/').at(-1) as string] || []).map((row) => ({ id: row.id, data: () => row })) })),
+      })),
+      doc: vi.fn((path: string) => ({
+        get: vi.fn(async () => {
+          const [collectionName, id] = path.split('/').slice(-2);
+          const row = collectionName === 'members' ? members[id] : rows[collectionName]?.find((item) => item.id === id);
+          return row ? { exists: true, id, data: () => row } : { exists: false, data: () => null };
+        }),
+      })),
+    };
+    const appFor = (actorId: string, actorRole: string) => {
+      const app = express();
+      app.use((req: any, _res, next) => { req.context = { tenantId: 'mysc', actorId, actorRole }; next(); });
+      mountProjectRoutes(app, { db, now: () => '2026-10-13T00:00:00.000Z', idempotencyService: {} } as any);
+      app.use((error: any, _req, res, _next) => { res.status(error.statusCode || 500).json({ error: error.code || 'internal_error' }); });
+      return app;
+    };
+
+    const admin = await request(appFor('admin-a', 'admin')).get('/api/v1/project-requests').expect(200);
+    expect(admin.body).toMatchObject({ scope: 'ORGANIZATION', total: 4, countsByStatus: { PENDING: 2, REJECTED: 1, APPROVED: 1 } });
+    expect(admin.body.items[0]).toMatchObject({ id: 'change-own-project', projectName: '내 사업(변경)', cic: 'CIC2' });
+    expect(admin.body.items.find((item: any) => item.id === 'reg-pending')).toMatchObject({
+      requestKind: 'REGISTRATION', projectName: '신규 사업', cic: 'CIC1', managerName: '김담당', executiveApproverName: '박승인', requestedByName: '김요청' });
+    expect(JSON.stringify(admin.body)).not.toContain('kim@mysc.co.kr');
+
+    const pending = await request(appFor('admin-a', 'admin')).get('/api/v1/project-requests?status=pending&requestKind=REGISTRATION').expect(200);
+    expect(pending.body.items.map((item: any) => item.id)).toEqual(['reg-pending']);
+
+    const pm = await request(appFor('pm-a', 'pm')).get('/api/v1/project-requests').expect(200);
+    expect(pm.body.scope).toBe('ACCESSIBLE_PROJECTS');
+    expect(pm.body.items.map((item: any) => item.id).sort()).toEqual(['change-own-project', 'reg-rejected']);
+
+    await request(appFor('stranger', 'pm')).get('/api/v1/project-requests').expect(403);
+  });
+
   it('serves latest, pending-summary, and review-inbox views without client Firestore access', async () => {
     const collectionRows = {
       project_requests: [
