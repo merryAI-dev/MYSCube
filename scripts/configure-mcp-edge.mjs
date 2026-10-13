@@ -14,10 +14,12 @@ export const MCP_PATHS = Object.freeze([
 ]);
 const LEGACY_BFF_SCOPE = `(http.host eq "myscube.myscguard.app" and http.request.uri.path in {${MCP_PATHS.map((path) => `"${path}"`).join(' ')}})`;
 // mcp.myscguard.app 은 MCP 전용 Worker 라 호스트 전체를 뺀다. BFF 의 /mcp 경로 예외는 옮기는 동안 유지한다.
-export const MCP_SCOPE = `(http.host eq "mcp.myscguard.app" or ${LEGACY_BFF_SCOPE})`;
+const HOST_SCOPE_V1 = `(http.host eq "mcp.myscguard.app" or ${LEGACY_BFF_SCOPE})`;
+export const MCP_HOSTS = Object.freeze(['mcp.myscguard.app', 'ema-mcp.myscguard.app']);
+export const MCP_SCOPE = `(http.host in {${MCP_HOSTS.map((host) => `"${host}"`).join(' ')}} or ${LEGACY_BFF_SCOPE})`;
 const SLACK_SUFFIX = ' and not (http.host eq "myscube.myscguard.app" and http.request.method eq "POST" and http.request.uri.path in {"/api/slack/events" "/api/slack/interactions"})';
 const MCP_SUFFIX = ` and not ${MCP_SCOPE}`;
-const PREVIOUS_SUFFIXES = [` and not ${LEGACY_BFF_SCOPE}`];
+const PREVIOUS_SUFFIXES = [` and not ${HOST_SCOPE_V1}`, ` and not ${LEGACY_BFF_SCOPE}`];
 // configure-slack-edge.mjs 가 검토한 원래 규칙 식의 해시. 규칙이 그사이 바뀌었으면 적용하지 않는다.
 const BASELINE = '5966f97c2a4a454711192fa4fa3076ddfef26ccd56d37c4628f1aac4cdeff759';
 
