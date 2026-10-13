@@ -1,9 +1,9 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
 import { buildCsv, buildXlsx, readXlsx, XlsxError } from '../src/ema/xlsx.mjs';
+import { REGISTRY_SAMPLE_XLSX_BASE64 } from './fixtures/registry-sample.mjs';
 
-const fixture = () => new Uint8Array(readFileSync(new URL('./fixtures/registry-sample.xlsx', import.meta.url)));
+const fixture = () => Uint8Array.from(atob(REGISTRY_SAMPLE_XLSX_BASE64), (char) => char.charCodeAt(0));
 
 describe('xlsx reader', () => {
   it('reads the first sheet of a real Excel file: headers, shared strings, numbers, blank rows', () => {
