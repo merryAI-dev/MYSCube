@@ -39,3 +39,20 @@ npx wrangler dev --local --local-protocol https --host mcp.myscguard.app
 ```
 
 테스트는 저장소 루트에서 `npx vitest run mcp-worker/test` 로 실행합니다.
+
+## EMA Station MCP (`https://ema-mcp.myscguard.app/mcp`)
+
+같은 코드베이스의 두 번째 Worker(`wrangler.ema.jsonc`, 진입점 `src/ema/index.mjs`)입니다. EMA Station의 스타트업 등록(FRN) 데이터를 다룹니다. MYSCube와 KV·토큰·도메인이 완전히 분리돼 있어서 한쪽이 뚫려도 다른 쪽 세션은 노출되지 않습니다.
+
+```
+MCP 클라이언트 ──OAuth 2.1──▶ ema-mcp.myscguard.app ──구성원 본인 Firebase 토큰──▶ EMA Station 콜러블 함수
+```
+
+- **로그인**: EMA 계정은 이메일·비밀번호(가상 계정)라 Google 로그인을 쓰지 않습니다. 동의 화면 → EMA 사이트 `/mcp/authorize`(비밀번호는 거기서만 입력) → 사이트가 로그인 증명(ID 토큰·갱신 토큰)만 `POST /ema/session` 으로 보냅니다(허용 출처·같은 사이트 쿠키로 연결 요청에 묶음). 서버는 `getRegistryAccess` 로 권한을 확인한 뒤에만 토큰을 발급합니다.
+- **권한**: Worker 에 권한 코드는 없습니다. 모든 호출은 구성원 본인 토큰으로 EMA 함수를 부르고, 함수가 `admin·consultant·staff`(읽기)와 `admin`(내보내기·일괄 등록)을 판단합니다. 관리자 도구는 관리자에게만 목록에 보입니다.
+- **세션**: 액세스 토큰 55분, 갱신 토큰은 7일 미사용 시 만료, 최대 30일.
+- **도구**: `ema_registry_status`(기본 진입점), `ema_registry_search`, `ema_registry_get`, `ema_registry_export`, `ema_registry_import_upload_link`, `ema_registry_import_preview`, `ema_registry_import_commit`.
+- **엑셀**: 작은 표는 AI가 읽어 `rows`로 넘기고, 큰 파일은 1회용 업로드 링크(15분)로 올립니다. 내려받기는 1회용 링크(15분)로 파일을 전달하며 내용은 대화에 싣지 않습니다. 연락처·사업자번호 전체는 AI 대화에 나오지 않고(사업자번호는 가려서 표시) 파일에만 들어갑니다.
+- **일괄 등록**: 미리보기(검증·중복 판정, 쓰기 없음) → 사용자 확인 → 등록. 삭제된 기업·이관 기업과 같은 행은 건너뛰고, 기존 기업의 값은 빈 칸만 채우며, 크레딧은 기본으로 부여하지 않습니다. 같은 배치를 다시 실행해도 중복 등록되지 않습니다.
+- **배포**: `MCP Worker Deploy`의 `ema` 대상. GitHub `Production` 환경 비밀값 `EMA_MCP_FIREBASE_WEB_API_KEY`(EMA 웹 앱의 Firebase Web API 키), `EMA_MCP_CONSENT_SECRET`(32자 이상)이 필요합니다. 서버 쪽 함수와 연결 화면은 EMA_Station 저장소(`feat(registry)`)에 있습니다.
+

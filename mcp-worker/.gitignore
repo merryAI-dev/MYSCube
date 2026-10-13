@@ -2,3 +2,7 @@ dist/
 .wrangler/
 wrangler.generated.jsonc
 .dev.vars
+wrangler.ema.generated.jsonc
+dist-ema/
+.dev.vars*
+.deploy-secrets.json

@@ -17,6 +17,11 @@ concurrency:
 
 jobs:
   deploy:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [myscube, ema]
+    name: deploy (${{ matrix.target }})
     if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -63,4 +68,6 @@ jobs:
           MCP_GOOGLE_CLIENT_SECRET: ${{ secrets.MCP_GOOGLE_CLIENT_SECRET }}
           MCP_FIREBASE_WEB_API_KEY: ${{ secrets.MCP_FIREBASE_WEB_API_KEY }}
           MCP_CONSENT_SECRET: ${{ secrets.MCP_CONSENT_SECRET }}
-        run: node scripts/deploy-mcp-worker.mjs
+          EMA_MCP_FIREBASE_WEB_API_KEY: ${{ secrets.EMA_MCP_FIREBASE_WEB_API_KEY }}
+          EMA_MCP_CONSENT_SECRET: ${{ secrets.EMA_MCP_CONSENT_SECRET }}
+        run: node scripts/deploy-mcp-worker.mjs ${{ matrix.target }}

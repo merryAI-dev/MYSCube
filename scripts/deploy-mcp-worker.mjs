@@ -1,16 +1,45 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync, rmSync, writeFileSync } from 'node:fs';
 
-// MYSCube MCP Worker(mcp.myscguard.app) 배포. main 의 GitHub Actions 에서만 실행한다.
+// MCP Worker 배포(MYSCube: mcp.myscguard.app, EMA Station: ema-mcp.myscguard.app). main 의 GitHub Actions 에서만 실행한다.
 // KV 는 이름으로 찾고 없으면 만든다. 비밀값은 이 러너와 Cloudflare 밖으로 나가지 않는다.
-const KV_TITLE = 'myscube-mcp-oauth';
-const ORIGIN = 'https://mcp.myscguard.app';
+// 사용법: node scripts/deploy-mcp-worker.mjs [myscube|ema]
+const TARGETS = {
+  myscube: {
+    kvTitle: 'myscube-mcp-oauth',
+    origin: 'https://mcp.myscguard.app',
+    config: 'wrangler.jsonc',
+    generated: 'wrangler.generated.jsonc',
+    // Worker 비밀 이름 → 러너 환경변수
+    secrets: {
+      GOOGLE_CLIENT_ID: 'MCP_GOOGLE_CLIENT_ID',
+      GOOGLE_CLIENT_SECRET: 'MCP_GOOGLE_CLIENT_SECRET',
+      FIREBASE_WEB_API_KEY: 'MCP_FIREBASE_WEB_API_KEY',
+      CONSENT_SECRET: 'MCP_CONSENT_SECRET',
+    },
+  },
+  ema: {
+    kvTitle: 'myscube-ema-mcp-oauth',
+    origin: 'https://ema-mcp.myscguard.app',
+    config: 'wrangler.ema.jsonc',
+    generated: 'wrangler.ema.generated.jsonc',
+    secrets: {
+      FIREBASE_WEB_API_KEY: 'EMA_MCP_FIREBASE_WEB_API_KEY',
+      CONSENT_SECRET: 'EMA_MCP_CONSENT_SECRET',
+    },
+  },
+};
+const targetName = process.argv[2] || 'myscube';
+const target = TARGETS[targetName];
+if (!target) throw new Error(`Unknown target: ${targetName}`);
+const KV_TITLE = target.kvTitle;
+const ORIGIN = target.origin;
 const env = process.env;
 if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REF !== 'refs/heads/main') throw new Error('Only main GitHub Actions may deploy');
-for (const key of ['CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL', 'CLOUDFLARE_ZONE_ID', 'MCP_GOOGLE_CLIENT_ID', 'MCP_GOOGLE_CLIENT_SECRET', 'MCP_FIREBASE_WEB_API_KEY', 'MCP_CONSENT_SECRET']) {
+for (const key of ['CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL', 'CLOUDFLARE_ZONE_ID', ...Object.values(target.secrets)]) {
   if (!env[key]) throw new Error(`${key} is not configured`);
 }
-if (env.MCP_CONSENT_SECRET.length < 32) throw new Error('MCP_CONSENT_SECRET must be at least 32 characters');
+if (env[target.secrets.CONSENT_SECRET].length < 32) throw new Error(`${target.secrets.CONSENT_SECRET} must be at least 32 characters`);
 
 async function cf(path, method = 'GET', body) {
   const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
@@ -29,17 +58,16 @@ const namespaces = await cf(`/accounts/${accountId}/storage/kv/namespaces?per_pa
 const kv = namespaces.find((item) => item.title === KV_TITLE) || await cf(`/accounts/${accountId}/storage/kv/namespaces`, 'POST', { title: KV_TITLE });
 
 const workerDir = new URL('../mcp-worker/', import.meta.url);
-const config = JSON.parse(readFileSync(new URL('wrangler.jsonc', workerDir), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
+const config = JSON.parse(readFileSync(new URL(target.config, workerDir), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
 config.kv_namespaces = [{ binding: 'OAUTH_KV', id: kv.id }];
-const generated = new URL('wrangler.generated.jsonc', workerDir);
+const generated = new URL(target.generated, workerDir);
 writeFileSync(generated, JSON.stringify(config, null, 2));
 const secretsFile = new URL('.deploy-secrets.json', workerDir);
 const wranglerEnv = { ...env, CLOUDFLARE_ACCOUNT_ID: accountId, WRANGLER_SEND_METRICS: 'false' };
 const wrangler = (...args) => execFileSync('npx', ['wrangler', ...args, '--config', generated.pathname], { cwd: workerDir, env: wranglerEnv, stdio: 'inherit' });
 try {
   wrangler('deploy');
-  writeFileSync(secretsFile, JSON.stringify({ GOOGLE_CLIENT_ID: env.MCP_GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET: env.MCP_GOOGLE_CLIENT_SECRET,
-    FIREBASE_WEB_API_KEY: env.MCP_FIREBASE_WEB_API_KEY, CONSENT_SECRET: env.MCP_CONSENT_SECRET }), { mode: 0o600 });
+  writeFileSync(secretsFile, JSON.stringify(Object.fromEntries(Object.entries(target.secrets).map(([name, variable]) => [name, env[variable]]))), { mode: 0o600 });
   wrangler('secret', 'bulk', secretsFile.pathname);
 } finally {
   rmSync(secretsFile, { force: true });

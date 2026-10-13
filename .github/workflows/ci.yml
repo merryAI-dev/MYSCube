@@ -32,6 +32,10 @@ jobs:
 
       - run: npm ci
 
+      - name: Install MCP worker packages (tests import xlsx support)
+        run: npm ci --ignore-scripts
+        working-directory: mcp-worker
+
       - name: Unit tests
         run: npm test
 

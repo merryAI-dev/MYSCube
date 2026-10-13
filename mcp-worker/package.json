@@ -6,11 +6,13 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "wrangler deploy --dry-run --outdir dist"
+    "check": "wrangler deploy --dry-run --outdir dist",
+    "check:ema": "wrangler deploy --dry-run --outdir dist-ema --config wrangler.ema.jsonc"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.1",
     "@modelcontextprotocol/sdk": "1.26.0",
+    "fflate": "0.8.2",
     "zod": "4.3.6"
   },
   "devDependencies": {
