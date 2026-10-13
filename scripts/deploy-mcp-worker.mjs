@@ -79,23 +79,32 @@ function curl(args) {
   const out = execFileSync('curl', ['-s', '-m', '15', ...args], { encoding: 'utf8' });
   return out;
 }
+function challengeOf(userAgent) {
+  const head = curl(['-i', '-A', userAgent, '-X', 'POST', '-H', 'content-type: application/json', '-d', '{}', `${ORIGIN}/mcp`]);
+  return { status: /^HTTP\/[\d.]+ (\d{3})/u.exec(head)?.[1], challenge: /www-authenticate:.*resource_metadata=/iu.test(head) };
+}
+// 통과 조건은 공개 주소의 보호 리소스 메타데이터(Worker 가 서비스 중이라는 증거)다. 인증 없는 /mcp 호출의 401 은
+// 가능하면 함께 확인하지만, GitHub 러너 IP 에서는 엣지가 403 을 주는 일이 있어(Mac·AI 서비스에서는 401) 그때는 경고만 남긴다.
 function smoke() {
   const body = curl(['-A', 'python-httpx/0.27.0', '-w', '\n%{http_code}', `${ORIGIN}/.well-known/oauth-protected-resource/mcp`]);
   const lines = body.trimEnd().split('\n');
   const code = lines.pop();
   let resource = '';
   try { resource = JSON.parse(lines.join('\n')).resource; } catch { /* 아직 준비 중 */ }
-  const head = curl(['-i', '-A', 'mcp-client/1.0', '-X', 'POST', '-H', 'content-type: application/json', '-d', '{}', `${ORIGIN}/mcp`]);
-  const status = /^HTTP\/[\d.]+ (\d{3})/u.exec(head)?.[1];
-  const challenge = /www-authenticate:.*resource_metadata=/iu.test(head);
-  const ok = code === '200' && resource === `${ORIGIN}/mcp` && status === '401' && challenge;
-  return { ok, detail: `metadata ${code} resource=${resource || '-'} / mcp ${status || '-'} challenge=${challenge}` };
+  const metadataOk = code === '200' && resource === `${ORIGIN}/mcp`;
+  const seen = ['mcp-client/1.0', 'Mozilla/5.0'].map((agent) => ({ agent, ...challengeOf(agent) }));
+  const challenged = seen.some((entry) => entry.status === '401' && entry.challenge);
+  const detail = `metadata ${code} resource=${resource || '-'} / mcp ${seen.map((entry) => `${entry.agent}=${entry.status || '-'}`).join(' ')} challenge=${challenged}`;
+  return { ok: metadataOk, warn: metadataOk && !challenged, detail };
 }
 let last = { ok: false, detail: 'not run' };
 for (let attempt = 1; attempt <= 18; attempt++) {
   try { last = smoke(); } catch (error) { last = { ok: false, detail: `curl failed: ${error.message.split('\n')[0]}` }; }
   console.log(`discovery check ${attempt}: ${last.detail}`);
-  if (last.ok) break;
+  if (last.ok) {
+    if (last.warn) console.log('::warning::인증 없는 /mcp 요청이 401 이 아닙니다. 러너 IP 에 대한 엣지 응답일 수 있으니 공개 주소에서 직접 확인하세요.');
+    break;
+  }
   if (attempt === 18) throw new Error(`MCP discovery smoke test failed (${last.detail})`);
   await new Promise((resolve) => setTimeout(resolve, 10_000));
 }
