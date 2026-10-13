@@ -129,6 +129,7 @@ import { mountPersonProfessionalProfileRoutes } from './routes/person-profession
 import { createPersonHrEvidenceStorageService } from './person-hr-evidence-storage.mjs';
 import { mountCashflowExportRoutes } from './routes/cashflow-exports.mjs';
 import { mountJvmWeeklyApiRoutes } from './routes/jvm-weekly-api.mjs';
+import { MCP_INTERNAL_CONTEXT } from './internal-dispatch.mjs';
 import { createMcpOAuthService, mountMcpOAuthRoutes } from './mcp-oauth.mjs';
 import { createLocalRoomRelay, mountLocalRoomRelay } from '../mcp/merryhere-local-relay.mjs';
 import { createMerryhereConnections } from '../mcp/merryhere-connection.mjs';
@@ -668,6 +669,13 @@ export async function resolveApiRequestContext(req, {
 
 function createApiContextMiddleware({ authMode, verifyToken, resolveMemberIdentity, resolveMcpAccessToken }) {
   return asyncHandler(async (req, res, next) => {
+    const internalContext = req[MCP_INTERNAL_CONTEXT];
+    if (internalContext && req.method === 'GET') {
+      req.context = { ...internalContext, authSource: 'mcp_oauth', requestId: req.requestId || createRequestId(), idempotencyKey: undefined };
+      res.setHeader('x-request-id', req.context.requestId);
+      next();
+      return;
+    }
     req.context = await resolveApiRequestContext(req, {
       authMode,
       verifyToken,
@@ -1789,6 +1797,7 @@ export function createBffApp(options = {}) {
     jvmWeeklyWorkspaceEmailDomain: options.jvmWeeklyWorkspaceEmailDomain,
     cashflowSlackService,
     mcpOAuthService,
+    inspectCashflowSheet: cashflowSheetLabRoutes?.inspectCashflowSheet,
   });
   app.post('/api/v1/cashflow/month-close-reminder-preview', asyncHandler(async (req, res) => {
     assertActorRoleAllowed(req, ['admin', 'finance'], 'preview month-close reminders');

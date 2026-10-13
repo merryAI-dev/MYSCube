@@ -61,9 +61,9 @@ import {
   CASHFLOW_SETTLEMENT_CYCLE_CUTOFF_MONTH,
   isHistoricalCashflowSettlementCycle,
 } from '../cashflow/settlement-cycle/contract.mjs';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import * as z from 'zod/v4';
+import { createRemoteMcpServer } from '../../mcp/remote-tools.mjs';
+import { dispatchInternalGet } from '../internal-dispatch.mjs';
 
 const CASHFLOW_LINE_INDEX = new Map(CASHFLOW_ALL_LINES.map((lineId, index) => [lineId, index]));
 const CASHFLOW_MONTH_CLOSE_ROUTE_TIMEOUT_MS = 26_000;
@@ -3923,6 +3923,7 @@ export function mountJvmWeeklyApiRoutes(app, {
   performanceNow,
   cashflowSlackService,
   mcpOAuthService,
+  inspectCashflowSheet,
   now = () => new Date(),
 } = {}) {
   const baseUrl = resolveJavaWeeklyApiBaseUrl({ jvmWeeklyApiBaseUrl }, env);
@@ -4892,22 +4893,25 @@ export function mountJvmWeeklyApiRoutes(app, {
     res.status(200).json(await readWeeklyOverview(req));
   }));
 
-  function mcpServerFor(context) {
-    const server = new McpServer({ name: 'myscube', version: '0.2.0' });
-    server.registerTool('cashflow_status', {
-      title: 'MYSCube 정산 현황 조회',
-      description: '권한이 있는 프로젝트의 월·주 정산 상태와 P/A 차액을 조회합니다. 읽기 전용입니다.',
-      inputSchema: { yearMonth: z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/), projectIds: z.array(z.string()).min(1).max(100) },
-      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    }, async ({ yearMonth, projectIds }) => {
-      try {
-        const overview = await readWeeklyOverview({ context, body: { yearMonth, projectIds } });
-        return { content: [{ type: 'text', text: JSON.stringify(overview) }] };
-      } catch (error) {
-        return { content: [{ type: 'text', text: error instanceof Error ? error.message : '현금흐름 조회에 실패했습니다.' }], isError: true };
-      }
+  // assertCashflowProjectInScope 와 같은 판정을 목록 필터로 쓴다. 구성원 문서는 요청당 한 번만 읽는다.
+  async function projectVisibilityFor(context) {
+    const req = { context };
+    assertWeeklyWorkspaceOrRoleAllowed(req, ROUTE_ROLES.readCore, 'read MCP projects', authMode, workspaceEmailDomain);
+    const workspaceUser = isWorkspaceAuthMode(authMode) && isWorkspaceUser(context, workspaceEmailDomain);
+    const role = readOptionalText(context?.actorRole);
+    if (!db?.doc || workspaceUser || TENANT_WIDE_PROJECT_ROLES.includes(role.toLowerCase())) return async () => true;
+    const members = await readActorMemberDocuments({
+      db, tenantId: context?.tenantId, actorId: context?.actorId, actorEmail: context?.actorEmail,
     });
-    return server;
+    return async (projectId) => isProjectInActorScope({ role, members, actorId: context?.actorId, projectId, workspaceUser });
+  }
+
+  async function mcpServerFor(context) {
+    return createRemoteMcpServer({
+      context, db, readWeeklyOverview, readCashflowSnapshot, inspectCashflowSheet,
+      readApi: (path, query) => dispatchInternalGet(app, { path, query, context }),
+      isProjectVisible: await projectVisibilityFor(context),
+    });
   }
 
   app.post('/mcp', asyncHandler(async (req, res) => {
@@ -4918,7 +4922,7 @@ export function mountJvmWeeklyApiRoutes(app, {
       res.setHeader('WWW-Authenticate', `Bearer resource_metadata="${new URL('/.well-known/oauth-protected-resource', mcpOAuthService.resource).toString()}"`);
       throw error;
     }
-    const server = mcpServerFor(context);
+    const server = await mcpServerFor(context);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     await server.connect(transport);
     await transport.handleRequest(req, res, req.body);

@@ -19,7 +19,7 @@ export const CODE_EVIDENCE = [
   {
     "topic": "sheet_validation",
     "path": "server/bff/routes/jvm-weekly-api.mjs",
-    "sourceSha256": "3988c813cde64c5ce684d790d51abcd2b4b48694ea9bdb4dd3c5f76e832b94fb",
+    "sourceSha256": "bd04646463decc635a636c9605a95ae608162d2e5a376786336bb681718914fc",
     "startLine": 3552,
     "endLine": 3553,
     "excerpt": "    sheetRuleWarnings.push(...sheetControlBlockers(sheetFacts));\n    sheetRuleWarnings.push(...monthSheetCalculationBlockers(sheetFacts, yearMonth));"
@@ -27,7 +27,7 @@ export const CODE_EVIDENCE = [
   {
     "topic": "sheet_validation",
     "path": "server/bff/routes/jvm-weekly-api.mjs",
-    "sourceSha256": "3988c813cde64c5ce684d790d51abcd2b4b48694ea9bdb4dd3c5f76e832b94fb",
+    "sourceSha256": "bd04646463decc635a636c9605a95ae608162d2e5a376786336bb681718914fc",
     "startLine": 2779,
     "endLine": 2792,
     "excerpt": "  if (projectionRows.length !== 19 || actualRows.length !== 19) {\n    blockers.push({\n      code: 'SHEET_CONTROL_TOTAL_INCOMPLETE',\n      message: 'Projection/Actual BO control total이 불완전합니다. 시트값을 다시 불러와 주세요.',\n    });\n  } else if (\n    typeof controls?.deposit?.matches !== 'boolean'\n    || rows.some((row) => typeof row?.matches !== 'boolean')\n  ) {\n    blockers.push({\n      code: 'SHEET_CONTROL_TOTAL_INVALID',\n      message: 'Projection/Actual BO control total 검산값이 올바르지 않습니다. 시트값을 다시 불러와 주세요.',\n    });\n  }"

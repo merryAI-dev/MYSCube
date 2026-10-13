@@ -1,0 +1,72 @@
+name: Cloudflare MCP Edge
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'Exempt the MCP protocol paths from the automation-client block. Unchecked only prints the current rule.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudflare-custom-waf
+  cancel-in-progress: false
+
+jobs:
+  edge:
+    runs-on: ubuntu-latest
+    environment: Production
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Show current automation-client rule and the planned scope
+        env:
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          node --input-type=module <<'JS'
+          import { MCP_SCOPE, withMcpException } from './scripts/configure-mcp-edge.mjs';
+          const { CLOUDFLARE_API_KEY: key, CLOUDFLARE_EMAIL: email, CLOUDFLARE_ZONE_ID: zone } = process.env;
+          if (!key || !email || !/^[a-f0-9]{32}$/.test(zone || '')) throw new Error('Cloudflare credentials unavailable');
+          const response = await fetch(`https://api.cloudflare.com/client/v4/zones/${zone}/rulesets/phases/http_request_firewall_custom/entrypoint`, {
+            headers: { 'X-Auth-Key': key, 'X-Auth-Email': email }, signal: AbortSignal.timeout(15000),
+          });
+          const result = await response.json();
+          if (!response.ok || !result.success) throw new Error(`Cloudflare read failed: ${response.status}`);
+          const rule = result.result.rules.find((item) => item.ref === 'mysc_explicit_automation_client_block');
+          console.log(JSON.stringify({ scope: MCP_SCOPE, alreadyApplied: withMcpException(rule.expression) === rule.expression, current: rule.expression }, null, 2));
+          JS
+      - name: Apply MCP edge exception
+        if: inputs.apply
+        env:
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: node scripts/configure-mcp-edge.mjs
+      - name: Preserve pre-change firewall backup
+        if: always() && inputs.apply
+        uses: actions/upload-artifact@v4
+        with:
+          name: mcp-edge-before
+          path: mcp-edge-before.json
+          retention-days: 30
+          if-no-files-found: warn
+      - name: Smoke test MCP discovery as SDK clients
+        if: inputs.apply
+        run: |
+          sleep 10
+          for ua in "python-httpx/0.27.0" "mcp-client/1.0" "node"; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' -A "$ua" https://myscube.myscguard.app/.well-known/oauth-protected-resource)
+            echo "$ua -> $code"
+            test "$code" = "200"
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A "python-httpx/0.27.0" https://myscube.myscguard.app/api/v1/health)
+          echo "non-MCP path with httpx -> $code (expected 403)"
+          test "$code" = "403"
