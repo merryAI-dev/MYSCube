@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@cloudflare/workers-oauth-provider', () => ({
+  AuthorizationError: class AuthorizationError extends Error {},
   authorizationErrorRedirect: (request, error) => `${request.redirectUri}?error=${error}`,
 }));
-const { handleSession } = await import('../src/ema/auth.mjs');
+const { AuthorizationError } = await import('@cloudflare/workers-oauth-provider');
+const { handleAuthorize, handleSession } = await import('../src/ema/auth.mjs');
 const { createEmaClient, EmaError } = await import('../src/ema/client.mjs');
 
 const WEB = 'https://emastation.myscguard.app';
@@ -81,6 +83,28 @@ describe('EMA session handoff', () => {
       expect(response.status).toBe(400);
     }
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+});
+
+describe('EMA consent page', () => {
+  it('shows a restart notice instead of a worker crash when the consent request expired', async () => {
+    const oauth = provider({
+      approveConsent: vi.fn(async () => { throw new AuthorizationError('invalid_request', { description: 'expired' }); }),
+    });
+    const form = new FormData();
+    form.set('handle', 'old-handle');
+    form.set('decision', 'approve');
+    const response = await handleAuthorize(new Request('https://ema-mcp.myscguard.app/authorize', { method: 'POST', body: form }), env(oauth));
+    expect(response.status).toBe(400);
+    expect(await response.text()).toContain('연결 요청이 만료됐습니다');
+  });
+
+  it('does not hide unexpected errors', async () => {
+    const oauth = provider({ approveConsent: vi.fn(async () => { throw new TypeError('bug'); }) });
+    const form = new FormData();
+    form.set('handle', 'h');
+    form.set('decision', 'approve');
+    await expect(handleAuthorize(new Request('https://ema-mcp.myscguard.app/authorize', { method: 'POST', body: form }), env(oauth))).rejects.toThrow('bug');
   });
 });
 

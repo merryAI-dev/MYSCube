@@ -1,4 +1,4 @@
-import { authorizationErrorRedirect } from '@cloudflare/workers-oauth-provider';
+import { AuthorizationError, authorizationErrorRedirect } from '@cloudflare/workers-oauth-provider';
 import { createBffClient, BffError } from './bff.mjs';
 import { exchangeGoogleCode, googleAuthorizeUrl, IdentityError, s256, signInFirebase } from './identity.mjs';
 
@@ -41,7 +41,18 @@ async function startUpstream(env, oauth, authRequest, headers) {
   return new Response(null, { status: 302, headers: upstreamHeaders });
 }
 
+// 동의 화면은 10분 안에 눌러야 하고 한 번만 쓸 수 있다. 라이브러리가 던지는 AuthorizationError 를
+// 그대로 두면 Cloudflare 오류 1101 화면이 나오므로 다시 시작하라는 안내로 바꾼다.
 export async function handleAuthorize(request, env) {
+  try {
+    return await authorize(request, env);
+  } catch (error) {
+    if (error instanceof AuthorizationError) return errorPage('연결 요청이 만료됐습니다. 동의 화면은 10분 안에 한 번만 누를 수 있습니다.');
+    throw error;
+  }
+}
+
+async function authorize(request, env) {
   const oauth = env.OAUTH_PROVIDER;
   const remember = { secret: env.CONSENT_SECRET };
   if (request.method === 'GET') {
