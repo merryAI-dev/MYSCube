@@ -74,16 +74,29 @@ try {
 }
 
 // 사용자 도메인 인증서와 DNS 가 붙는 동안 최대 3분 기다리며 MCP 표준 응답을 확인한다.
-async function smoke() {
-  const resource = await fetch(`${ORIGIN}/.well-known/oauth-protected-resource/mcp`, { headers: { 'user-agent': 'python-httpx/0.27.0' } });
-  const metadata = resource.ok ? await resource.json() : null;
-  const challenge = await fetch(`${ORIGIN}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', 'user-agent': 'mcp-client/1.0' }, body: '{}' });
-  return metadata?.resource === `${ORIGIN}/mcp` && challenge.status === 401
-    && (challenge.headers.get('www-authenticate') || '').includes('resource_metadata=');
+// Cloudflare 가 러너(데이터센터 IP)의 Node fetch 지문을 막는 일이 있어, 엣지 점검 워크플로와 같은 curl 로 확인한다.
+function curl(args) {
+  const out = execFileSync('curl', ['-s', '-m', '15', ...args], { encoding: 'utf8' });
+  return out;
 }
-for (let attempt = 1; ; attempt++) {
-  try { if (await smoke()) break; } catch { /* certificate or DNS still provisioning */ }
-  if (attempt === 18) throw new Error('MCP discovery smoke test failed');
+function smoke() {
+  const body = curl(['-A', 'python-httpx/0.27.0', '-w', '\n%{http_code}', `${ORIGIN}/.well-known/oauth-protected-resource/mcp`]);
+  const lines = body.trimEnd().split('\n');
+  const code = lines.pop();
+  let resource = '';
+  try { resource = JSON.parse(lines.join('\n')).resource; } catch { /* 아직 준비 중 */ }
+  const head = curl(['-i', '-A', 'mcp-client/1.0', '-X', 'POST', '-H', 'content-type: application/json', '-d', '{}', `${ORIGIN}/mcp`]);
+  const status = /^HTTP\/[\d.]+ (\d{3})/u.exec(head)?.[1];
+  const challenge = /www-authenticate:.*resource_metadata=/iu.test(head);
+  const ok = code === '200' && resource === `${ORIGIN}/mcp` && status === '401' && challenge;
+  return { ok, detail: `metadata ${code} resource=${resource || '-'} / mcp ${status || '-'} challenge=${challenge}` };
+}
+let last = { ok: false, detail: 'not run' };
+for (let attempt = 1; attempt <= 18; attempt++) {
+  try { last = smoke(); } catch (error) { last = { ok: false, detail: `curl failed: ${error.message.split('\n')[0]}` }; }
+  console.log(`discovery check ${attempt}: ${last.detail}`);
+  if (last.ok) break;
+  if (attempt === 18) throw new Error(`MCP discovery smoke test failed (${last.detail})`);
   await new Promise((resolve) => setTimeout(resolve, 10_000));
 }
 console.log(JSON.stringify({ origin: ORIGIN, kvNamespace: KV_TITLE, release: env.GITHUB_SHA, discovery: 'ok' }));
