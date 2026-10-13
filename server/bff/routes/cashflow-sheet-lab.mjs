@@ -4976,5 +4976,12 @@ export function mountCashflowSheetLabRoutes(app, {
     };
   }
 
+  app.get('/api/v1/projects/:projectId/cashflow-sheet-lab/inspect', asyncHandler(async (req, res) => {
+    res.setHeader('cache-control', 'no-store');
+    res.status(200).json(await inspectCashflowSheet({
+      context: req.context, projectId: req.params.projectId, sourceYear: req.query.sourceYear,
+    }));
+  }));
+
   return { inspectCashflowSheet };
 }

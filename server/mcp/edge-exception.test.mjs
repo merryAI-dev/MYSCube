@@ -15,7 +15,8 @@ describe('MCP edge exception', () => {
     expect(withMcpException(expression)).toBe(expression);
   });
 
-  it('exempts only the MCP protocol paths, not the browser login page', () => {
+  it('exempts the MCP host and only the MCP protocol paths on the app host, not the browser login page', () => {
+    expect(MCP_SCOPE).toContain('http.host eq "mcp.myscguard.app"');
     expect(MCP_SCOPE).toContain('"/mcp"');
     expect(MCP_SCOPE).toContain('"/api/v1/mcp/oauth/token"');
     expect(MCP_SCOPE).not.toContain('authorize');
@@ -23,5 +24,12 @@ describe('MCP edge exception', () => {
 
   it('refuses to apply when the live rule drifted from review', () => {
     expect(() => withMcpException('(http.user_agent eq "")')).toThrow();
+  });
+
+  it('upgrades a rule that already carries the earlier app-host-only exception', () => {
+    const expression = terraformAutomationRule();
+    const legacy = expression.slice(0, -` and not ${MCP_SCOPE}`.length)
+      + ' and not (http.host eq "myscube.myscguard.app" and http.request.uri.path in {"/mcp" "/.well-known/oauth-authorization-server" "/.well-known/oauth-protected-resource" "/.well-known/oauth-protected-resource/mcp" "/api/v1/mcp/oauth/register" "/api/v1/mcp/oauth/token"})';
+    expect(withMcpException(legacy)).toBe(expression);
   });
 });

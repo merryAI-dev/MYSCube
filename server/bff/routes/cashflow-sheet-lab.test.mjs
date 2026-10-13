@@ -5928,4 +5928,15 @@ describe('cashflow sheet inspection for MCP', () => {
       .rejects.toMatchObject({ statusCode: 403 });
     expect(previewSpreadsheet).not.toHaveBeenCalled();
   });
+
+  it('serves the same inspection read-only over GET for the MCP service', async () => {
+    const onWrite = vi.fn();
+    const app = createApp({ db: createDb({ project: sheetProject, onWrite }) });
+    const response = await request(app).get('/api/v1/projects/project-a/cashflow-sheet-lab/inspect').expect(200);
+    expect(response.body).toMatchObject({ projectId: 'project-a', verdict: 'OK' });
+    expect(response.headers['cache-control']).toBe('no-store');
+    expect(onWrite).not.toHaveBeenCalled();
+    await request(createApp({ db: createDb({ project: sheetProject }), context: { actorEmail: 'outside@example.com', actorRole: 'pm' } }))
+      .get('/api/v1/projects/project-a/cashflow-sheet-lab/inspect').expect(403);
+  });
 });
