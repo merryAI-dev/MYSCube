@@ -1,4 +1,4 @@
-import { authorizationErrorRedirect } from '@cloudflare/workers-oauth-provider';
+import { AuthorizationError, authorizationErrorRedirect } from '@cloudflare/workers-oauth-provider';
 import { createEmaClient, EmaError } from './client.mjs';
 
 // 로그인은 EMA Station 사이트에서만 한다. 이 서비스는 비밀번호를 받지 않고, 로그인한 구성원의
@@ -34,7 +34,20 @@ async function startUpstream(env, oauth, authRequest, headers) {
   return new Response(null, { status: 302, headers: upstreamHeaders });
 }
 
+// 동의 화면은 10분 안에 눌러야 하고, 다른 브라우저에서 이어 누르거나 두 번 누르면 라이브러리가 AuthorizationError 를 던진다.
+// 잡지 않으면 Cloudflare 오류 1101 화면이 나오므로 다시 시작하라는 안내로 바꾼다.
 export async function handleAuthorize(request, env) {
+  try {
+    return await authorize(request, env);
+  } catch (error) {
+    if (error instanceof AuthorizationError) {
+      return page('EMA Station 연결', '<h1>연결 요청이 만료됐습니다</h1><p>동의 화면은 10분 안에 눌러야 하고, 한 번만 쓸 수 있습니다.</p><p class="muted">AI 앱으로 돌아가 연결을 다시 시작해 주세요.</p>', new Headers(), 400);
+    }
+    throw error;
+  }
+}
+
+async function authorize(request, env) {
   const oauth = env.OAUTH_PROVIDER;
   const remember = { secret: env.CONSENT_SECRET };
   if (request.method === 'GET') {

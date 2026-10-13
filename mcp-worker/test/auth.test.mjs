@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@cloudflare/workers-oauth-provider', () => ({
+  AuthorizationError: class AuthorizationError extends Error {},
   authorizationErrorRedirect: (request, error) => `${request.redirectUri}?error=${error}&state=${request.state}`,
 }));
 const { handleCallback } = await import('../src/auth.mjs');
