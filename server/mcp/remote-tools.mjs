@@ -9,16 +9,8 @@ export { API_CATALOG_VERSION };
 // 쓰지 않으므로, 각 도구가 보여주는 범위는 MYSCube 앱 화면과 같다. 모든 도구는 읽기 전용이다.
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
-const PROJECT_SEARCH_SCAN_LIMIT = 1000;
-const PROJECT_SEARCH_RESULT_LIMIT = 20;
-const MAX_RESULT_CHARS = 100_000;
-
 function ok(data) {
-  const text = JSON.stringify(data);
-  if (text.length <= MAX_RESULT_CHARS) return { content: [{ type: 'text', text }] };
-  return { content: [{ type: 'text', text: JSON.stringify({ truncated: true,
-    message: `결과가 ${MAX_RESULT_CHARS}자를 넘어 잘랐습니다. limit를 줄이거나 범위를 좁혀 다시 조회하세요.`,
-    partial: text.slice(0, MAX_RESULT_CHARS) }) }] };
+  return { content: [{ type: 'text', text: JSON.stringify(data) }] };
 }
 
 function fail(error, fallback) {
@@ -45,12 +37,12 @@ export function createRemoteMcpServer({ context, db, readWeeklyOverview, readCas
 
   tool(server, 'project_search', {
     title: '사업 검색',
-    description: '사업명이나 약칭의 일부로 권한 있는 사업을 찾아 projectId, 사업명, CIC, 상태를 돌려줍니다. 최대 20건이며 truncated가 true면 검색어를 더 구체적으로 바꾸세요.',
+    description: '사업명이나 약칭의 일부로 권한 있는 사업을 찾아 맞는 사업을 모두(projectId, 사업명, CIC, 상태) 돌려줍니다.',
     input: { query: z.string().trim().min(1).max(100).describe('사업명 또는 약칭의 일부') },
   }, async ({ query }) => {
     const needle = query.toLowerCase();
     const scanned = await db.collection(`orgs/${tenantId}/projects`)
-      .select('name', 'shortName', 'cic', 'status', 'trashedAt').limit(PROJECT_SEARCH_SCAN_LIMIT).get();
+      .select('name', 'shortName', 'cic', 'status', 'trashedAt').get();
     const items = [];
     for (const doc of scanned.docs) {
       const data = doc.data() || {};
@@ -58,8 +50,7 @@ export function createRemoteMcpServer({ context, db, readWeeklyOverview, readCas
       if (!await isProjectVisible(doc.id)) continue;
       items.push({ projectId: doc.id, name: data.name || '', shortName: data.shortName || null, cic: data.cic || null, status: data.status || null });
     }
-    return { items: items.slice(0, PROJECT_SEARCH_RESULT_LIMIT),
-      truncated: scanned.docs.length === PROJECT_SEARCH_SCAN_LIMIT || items.length > PROJECT_SEARCH_RESULT_LIMIT };
+    return { total: items.length, items };
   });
 
   tool(server, 'project_get', {

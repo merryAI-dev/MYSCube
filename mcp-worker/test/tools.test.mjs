@@ -31,7 +31,7 @@ describe('MYSCube MCP worker tools', () => {
   it('publishes read-only tools with described inputs and server instructions', async () => {
     await connect({ get: vi.fn(), post: vi.fn() });
     const { tools } = await client.listTools();
-    expect(tools.map((tool) => tool.name).sort()).toEqual(['accounting_read', 'api_catalog', 'api_read', 'cashflow_status', 'project_get', 'project_search', 'sheet_check']);
+    expect(tools.map((tool) => tool.name).sort()).toEqual(['accounting_read', 'api_catalog', 'api_read', 'cashflow_status', 'project_get', 'project_list', 'project_search', 'sheet_check']);
     for (const tool of tools) {
       expect(tool.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
       for (const property of Object.values(tool.inputSchema.properties || {})) expect(property.description).toBeTruthy();
@@ -39,15 +39,43 @@ describe('MYSCube MCP worker tools', () => {
     expect(client.getInstructions()).toContain('project_search');
   });
 
-  it('searches and reads projects through the BFF list with a field whitelist, paging once per request', async () => {
+  it('searches every searchable field and reads projects through the BFF list, paging the BFF once per request', async () => {
     const get = vi.fn(async (path, query) => (query.cursor ? { items: [projects[2]], nextCursor: null } : { items: projects.slice(0, 2), nextCursor: 'p2' }));
     await connect({ get, post: vi.fn() });
-    expect((await call('project_search', { query: '에코' })).json).toEqual({
-      items: [{ projectId: 'p1', name: '에코 스타트업 육성', shortName: '에코', cic: 'CIC1', status: 'IN_PROGRESS' }], truncated: false });
+    expect((await call('project_search', { query: '에코' })).json).toEqual({ total: 1, offset: 0, count: 1, nextOffset: null, complete: true,
+      items: [{ projectId: 'p1', name: '에코 스타트업 육성', shortName: '에코', cic: 'CIC1', status: 'IN_PROGRESS', managerName: '홍길동' }] });
+    expect((await call('project_search', { query: '홍길동 CIC1' })).json.items.map((item) => item.projectId)).toEqual(['p1']);
+    expect((await call('project_search', { query: '에코', includeTrashed: true })).json.total).toBe(2);
     expect((await call('project_get', { projectId: 'p1' })).json).toEqual({ projectId: 'p1', name: '에코 스타트업 육성', shortName: '에코',
       cic: 'CIC1', status: 'IN_PROGRESS', managerName: '홍길동', contractAmount: 1000 });
-    expect((await call('project_get', { projectId: 'p2' })).isError).toBe(true);
-    expect(get).toHaveBeenCalledWith('/api/v1/projects', { limit: 200, cursor: undefined });
+    expect((await call('project_get', { projectId: 'p2' })).json).toMatchObject({ projectId: 'p2', trashed: true });
+    expect(get).toHaveBeenCalledTimes(2);
+  });
+
+  it('lists every project without a cap, following BFF pages to the end', async () => {
+    const all = Array.from({ length: 3500 }, (_, index) => ({ id: `p${index}`, name: `사업 ${index}`, status: index % 2 ? 'IN_PROGRESS' : 'COMPLETED', cic: `C${index % 12}` }));
+    const get = vi.fn(async (path, { cursor }) => {
+      const start = cursor ? Number(cursor) : 0;
+      const items = all.slice(start, start + 200);
+      return { items, nextCursor: start + 200 < all.length ? String(start + 200) : null };
+    });
+    await connect({ get, post: vi.fn() });
+    const listed = (await call('project_list', {})).json;
+    expect(listed).toMatchObject({ total: 3500, count: 3500, complete: true, nextOffset: null });
+    expect((await call('project_list', { status: 'IN_PROGRESS', cic: 'C1' })).json.items.every((item) => item.status === 'IN_PROGRESS' && item.cic === 'C1')).toBe(true);
+    expect((await call('project_list', { offset: 3000, limit: 400 })).json).toMatchObject({ offset: 3000, count: 400, nextOffset: 3400 });
+    expect(get).toHaveBeenCalledTimes(18);
+  });
+
+  it('checks settlement status for every project in BFF-sized batches when no ids are given', async () => {
+    const all = Array.from({ length: 250 }, (_, index) => ({ id: `p${index}`, name: `사업 ${index}` }));
+    const get = vi.fn(async () => ({ items: all, nextCursor: null }));
+    const post = vi.fn(async (path, { projectIds }) => ({ yearMonth: '2026-09', items: projectIds.map((id) => ({ projectId: id })), errors: [] }));
+    await connect({ get, post });
+    const result = (await call('cashflow_status', { yearMonth: '2026-09' })).json;
+    expect(result.projectCount).toBe(250);
+    expect(result.items).toHaveLength(250);
+    expect(post.mock.calls.map(([, body]) => body.projectIds.length)).toEqual([100, 100, 50]);
   });
 
   it('maps dedicated tools to the existing BFF APIs', async () => {
