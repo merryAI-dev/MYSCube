@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as z from 'zod/v4';
-import { buildCsv, buildXlsx } from './xlsx.mjs';
+import { buildCsv, buildWorkbook, buildXlsx } from './xlsx.mjs';
 
 // EMA Station 기업 등록(FRN) 도구. 데이터는 로그인한 구성원 본인의 권한으로 EMA 함수에서만 읽고 쓴다.
 // 현황 조회가 기본 진입점이고, 쓰기는 "미리보기 → 사용자 확인 → 등록" 두 단계로만 한다.
@@ -13,11 +13,26 @@ const PREVIEW_SAMPLE_NEW_ROWS = 20;
 
 const ROUTE_TYPES = ['AC_SELECTED_TEAM', 'AC_APPLICANT_TEAM', 'COLD_CALL', 'EXTERNAL_JUDGE_REFERRAL', 'EXTERNAL_JUDGING_ENCOUNTER', 'INTERACTION'];
 
+// EMA 화면의 "FRN 발급" 양식과 같은 섹터·국가 목록.
+export const SECTORS = [
+  ['AGF', '농식품·수산식품'], ['AIR', 'AI·로봇·자동화'], ['CLT', '기후테크·환경'], ['CLF', '문화·라이프스타일'],
+  ['DIT', '딥테크·산업혁신'], ['EDU', '교육·콘텐츠'], ['FIN', '금융포용·핀테크'], ['GBL', '글로벌·국제개발'],
+  ['HCR', '헬스케어·돌봄'], ['INF', '인프라·에너지·모빌리티'], ['LCL', '로컬·지역재생'], ['SPI', '사회혁신·공공혁신'], ['OTH', '미분류'],
+];
+export const OVERSEAS_COUNTRIES = [
+  ['VN', '베트남'], ['SG', '싱가포르'], ['JP', '일본'], ['ID', '인도네시아'], ['IN', '인도'], ['PH', '필리핀'], ['US', '미국'],
+  ['FR', '프랑스'], ['HK', '홍콩'], ['TH', '태국'], ['MN', '몽골'], ['BD', '방글라데시'], ['SN', '세네갈'], ['TW', '대만'],
+];
+const TEMPLATE_HEADERS = ['기업명', '대표자/창업자', '섹터', '지역', '국가(해외만)'];
+const TEMPLATE_ROWS = 1000;
+
 const INSTRUCTIONS = [
   'EMA Station 스타트업 등록(FRN) 데이터를 다룹니다. 현황·개수·"어때?" 같은 일반 질문은 먼저 ema_registry_status를 호출하세요.',
   '특정 기업은 ema_registry_search로 찾고 ema_registry_get으로 상세를 봅니다. 연락처·사업자번호 전체는 AI에게 보이지 않으며 다운로드 파일에만 들어갑니다.',
+  '등록에 필요한 것은 EMA 화면의 "FRN 발급"과 같습니다: 기업명, 대표자/창업자, 섹터(이름이나 코드), 지역(국내/해외, 해외면 국가). 이 3~4가지만 있으면 되고 법인명·설립연도·홈페이지·발굴 경로 등은 묻지 마세요.',
+  '발굴 경로는 자동으로 정해지므로 사용자에게 묻거나 열로 요구하지 마세요. 형식을 만들어 달라고 하면 긴 열 목록을 만들지 말고 ema_registry_import_template으로 양식 파일 링크를 주세요.',
   '엑셀로 여러 기업을 등록하려면: 파일이 작으면 대화에 올린 표를 rows로 넘겨 ema_registry_import_preview를 부르고, 크면 ema_registry_import_upload_link로 업로드 링크를 받으세요.',
-  '등록은 반드시 미리보기 결과를 사용자에게 보여 주고 확인받은 뒤에만 ema_registry_import_commit을 호출하세요. 발굴 경로(routeType)를 임의로 정하지 말고 사용자에게 물으세요.',
+  '등록은 반드시 미리보기 결과를 사용자에게 보여 주고 확인받은 뒤에만 ema_registry_import_commit을 호출하세요.',
   '엑셀 내려받기는 ema_registry_export로 다운로드 링크를 만들어 사용자에게 전달합니다(파일 내용은 대화에 싣지 않습니다).',
 ].join(' ');
 
@@ -142,6 +157,49 @@ export function createEmaMcpServer({ ema, store, publicOrigin, access, now = () 
       };
     });
 
+    tool(server, 'ema_registry_import_template', {
+      title: '등록 양식 받기',
+      description: '일괄 등록용 엑셀 양식(.xlsx)의 다운로드 링크를 돌려줍니다. 열은 기업명, 대표자/창업자, 섹터, 지역(국내/해외), 국가(해외만) 5개뿐이고 섹터·지역은 드롭다운, 두 번째 시트에 섹터 코드표가 있습니다. 링크는 한 번만 쓸 수 있고 15분 뒤 만료됩니다. 사용자가 양식을 요청하면 열 목록을 직접 만들지 말고 이 도구를 쓰세요.',
+    }, async () => {
+      const sheets = [
+        {
+          name: '등록',
+          headers: TEMPLATE_HEADERS,
+          rows: [],
+          validations: [
+            { ref: `C2:C${TEMPLATE_ROWS}`, list: SECTORS.map(([, label]) => label) },
+            { ref: `D2:D${TEMPLATE_ROWS}`, list: ['국내', '해외'] },
+            { ref: `E2:E${TEMPLATE_ROWS}`, list: OVERSEAS_COUNTRIES.map(([, label]) => label) },
+          ],
+        },
+        { name: '섹터 코드표', headers: ['섹터', '코드'], rows: SECTORS.map(([code, label]) => [label, code]) },
+        {
+          name: '작성 안내',
+          headers: ['안내'],
+          rows: [
+            ['기업명, 대표자/창업자, 섹터 3가지만 있으면 등록할 수 있습니다.'],
+            ['지역은 국내/해외 중에서 고르고, 해외면 국가를 함께 고르세요(비우면 국내).'],
+            ['섹터를 비우면 "미분류"로 등록됩니다.'],
+            ['이미 등록된 기업은 새로 만들지 않고 기존 FRN에 연결됩니다.'],
+          ],
+        },
+      ];
+      const payload = {
+        name: 'EMA-기업등록-양식.xlsx',
+        contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        bytes: buildWorkbook(sheets),
+      };
+      const { token, expiresInMinutes } = await store.saveFile(access.uid, payload);
+      return {
+        fileName: payload.name,
+        downloadUrl: `${publicOrigin}/files/${token}`,
+        expiresInMinutes,
+        singleUse: true,
+        columns: TEMPLATE_HEADERS,
+        next: '사용자가 양식을 채워 업로드하면 ema_registry_import_upload_link → ema_registry_import_preview 순서로 진행하세요.',
+      };
+    });
+
     tool(server, 'ema_registry_import_upload_link', {
       title: '엑셀 업로드 링크',
       description: '큰 엑셀 파일을 올릴 1회용 업로드 링크를 만듭니다(15분). 사용자가 링크에서 파일을 올리면 읽은 내용이 배치로 저장되고, 그 batchId로 ema_registry_import_preview를 호출합니다. 파일이 작고 대화에 표가 이미 있으면 링크 없이 rows를 바로 넘기세요.',
@@ -157,13 +215,13 @@ export function createEmaMcpServer({ ema, store, publicOrigin, access, now = () 
 
     tool(server, 'ema_registry_import_preview', {
       title: '일괄 등록 미리보기',
-      description: '엑셀 내용을 검증하고 기존 기업과의 중복을 판정합니다. 아무것도 등록하지 않습니다. 결과의 상태: new(신규 등록), match(기존 기업에 근거 추가), match_deleted(삭제된 기업과 같음, 건너뜀), match_migrated(이관 기업과 같음, 건너뜀), duplicate_in_batch(같은 파일 안 중복, 건너뜀), invalid(오류, 건너뜀). batchId(업로드한 파일) 또는 rows(대화의 표) 중 하나를 넘깁니다.',
+      description: '엑셀 내용을 검증하고 기존 기업과의 중복을 판정합니다. 아무것도 등록하지 않습니다. 필수 값은 기업명·대표자/창업자(+섹터, 지역)뿐이며 열 이름은 한글/영문 어느 쪽이든 인식합니다. 발굴 경로·법인명 등은 요구하지 마세요. 결과의 상태: new(신규 등록), match(기존 기업에 근거 추가), match_deleted(삭제된 기업과 같음, 건너뜀), match_migrated(이관 기업과 같음, 건너뜀), duplicate_in_batch(같은 파일 안 중복, 건너뜀), invalid(오류, 건너뜀). batchId(업로드한 파일) 또는 rows(대화의 표) 중 하나를 넘깁니다.',
       input: {
         batchId: z.string().max(80).optional().describe('업로드 링크로 올린 파일의 배치 ID'),
         rows: z.array(rowShape).min(1).optional().describe('열 이름 → 값 객체의 배열. 첫 행이 머리글인 표를 객체로 바꿔 넘깁니다.'),
-        routeType: z.enum(ROUTE_TYPES).optional().describe('발굴 경로 일괄값. 파일에 발굴경로 열이 없을 때만 필요하며, 사용자가 말한 값만 쓰세요.'),
+        routeType: z.enum(ROUTE_TYPES).optional().describe('발굴 경로. 보통 비워 두세요(자동으로 정해짐). 사용자가 직접 지정한 경우에만 쓰세요.'),
         sourceYear: z.number().int().min(2000).optional().describe('등록 연도 일괄값(비우면 올해)'),
-        programCode: z.string().max(20).optional().describe('섹터 코드 일괄값. 열이 비었을 때만 적용'),
+        programCode: z.string().max(20).optional().describe('섹터 일괄값(코드 또는 이름). 섹터 열이 비었을 때만 적용'),
         countryCode: z.string().length(2).optional().describe('국가 코드 일괄값(비우면 KR)'),
         detail: z.enum(['problems', 'all']).optional().describe('problems(기본): 신규가 아닌 행은 모두, 신규는 일부만. all: 전부'),
       },

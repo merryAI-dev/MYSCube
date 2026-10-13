@@ -148,9 +148,7 @@ function displayWidth(value) {
   return width;
 }
 
-/** 머리글 + 값만 가진 .xlsx 를 만든다. 문자열은 항상 문자열 셀이라 수식으로 해석되지 않는다. */
-export function buildXlsx({ sheetName = 'Sheet1', headers, rows }) {
-  const safeSheetName = String(sheetName).replace(/[[\]:*?/\\]/gu, ' ').trim().slice(0, 31) || 'Sheet1';
+function sheetXml({ headers, rows, validations = [] }) {
   const lastColumn = columnLetters(Math.max(headers.length, 1) - 1);
   const lastRow = rows.length + 1;
 
@@ -168,24 +166,47 @@ export function buildXlsx({ sheetName = 'Sheet1', headers, rows }) {
     `<row r="1">${headers.map((header, column) => cell(`${columnLetters(column)}1`, header, 1)).join('')}</row>`,
     ...rows.map((row, index) => `<row r="${index + 2}">${headers.map((_, column) => cell(`${columnLetters(column)}${index + 2}`, row[column])).join('')}</row>`),
   ];
+  // 드롭다운(목록 검증). 목록 문자열은 255자를 넘을 수 없다.
+  const listValidations = validations.map(({ ref, list }) => {
+    const formula = list.join(',');
+    if (formula.length > 255) throw new XlsxError('드롭다운 목록이 너무 깁니다.');
+    return `<dataValidation type="list" allowBlank="1" showErrorMessage="1" sqref="${escapeXml(ref)}"><formula1>"${escapeXml(formula)}"</formula1></dataValidation>`;
+  });
 
-  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastColumn}${lastRow}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join('')}</cols><sheetData>${sheetRows.join('')}</sheetData><autoFilter ref="A1:${lastColumn}${lastRow}"/></worksheet>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastColumn}${lastRow}"/><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${widths.map((width, index) => `<col min="${index + 1}" max="${index + 1}" width="${width}" customWidth="1"/>`).join('')}</cols><sheetData>${sheetRows.join('')}</sheetData><autoFilter ref="A1:${lastColumn}${lastRow}"/>${listValidations.length ? `<dataValidations count="${listValidations.length}">${listValidations.join('')}</dataValidations>` : ''}</worksheet>`;
+}
 
+const safeSheetName = (name, fallback) => String(name).replace(/[[\]:*?/\\]/gu, ' ').trim().slice(0, 31) || fallback;
+
+/**
+ * 여러 시트를 가진 .xlsx. 각 시트는 { name, headers, rows, validations?: [{ ref:'C2:C1000', list:[...] }] }.
+ * 문자열은 항상 문자열 셀이라 수식으로 해석되지 않는다.
+ */
+export function buildWorkbook(sheets) {
+  const entries = sheets.map((sheet, index) => ({ ...sheet, name: safeSheetName(sheet.name, `Sheet${index + 1}`), file: `xl/worksheets/sheet${index + 1}.xml` }));
+  const overrides = entries.map((entry) => `<Override PartName="/${entry.file}" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('');
+  const relationships = entries.map((entry, index) => `<Relationship Id="rId${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')
+    + `<Relationship Id="rId${entries.length + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>`;
   const files = {
     '[Content_Types].xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>${overrides}<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`,
     '_rels/.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`,
     'xl/workbook.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${escapeXml(safeSheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${entries.map((entry, index) => `<sheet name="${escapeXml(entry.name)}" sheetId="${index + 1}" r:id="rId${index + 1}"/>`).join('')}</sheets></workbook>`,
     'xl/_rels/workbook.xml.rels': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`,
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relationships}</Relationships>`,
     'xl/styles.xml': `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`,
-    'xl/worksheets/sheet1.xml': sheet,
   };
+  for (const entry of entries) files[entry.file] = sheetXml(entry);
   return zipSync(Object.fromEntries(Object.entries(files).map(([name, content]) => [name, strToU8(content)])));
+}
+
+/** 시트 하나짜리 .xlsx(머리글 + 값). */
+export function buildXlsx({ sheetName = 'Sheet1', headers, rows }) {
+  return buildWorkbook([{ name: sheetName, headers, rows }]);
 }
 
 /** UTF-8 BOM 이 붙은 CSV. 수식으로 읽힐 수 있는 문자열은 앞에 작은따옴표를 붙인다. */
