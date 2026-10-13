@@ -4917,4 +4917,64 @@ export function mountCashflowSheetLabRoutes(app, {
     }
   }));
 
+  // 불러오기와 같은 양식 검사를 하되 아무것도 저장하지 않는다. 문의의 대부분이 시트 양식
+  // 문제라, 칸 주소와 함께 표준과 다른 곳을 그대로 돌려준다.
+  async function inspectCashflowSheet({ context, projectId, sourceYear: requestedYear }) {
+    assertCashflowSheetLabAccess({ context }, workspaceEmailDomain);
+    const tenantId = context.tenantId;
+    const project = await readProjectDocument(db, tenantId, projectId);
+    const sourceYear = resolveSourceYear(requestedYear, project?.cashflowSheetLab || {}, project);
+    const config = readCashflowSheetLabConfig(project, sourceYear);
+    const mirror = await readCashflowSheetMirror(db, tenantId, projectId);
+    const saved = mirror ? {
+      status: readOptionalText(mirror.status) || null,
+      capturedAt: readOptionalText(mirror.capturedAt) || null,
+      weeklyYear: Number.isSafeInteger(mirror.weeklyYear) ? mirror.weeklyYear : null,
+      lastRefreshAttemptAt: readOptionalText(mirror.lastRefreshAttemptAt) || null,
+      lastRefreshError: mirror.lastRefreshError ? {
+        code: readOptionalText(mirror.lastRefreshError.code) || null,
+        message: readOptionalText(mirror.lastRefreshError.message) || null,
+        at: readOptionalText(mirror.lastRefreshError.at) || null,
+        diagnostics: Array.isArray(mirror.lastRefreshError.diagnostics) ? mirror.lastRefreshError.diagnostics : [],
+      } : null,
+    } : null;
+    if (!config) {
+      return { projectId, sourceYear, verdict: 'NOT_CONFIGURED', issues: [{
+        code: 'cashflow_sheet_config_required', message: '이 연도의 사업비 관리 시트 링크가 등록되지 않았습니다.',
+      }], saved };
+    }
+    const source = resolvePreviewSource({ sourceYear }, config);
+    const weekRange = normalizeWeekRange(source);
+    const [freshness, preview] = await Promise.all([
+      loadSheetFreshness(source.value).catch(() => null),
+      loadSheetPreview({ value: source.value, sheetName: source.sheetName, bypassCache: true }),
+    ]);
+    const sheet = {
+      spreadsheetTitle: readOptionalText(preview.spreadsheetTitle) || null,
+      selectedSheetName: readOptionalText(preview.selectedSheetName) || null,
+      modifiedTime: readOptionalText(freshness?.modifiedTime) || null,
+      changedSinceLastLoad: freshness?.modifiedTime && mirror?.sourceFileModifiedTime
+        ? freshness.modifiedTime !== mirror.sourceFileModifiedTime
+        : null,
+    };
+    if (!isCashflowUsageLinkedSheetName(preview?.selectedSheetName)) {
+      return { projectId, sourceYear, verdict: 'NEEDS_FIX', sheet, saved, issues: [{
+        code: 'cashflow_sheet_tab_unsupported',
+        message: `선택된 탭(${sheet.selectedSheetName || '이름 없음'})이 cashflow(사용내역 연동) 탭이 아닙니다.`,
+      }] };
+    }
+    const template = analyzeCashflowSheetTemplate(preview.matrix);
+    const issues = template.reasons.map((reason) => ({ ...reason }));
+    try {
+      assertConfiguredWeekRangeExistsInTemplate(template, weekRange);
+    } catch (error) {
+      issues.push({ code: error.code || 'cashflow_week_range_not_in_sheet', message: error.message });
+    }
+    return {
+      projectId, sourceYear, verdict: issues.length === 0 ? 'OK' : 'NEEDS_FIX',
+      weeklyYear: template.weeklyYear ?? null, sheet, saved, issueCount: issues.length, issues: issues.slice(0, 100),
+    };
+  }
+
+  return { inspectCashflowSheet };
 }

@@ -22,7 +22,7 @@ export function McpAuthorizePage() {
   if (isLoading) return <main className="mx-auto max-w-md p-8 text-sm">{message}</main>;
   if (!user) return (
     <main className="mx-auto max-w-md space-y-4 p-8 text-sm">
-      <p>MYSCube 정산 현황을 조회하려면 회사 계정으로 로그인해 주세요.</p>
+      <p>AI 도구(Claude, ChatGPT 등)에서 MYSCube 데이터를 조회하려면 회사 Google 계정으로 한 번 로그인해 주세요. 로그인 상태는 30일 동안 유지됩니다.</p>
       <button type="button" className="rounded bg-slate-900 px-4 py-2 text-white" onClick={() => void loginWithGoogle()}>Google로 로그인</button>
     </main>
   );

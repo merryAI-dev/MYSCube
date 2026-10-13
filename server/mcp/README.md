@@ -1,6 +1,24 @@
 # MYSCube MCP
 
-`cashflow_status`만 제공하는 읽기 전용 MCP입니다. 정산 데이터는 브라우저·Playwright·화면 크롤링이 아니라 BFF→JVM의 기존 정산 조회 경로에서만 읽습니다.
+읽기 전용 MCP입니다. 정산 데이터는 브라우저·Playwright·화면 크롤링이 아니라 BFF→JVM의 기존 정산 조회 경로에서만 읽습니다.
+
+원격 MCP(`/mcp`)는 표준 MCP(Streamable HTTP + OAuth 2.1)라 Claude, ChatGPT 등 MCP를 지원하는 클라이언트에 같은 주소로 붙습니다. 모든 도구는 OAuth로 확인된 본인 권한으로 실행되며, Slack 봇의 감사 계정은 쓰지 않습니다.
+
+| 도구 | 하는 일 |
+|---|---|
+| `project_search` | 사업명·약칭으로 권한 있는 사업을 찾아 projectId를 돌려줍니다. |
+| `project_get` | 사업 기본 정보. 첨부·링크·연락처·검토 의견은 제외합니다. |
+| `cashflow_status` | 여러 사업의 월·주 정산 상태와 P/A 차액. |
+| `accounting_read` | 한 사업의 월/주차 계획·실적 입출금과 누적잔액(원장 반영값). |
+| `sheet_check` | 사업비 시트를 지금 읽어 표준 양식과 다른 칸(칸 주소·고칠 내용)과 마지막 불러오기 오류를 돌려줍니다. 저장하지 않습니다. |
+| `api_catalog` | 위 도구로 답할 수 없을 때 쓸 수 있는 검증된 조회 API 목록(id, 해시태그, params JSON Schema, 목록 버전 해시). |
+| `api_read` | `api_catalog`의 id 하나를 실행합니다. 목록에 없는 id는 실행되지 않고, 결과의 링크·이메일·파일 위치 필드는 제거됩니다. |
+
+조회 API를 늘릴 때는 라우트마다 도구를 만들지 않고 `remote-tools.mjs`의 `API_CATALOG`에 GET 항목 하나를 추가합니다. 각 API는 같은 프로세스 안에서 MCP 사용자의 context로 호출되어(`server/bff/internal-dispatch.mjs`), 앱 화면과 같은 역할·프로젝트 권한 검사를 받습니다.
+
+로그인: 처음 연결할 때 MYSCube 화면이 열리고, 회사 Google 계정으로 이미 로그인돼 있으면 바로 넘어갑니다. 액세스 토큰은 1시간이며 갱신 토큰(30일, 쓸 때마다 새로 발급)으로 자동 갱신되므로 30일 안에 한 번이라도 쓰면 다시 로그인하지 않습니다. 갱신할 때마다 구성원 상태를 다시 확인합니다.
+
+로컬 stdio 서버(`server.mjs`)는 아직 `cashflow_status`만 제공합니다.
 
 ## 연결
 

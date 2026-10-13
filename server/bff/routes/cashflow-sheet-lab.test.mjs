@@ -5867,3 +5867,65 @@ describe('cashflow sheet apply lock release on failure', () => {
     expect(db.__getDocument('orgs/tenant-a/cashflow_sheet_publications/project-a').status).toBe('APPLYING');
   });
 });
+
+describe('cashflow sheet inspection for MCP', () => {
+  const sheetProject = {
+    id: 'project-a',
+    cashflowSheetLab: { value: 'saved-spreadsheet-a', sheetName: 'cashflow(사용내역 연동)' },
+  };
+  const workspaceContext = { tenantId: 'tenant-a', actorId: 'actor-a', actorRole: 'pm', actorEmail: 'user@mysc.co.kr' };
+
+  function mountInspector({ project = sheetProject, matrix = buildMatrix(), selectedSheetName = 'cashflow(사용내역 연동)', onWrite } = {}) {
+    const previewSpreadsheet = vi.fn(async () => ({
+      spreadsheetId: 'spreadsheet-a', spreadsheetTitle: 'Cashflow workbook', selectedSheetName,
+      availableSheets: [{ sheetId: 1, title: selectedSheetName, index: 0 }], matrix,
+    }));
+    const app = express();
+    const { inspectCashflowSheet } = mountCashflowSheetLabRoutes(app, {
+      db: createDb({ project, onWrite }),
+      googleSheetsService: { previewSpreadsheet, getSpreadsheetFreshness: vi.fn(async () => ({ modifiedTime: '2026-10-01T00:00:00Z' })) },
+    });
+    return { inspectCashflowSheet, previewSpreadsheet };
+  }
+
+  it('reports the standard sheet as OK without writing anything', async () => {
+    const onWrite = vi.fn();
+    const { inspectCashflowSheet } = mountInspector({ onWrite });
+    const result = await inspectCashflowSheet({ context: workspaceContext, projectId: 'project-a' });
+    expect(result).toMatchObject({ verdict: 'OK', issueCount: 0, issues: [], sheet: { selectedSheetName: 'cashflow(사용내역 연동)' } });
+    expect(onWrite).not.toHaveBeenCalled();
+  });
+
+  it('returns the exact cells that differ from the standard template', async () => {
+    const broken = buildMatrix();
+    broken[12][4] = 'broken-week-header';
+    const onWrite = vi.fn();
+    const { inspectCashflowSheet } = mountInspector({ matrix: broken, onWrite });
+    const result = await inspectCashflowSheet({ context: workspaceContext, projectId: 'project-a' });
+    expect(result.verdict).toBe('NEEDS_FIX');
+    expect(result.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'cashflow_week_header_invalid', sourceCell: 'E13' }),
+    ]));
+    expect(onWrite).not.toHaveBeenCalled();
+  });
+
+  it('flags a tab that is not the cashflow usage-linked tab', async () => {
+    const { inspectCashflowSheet } = mountInspector({ selectedSheetName: '시트1' });
+    const result = await inspectCashflowSheet({ context: workspaceContext, projectId: 'project-a' });
+    expect(result).toMatchObject({ verdict: 'NEEDS_FIX', issues: [{ code: 'cashflow_sheet_tab_unsupported' }] });
+  });
+
+  it('says the sheet link is missing without calling Google', async () => {
+    const { inspectCashflowSheet, previewSpreadsheet } = mountInspector({ project: { id: 'project-a' } });
+    const result = await inspectCashflowSheet({ context: workspaceContext, projectId: 'project-a' });
+    expect(result).toMatchObject({ verdict: 'NOT_CONFIGURED', issues: [{ code: 'cashflow_sheet_config_required' }] });
+    expect(previewSpreadsheet).not.toHaveBeenCalled();
+  });
+
+  it('keeps the sheet lab access rule for non-workspace callers', async () => {
+    const { inspectCashflowSheet, previewSpreadsheet } = mountInspector();
+    await expect(inspectCashflowSheet({ context: { ...workspaceContext, actorEmail: 'outside@example.com' }, projectId: 'project-a' }))
+      .rejects.toMatchObject({ statusCode: 403 });
+    expect(previewSpreadsheet).not.toHaveBeenCalled();
+  });
+});

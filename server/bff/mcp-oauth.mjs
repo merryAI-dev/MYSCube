@@ -4,7 +4,11 @@ import { asyncHandler, createHttpError, readOptionalText } from './bff-utils.mjs
 
 const SCOPE = 'cashflow.read';
 const CODE_TTL_MS = 60_000;
-const ACCESS_TTL_MS = 10 * 60_000;
+// 비개발자가 Google 로그인까지 마칠 시간을 준다.
+const REQUEST_TTL_MS = 10 * 60_000;
+const ACCESS_TTL_MS = 60 * 60_000;
+// 갱신 토큰은 쓸 때마다 새로 발급되고 30일 동안 쓰지 않으면 만료된다. 매번 구성원 상태를 다시 확인한다.
+const REFRESH_TTL_MS = 30 * 24 * 60 * 60_000;
 const LOCAL_CLIENT_ID = 'myscube-local-launcher';
 
 const hash = (value) => createHash('sha256').update(value).digest('base64url');
@@ -26,11 +30,6 @@ function publicUrl(value, name) {
   return url.toString().replace(/\/$/, '');
 }
 
-function scopes(value) {
-  const result = String(value || '').split(/\s+/).filter(Boolean);
-  if (result.length !== 1 || result[0] !== SCOPE) throw createHttpError(400, '허용되지 않은 OAuth 권한입니다.', 'invalid_scope');
-  return SCOPE;
-}
 
 function loopbackRedirect(uri) {
   try {
@@ -95,6 +94,30 @@ export function createMcpOAuthService({ db, issuer, publicOrigin, now = () => ne
     return memberContext(member.exists ? member.data() : null, context);
   }
 
+  async function issueTokens({ context, clientId }) {
+    const accessToken = secret();
+    const refreshToken = secret();
+    const createdAt = now().toISOString();
+    await collection('mcp_oauth_tokens', accessToken).set({ context, clientId, scope: SCOPE, resource, expiresAtMs: nowMs(now) + ACCESS_TTL_MS, createdAt });
+    await collection('mcp_oauth_refresh_tokens', refreshToken).set({ context, clientId, resource, expiresAtMs: nowMs(now) + REFRESH_TTL_MS, createdAt });
+    return { access_token: accessToken, token_type: 'Bearer', expires_in: ACCESS_TTL_MS / 1000, refresh_token: refreshToken, scope: SCOPE };
+  }
+
+  async function refresh(input) {
+    const clientId = required(input.client_id);
+    const ref = collection('mcp_oauth_refresh_tokens', required(input.refresh_token));
+    const record = await db.runTransaction(async (transaction) => {
+      const snap = await transaction.get(ref);
+      const current = snap.exists ? snap.data() : null;
+      if (!current || current.usedAt || current.expiresAtMs < nowMs(now) || current.clientId !== clientId || current.resource !== resource) {
+        throw createHttpError(400, '로그인이 만료됐습니다. 다시 연결해 주세요.', 'invalid_grant');
+      }
+      transaction.set(ref, { usedAt: now().toISOString() }, { merge: true });
+      return current;
+    });
+    return issueTokens({ context: await activeContext(record.context), clientId });
+  }
+
   return {
     issuer: safeIssuer,
     resource,
@@ -104,8 +127,9 @@ export function createMcpOAuthService({ db, issuer, publicOrigin, now = () => ne
         authorization_endpoint: `${safeIssuer}/api/v1/mcp/oauth/authorize`,
         token_endpoint: `${safeIssuer}/api/v1/mcp/oauth/token`,
         registration_endpoint: `${safeIssuer}/api/v1/mcp/oauth/register`,
-        response_types_supported: ['code'], grant_types_supported: ['authorization_code'],
+        response_types_supported: ['code'],
         code_challenge_methods_supported: ['S256'], scopes_supported: [SCOPE],
+        grant_types_supported: ['authorization_code', 'refresh_token'], token_endpoint_auth_methods_supported: ['none'],
       };
     },
     async register({ redirectUris }) {
@@ -114,7 +138,8 @@ export function createMcpOAuthService({ db, issuer, publicOrigin, now = () => ne
       }
       const clientId = `myscube-${secret()}`;
       await collection('mcp_oauth_clients', clientId).set({ clientId, redirectUris, createdAt: now().toISOString() });
-      return { client_id: clientId, redirect_uris: redirectUris, token_endpoint_auth_method: 'none' };
+      return { client_id: clientId, redirect_uris: redirectUris, token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] };
     },
     async startAuthorization(input) {
       const clientId = required(input.client_id);
@@ -123,12 +148,12 @@ export function createMcpOAuthService({ db, issuer, publicOrigin, now = () => ne
       if (required(input.response_type) !== 'code' || required(input.code_challenge_method) !== 'S256' || !/^[A-Za-z0-9_-]{43,128}$/.test(required(input.code_challenge))) {
         throw createHttpError(400, 'PKCE S256 인증 요청이 필요합니다.', 'invalid_request');
       }
-      scopes(input.scope);
+      // 요청한 scope 와 무관하게 읽기 전용 권한 하나만 발급한다.
       if (input.resource && readOptionalText(input.resource) !== resource) throw createHttpError(400, 'MCP 리소스 주소가 일치하지 않습니다.', 'invalid_target');
       const requestId = secret();
       await collection('mcp_oauth_requests', requestId).set({
         clientId, redirectUri, codeChallenge: input.code_challenge, state: readOptionalText(input.state),
-        expiresAtMs: nowMs(now) + CODE_TTL_MS, createdAt: now().toISOString(),
+        expiresAtMs: nowMs(now) + REQUEST_TTL_MS, createdAt: now().toISOString(),
       });
       return `${safeOrigin}/mcp/authorize?request_id=${encodeURIComponent(requestId)}`;
     },
@@ -147,6 +172,7 @@ export function createMcpOAuthService({ db, issuer, publicOrigin, now = () => ne
       return appendQuery(request.redirectUri, { code, state: request.state });
     },
     async exchangeCode(input) {
+      if (input.grant_type === 'refresh_token') return refresh(input);
       const code = required(input.code);
       const verifier = required(input.code_verifier);
       const clientId = required(input.client_id);
@@ -165,8 +191,7 @@ export function createMcpOAuthService({ db, issuer, publicOrigin, now = () => ne
         transaction.set(ref, { usedAt: now().toISOString() }, { merge: true });
         return record.context;
       });
-      await collection('mcp_oauth_tokens', accessToken).set({ context, clientId, scope: SCOPE, resource, expiresAtMs: nowMs(now) + ACCESS_TTL_MS, createdAt: now().toISOString() });
-      return { access_token: accessToken, token_type: 'Bearer', expires_in: ACCESS_TTL_MS / 1000, scope: SCOPE };
+      return issueTokens({ context, clientId });
     },
     async resolveAccessToken(authorization) {
       const accessToken = parseAuthorizationBearer(authorization);
