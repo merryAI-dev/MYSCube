@@ -1,0 +1,15 @@
+{
+  // KV id 는 배포 스크립트(scripts/deploy-mcp-worker.mjs)가 계정에서 찾아 wrangler.generated.jsonc 에 넣는다.
+  "name": "myscube-mcp",
+  "main": "src/index.mjs",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "routes": [{ "pattern": "mcp.myscguard.app", "custom_domain": true }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACED_AT_DEPLOY" }],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://mcp.myscguard.app",
+    "BFF_BASE_URL": "https://myscube.myscguard.app",
+    "GOOGLE_HOSTED_DOMAIN": "mysc.co.kr"
+  },
+  "observability": { "enabled": true }
+}

@@ -10,7 +10,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
-    include: ['src/**/*.test.ts', 'server/**/*.test.ts', 'server/**/*.test.mjs'],
+    include: ['src/**/*.test.ts', 'server/**/*.test.ts', 'server/**/*.test.mjs', 'mcp-worker/test/**/*.test.mjs'],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],

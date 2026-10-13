@@ -1,0 +1,19 @@
+{
+  "name": "myscube-mcp-worker",
+  "private": true,
+  "type": "module",
+  "description": "MYSCube remote MCP service on Cloudflare Workers (read-only, Google sign-in, calls the MYSCube BFF as the signed-in member).",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "check": "wrangler deploy --dry-run --outdir dist"
+  },
+  "dependencies": {
+    "@cloudflare/workers-oauth-provider": "1.2.1",
+    "@modelcontextprotocol/sdk": "1.26.0",
+    "zod": "4.3.6"
+  },
+  "devDependencies": {
+    "wrangler": "4.143.0"
+  }
+}

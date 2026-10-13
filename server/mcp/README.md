@@ -1,5 +1,7 @@
 # MYSCube MCP
 
+> 운영용 원격 MCP 는 별도 서비스인 [`mcp-worker/`](../../mcp-worker/README.md)(`https://mcp.myscguard.app/mcp`)입니다. 아래 BFF 안의 `/mcp` 는 옮기는 동안 유지되며, 같은 도구 정의(`api-catalog.mjs`)를 씁니다.
+
 읽기 전용 MCP입니다. 정산 데이터는 브라우저·Playwright·화면 크롤링이 아니라 BFF→JVM의 기존 정산 조회 경로에서만 읽습니다.
 
 원격 MCP(`/mcp`)는 표준 MCP(Streamable HTTP + OAuth 2.1)라 Claude, ChatGPT 등 MCP를 지원하는 클라이언트에 같은 주소로 붙습니다. 모든 도구는 OAuth로 확인된 본인 권한으로 실행되며, Slack 봇의 감사 계정은 쓰지 않습니다.
