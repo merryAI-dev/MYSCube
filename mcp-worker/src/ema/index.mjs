@@ -3,7 +3,8 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { refreshFirebase } from '../identity.mjs';
 import { handleAuthorize, handleSession, SCOPES } from './auth.mjs';
 import { createEmaClient } from './client.mjs';
-import { createStore, handleFileDownload, handleUpload } from './files.mjs';
+import { runImportCommit } from './commit.mjs';
+import { createStore, handleConfirm, handleFileDownload, handleUpload } from './files.mjs';
 import { createEmaMcpServer } from './tools.mjs';
 
 // MCP 액세스 토큰은 안에 담긴 Firebase ID 토큰(1시간)보다 먼저 끝나야 한다.
@@ -25,12 +26,12 @@ const mcpHandler = {
   async fetch(request, env, ctx) {
     if (request.method !== 'POST') return new Response(null, { status: 405, headers: { allow: 'POST' } });
     let props = ctx.props;
-    if (!props?.idToken || props.expiresAt < Date.now() + 60_000) props = await refreshedProps(props, env);
+    if (!props?.idToken || props.expiresAt < Date.now() + 16 * 60_000) props = await refreshedProps(props, env);
     const server = createEmaMcpServer({
       ema: createEmaClient({ functionsBase: env.EMA_FUNCTIONS_BASE, idToken: props.idToken }),
       store: createStore(env.OAUTH_KV),
       publicOrigin: env.PUBLIC_ORIGIN,
-      access: { uid: props.uid, role: props.role, canExportAndImport: props.canExportAndImport === true },
+      access: { uid: props.uid, role: props.role, canExportAndImport: props.canExportAndImport === true, idToken: props.idToken, idTokenExpiresAt: props.expiresAt },
     });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
@@ -45,6 +46,16 @@ const defaultHandler = {
     if (pathname === '/ema/session') return handleSession(request, env);
     const upload = /^\/upload\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
     if (upload) return handleUpload(request, createStore(env.OAUTH_KV), upload[1]);
+    const confirm = /^\/confirm\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
+    if (confirm) {
+      const store = createStore(env.OAUTH_KV);
+      const link = await store.readConfirm(confirm[1]);
+      const ema = link ? createEmaClient({ functionsBase: env.EMA_FUNCTIONS_BASE, idToken: link.idToken }) : null;
+      return handleConfirm(request, {
+        store, ema, token: confirm[1],
+        runCommit: (options) => runImportCommit({ ...options, store }),
+      });
+    }
     const file = /^\/files\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
     if (file && request.method === 'GET') return handleFileDownload(createStore(env.OAUTH_KV), file[1]);
     if (pathname === '/') {
