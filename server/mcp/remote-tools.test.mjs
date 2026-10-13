@@ -76,15 +76,15 @@ describe('remote MYSCube MCP tools', () => {
     const { json } = await call('project_search', { query: '에코' });
     expect(json.items.map((item) => item.projectId)).toEqual(['p1', 'p2']);
     expect(json.items[0]).toEqual({ projectId: 'p1', name: '에코 스타트업 육성', shortName: '에코', cic: 'CIC1', status: 'IN_PROGRESS' });
-    expect(json.truncated).toBe(false);
+    expect(json.total).toBe(2);
   });
 
-  it('marks search results truncated past twenty matches', async () => {
-    const projects = Object.fromEntries(Array.from({ length: 25 }, (_, index) => [`p${index}`, { name: `사업 ${index}` }]));
+  it('returns every match without a result cap', async () => {
+    const projects = Object.fromEntries(Array.from({ length: 1500 }, (_, index) => [`p${index}`, { name: `사업 ${index}` }]));
     await connect({ db: projectsDb(projects) });
     const { json } = await call('project_search', { query: '사업' });
-    expect(json.items).toHaveLength(20);
-    expect(json.truncated).toBe(true);
+    expect(json.items).toHaveLength(1500);
+    expect(json.total).toBe(1500);
   });
 
   it('returns whitelisted project fields only and refuses projects outside scope', async () => {

@@ -8,7 +8,7 @@ export const projectId = z.string().min(1).max(120).regex(/^[^/]+$/)
   .describe('MYSCube 프로젝트 ID. 모르면 project_search로 먼저 찾습니다.');
 export const yearMonth = z.string().regex(/^20\d{2}-(0[1-9]|1[0-2])$/).describe('조회월, YYYY-MM 형식');
 export const cursor = z.string().max(500).optional().describe('이전 응답의 nextCursor. 첫 페이지는 비워 둡니다.');
-export const limit = z.number().int().min(1).max(100).optional().describe('한 번에 받을 건수(최대 100)');
+export const limit = z.number().int().min(1).optional().describe('한 번에 받을 건수. 서버가 허용하는 최대치보다 크면 최대치로 맞춰집니다.');
 
 export const PROJECT_FIELDS = Object.freeze([
   'name', 'shortName', 'officialContractName', 'projectCode', 'groupwareName',
@@ -61,6 +61,12 @@ export const API_CATALOG = Object.freeze([
   { id: 'cashflow.sheet_apply_status', tags: ['#사업비', '#시트', '#반영상태'], input: { projectId },
     description: '시트 값 반영 작업의 현재 상태(진행 중, 완료, 실패와 잠금).',
     path: ({ projectId: id }) => `/api/v1/projects/${id}/cashflow-sheet-lab/apply-status` },
+  { id: 'project_request.list', tags: ['#사업등록', '#사업정보변경', '#승인', '#전체'], input: {
+      status: z.enum(['PENDING', 'APPROVED', 'REJECTED']).optional().describe('요청 상태로 거르기. 비우면 전부'),
+      requestKind: z.enum(['REGISTRATION', 'CHANGE']).optional().describe('등록(REGISTRATION) 또는 정보 변경(CHANGE). 비우면 둘 다'),
+    },
+    description: '사업 등록·정보 변경 요청 전체 목록(사업명, CIC, 담당자, 승인자, 요청자·요청일, 검토자·검토일·사유)과 상태별 건수. 관리자·재무는 조직 전체가, 그 밖에는 접근 가능한 사업과 본인 관련 요청만 나옵니다. 응답의 scope가 ORGANIZATION일 때만 조직 전체 건수로 보고하세요.',
+    path: () => '/api/v1/project-requests', query: ['status', 'requestKind'] },
   { id: 'project_request.registration_drafts', tags: ['#사업등록', '#목록'], input: {},
     description: '권한 있는 사업 등록 초안(작성 중·검토 중) 목록.',
     path: () => '/api/v1/project-registration-drafts' },
