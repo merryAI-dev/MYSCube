@@ -1,3 +1,4 @@
+import { unzipSync } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -43,7 +44,7 @@ describe('EMA tool surface', () => {
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'ema_registry_export', 'ema_registry_get', 'ema_registry_import_commit', 'ema_registry_import_preview',
-      'ema_registry_import_upload_link', 'ema_registry_search', 'ema_registry_status',
+      'ema_registry_import_template', 'ema_registry_import_upload_link', 'ema_registry_search', 'ema_registry_status',
     ]);
     for (const tool of tools) {
       expect(tool.description.length).toBeGreaterThan(30);
@@ -218,6 +219,27 @@ describe('bulk import', () => {
     expect(result.status).toBe('in_progress');
     expect(result.remaining).toBeGreaterThan(0);
     expect(result.retry).toContain('다시 호출');
+  });
+
+  it('tells the AI the form is just company, founder and sector, with no route question', async () => {
+    await connect({ ema: fakeEma() });
+    const instructions = client.getInstructions();
+    expect(instructions).toContain('기업명, 대표자/창업자, 섹터');
+    expect(instructions).toContain('발굴 경로는 자동');
+    expect(instructions).toContain('ema_registry_import_template');
+  });
+
+  it('serves a template workbook with only the form fields, dropdowns and a sector code sheet', async () => {
+    const { store } = await connect({ ema: fakeEma() });
+    const { json } = await call('ema_registry_import_template');
+    expect(json.columns).toEqual(['기업명', '대표자/창업자', '섹터', '지역', '국가(해외만)']);
+    expect(json.downloadUrl).toMatch(/^https:\/\/ema-mcp\.myscguard\.app\/files\/[A-Za-z0-9_-]{20,}$/);
+    const file = await store.takeFile(json.downloadUrl.split('/').pop());
+    expect(file.name).toMatch(/\.xlsx$/);
+    const text = new TextDecoder('utf-8').decode(unzipSync(new Uint8Array(file.bytes))['xl/worksheets/sheet1.xml']);
+    expect(text).toContain('type="list"');
+    expect(text).toContain('국내,해외');
+    expect(Object.keys(unzipSync(new Uint8Array(file.bytes)))).toContain('xl/worksheets/sheet2.xml');
   });
 
   it('hands out a one-time upload link bound to the signed-in member', async () => {
