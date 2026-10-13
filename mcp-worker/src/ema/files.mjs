@@ -4,6 +4,7 @@ import { readXlsx, XlsxError } from './xlsx.mjs';
 const UPLOAD_TTL_SECONDS = 15 * 60;
 const FILE_TTL_SECONDS = 15 * 60;
 const BATCH_TTL_SECONDS = 24 * 60 * 60;
+const CONFIRM_TTL_SECONDS = 15 * 60;
 const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const KV_VALUE_LIMIT = 24 * 1024 * 1024;
 
@@ -41,6 +42,22 @@ export function createStore(kv) {
       const raw = await kv.get(`ema:batch:${batchId}`);
       const batch = raw ? JSON.parse(raw) : null;
       return batch && batch.uid === uid ? batch : null;
+    },
+    // 웹 확정 화면용. 링크 안의 로그인 증명은 링크보다 오래 살지 않게 만료를 맞춘다.
+    async createConfirmLink({ uid, batchId, excludeRows, idToken, idTokenExpiresAt }, nowMs = Date.now()) {
+      const remaining = Math.floor(((idTokenExpiresAt ?? nowMs + 55 * 60_000) - nowMs) / 1000) - 30;
+      const ttl = Math.min(CONFIRM_TTL_SECONDS, remaining);
+      if (ttl < 60) throw new Error('로그인 유효 시간이 얼마 남지 않았습니다. 잠시 후 다시 시도해 주세요.');
+      const token = randomId(32);
+      await kv.put(`ema:confirm:${token}`, JSON.stringify({ uid, batchId, excludeRows, idToken }), { expirationTtl: ttl });
+      return { token, expiresInMinutes: Math.max(1, Math.floor(ttl / 60)) };
+    },
+    async readConfirm(token) {
+      const raw = await kv.get(`ema:confirm:${token}`);
+      return raw ? JSON.parse(raw) : null;
+    },
+    async consumeConfirm(token) {
+      await kv.delete(`ema:confirm:${token}`);
     },
     async saveFile(uid, { name, contentType, bytes }) {
       const token = randomId(32);
@@ -115,6 +132,54 @@ export async function handleUpload(request, store, token) {
 <p>시트: <strong>${escape(sheet.sheetName)}</strong> · 열 ${sheet.headers.length}개</p>
 <p>이제 AI 대화로 돌아가 <strong>"방금 올린 엑셀 미리보기 해줘"</strong>라고 말해 주세요.</p>
 <p class="muted">배치 ID: <code>${escape(batchId)}</code></p>`);
+}
+
+const STATUS_LABELS = { new: '신규 등록', match: '기존 기업에 근거 추가', match_deleted: '삭제된 기업과 같음(건너뜀)', match_migrated: '이관 기업과 같음(건너뜀)', duplicate_in_batch: '파일 안 중복(건너뜀)', invalid: '오류(건너뜀)', provided: 'FRN 지정(기존 기업에 연결)' };
+const RESULT_LABELS = { created: '신규 등록', linked: '기존 기업에 추가', skipped: '건너뜀', error: '오류' };
+const MAX_LISTED = 50;
+
+// 등록 확정 화면. GET 은 보여 주기만 하고, POST 의 버튼 클릭이 있어야 등록한다.
+export async function handleConfirm(request, { store, ema, token, runCommit }) {
+  const link = await store.readConfirm(token);
+  const expired = () => page('등록 확정', '<h1>링크가 만료됐거나 이미 사용됐습니다</h1><p>AI에게 "등록 확정 링크 다시 줘"라고 요청해 주세요.</p>', 410);
+  if (!link) return expired();
+  const batch = await store.loadBatch(link.batchId, link.uid);
+  if (!batch?.preview) return expired();
+  if (request.method !== 'GET' && request.method !== 'POST') return new Response(null, { status: 405, headers: { allow: 'GET, POST' } });
+
+  const excluded = new Set(link.excludeRows ?? []);
+  const items = batch.preview.items;
+  const actionable = items.filter((item) => !excluded.has(item.sheetRow));
+  const willCreate = actionable.filter((item) => item.action === 'create').length;
+  const willLink = actionable.filter((item) => item.action === 'link').length;
+  const willSkip = items.length - willCreate - willLink;
+
+  if (request.method === 'GET') {
+    const problems = items.filter((item) => item.status !== 'new' || excluded.has(item.sheetRow));
+    const rows = problems.slice(0, MAX_LISTED).map((item) => `<li>${item.sheetRow}행 ${escape(item.name || '(이름 없음)')} — ${excluded.has(item.sheetRow) ? '제외함' : escape(STATUS_LABELS[item.status] || item.status)}${item.errors?.length ? ` · ${escape(item.errors.join(' / '))}` : ''}</li>`).join('');
+    return page('등록 확정', `<h1>기업 ${willCreate + willLink}건을 등록할까요?</h1>
+<ul><li>신규 등록 <strong>${willCreate}</strong>건</li><li>기존 기업에 근거 추가 <strong>${willLink}</strong>건(빈 칸만 채우고 기존 값은 바꾸지 않음)</li><li>건너뜀 <strong>${willSkip}</strong>건</li></ul>
+${rows ? `<h2 style="font-size:15px">확인이 필요한 행</h2><ul>${rows}</ul>${problems.length > MAX_LISTED ? `<p class="muted">외 ${problems.length - MAX_LISTED}건</p>` : ''}` : ''}
+<form method="post"><p><button type="submit">등록 확정</button></p></form>
+<p class="muted">기여 크레딧은 부여하지 않습니다. 이 링크는 계정에 묶여 있으며 15분 안에 쓰지 않으면 만료됩니다.</p>`);
+  }
+
+  let result;
+  try {
+    result = await runCommit({ ema, uid: link.uid, batchId: link.batchId, excludeRows: link.excludeRows ?? [] });
+  } catch (error) {
+    const message = error instanceof Error && error.message ? error.message : '등록 중 오류가 발생했습니다.';
+    return page('등록 확정', `<h1>등록하지 못했습니다</h1><p>${escape(message)}</p><form method="post"><p><button type="submit">다시 시도</button></p></form>`, 502);
+  }
+  const done = result.status === 'done';
+  if (done) await store.consumeConfirm(token);
+  const created = (result.created ?? []).slice(0, MAX_LISTED).map((entry) => `<li>${escape(entry.name || '')} — <code>${escape(entry.frn || '')}</code></li>`).join('');
+  const problems = (result.problems ?? []).slice(0, MAX_LISTED).map((entry) => `<li>${entry.sheetRow ?? ''}행 ${escape(entry.name || '')} — ${escape(RESULT_LABELS[entry.status] || entry.status)} ${escape(entry.message || entry.reason || '')}</li>`).join('');
+  return page('등록 확정', `<h1>${done ? '등록을 마쳤습니다' : '일부만 처리했습니다'}</h1>
+<p>${Object.entries(result.counts).map(([status, count]) => `${escape(RESULT_LABELS[status] || status)} ${count}건`).join(' · ') || '처리된 행이 없습니다.'}</p>
+${created ? `<h2 style="font-size:15px">새로 만든 FRN</h2><ul>${created}</ul>` : ''}
+${problems ? `<h2 style="font-size:15px">확인이 필요한 행</h2><ul>${problems}</ul>` : ''}
+${done ? '<p>이제 AI 대화로 돌아가 결과를 확인하세요.</p>' : `<p>${escape(result.error || '시간 제한으로 일부만 처리했습니다.')} 아래 버튼을 누르면 이어서 처리하며 중복 등록되지 않습니다.</p><form method="post"><p><button type="submit">이어서 처리</button></p></form>`}`);
 }
 
 export async function handleFileDownload(store, token) {

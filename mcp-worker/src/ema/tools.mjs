@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as z from 'zod/v4';
+import { runImportCommit } from './commit.mjs';
 import { buildCsv, buildWorkbook, buildXlsx } from './xlsx.mjs';
 
 // EMA Station 기업 등록(FRN) 도구. 데이터는 로그인한 구성원 본인의 권한으로 EMA 함수에서만 읽고 쓴다.
@@ -7,8 +8,6 @@ import { buildCsv, buildWorkbook, buildXlsx } from './xlsx.mjs';
 
 const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
-const COMMIT_CHUNK = 25;
-const COMMIT_BUDGET_MS = 45_000;
 const PREVIEW_SAMPLE_NEW_ROWS = 20;
 
 const ROUTE_TYPES = ['AC_SELECTED_TEAM', 'AC_APPLICANT_TEAM', 'COLD_CALL', 'EXTERNAL_JUDGE_REFERRAL', 'EXTERNAL_JUDGING_ENCOUNTER', 'INTERACTION'];
@@ -32,7 +31,7 @@ const INSTRUCTIONS = [
   '등록에 필요한 것은 EMA 화면의 "FRN 발급"과 같습니다: 기업명, 대표자/창업자, 섹터(이름이나 코드), 지역(국내/해외, 해외면 국가). 이 3~4가지만 있으면 되고 법인명·설립연도·홈페이지·발굴 경로 등은 묻지 마세요.',
   '발굴 경로는 자동으로 정해지므로 사용자에게 묻거나 열로 요구하지 마세요. 형식을 만들어 달라고 하면 긴 열 목록을 만들지 말고 ema_registry_import_template으로 양식 파일 링크를 주세요.',
   '엑셀로 여러 기업을 등록하려면: 파일이 작으면 대화에 올린 표를 rows로 넘겨 ema_registry_import_preview를 부르고, 크면 ema_registry_import_upload_link로 업로드 링크를 받으세요.',
-  '등록은 반드시 미리보기 결과를 사용자에게 보여 주고 확인받은 뒤에만 ema_registry_import_commit을 호출하세요.',
+  '등록은 반드시 미리보기 결과를 사용자에게 보여 주고 확인받은 뒤에만 하세요. 기본은 ema_registry_import_confirm_link로 웹 확정 링크를 받아 사용자가 화면에서 "등록 확정"을 누르게 하는 방식이고, 대화 안에서 직접 등록이 허용되는 환경에서만 ema_registry_import_commit을 쓸 수 있습니다.',
   '엑셀 내려받기는 ema_registry_export로 다운로드 링크를 만들어 사용자에게 전달합니다(파일 내용은 대화에 싣지 않습니다).',
 ].join(' ');
 
@@ -276,52 +275,27 @@ export function createEmaMcpServer({ ema, store, publicOrigin, access, now = () 
         excludeRows: z.array(z.number().int().min(1)).optional().describe('등록에서 뺄 행의 sheetRow 번호'),
         awardCredits: z.boolean().optional().describe('true면 등록한 관리자에게 기여 크레딧을 부여합니다(기본 false). 사용자가 명시적으로 원할 때만.'),
       },
-    }, async ({ batchId, excludeRows = [], awardCredits = false }) => {
+    }, ({ batchId, excludeRows = [], awardCredits = false }) => runImportCommit({ ema, store, uid: access.uid, batchId, excludeRows, awardCredits, now }));
+
+    tool(server, 'ema_registry_import_confirm_link', {
+      title: '등록 확정 링크',
+      description: '미리보기를 사용자에게 보여 주고 등록 의사를 확인받은 뒤 이 도구로 웹 확정 화면 링크를 만듭니다. 이 도구는 아무것도 등록하지 않습니다. 사용자가 링크를 열어 화면에서 "등록 확정"을 눌러야 실제 등록이 됩니다. 링크는 15분 뒤 만료됩니다. ChatGPT처럼 대화 안에서 등록 도구가 차단되는 환경에서는 ema_registry_import_commit 대신 이 도구를 쓰세요.',
+      input: {
+        batchId: z.string().max(80).describe('ema_registry_import_preview가 돌려준 batchId'),
+        excludeRows: z.array(z.number().int().min(1)).optional().describe('등록에서 뺄 행의 sheetRow 번호'),
+      },
+    }, async ({ batchId, excludeRows = [] }) => {
       const batch = await store.loadBatch(batchId, access.uid);
       if (!batch?.preview) throw new Error('이 배치는 미리보기가 없습니다. 먼저 ema_registry_import_preview를 호출하세요.');
-      const excluded = new Set(excludeRows);
-      const rows = batch.preview.items.map((item) => ({
-        index: item.index,
-        record: item.record,
-        action: excluded.has(item.sheetRow) ? 'skip' : item.action,
-      }));
-      const byIndex = new Map(batch.preview.items.map((item) => [item.index, item]));
-      const results = new Map((batch.commit?.results ?? []).filter((entry) => entry.status !== 'not_processed' && entry.status !== 'error').map((entry) => [entry.index, entry]));
-
-      const started = now();
-      let timedOut = false;
-      let failure = null;
-      const pending = rows.filter((row) => !results.has(row.index));
-      for (let offset = 0; offset < pending.length; offset += COMMIT_CHUNK) {
-        if (now() - started > COMMIT_BUDGET_MS) { timedOut = true; break; }
-        const chunk = pending.slice(offset, offset + COMMIT_CHUNK);
-        try {
-          const response = await ema.call('commitRegistryImport', { batchId, rows: chunk, awardCredits });
-          for (const entry of response.results) {
-            if (entry.status !== 'not_processed') results.set(entry.index, entry);
-          }
-        } catch (error) {
-          failure = error instanceof Error ? error.message : '등록 중 오류가 발생했습니다.';
-          break;
-        }
-      }
-
-      const entries = [...results.values()].sort((a, b) => a.index - b.index);
-      const decorate = (entry) => ({ sheetRow: byIndex.get(entry.index)?.sheetRow, name: entry.name, status: entry.status, frn: entry.frn, reason: entry.reason, message: entry.message });
-      const counts = {};
-      entries.forEach((entry) => { counts[entry.status] = (counts[entry.status] || 0) + 1; });
-      const remaining = rows.length - entries.length;
-      await store.saveBatch(batchId, { ...batch, commit: { at: new Date(now()).toISOString(), awardCredits, results: entries } });
+      if (!access.idToken) throw new Error('로그인 정보를 확인하지 못했습니다. AI 앱에서 연결을 다시 해 주세요.');
+      const { token, expiresInMinutes } = await store.createConfirmLink({
+        uid: access.uid, batchId, excludeRows, idToken: access.idToken, idTokenExpiresAt: access.idTokenExpiresAt,
+      }, now());
       return {
-        batchId,
-        status: remaining === 0 && !failure ? 'done' : 'in_progress',
-        counts,
-        remaining,
-        ...(failure ? { error: failure, retry: '같은 batchId로 다시 호출하면 이어서 처리하며 중복 등록되지 않습니다.' } : {}),
-        ...(timedOut ? { retry: '시간 제한으로 일부만 처리했습니다. 같은 batchId로 다시 호출하면 이어서 처리합니다.' } : {}),
-        created: entries.filter((entry) => entry.status === 'created').map(decorate),
-        linked: entries.filter((entry) => entry.status === 'linked').map(decorate),
-        problems: entries.filter((entry) => ['error', 'skipped'].includes(entry.status)).map(decorate),
+        confirmUrl: `${publicOrigin}/confirm/${token}`,
+        expiresInMinutes,
+        summary: batch.preview.summary,
+        next: '사용자에게 링크를 전달하세요. 링크의 화면에서 "등록 확정"을 누르면 등록됩니다. 사용자가 완료했다고 말하면 ema_registry_status로 확인할 수 있습니다.',
       };
     });
   }

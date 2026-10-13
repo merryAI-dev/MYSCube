@@ -2,7 +2,8 @@ import { unzipSync } from 'fflate';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createStore } from '../src/ema/files.mjs';
+import { createStore, handleConfirm } from '../src/ema/files.mjs';
+import { runImportCommit } from '../src/ema/commit.mjs';
 import { createEmaMcpServer, maskBusinessNumber } from '../src/ema/tools.mjs';
 import { readXlsx } from '../src/ema/xlsx.mjs';
 import { fakeEma, memoryKv } from './ema-support.mjs';
@@ -14,7 +15,7 @@ async function connect({ ema, kv = memoryKv(), admin = true, now } = {}) {
   const store = createStore(kv);
   const server = createEmaMcpServer({
     ema, store, publicOrigin: 'https://ema-mcp.myscguard.app',
-    access: { uid: 'u1', role: admin ? 'admin' : 'staff', canExportAndImport: admin }, ...(now ? { now } : {}),
+    access: { uid: 'u1', role: admin ? 'admin' : 'staff', canExportAndImport: admin, idToken: 'id-token-1', idTokenExpiresAt: Date.now() + 50 * 60_000 }, ...(now ? { now } : {}),
   });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -43,7 +44,7 @@ describe('EMA tool surface', () => {
     await connect({ ema: fakeEma(), admin: true });
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
-      'ema_registry_export', 'ema_registry_get', 'ema_registry_import_commit', 'ema_registry_import_preview',
+      'ema_registry_export', 'ema_registry_get', 'ema_registry_import_commit', 'ema_registry_import_confirm_link', 'ema_registry_import_preview',
       'ema_registry_import_template', 'ema_registry_import_upload_link', 'ema_registry_search', 'ema_registry_status',
     ]);
     for (const tool of tools) {
@@ -180,6 +181,44 @@ describe('bulk import', () => {
     const again = (await call('ema_registry_import_commit', { batchId: preview.batchId, excludeRows: [2] })).json;
     expect(committed).toHaveLength(1);
     expect(again).toMatchObject({ status: 'done', counts: { created: 1, skipped: 2 } });
+  });
+
+  it('web confirm link registers nothing until the button is pressed, then commits once', async () => {
+    const committed = [];
+    const ema = fakeEma({
+      previewRegistryImport: async () => previewResponse,
+      commitRegistryImport: async ({ rows }) => {
+        committed.push(rows.map((row) => row.action));
+        return { results: rows.map((row) => ({ index: row.index, status: row.action === 'create' ? 'created' : 'skipped', frn: 'AIR-KR-26-002', name: '모닥불' })) };
+      },
+    });
+    const { store } = await connect({ ema });
+    const { json: preview } = await call('ema_registry_import_preview', { rows: [{ 기업명: 'a' }, { 기업명: 'b' }, { 기업명: '' }], routeType: 'COLD_CALL' });
+    const { json: link } = await call('ema_registry_import_confirm_link', { batchId: preview.batchId });
+    expect(link.confirmUrl).toMatch(/^https:\/\/ema-mcp\.myscguard\.app\/confirm\/[A-Za-z0-9_-]{20,}$/);
+    expect(committed).toHaveLength(0);
+    const token = link.confirmUrl.split('/').pop();
+    const options = { store, ema, token, runCommit: (o) => runImportCommit({ ...o, store }) };
+
+    const shown = await handleConfirm(new Request(link.confirmUrl), options);
+    expect(shown.status).toBe(200);
+    expect(await shown.text()).toContain('등록 확정');
+    expect(committed).toHaveLength(0);
+
+    const done = await handleConfirm(new Request(link.confirmUrl, { method: 'POST' }), options);
+    expect(await done.text()).toContain('등록을 마쳤습니다');
+    expect(committed).toHaveLength(1);
+    const reused = await handleConfirm(new Request(link.confirmUrl, { method: 'POST' }), options);
+    expect(reused.status).toBe(410);
+    expect(committed).toHaveLength(1);
+  });
+
+  it('confirm link is refused for another member batch, an unknown batch and an almost-expired login', async () => {
+    const { store } = await connect({ ema: fakeEma({ previewRegistryImport: async () => previewResponse }) });
+    const foreign = await store.createBatch('someone-else', { source: 'chat', rows: [{ 기업명: 'x' }], rowNumbers: [1], preview: { summary: {}, items: [] } });
+    expect((await call('ema_registry_import_confirm_link', { batchId: foreign })).isError).toBe(true);
+    expect((await call('ema_registry_import_confirm_link', { batchId: 'does-not-exist-1' })).isError).toBe(true);
+    await expect(store.createConfirmLink({ uid: 'u1', batchId: 'b', excludeRows: [], idToken: 't', idTokenExpiresAt: Date.now() + 40_000 })).rejects.toThrow('유효 시간');
   });
 
   it('refuses to commit without a preview, and reports a mid-way failure so it can be resumed', async () => {
