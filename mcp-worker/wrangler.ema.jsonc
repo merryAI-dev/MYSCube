@@ -1,0 +1,15 @@
+{
+  // KV id 는 배포 스크립트(scripts/deploy-mcp-worker.mjs, target=ema)가 계정에서 찾아 wrangler.ema.generated.jsonc 에 넣는다.
+  "name": "myscube-ema-mcp",
+  "main": "src/ema/index.mjs",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "routes": [{ "pattern": "ema-mcp.myscguard.app", "custom_domain": true }],
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACED_AT_DEPLOY" }],
+  "vars": {
+    "PUBLIC_ORIGIN": "https://ema-mcp.myscguard.app",
+    "EMA_WEB_ORIGIN": "https://emastation.myscguard.app",
+    "EMA_FUNCTIONS_BASE": "https://asia-northeast3-startup-acceleration-platform.cloudfunctions.net"
+  },
+  "observability": { "enabled": true }
+}
