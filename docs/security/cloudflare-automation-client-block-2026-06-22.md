@@ -76,3 +76,19 @@ Post-apply smoke tests against `https://edge.myscguard.app/`:
 ## Operational Note
 
 This is an edge reduction control, not a replacement for Firebase Auth, Firestore Rules, backend authorization, audit logging, or data-at-rest encryption. A browser that spoofs a normal user agent can still reach the app, so sensitive operations must remain protected behind application authorization and rate limits.
+
+## MCP Protocol Path Exception (2026-10-13)
+
+The remote MYSCube MCP is a standard MCP server (Streamable HTTP + OAuth 2.1). Its clients (Claude, ChatGPT, the Python and Node MCP SDKs) send `httpx`, `mcp-client` or similar `User-Agent` values, so this rule blocked them with `403` before they reached the OAuth discovery document.
+
+The rule now excludes only these exact paths on `myscube.myscguard.app`; every other path keeps the block, and the browser login page `/api/v1/mcp/oauth/authorize` is not excluded:
+
+- `/mcp`
+- `/.well-known/oauth-authorization-server`, `/.well-known/oauth-protected-resource`, `/.well-known/oauth-protected-resource/mcp`
+- `/api/v1/mcp/oauth/register`, `/api/v1/mcp/oauth/token`
+
+Requests on these paths still need a valid MCP access token for data (`/mcp`), and every tool runs with the signed-in member's own permissions.
+
+- Source of truth: `infra/cloudflare/main.tf` and `scripts/configure-mcp-edge.mjs` (kept equal by `server/mcp/edge-exception.test.mjs`)
+- Apply: `Cloudflare MCP Edge` workflow on `main` with `apply` checked; it saves the pre-change ruleset as an artifact, refuses if the rule drifted from review, and smoke-tests that SDK user agents reach discovery while a non-MCP path with `httpx` still returns `403`.
+- Rollback: re-apply the expression from the `mcp-edge-before` artifact.
