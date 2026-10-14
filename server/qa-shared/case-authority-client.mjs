@@ -20,7 +20,11 @@ export function createCaseAuthorityClient({
     origin !== url.origin
   )
     fail("investigation_authority_unconfigured");
-  return async ({ caseId, runId, phase, actorId, scope }) => {
+  return async ({ caseId, runId, phase, actorId, scope, projectId, aggregateVersion }) => {
+    const projectRead = projectId !== undefined;
+    if (projectRead && (phase !== "run" || !/^p[0-9]{10,20}$/.test(projectId)
+      || !Number.isSafeInteger(aggregateVersion) || aggregateVersion < 1))
+      fail("investigation_authority_invalid");
     let response;
     try {
       const client = await auth.getIdTokenClient(origin);
@@ -30,13 +34,13 @@ export function createCaseAuthorityClient({
         : headers.Authorization;
       if (!/^Bearer \S+$/.test(token || ""))
         fail("investigation_authority_unavailable");
-      response = await fetchImpl(`${origin}/internal/authorize-case`, {
+      response = await fetchImpl(`${origin}/internal/${projectRead ? "authorize-case-project" : "authorize-case"}`, {
         method: "POST",
         redirect: "error",
         credentials: "omit",
         signal: AbortSignal.timeout(15000),
         headers: { Authorization: token, "Content-Type": "application/json" },
-        body: JSON.stringify({ case_id: caseId, run_id: runId, phase }),
+        body: JSON.stringify(projectRead ? { case_id: caseId, run_id: runId, project_id: projectId } : { case_id: caseId, run_id: runId, phase }),
       });
     } catch {
       fail("investigation_authority_unavailable");
@@ -85,6 +89,11 @@ export function createCaseAuthorityClient({
       Math.abs(now() - Date.parse(data.checked_at)) > 30000
     )
       fail("investigation_authority_invalid");
-    return { businessActorId: data.business_actor_id };
+    if (projectRead && (data.project_id !== projectId || data.purpose !== 'investigation_read'
+      || data.aggregate_version !== aggregateVersion || data.event_id !== runId.slice(3)
+      || !/^[a-f0-9]{64}$/.test(data.project_source_revision || '')))
+      fail("investigation_authority_invalid");
+    return { businessActorId: data.business_actor_id,
+      ...(projectRead ? {projectId:data.project_id,sourceRevision:data.project_source_revision} : {}) };
   };
 }
