@@ -398,8 +398,10 @@ async function validateAnswer(answer) {
       errors.push("Every fact needs observed evidence IDs.");
     for (const id of claim.evidence_ids) {
       const item = observedEvidence.get(id);
-      if (!item || item.status !== "available")
-        errors.push(`Fact references unavailable or unknown evidence: ${id}`);
+      if (!item)
+        errors.push(`Fact references unknown evidence: ${id}. Read the stored evidence manifest and use an observed available evidence ID that supports this fact; do not invent or substitute an ID without inspecting its content.`);
+      else if (item.status !== "available")
+        errors.push(`Fact references unavailable evidence: ${id}. This record does not establish a business fact. Move the access gap to unknowns, investigate the missing source when possible, and retain a fact only if other available evidence actually supports it. Do not change a cited ID merely to pass validation.`);
     }
   }
   for (const claim of answer.hypotheses)
