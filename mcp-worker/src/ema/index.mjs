@@ -60,7 +60,12 @@ const defaultHandler = {
       });
     }
     const note = /^\/note\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
-    if (note) return handleNotePage(request, { notes: createNoteStore(env.OAUTH_KV), token: note[1], save: noteSaverFrom(env) });
+    if (note) {
+      return handleNotePage(request, {
+        notes: createNoteStore(env.OAUTH_KV), token: note[1], saveNote: noteSaverFrom(env),
+        emaFor: (idToken) => createEmaClient({ functionsBase: env.EMA_FUNCTIONS_BASE, idToken }),
+      });
+    }
     const file = /^\/files\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
     if (file && request.method === 'GET') return handleFileDownload(createStore(env.OAUTH_KV), file[1]);
     if (pathname === '/') {
