@@ -78,7 +78,45 @@ MCP는 권한 판단 코드를 갖지 않는다. BFF 응답(403 등)을 그대�
   1. 출처 검증: `source`가 `attachment_text`이면 `textRef`의 텍스트에서 각 `quote`를 정규화(공백·줄바꿈) 후 찾는다. 없으면 그 값은 판정하지 않고 `not_found`로 돌려준다. `chat_attachment`·`connector`는 MCP가 원문을 볼 수 없으므로 `unverified`로 표시하고, 그 값으로 나온 `mismatch`는 `check`로 낮춘다.
   2. 제출값은 MCP가 BFF에서 다시 읽는다(AI가 넘긴 제출값은 믿지 않는다).
   3. 7절 규칙으로 판정한다.
-- 출력: `{ reviewToken, summary: { mismatch, check, match }, findings: [{ status, documentKind, field, label, submitted, document, quote, page, evidence: "verified"|"unverified"|"not_found", message }], limitations: [...] }`
+- 출력(결과 계약, REA Evidence·coverage·unknowns 방식 적용):
+
+```jsonc
+{
+  "review": {
+    "reviewId": "rv_<sha256 앞 24자>",          // 아래 identity 를 정규화한 JSON 의 해시. 같은 입력이면 같은 id
+    "identity": {
+      "subject": { "type": "request", "projectId": "...", "requestId": "..." },
+      "reviewToken": "...",                        // BFF 가 준 요청 버전 식별
+      "documents": [{ "kind": "contract", "sha256": "...", "source": "attachment_text" }],
+      "rulesVersion": "project-review-rules@1",
+      "extractor": "bff-pdfjs@5.4.624"            // 경로 B. 경로 C·커넥터는 "chat"·"connector"
+    },
+    "createdAt": "ISO-8601"
+  },
+  "summary": { "mismatch": 0, "check": 0, "match": 0, "unknown": 0 },
+  "coverage": [                                    // "문제 없음"과 "확인 못 함"을 섞지 않는다
+    { "kind": "contract", "status": "complete" | "partial" | "unknown",
+      "checkedFields": ["contractAmount", "..."], "missingFields": [{ "field": "...", "reason": "..." }] }
+  ],
+  "findings": [{
+    "findingId": "f_<hash>", "status": "mismatch" | "check" | "match",
+    "documentKind": "contract", "field": "contractAmount", "label": "계약금액",
+    "submitted": "110,000,000원", "document": "120,000,000원",
+    "quote": "총 계약금액: 120,000,000원", "page": 1,
+    "evidence": "verified" | "unverified" | "not_found",
+    "rule": "amount.exact", "message": "..."
+  }],
+  "unknowns": [                                    // 해결될 때까지 남는 확인 사항
+    { "unknownId": "u_<hash>", "kind": "contract", "question": "스캔본이라 금액 근거를 확인하지 못함", "resolveBy": "대화에 파일 첨부" }
+  ],
+  "limitations": ["BFF 변환은 글자 레이어만 읽는다(OCR 없음)", "..."]
+}
+```
+
+- 규칙:
+  - `coverage.status`: 서류의 대조 항목을 모두 판정했으면 `complete`, 일부만이면 `partial`, 서류를 못 읽었으면 `unknown`. **`findings`에 `mismatch`가 없어도 `coverage`가 `complete`가 아니면 "문제 없음"이라고 말하지 않는다**(플레이북에 명시).
+  - `reviewId`·`findingId`·`unknownId`는 내용 해시로 만든다. 같은 서류·규칙·제출 버전이면 같은 id가 나와 재현과 비교(S2 재제출 비교)에 쓴다.
+  - 오류는 공통 형식 `{ error: { code, message, retryable, remediation, partial? } }`로 돌려준다(REA error contract 방식).
 
 ### 5.6 서류와 입력 텍스트 간 조회·분석
 
@@ -194,6 +232,24 @@ MCP는 권한 판단 코드를 갖지 않는다. BFF 응답(403 등)을 그대�
 - AI가 값을 잘못 읽을 수 있다. 출처 검증은 "인용이 서류에 있는가"만 확인하며, 인용에서 값을 바르게 읽었는지는 판정 규칙과 사람 확인에 맡긴다.
 - BFF 첨부 권한(요청 첨부는 admin·finance·지정 결재자)이 검토 문서 권한(담당 구성원 포함)보다 좁다. 담당 구성원은 제출값은 보이지만 첨부는 못 읽을 수 있다. 그대로 따르고 결과에 표시한다.
 
+## 12. 개발 티켓 (S1, 순서대로 진행)
+
+모두 MYSCube MCP Worker(`mcp-worker/src/`) 안의 작업이다. BFF는 S1a로 끝났고 더 바꾸지 않는다. 티켓마다 단위 테스트와 사보타주 검증을 하고, 결과를 아래 QA 기록에 남긴다. 배포는 T7 끝에서 한 번, 사용자 확인 후에 한다.
+
+| 티켓 | 내용 | 완료 조건 | 의존 |
+|---|---|---|---|
+| T1 | BFF 클라이언트 보강(10.4절): 응답 바이트 상한(스트림 누적), GET 한정 재시도(429·502·503·504, `Retry-After`, 지수 백오프·지터, 최대 2회), 공통 오류 형식 | 상한 초과 중단, 재시도 대상·비대상, 기존 MYSCube 도구 테스트 무변경 통과 | — |
+| T2 | 결과 계약 모듈: `reviewId`·`findingId`·`unknownId` 해시, `coverage` 계산, 요약, 공통 오류 형식, `rulesVersion` | 같은 입력 → 같은 id, 순서만 다른 입력 → 같은 id, coverage 세 상태 | — |
+| T3 | 출처 검증: 인용(quote)을 쪽별 텍스트에서 정규화(공백·줄바꿈·전각/반각·하이픈) 후 찾기, 쪽 번호 반환 | 일치·불일치·쪽 경계 걸침·너무 짧은 인용(오탐 방지 최소 길이) | — |
+| T4 | 대조 규칙(7절): 보류 브랜치(`b0c72821`)의 BFF 대조 로직을 Worker로 옮기고 결과 계약(T2)·출처 검증(T3)에 맞춤. 근거 미검증 값의 `mismatch` → `check` 강등 | 기존 11개 테스트 의미 유지 + 강등·coverage 테스트 | T2, T3 |
+| T5 | 텍스트 캐시와 grant(10.2·10.3절): KV `pdftext:<sha256>`, `grant:<uid>:<sha256>`, 1시간 | 다른 사용자 grant 거부, 만료, 해시 형식 검사 | T1 |
+| T6 | 제출값 읽기: `review-document`·초안 조회 응답에서 대조 필드만 뽑기(8절 개인정보 가림), `serverReadiness`, 첨부 목록 | 요청·등록 초안·수정 초안·프로젝트 네 종류, 403·404 전달 | T1 |
+| T7 | 도구 5종 등록: `project_review_playbook`, `project_review_queue`, `project_submission_get`, `project_attachment_text`(이어받기 요청 포함), `project_review_check`. `_meta.provenance.untrusted_content`, 사용량 기록 detail 키 | 도구 목록·설명·스키마 테스트, 읽기 전용 표시, 서류 본문 결과에 untrusted 표시 | T1~T6 |
+| T8 | 운영 QA: 실제 요청 1건 이상을 Claude·ChatGPT에서 끝까지(검토함 → 제출값 → 텍스트 → 판정). 지연·응답 크기·오탐 기록 | QA 기록 작성, 발견 사항 티켓화 | T7 배포 |
+| T9 | (S1.5) `project_attachment_search`와 `textFindings` | 5.6절 | T8 |
+
+S2 이후 티켓(재제출 비교, 제안서·참여율, 사업관리 폴더, 독소조항)은 T8 결과를 보고 정리한다.
+
 ## QA 기록
 
 ### S0 — PDF 텍스트 변환(unpdf 1.8.1) 검증, 2026-10-14
@@ -237,3 +293,9 @@ MCP는 권한 판단 코드를 갖지 않는다. BFF 응답(403 등)을 그대�
 | 전체 | `npm test` 4,925 통과, BFF 2,103 통과, `typecheck` 새 오류 없음, `policy:verify` 통과 |
 
 미실행: `bff:test:integration`(에뮬레이터 필요, CI에서 실행), 운영 실측(배포 후).
+
+### T1 — BFF 클라이언트 보강, 2026-10-14
+- 호출 방식(`get(path, query)`, `post(path, body)`) 유지, 세 번째 인자로 `maxBytes`. 기본 상한 16MB(기존 도구의 큰 응답 보호), 첨부 텍스트는 호출 때 낮춘다.
+- GET만 재시도(429·502·503·504·네트워크 오류, 최대 2회, `Retry-After` 최대 5초, 300·600ms 백오프+지터). 재시도 포함 전체 시간 25초 유지.
+- 작성 중 발견해 고친 버그: 재시도 대상 응답의 본문을 먼저 버린 뒤 시간 부족으로 재시도를 포기하면 BFF 오류 메시지가 사라졌다. 재시도를 확정한 뒤에만 버리도록 수정.
+- 테스트: 새 7개, MCP Worker 전체 82 통과. 사보타주(본문 먼저 버리기 / POST 재시도) 각각 해당 테스트 실패 확인 후 복구.
