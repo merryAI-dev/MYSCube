@@ -1,0 +1,9 @@
+# Stop reviewing a candidate that already has a decisive rejection
+
+A validated counterexample or a fact incorrectly supported by an unavailable source already makes the current candidate ineligible for approval. Previously the reviewer still called the model for every remaining audit batch. The runtime now saves the completed batch and a `review_stopped` checkpoint, rechecks current authority/cancellation, and returns the rejection to the investigator. It never returns partial approval. Unknown/irrelevant assessments do not trigger this branch; approval still requires all evidence and fragment checks.
+
+The checkpoint records expected/verified batch counts, completion flag and rejection codes. Usage includes every response already received. Durable write failure, revocation or abort propagates instead of becoming a normal rejection. This is not a fixed investigation-call limit and does not stop the broader investigation from gathering evidence or revising the candidate.
+
+Read-only historical audit: run `qa-7ca5de16-abad-412e-98c3-01ec03f2248a`, 654 contiguous checkpoints matching an unchanged run count. Review manifest `795cb3bc7a0edde5164d6dd6ec03bb1d5898c6cc312ee99a4f3ee970b601efb4` contained a counter in its first of18 verified batches at checkpoint501. The following17 completed review responses used251032 input/output tokens. These are historical calls that the new branch would avoid for this same verdict sequence, not measured future savings or a guarantee about total investigation cost.
+
+Validation:69 local tests across review-sessions, original-flow and claims-flow passed. Independent QA ran77 tests including additional review coverage and found no blocker. No emulator or paid model invocation was used. Production model-quality replay remains pending API availability.
