@@ -38,9 +38,12 @@ export function parseDate(value) {
   // ISO 날짜·시각: 시간대가 붙어 있으면 한국 시간의 날짜로 바꾼다(UTC 로 저장된 자정이 하루 앞당겨지지 않게).
   const iso8601 = /^(\d{4}-\d{2}-\d{2})T[\d:.]+(Z|[+-]\d{2}:?\d{2})?$/u.exec(raw);
   if (iso8601) {
-    if (!iso8601[2]) return parseDate(iso8601[1]);
+    // 날짜 부분이 실제 날짜여야 한다(2월 30일이 3월 2일로 넘어가지 않게, 3차 리뷰 #1).
+    const literal = parseDate(iso8601[1]);
+    if (!literal || !iso8601[2]) return literal;
     const instant = Date.parse(raw);
-    return Number.isNaN(instant) ? null : new Date(instant + KST_OFFSET_MS).toISOString().slice(0, 10);
+    // 시각 표기가 비표준이면 날짜 부분을 쓴다(3차 리뷰 #7).
+    return Number.isNaN(instant) ? literal : new Date(instant + KST_OFFSET_MS).toISOString().slice(0, 10);
   }
   const match = new RegExp(`^${DATE_NOTATION}$`, 'u').exec(raw);
   if (!match) return null;
@@ -53,15 +56,11 @@ export function parseDate(value) {
 export function normalizeOrgName(value) {
   // 전각 괄호·로마 숫자 같은 호환 문자를 먼저 맞춘다(인용은 NFKC 로 비교하므로 값도 같게).
   return text(value).normalize('NFKC').toLowerCase()
-    .replace(/주식회사|유한회사|유한책임회사|재단법인|사단법인|사회적협동조합|협동조합|\(주\)|\(유\)|\(재\)|\(사\)|㈜|㈔|㈕/gu, '')
+    // NFKC 뒤에는 ㈜·㈔ 같은 기호가 (주)·(사)로 바뀌므로 괄호 표기만 지우면 된다(3차 리뷰 #5).
+    .replace(/주식회사|유한회사|유한책임회사|재단법인|사단법인|사회적협동조합|협동조합|\((?:주|유|재|사|有|株|財|社)\)/gu, '')
     .replace(/[\s()[\]{}.,·・\-_'"]/gu, '');
 }
 
-// 정규화 후 같을 때만 확실한 일치로 본다. 포함 관계("삼성" ⊂ "삼성물산")는 다른 기관일 수 있어 사람 확인으로 돌린다.
-const sameName = (left, right) => {
-  const a = normalizeOrgName(left);
-  return Boolean(a) && a === normalizeOrgName(right);
-};
 
 // 문자 2-gram 겹침(Dice 계수, 0~1). 계약명처럼 표기가 조금씩 다른 이름에 쓴다("2026" / "2026년").
 export function nameSimilarity(left, right) {
@@ -94,14 +93,20 @@ function orgCompare(a, b) {
   return false;
 }
 
-// 계약명: 표기 차이("2026"/"2026년")는 일치로 보되, 한쪽이 다른 쪽을 포함하면(예: "…용역"과 "…용역 2차") 확인 필요.
+// 계약명 정규화: 기관명 규칙에 더해 연도 뒤 "년"을 지운다("2026년" = "2026", 3차 리뷰 #3).
+const normalizeContractName = (value) => normalizeOrgName(value).replace(/(\d{4})년/gu, '$1');
+const digitsOf = (value) => (value.match(/\d+/gu) ?? []).join(',');
+
+// 계약명: 표기 차이는 일치로 보되, 숫자(연도·차수)가 다르면 다른 계약이다(3차 리뷰 #2).
+// 한쪽이 다른 쪽을 포함하면(예: "…용역"과 "…용역 2차") 확인 필요.
 function contractNameCompare(a, b) {
-  const left = normalizeOrgName(a);
-  const right = normalizeOrgName(b);
+  const left = normalizeContractName(a);
+  const right = normalizeContractName(b);
   if (!left || !right) return false;
   if (left === right) return true;
   if (left.includes(right) || right.includes(left)) return 'close';
-  const score = nameSimilarity(a, b);
+  const score = nameSimilarity(left, right);
+  if (digitsOf(left) !== digitsOf(right)) return score >= NAME_CLOSE ? 'close' : false;
   return score >= NAME_SAME ? true : score >= NAME_CLOSE ? 'close' : false;
 }
 

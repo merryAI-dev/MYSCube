@@ -214,3 +214,31 @@ describe('second code review fixes', () => {
     expect(find(result, 'contractAmount').message).toContain('인용 문장에 그 값이 없어');
   });
 });
+
+describe('third code review fixes', () => {
+  it('rejects impossible ISO dates instead of rolling them over (3rd #1, #7)', () => {
+    expect(parseDate('2026-02-30T10:00:00Z')).toBeNull();
+    expect(parseDate('2026-02-31T00:00:00+09:00')).toBeNull();
+    expect(parseDate('2026-03-01T1:2Z')).toBe('2026-03-01');
+  });
+
+  it('does not match contract names that differ in round or year (3rd #2)', () => {
+    const pages = (line) => [`${contractPages[0]}\n${line}`, contractPages[1]];
+    const round = only([contract({ officialContractName: read('2026 청년 창업 지원 운영 용역 2차', '사업명: 2026 청년 창업 지원 운영 용역 2차') }, { pages: pages('사업명: 2026 청년 창업 지원 운영 용역 2차') })], { officialContractName: '2026 청년 창업 지원 운영 용역 1차' });
+    expect(find(round, 'officialContractName').status).toBe('check');
+    const year = only([contract({ officialContractName: read('2027년 청년 창업 지원 운영 용역', '사업명: 2027년 청년 창업 지원 운영 용역') }, { pages: pages('사업명: 2027년 청년 창업 지원 운영 용역') })]);
+    expect(find(year, 'officialContractName').status).not.toBe('match');
+  });
+
+  it('treats a year written with or without "년" as the same contract name (3rd #3)', () => {
+    const pages = (line) => [`${contractPages[0]}\n${line}`, contractPages[1]];
+    const short = only([contract({ officialContractName: read('2026년 사업', '사업명: 2026년 사업') }, { pages: pages('사업명: 2026년 사업') })], { officialContractName: '2026 사업' });
+    expect(find(short, 'officialContractName').status).toBe('match');
+  });
+
+  it('strips parenthesized legal forms after full-width normalization (3rd #5)', () => {
+    expect(normalizeOrgName('㈜한국')).toBe('한국');
+    expect(normalizeOrgName('(有)한국')).toBe('한국');
+    expect(normalizeOrgName('(株)한국')).toBe('한국');
+  });
+});

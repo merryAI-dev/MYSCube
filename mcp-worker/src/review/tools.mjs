@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import { BffError } from '../bff.mjs';
-import { buildReviewResult, hashId, reviewError } from './contract.mjs';
+import { buildReviewResult, hashId, reviewError, stableJson } from './contract.mjs';
 import { PLAYBOOK } from './playbook.mjs';
 import { REVIEW_DOCUMENT_KINDS, reviewSubmission } from './rules.mjs';
 import { attachmentTextPath, loadSubmission, parseSubject, SUBJECT_TYPES, subjectKey } from './submission.mjs';
@@ -76,7 +76,12 @@ export function pageWindow(pages, from, offset = 0) {
   let next = null;
   for (let number = start; number <= pages.length; number += 1) {
     const body = pages[number - 1];
-    const begin = number === start ? Math.min(Math.max(0, offset), body.length) : 0;
+    let begin = number === start ? Math.min(Math.max(0, offset), body.length) : 0;
+    // 시작 위치가 서로게이트 쌍 가운데면 쌍 뒤로 옮긴다(3차 리뷰 #9).
+    if (begin > 0 && begin < body.length) {
+      const unit = body.charCodeAt(begin);
+      if (unit >= 0xDC00 && unit <= 0xDFFF) begin += 1;
+    }
     const header = begin > 0 ? `[p.${number} 이어서]\n` : `[p.${number}]\n`;
     const room = TEXT_CHARS_PER_RESPONSE - used - header.length;
     if (parts.length && body.length - begin + header.length > TEXT_CHARS_PER_RESPONSE - used) {
@@ -224,8 +229,8 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
       identity: {
         subject: loaded.subject, reviewToken: loaded.reviewToken, extractor: EXTRACTOR,
         documents: documents.map(({ kind, sha256, source }) => ({ kind, sha256, source })),
-        // 추출값 순서만 다른 같은 입력은 같은 id 가 되게 서류 종류·출처 순으로 정렬한다(2차 리뷰 #6).
-        inputsDigest: await hashId('i', { submission: loaded.submission, extractions: [...extractions].sort((a, b) => `${a.kind}:${a.source}`.localeCompare(`${b.kind}:${b.source}`)) }),
+        // 추출값 순서만 다른 같은 입력은 같은 id 가 되게 정규화 JSON 으로 정렬한다(2차 리뷰 #6, 3차 #6).
+        inputsDigest: await hashId('i', { submission: loaded.submission, extractions: extractions.map(stableJson).sort() }),
       },
       findings: judged.findings, coverage: judged.coverage, unknowns: judged.unknowns, limitations: judged.limitations,
     });

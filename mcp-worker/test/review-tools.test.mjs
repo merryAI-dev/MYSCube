@@ -265,5 +265,21 @@ describe('project review tools', () => {
       expect(json).toMatchObject({ pages: '1-2', notice: expect.stringContaining('바뀌었습니다') });
       expect(json.text.startsWith('[p.1]\n새 1쪽')).toBe(true);
     });
+
+    it('gives the same review id for same-kind, same-source extractions in either order (3rd #6)', async () => {
+      await connect();
+      const first = { kind: 'contract', source: 'connector', fields: { contractAmount: { value: '110,000,000', quote: '총액 110,000,000원' } } };
+      const second = { kind: 'contract', source: 'connector', fields: { clientOrg: { value: '가상테스트재단', quote: '발주: 가상테스트재단' } } };
+      const a = await call('project_review_check', { subject, extractions: [first, second] });
+      const b = await call('project_review_check', { subject, extractions: [second, first] });
+      expect(b.json.review.reviewId).toBe(a.json.review.reviewId);
+    });
+
+    it('never starts a window in the middle of a surrogate pair (3rd #9)', async () => {
+      await connect({ bff: fakeBff({ '/api/v1/project-requests/r1/attachments/contract/text': () => ({ kind: 'contract', name: 'e.pdf', sha256: SHA, pageCount: 1, pages: ['😀😀😀 끝'], quality: 'ok' }) }) });
+      await call('project_attachment_text', { subject, kind: 'contract' });
+      const { json } = await call('project_attachment_text', { subject, kind: 'contract', textRef: SHA, offset: 1 });
+      expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(json.text)).toBe(false);
+    });
   });
 });

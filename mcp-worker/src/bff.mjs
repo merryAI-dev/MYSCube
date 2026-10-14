@@ -101,7 +101,9 @@ export function createBffClient({
         // 본문을 읽는 중에도 같은 시간 한도가 적용된다. 시간 초과·연결 끊김을 공통 오류로 바꾼다(코드 리뷰 #3).
         if (error instanceof BffError) throw error;
         // 오류 응답(403 등)의 본문을 읽다 끊겼으면 원래 상태 코드를 유지한다(2차 리뷰 #9).
-        if (!response.ok) throw new BffError(response.status, null, { retryable: RETRY_STATUSES.has(response.status) });
+        if (!response.ok) {
+          throw new BffError(response.status, { code: 'response_incomplete', message: `MYSCube 오류 응답(HTTP ${response.status})을 끝까지 받지 못했습니다.` }, { retryable: RETRY_STATUSES.has(response.status) });
+        }
         if (error?.name === 'TimeoutError' || error?.name === 'AbortError') {
           throw new BffError(504, { code: 'timeout', message: 'MYSCube 응답이 늦어 중단했습니다.' }, { retryable: true });
         }
