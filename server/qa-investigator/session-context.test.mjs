@@ -140,3 +140,20 @@ test('evidence source ID is adapter-defined while the ledger separately binds fu
   assert.throws(() => ledger.observe({ ...item, content_hash: 'f'.repeat(64) }),
     { code: 'session_evidence_invalid' });
 });
+
+test('stored source JSON key order survives resume and full-envelope readback', () => {
+  const body = { source: 'query_client_errors', status: 'available', rows: [{ z: 1, a: 2 }],
+    observed_at: '2026-10-14T00:00:00Z' };
+  const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+  const hash = digest(body);
+  const item = { ...body, content_hash: hash, evidence_id: `ev_${hash}` };
+  const row = stored(item);
+  const verified = verifyStoredEvidence({ ...row, runBinding });
+  const ledger = createSessionContext({ runBinding, report, priorEvidence: [row] });
+  for (const restored of [verified.evidence, ledger.readEvidence({ evidence_id: item.evidence_id }).envelope]) {
+    const { content_hash, evidence_id, ...restoredBody } = restored;
+    assert.equal(digest(restoredBody), content_hash);
+    assert.equal(evidence_id, `ev_${hash}`);
+    assert.equal(JSON.stringify(restored), JSON.stringify(item));
+  }
+});
