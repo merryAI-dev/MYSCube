@@ -37,6 +37,8 @@ function receipt(issue, draft, marker) {
 export async function deliverReviewedIssue({caseId,store,authorize,generateDraft,reviewDraft,github}) {
   const marker=issueMarker(caseId);
   let source=await authorize();
+  if (source.run.status === 'failed') return {status:'investigation_failed'};
+  if (source.run.status === 'needs_review') return {status:'investigation_needs_review'};
   if (source.run.status !== 'completed' || source.run.review?.accepted !== true) return {status:'waiting_for_reviewed_result'};
   const sourceHash=reviewedHash(source,caseId);
   let saved=await store.read();

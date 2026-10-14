@@ -29,7 +29,7 @@ export async function runPublicationSweep({ client, createDelivery, onResult, no
       seen.add(caseId);
       try {
         const result = await deliverReviewedIssue({ caseId, ...await createDelivery(caseId) });
-        if (['publication_outcome_unknown', 'receipt_persistence_conflict'].includes(result.status)) failed = true;
+        if (['investigation_failed', 'publication_outcome_unknown', 'receipt_persistence_conflict'].includes(result.status)) failed = true;
         await onResult({ case_id: caseId, status: result.status, ...(result.receipt ? { issue_url: result.receipt.url } : {}) });
       } catch (error) {
         failed = true;
