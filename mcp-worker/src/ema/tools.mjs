@@ -33,7 +33,7 @@ const INSTRUCTIONS = [
   '엑셀로 여러 기업을 등록하려면: 파일이 작으면 대화에 올린 표를 rows로 넘겨 ema_registry_import_preview를 부르고, 크면 ema_registry_import_upload_link로 업로드 링크를 받으세요.',
   '등록은 반드시 미리보기 결과를 사용자에게 보여 주고 확인받은 뒤에만 하세요. 기본은 ema_registry_import_confirm_link로 웹 확정 링크를 받아 사용자가 화면에서 "등록 확정"을 누르게 하는 방식이고, 대화 안에서 직접 등록이 허용되는 환경에서만 ema_registry_import_commit을 쓸 수 있습니다.',
   '엑셀 내려받기는 ema_registry_export로 다운로드 링크를 만들어 사용자에게 전달합니다(파일 내용은 대화에 싣지 않습니다).',
-  '컨설턴트·관리자는 Meet 회의록을 가져와 보고서 초안을 만들 수 있습니다: ema_google_connect로 Google을 연결하고(calendar/gmail 중 선택), ema_meeting_sources_list로 후보를 찾아 ema_meeting_draft_create로 초안함에 저장합니다. 초안은 원장에 쓰이지 않으며 사용자가 EMA 화면 "회의록 추가 → 초안 불러오기"에서 확정합니다. Tiro 등 다른 MCP에서 읽은 회의록은 text로 넘기세요. 새로 올릴 때 "미작성"으로 거르지 마세요.',
+  '컨설턴트·관리자는 회의록으로 보고서 초안을 만들 수 있습니다: 사용자의 Gmail·Drive·Calendar 커넥터(Meet 노트, 회의록 메일)나 Tiro MCP로 회의록을 먼저 읽고, 그 텍스트를 ema_meeting_draft_create에 넘기세요. 초안은 원장에 쓰이지 않으며 사용자가 EMA 화면 "회의록 추가 → 초안 불러오기"에서 확정합니다. 새로 올릴 때 "미작성"으로 거르지 마세요.',
 ].join(' ');
 
 export function maskBusinessNumber(value) {
@@ -73,7 +73,7 @@ const filterShape = {
 
 const rowShape = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]));
 
-export function createEmaMcpServer({ ema, store, publicOrigin, access, google = null, now = () => Date.now() }) {
+export function createEmaMcpServer({ ema, store, publicOrigin, access, now = () => Date.now() }) {
   const server = new McpServer({ name: 'ema-station', version: '1.0.0' }, { instructions: INSTRUCTIONS });
   const isAdmin = access.canExportAndImport === true;
 
@@ -287,9 +287,7 @@ export function createEmaMcpServer({ ema, store, publicOrigin, access, google = 
   }
 
   // 회의록 초안함은 관리자와 활성 컨설턴트만 쓴다(최종 권한 판단은 EMA 함수가 한다).
-  if (google && ['admin', 'consultant'].includes(access.role)) {
-    registerMeetingTools(server, { ema, google, access: { ...access, publicOrigin }, now });
-  }
+  if (['admin', 'consultant'].includes(access.role)) registerMeetingTools(server, { ema });
 
   return server;
 }

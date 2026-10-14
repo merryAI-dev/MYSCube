@@ -44,6 +44,7 @@ describe('EMA tool surface', () => {
     await connect({ ema: fakeEma(), admin: true });
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'ema_meeting_draft_create', 'ema_meeting_draft_delete', 'ema_meeting_draft_get', 'ema_meeting_drafts_list',
       'ema_registry_export', 'ema_registry_get', 'ema_registry_import_commit', 'ema_registry_import_confirm_link', 'ema_registry_import_preview',
       'ema_registry_import_template', 'ema_registry_import_upload_link', 'ema_registry_search', 'ema_registry_status',
     ]);
@@ -53,7 +54,8 @@ describe('EMA tool surface', () => {
     }
     const commit = tools.find((tool) => tool.name === 'ema_registry_import_commit');
     expect(commit.annotations.readOnlyHint).toBe(false);
-    expect(tools.filter((tool) => tool.name !== 'ema_registry_import_commit').every((tool) => tool.annotations.readOnlyHint !== false)).toBe(true);
+    const writes = new Set(['ema_registry_import_commit', 'ema_meeting_draft_create', 'ema_meeting_draft_delete']);
+    expect(tools.filter((tool) => !writes.has(tool.name)).every((tool) => tool.annotations.readOnlyHint !== false)).toBe(true);
     expect(client.getInstructions()).toContain('ema_registry_status');
   });
 });

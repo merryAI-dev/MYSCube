@@ -3,7 +3,6 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { refreshFirebase } from '../identity.mjs';
 import { handleAuthorize, handleSession, SCOPES } from './auth.mjs';
 import { createEmaClient } from './client.mjs';
-import { createGoogleService, handleGoogleCallback, handleGoogleStart } from './google.mjs';
 import { runImportCommit } from './commit.mjs';
 import { createStore, handleConfirm, handleFileDownload, handleUpload } from './files.mjs';
 import { createEmaMcpServer } from './tools.mjs';
@@ -32,8 +31,7 @@ const mcpHandler = {
       ema: createEmaClient({ functionsBase: env.EMA_FUNCTIONS_BASE, idToken: props.idToken }),
       store: createStore(env.OAUTH_KV),
       publicOrigin: env.PUBLIC_ORIGIN,
-      google: createGoogleService({ kv: env.OAUTH_KV, env }),
-      access: { uid: props.uid, email: props.email, role: props.role, canExportAndImport: props.canExportAndImport === true, idToken: props.idToken, idTokenExpiresAt: props.expiresAt },
+      access: { uid: props.uid, role: props.role, canExportAndImport: props.canExportAndImport === true, idToken: props.idToken, idTokenExpiresAt: props.expiresAt },
     });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
@@ -48,9 +46,6 @@ const defaultHandler = {
     if (pathname === '/ema/session') return handleSession(request, env);
     const upload = /^\/upload\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
     if (upload) return handleUpload(request, createStore(env.OAUTH_KV), upload[1]);
-    if (pathname === '/google/callback' && request.method === 'GET') return handleGoogleCallback(request, createGoogleService({ kv: env.OAUTH_KV, env }));
-    const googleStart = /^\/google\/start\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
-    if (googleStart) return handleGoogleStart(request, createGoogleService({ kv: env.OAUTH_KV, env }), googleStart[1]);
     const confirm = /^\/confirm\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
     if (confirm) {
       const store = createStore(env.OAUTH_KV);
