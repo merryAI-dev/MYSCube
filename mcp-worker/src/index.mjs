@@ -4,6 +4,7 @@ import { handleAuthorize, handleCallback, SCOPES } from './auth.mjs';
 import { createBffClient } from './bff.mjs';
 import { refreshFirebase } from './identity.mjs';
 import { createMyscubeMcpServer } from './tools.mjs';
+import { createTextStore } from './review/text-store.mjs';
 import { clientOf, usageRecorder } from './usage.mjs';
 
 const ORIGIN = 'https://mcp.myscguard.app';
@@ -29,6 +30,8 @@ const mcpHandler = {
     const server = createMyscubeMcpServer({
       bff: createBffClient({ baseUrl: env.BFF_BASE_URL, idToken: props.firebaseIdToken }),
       record: usageRecorder(env.USAGE, { uid: props.uid, role: 'member', client: clientOf(request.headers.get('user-agent')) }),
+      textStore: createTextStore(env.OAUTH_KV),
+      uid: props.uid,
     });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
