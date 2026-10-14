@@ -254,9 +254,11 @@ export function mountQaSlackIngressRoute(app, { ingress, signingSecret, path = '
       res.status(200).json(result.challenge ? { challenge: result.challenge } : { ok: true });
     } catch (error) {
       const code = error?.code || error?.message;
-      const status = code === 'slack_signature_invalid' ? 401
-        : code === 'slack_body_invalid' ? 400 : 403;
-      res.status(status).json({ error: typeof code === 'string' && code.startsWith('slack_') ? code : 'slack_ingress_rejected' });
+      const status = new Map(Object.entries({slack_signature_invalid:401, slack_body_invalid:400,
+        slack_scope_invalid:403, slack_binding_required:403, slack_identity_link_required:403,
+        slack_project_scope_invalid:403, member_inactive:403, slack_event_conflict:409})).get(code) || 503;
+      res.status(status).json({error:status === 503 ? 'slack_ingress_unavailable'
+        : code === 'member_inactive' ? 'slack_ingress_rejected' : code});
     }
   });
 }

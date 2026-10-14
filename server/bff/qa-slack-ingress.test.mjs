@@ -230,3 +230,17 @@ test('incomplete business identity cannot create a queued Slack case', async () 
     assert.equal(docs.size,size);
   }
 });
+
+test('transient ingress failure returns sanitized 503 and subsequent delivery succeeds once', async () => {
+  const {docs,service}=harness();let fail=true;
+  const app=express();mountQaSlackIngressRoute(app,{signingSecret:secret,ingress:{acceptSigned:async args=>{
+    const result=await service.acceptSigned(args);
+    if(fail){fail=false;throw Error('PRIVATE database response lost');}return result;
+  }}});
+  const s=sign(payload());const send=()=>request(app).post('/hooks/slack/events').set({
+    'content-type':'application/json','x-slack-request-timestamp':timestamp,'x-slack-signature':s.signature,
+  }).send(s.rawBody.toString('utf8'));
+  const failed=await send();assert.equal(failed.status,503);assert.deepEqual(failed.body,{error:'slack_ingress_unavailable'});
+  const retried=await send();assert.equal(retried.status,200);
+  assert.equal([...docs.keys()].filter(key=>key.includes('/qa_kafka_outbox/')).length,1);
+});
