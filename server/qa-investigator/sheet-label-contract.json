@@ -1,0 +1,169 @@
+{
+  "actual": [
+    {
+      "label": "MYSC 선입금 - 직접사업비 등(입금)",
+      "line_id": "MYSC_PREPAY_IN",
+      "row": 38
+    },
+    {
+      "label": "MYSC 선입금 - MYSC 인건비(입금)",
+      "line_id": "MYSC_PREPAY_LABOR_IN",
+      "row": 39
+    },
+    {
+      "label": "MYSC 선입금 - 매입부가세(입금)",
+      "line_id": "MYSC_PREPAY_INPUT_VAT_IN",
+      "row": 40
+    },
+    {
+      "label": "매출액(입금)",
+      "line_id": "SALES_IN",
+      "row": 41
+    },
+    {
+      "label": "매출부가세(입금)",
+      "line_id": "SALES_VAT_IN",
+      "row": 42
+    },
+    {
+      "label": "팀지원금(입금)",
+      "line_id": "TEAM_SUPPORT_IN",
+      "row": 43
+    },
+    {
+      "label": "은행이자(입금)",
+      "line_id": "BANK_INTEREST_IN",
+      "row": 44
+    },
+    {
+      "label": "MYSC 선입금 - 직접사업비 등(출금)",
+      "line_id": "MYSC_PREPAY_DIRECT_OUT",
+      "row": 46
+    },
+    {
+      "label": "MYSC 선입금 - MYSC 인건비(출금)",
+      "line_id": "MYSC_PREPAY_LABOR_OUT",
+      "row": 47
+    },
+    {
+      "label": "직접사업비(공급가액)",
+      "line_id": "DIRECT_COST_OUT",
+      "row": 48
+    },
+    {
+      "label": "매입부가세",
+      "line_id": "INPUT_VAT_OUT",
+      "row": 49
+    },
+    {
+      "label": "MYSC인건비",
+      "line_id": "MYSC_LABOR_OUT",
+      "row": 50
+    },
+    {
+      "label": "MYSC수익",
+      "line_id": "MYSC_PROFIT_OUT",
+      "row": 51
+    },
+    {
+      "label": "매출부가세(출금)",
+      "line_id": "SALES_VAT_OUT",
+      "row": 52
+    },
+    {
+      "label": "팀지원금(출금)",
+      "line_id": "TEAM_SUPPORT_OUT",
+      "row": 53
+    },
+    {
+      "label": "은행이자(출금)",
+      "line_id": "BANK_INTEREST_OUT",
+      "row": 54
+    }
+  ],
+  "coordinates_blob_sha": "7480e942509a1ab33dab4712bcc0c3803eba5916",
+  "policy_blob_sha": "af6e5f33d71b853f30900d6f121753ad047d5cdf",
+  "projection": [
+    {
+      "label": "MYSC 선입금 - 직접사업비 등",
+      "line_id": "MYSC_PREPAY_IN",
+      "row": 15
+    },
+    {
+      "label": "MYSC 선입금 - MYSC 인건비",
+      "line_id": "MYSC_PREPAY_LABOR_IN",
+      "row": 16
+    },
+    {
+      "label": "MYSC 선입금 - 매입부가세",
+      "line_id": "MYSC_PREPAY_INPUT_VAT_IN",
+      "row": 17
+    },
+    {
+      "label": "매출액(입금)",
+      "line_id": "SALES_IN",
+      "row": 18
+    },
+    {
+      "label": "매출부가세(입금)",
+      "line_id": "SALES_VAT_IN",
+      "row": 19
+    },
+    {
+      "label": "팀지원금(입금)",
+      "line_id": "TEAM_SUPPORT_IN",
+      "row": 20
+    },
+    {
+      "label": "은행이자(입금)",
+      "line_id": "BANK_INTEREST_IN",
+      "row": 21
+    },
+    {
+      "label": "MYSC 선입금 - 직접사업비 등",
+      "line_id": "MYSC_PREPAY_DIRECT_OUT",
+      "row": 23
+    },
+    {
+      "label": "MYSC 선입금 - MYSC 인건비",
+      "line_id": "MYSC_PREPAY_LABOR_OUT",
+      "row": 24
+    },
+    {
+      "label": "직접사업비(공급가액)",
+      "line_id": "DIRECT_COST_OUT",
+      "row": 25
+    },
+    {
+      "label": "매입부가세",
+      "line_id": "INPUT_VAT_OUT",
+      "row": 26
+    },
+    {
+      "label": "MYSC인건비",
+      "line_id": "MYSC_LABOR_OUT",
+      "row": 27
+    },
+    {
+      "label": "MYSC수익",
+      "line_id": "MYSC_PROFIT_OUT",
+      "row": 28
+    },
+    {
+      "label": "매출부가세(출금)",
+      "line_id": "SALES_VAT_OUT",
+      "row": 29
+    },
+    {
+      "label": "팀지원금(출금)",
+      "line_id": "TEAM_SUPPORT_OUT",
+      "row": 30
+    },
+    {
+      "label": "은행이자(출금)",
+      "line_id": "BANK_INTEREST_OUT",
+      "row": 31
+    }
+  ],
+  "source_revision": "336fe9b2e87de39e8c07eafe843d18e05a7aca2e"
+}

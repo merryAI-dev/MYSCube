@@ -1,0 +1,10 @@
+FROM node:24-slim
+WORKDIR /app/qa-investigator
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+COPY *.mjs sheet-label-contract.json ./
+COPY shared-bff ../bff
+COPY shared-qa ../qa-shared
+ENV NODE_ENV=production QA_REPORT_ID=case QA_PROVIDER=openai
+USER node
+CMD ["node", "runner.mjs"]
