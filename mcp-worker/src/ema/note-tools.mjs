@@ -19,6 +19,12 @@ function bullets(items) {
   return lines.length ? lines.map((line) => `- ${line}`).join('\n') : '- (없음)';
 }
 
+// 원본이 여러 건(예: Tiro 녹음 2건을 한 회의록으로)이면 정렬해 하나의 키로 묶는다. 같은 묶음이면 같은 파일을 갱신한다.
+export function sourceKeyOf(input) {
+  const refs = [...new Set([input.sourceRef, ...(input.sourceRefs ?? [])].map((ref) => String(ref ?? '').trim()).filter(Boolean))].sort();
+  return { refs, key: refs.join('+') };
+}
+
 // 일정이 있으면 일정의 날짜·참석자를 우선한다. 일정과 입력이 다르면 일정이 기준이다.
 export function buildMeetingNote(input) {
   const event = input.calendarEvent;
@@ -27,7 +33,10 @@ export function buildMeetingNote(input) {
   const category = input.category?.trim() || '';
   const counterpart = input.counterpart.trim();
   const by = input.author ? `_${input.author.trim()}${input.affiliation ? `(${input.affiliation.trim()})` : ''}` : '';
-  const title = `${category ? `[${category}] ` : ''}${counterpart} 미팅${by}`;
+  // 행사·발표회처럼 "미팅"이 어색하면 title로 이름을 직접 준다.
+  const name = input.title?.trim() || `${counterpart} 미팅`;
+  const title = `${category ? `[${category}] ` : ''}${name}${by}`;
+  const { refs } = sourceKeyOf(input);
   const fileName = `${cleanFileName(`${date.replaceAll('-', '')} ${title}`)}.md`;
   const attendees = (event?.attendees ?? []).map((person) => person.name || person.email).filter(Boolean);
   const header = [
@@ -38,12 +47,13 @@ export function buildMeetingNote(input) {
     `author: ${yaml(input.author)}`,
     `affiliation: ${yaml(input.affiliation)}`,
     `source: ${input.source ?? 'manual'}`,
-    `sourceRef: ${yaml(input.sourceRef)}`,
+    ...(refs.length > 1 ? ['sourceRefs:', ...refs.map((ref) => `  - ${yaml(ref)}`)] : [`sourceRef: ${yaml(refs[0])}`]),
     `calendarEventId: ${yaml(event?.id)}`,
     ...(attendees.length ? ['attendees:', ...attendees.map((name) => `  - ${yaml(name)}`)] : []),
     '---',
   ].join('\n');
-  const markdown = `${header}\n\n# ${title}\n\n## 요약\n${bullets(input.summary)}\n\n## 향후 팔로업\n${bullets(input.followUps)}\n${
+  const details = input.details?.trim();
+  const markdown = `${header}\n\n# ${title}\n\n## 요약\n${bullets(input.summary)}\n${details ? `\n## 상세내용\n${details}\n` : ''}\n## 향후 팔로업\n${bullets(input.followUps)}\n${
     input.notes?.length ? `\n## 참고\n${bullets(input.notes)}\n` : ''}`;
   return { fileName, title, date, markdown };
 }
@@ -51,18 +61,21 @@ export function buildMeetingNote(input) {
 export function registerNoteTools(server, { notes, saveNote, publicOrigin, uid } = {}) {
   tool(server, 'ema_meeting_note_markdown', {
     title: '회의록 마크다운 만들기',
-    description: `회의록을 팀 표준 마크다운(머리말 + 요약 + 향후 팔로업 + 참고)과 파일명으로 만들어 줍니다. 이 도구는 저장하지 않습니다. 저장은 셋 중 하나로 하세요: (가) 사용자에게 saveUrl을 주고 화면의 "드라이브에 저장"을 누르게 한다(ChatGPT 등 어디서나 됨, 기본) (나) 대화 안 쓰기가 허용되면 ema_meeting_note_save(noteId) (다) Drive 커넥터로 folderId 폴더에 fileName·markdown을 직접 저장. 순서: ① 회의록(Gmail·Tiro MCP 등)을 읽는다 ② Google Calendar 커넥터로 회의 시각 전후의 비슷한 일정을 찾아 제목·참석자가 맞는 것을 calendarEvent로 넘긴다(여러 개면 사용자에게 고르게 한다, 없으면 생략) ③ 요약·향후 팔로업·참고를 직접 정리해 넘긴다. 같은 fileName이나 sourceRef가 폴더에 있으면 (가)(나)는 자동으로 갱신하고, (다)는 직접 찾아 갱신해야 한다.`,
+    description: `회의록을 팀 표준 마크다운(머리말 + 요약 + 상세내용 + 향후 팔로업 + 참고)과 파일명으로 만들어 줍니다. 이 도구는 저장하지 않습니다. 저장은 Drive 커넥터로 직접 올리지 말고(ChatGPT 등에서 파일 참조 형식 오류로 실패함) 다음 중 하나로 하세요: (가) ema_meeting_note_save(noteId)로 바로 저장(대화 안 쓰기가 허용되는 환경) (나) 그게 차단되면 사용자에게 saveUrl을 주고 화면의 "드라이브에 저장"을 누르게 한다. 순서: ① 회의록(Gmail·Tiro MCP 등)을 읽는다 ② Google Calendar 커넥터로 회의 시각 전후의 비슷한 일정을 찾아 제목·참석자가 맞는 것을 calendarEvent로 넘긴다(여러 개면 사용자에게 고르게 한다, 없으면 생략) ③ 요약·상세내용·향후 팔로업·참고를 직접 정리해 넘긴다. 원본이 여러 건이면 sourceRefs에 모두 넣는다. 같은 fileName이나 같은 원본 묶음이 폴더에 있으면 자동으로 갱신된다.`,
     input: {
       counterpart: z.string().min(1).max(120).describe('상대 기관·기업·주제. 파일명에 들어감(예: White Box Enterprise)'),
+      title: z.string().max(120).optional().describe('제목을 직접 줄 때(행사·발표회 등 "미팅"이 어색한 경우). 예: MYSC 임팩트 스타트업 IR+AR'),
       category: z.string().max(40).optional().describe('분류(예: 호주 파트너, 투자사, 고객사). 모르면 생략'),
       meetingDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/u).optional().describe('회의 날짜. calendarEvent가 있으면 일정의 날짜를 씀'),
       author: z.string().max(40).optional().describe('작성자 이름'),
       affiliation: z.string().max(40).optional().describe('작성자 소속'),
       summary: z.array(z.string().max(1000)).min(1).describe('요약 불릿: 배경, 핵심 논의, 상대방 요청'),
       followUps: z.array(z.string().max(500)).optional().describe('향후 팔로업 불릿(다음 행동)'),
+      details: z.string().max(50_000).optional().describe('상세내용(마크다운). 발표·논의별 소제목과 질의응답 등. 없으면 섹션 생략'),
       notes: z.array(z.string().max(2000)).optional().describe('참고 불릿(상대 기관 소개, 출처 등). 없으면 섹션 생략'),
       source: z.enum(['meet-calendar', 'meet-gmail', 'tiro', 'manual']).optional().describe('회의록 출처'),
       sourceRef: z.string().max(200).optional().describe('원본 식별자(메일 ID, Tiro 노트 ID 등). 중복 저장 방지에 씀'),
+      sourceRefs: z.array(z.string().max(200)).optional().describe('원본이 여러 건일 때 모든 식별자(예: Tiro 녹음 2건)'),
       calendarEvent: z.object({
         id: z.string().max(200).describe('일정 ID'),
         title: z.string().max(300).optional(),
@@ -72,14 +85,14 @@ export function registerNoteTools(server, { notes, saveNote, publicOrigin, uid }
     },
   }, async (input) => {
     const note = buildMeetingNote(input);
-    const noteId = notes ? await notes.put(uid, { fileName: note.fileName, markdown: note.markdown, sourceRef: input.sourceRef || '' }) : null;
+    const noteId = notes ? await notes.put(uid, { fileName: note.fileName, markdown: note.markdown, sourceRef: sourceKeyOf(input).key }) : null;
     return {
       ...note,
       folderId: NOTES_FOLDER_ID,
       ...(noteId ? { noteId, saveUrl: `${publicOrigin}/note/${noteId}` } : {}),
       driveSaveReady: Boolean(saveNote),
       next: noteId
-        ? '사용자에게 파일명과 요약을 보여 주고 saveUrl을 전달하세요. 링크 화면에서 "드라이브에 저장"을 누르면 팀 폴더에 저장되고, .md로 내려받을 수도 있습니다(24시간 유효).'
+        ? '사용자에게 파일명과 요약을 보여 주고 확인을 받으세요. 확인하면 ema_meeting_note_save(noteId)로 저장하고, 그 도구가 차단되면 saveUrl을 전달하세요(링크 화면의 "드라이브에 저장", 24시간 유효). Drive 커넥터로 직접 올리지 마세요.'
         : '사용자에게 파일명과 요약을 보여 주고, Drive 커넥터로 folderId 폴더에 fileName으로 저장하세요.',
     };
   });
