@@ -2241,6 +2241,41 @@ describe('project information private drafts', () => {
     }));
   });
 
+  function textRouteApp(readAttachment) {
+    const service = { readAttachment: vi.fn(readAttachment) };
+    const app = express();
+    app.use((req, _res, next) => {
+      req.context = { tenantId: 'tenant-a', actorId: 'actor-a', actorRole: 'pm', actorName: 'Actor A', requestId: 'request-a' };
+      next();
+    });
+    mountProjectInfoDraftRoutes(app, { enabled: true, projectInfoDraftService: service });
+    app.use((error, _req, res, _next) => {
+      res.status(error.statusCode || 500).json({ error: error.code || 'internal_error' });
+    });
+    return { app, service };
+  }
+
+  it('serves edit-draft attachment text through the same readAttachment call as the download', async () => {
+    const { app, service } = textRouteApp(async () => ({ buffer: Buffer.from('private-edit-pdf'), contentType: 'application/pdf', size: 16, name: 'contract.pdf' }));
+    const response = await request(app)
+      .get('/api/v1/project-info-drafts/project-a/attachments/contract/text')
+      .expect(200);
+    expect(service.readAttachment).toHaveBeenCalledTimes(1);
+    expect(service.readAttachment).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 'tenant-a', actorId: 'actor-a', projectId: 'project-a', documentKind: 'contract',
+    }));
+    expect(response.headers['cache-control']).toBe('private, no-store');
+    expect(response.body).toMatchObject({ kind: 'contract', name: 'contract.pdf', reason: 'not_pdf', pages: [] });
+  });
+
+  it('refuses edit-draft attachment text exactly when the download would be refused', async () => {
+    const { app } = textRouteApp(async () => { throw Object.assign(new Error('not found'), { statusCode: 404, code: 'not_found' }); });
+    const response = await request(app)
+      .get('/api/v1/project-info-drafts/project-a/attachments/contract/text')
+      .expect(404);
+    expect(response.body).toEqual({ error: 'not_found' });
+  });
+
   it('passes the typed attachment kind, revision, and lease fence to DELETE', async () => {
     const service = {
       removeAttachment: vi.fn(async () => ({

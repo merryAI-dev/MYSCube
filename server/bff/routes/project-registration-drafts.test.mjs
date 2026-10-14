@@ -2182,6 +2182,35 @@ describe('project registration draft routes', () => {
     }));
   });
 
+  it('serves draft attachment text through the same readAttachment call as the download', async () => {
+    const { app, service } = createRouteApp();
+
+    const response = await request(app)
+      .get('/api/v1/project-registration-drafts/draft-a/attachments/contract/text')
+      .expect(200);
+
+    expect(service.readAttachment).toHaveBeenCalledTimes(1);
+    expect(service.readAttachment).toHaveBeenCalledWith(expect.objectContaining({
+      tenantId: 'tenant-a', actorId: 'actor-a', draftId: 'draft-a', documentKind: 'contract',
+    }));
+    expect(response.headers['content-type']).toContain('application/json');
+    expect(response.headers['cache-control']).toBe('private, no-store');
+    // 목(mock) 파일은 PDF 가 아니므로 텍스트 없이 이유만 돌려준다. 파일 이름은 헤더가 아니라 JSON 값으로만 나간다.
+    expect(response.body).toMatchObject({ kind: 'contract', reason: 'not_pdf', pages: [], size: 17, name: 'contract"\r\nX-Test: injected.pdf' });
+    expect(response.body.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(response.headers['x-test']).toBeUndefined();
+  });
+
+  it('refuses draft attachment text exactly when the download would be refused', async () => {
+    const { app, service } = createRouteApp();
+    service.readAttachment.mockRejectedValueOnce(Object.assign(new Error('Draft owner required'), { statusCode: 403, code: 'forbidden' }));
+    const response = await request(app)
+      .get('/api/v1/project-registration-drafts/draft-a/attachments/contract/text')
+      .expect(403);
+    expect(response.body.error).toBe('forbidden');
+    expect(response.body.pages).toBeUndefined();
+  });
+
   it('returns 422 for a root array before the real create service writes anything', async () => {
     const harness = createHarness();
     const app = express();

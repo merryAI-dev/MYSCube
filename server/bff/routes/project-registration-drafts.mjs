@@ -34,6 +34,7 @@ import {
   projectDocumentValidationError,
   projectProposalFileMetadataError,
 } from '../project-document-validation.mjs';
+import { buildAttachmentTextBody, sendAttachmentText } from '../attachment-text.mjs';
 
 const RESOURCE_TYPE = 'project-registration';
 const DOCUMENT_FIELD_BY_KIND = {
@@ -1586,6 +1587,19 @@ export function mountProjectRegistrationDraftRoutes(app, {
       draftId: routeDraftId(req),
       documentKind: requiredText(req.params?.documentKind, 'documentKind'),
     }));
+  }));
+
+  // 정합성 검토 MCP 용 첨부 텍스트(읽기 전용). 권한과 파일 읽기는 위 다운로드와 같은 함수를 쓴다.
+  app.get('/api/v1/project-registration-drafts/:draftId/attachments/:documentKind/text', asyncHandler(async (req, res) => {
+    assertActorRoleAllowed(req, PROJECT_REQUEST_ROUTE_ROLES, 'read a project registration draft attachment');
+    const current = await routeContext(req, piiProtector);
+    const documentKind = requiredText(req.params?.documentKind, 'documentKind');
+    const downloaded = await projectRegistrationDraftService.readAttachment({
+      ...current,
+      draftId: routeDraftId(req),
+      documentKind,
+    });
+    sendAttachmentText(res, await buildAttachmentTextBody({ kind: documentKind, downloaded, name: downloaded?.name }));
   }));
 
   app.post('/api/v1/project-registration-drafts/:draftId/history/:revision/restore', asyncHandler(async (req, res) => {
