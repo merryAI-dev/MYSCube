@@ -569,7 +569,7 @@ try {
       tools,
       signal,
       onCheckpoint: checkpoint,
-      ...(pipeline ? { beforeStep: () => pipeline.authorize() } : {}),
+      ...(pipeline ? { beforeStep: () => pipeline.authorize(), runBinding, priorEvidenceRecords } : {}),
     });
   const investigationReport = investigationPlan
     ? { ...request.report, investigation_plan: investigationPlan }
