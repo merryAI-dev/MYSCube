@@ -54,7 +54,8 @@ describe('EMA tool surface', () => {
     }
     const commit = tools.find((tool) => tool.name === 'ema_registry_import_commit');
     expect(commit.annotations.readOnlyHint).toBe(false);
-    expect(tools.filter((tool) => tool.name !== 'ema_registry_import_commit').every((tool) => tool.annotations.readOnlyHint !== false)).toBe(true);
+    const writes = new Set(['ema_registry_import_commit', 'ema_meeting_draft_create', 'ema_meeting_draft_delete']);
+    expect(tools.filter((tool) => !writes.has(tool.name)).every((tool) => tool.annotations.readOnlyHint !== false)).toBe(true);
     expect(client.getInstructions()).toContain('ema_registry_status');
   });
 });
