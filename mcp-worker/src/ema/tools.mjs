@@ -1,13 +1,13 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as z from 'zod/v4';
 import { runImportCommit } from './commit.mjs';
+import { registerMeetingTools } from './meeting-tools.mjs';
+import { READ_ONLY, tool, WRITES } from './tool-kit.mjs';
 import { buildCsv, buildWorkbook, buildXlsx } from './xlsx.mjs';
 
 // EMA Station 기업 등록(FRN) 도구. 데이터는 로그인한 구성원 본인의 권한으로 EMA 함수에서만 읽고 쓴다.
 // 현황 조회가 기본 진입점이고, 쓰기는 "미리보기 → 사용자 확인 → 등록" 두 단계로만 한다.
 
-const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
-const WRITES = { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const PREVIEW_SAMPLE_NEW_ROWS = 20;
 
 const ROUTE_TYPES = ['AC_SELECTED_TEAM', 'AC_APPLICANT_TEAM', 'COLD_CALL', 'EXTERNAL_JUDGE_REFERRAL', 'EXTERNAL_JUDGING_ENCOUNTER', 'INTERACTION'];
@@ -33,22 +33,8 @@ const INSTRUCTIONS = [
   '엑셀로 여러 기업을 등록하려면: 파일이 작으면 대화에 올린 표를 rows로 넘겨 ema_registry_import_preview를 부르고, 크면 ema_registry_import_upload_link로 업로드 링크를 받으세요.',
   '등록은 반드시 미리보기 결과를 사용자에게 보여 주고 확인받은 뒤에만 하세요. 기본은 ema_registry_import_confirm_link로 웹 확정 링크를 받아 사용자가 화면에서 "등록 확정"을 누르게 하는 방식이고, 대화 안에서 직접 등록이 허용되는 환경에서만 ema_registry_import_commit을 쓸 수 있습니다.',
   '엑셀 내려받기는 ema_registry_export로 다운로드 링크를 만들어 사용자에게 전달합니다(파일 내용은 대화에 싣지 않습니다).',
+  '컨설턴트·관리자는 Meet 회의록을 가져와 보고서 초안을 만들 수 있습니다: ema_google_connect로 Google을 연결하고(calendar/gmail 중 선택), ema_meeting_sources_list로 후보를 찾아 ema_meeting_draft_create로 초안함에 저장합니다. 초안은 원장에 쓰이지 않으며 사용자가 EMA 화면 "회의록 추가 → 초안 불러오기"에서 확정합니다. Tiro 등 다른 MCP에서 읽은 회의록은 text로 넘기세요. 새로 올릴 때 "미작성"으로 거르지 마세요.',
 ].join(' ');
-
-function ok(data) {
-  return { content: [{ type: 'text', text: JSON.stringify(data) }] };
-}
-
-function fail(error, fallback) {
-  return { content: [{ type: 'text', text: error instanceof Error && error.message ? error.message : fallback }], isError: true };
-}
-
-function tool(server, name, { title, description, input = {}, annotations = READ_ONLY }, run) {
-  server.registerTool(name, { title, description, inputSchema: input, annotations }, async (args) => {
-    try { return ok(await run(args)); }
-    catch (error) { return fail(error, `${title}에 실패했습니다.`); }
-  });
-}
 
 export function maskBusinessNumber(value) {
   const digits = String(value ?? '').replace(/\D/gu, '');
@@ -87,7 +73,7 @@ const filterShape = {
 
 const rowShape = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]));
 
-export function createEmaMcpServer({ ema, store, publicOrigin, access, now = () => Date.now() }) {
+export function createEmaMcpServer({ ema, store, publicOrigin, access, google = null, now = () => Date.now() }) {
   const server = new McpServer({ name: 'ema-station', version: '1.0.0' }, { instructions: INSTRUCTIONS });
   const isAdmin = access.canExportAndImport === true;
 
@@ -298,6 +284,11 @@ export function createEmaMcpServer({ ema, store, publicOrigin, access, now = () 
         next: '사용자에게 링크를 전달하세요. 링크의 화면에서 "등록 확정"을 누르면 등록됩니다. 사용자가 완료했다고 말하면 ema_registry_status로 확인할 수 있습니다.',
       };
     });
+  }
+
+  // 회의록 초안함은 관리자와 활성 컨설턴트만 쓴다(최종 권한 판단은 EMA 함수가 한다).
+  if (google && ['admin', 'consultant'].includes(access.role)) {
+    registerMeetingTools(server, { ema, google, access: { ...access, publicOrigin }, now });
   }
 
   return server;
