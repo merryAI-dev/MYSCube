@@ -1,0 +1,8 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', '${_IMAGE}', '.']
+  - name: gcr.io/cloud-builders/docker
+    args: ['run', '--rm', '--network=none', '${_IMAGE}', 'node', '--input-type=module', '-e', "await import('./server/bff/qa-slack-ingress.mjs'); await import('./server/bff/firestore.mjs'); console.log('slack_runtime_dependencies_imported')"]
+images: ['${_IMAGE}']
+options:
+  logging: CLOUD_LOGGING_ONLY
