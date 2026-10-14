@@ -40,6 +40,7 @@ import {
   projectDocumentValidationError,
   projectProposalFileMetadataError,
 } from '../project-document-validation.mjs';
+import { buildAttachmentTextBody, sendAttachmentText } from '../attachment-text.mjs';
 
 const RESOURCE_TYPE = 'project-info';
 // Every member works across all projects; see CROSS_PROJECT_ROLES in src/app/platform/rbac.ts.
@@ -1801,6 +1802,18 @@ export function mountProjectInfoDraftRoutes(app, {
       projectId: routeProjectId(req),
       documentKind: requiredText(req.params?.documentKind, 'documentKind'),
     }));
+  }));
+
+  // 정합성 검토 MCP 용 첨부 텍스트(읽기 전용). 권한과 파일 읽기는 위 다운로드와 같은 함수를 쓴다.
+  app.get('/api/v1/project-info-drafts/:projectId/attachments/:documentKind/text', asyncHandler(async (req, res) => {
+    assertActorRoleAllowed(req, PROJECT_REQUEST_ROUTE_ROLES, 'read a project information draft attachment');
+    const documentKind = requiredText(req.params?.documentKind, 'documentKind');
+    const downloaded = await projectInfoDraftService.readAttachment({
+      ...await routeContext(req, piiProtector),
+      projectId: routeProjectId(req),
+      documentKind,
+    });
+    sendAttachmentText(res, await buildAttachmentTextBody({ kind: documentKind, downloaded, name: downloaded?.name }));
   }));
 
   app.post('/api/v1/project-info-drafts/:projectId/open', asyncHandler(async (req, res) => {

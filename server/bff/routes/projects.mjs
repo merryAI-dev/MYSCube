@@ -51,6 +51,7 @@ import {
   projectExecutiveResubmitSchema,
   projectManagementPlanningReviewSchema,
 } from '../schemas.mjs';
+import { buildAttachmentTextBody, sendAttachmentText } from '../attachment-text.mjs';
 
 function trimSlackText(value, maxLength = 200) {
   const text = readOptionalText(value);
@@ -3254,10 +3255,9 @@ export function mountProjectRoutes(app, {
     res.status(200).json({ item: items[0] || null });
   }));
 
-  app.get('/api/v1/projects/:projectId/attachments/:documentKind', asyncHandler(async (req, res) => {
-    const { tenantId, actorId } = req.context;
-    const projectId = readOptionalText(req.params.projectId);
-    const documentKind = readOptionalText(req.params.documentKind);
+  // 승인된 프로젝트 첨부를 읽는다(권한 확인 포함). 다운로드와 첨부 텍스트(정합성 검토)가 같이 쓴다.
+  // 2026-10-14: 기존 다운로드 라우트 본문을 그대로 옮겼다. 응답 전송만 호출한 쪽으로 넘겼다.
+  async function loadProjectAttachment({ tenantId, actorId, projectId, documentKind }) {
     const field = {
       contract: 'contractDocument',
       customer_business_registration: 'customerBusinessRegistrationDocument',
@@ -3302,8 +3302,7 @@ export function mountProjectRoutes(app, {
       const downloaded = await projectRequestContractStorageService.downloadExistingProjectAttachment({
         tenantId, projectId, path, attachment, existingAttachment: project[field],
       });
-      sendPrivateProjectAttachment(res, downloaded, attachment, path.split('/').pop());
-      return;
+      return { downloaded, attachment, objectName: path.split('/').pop() };
     }
     const expectedPrefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
     const objectName = path.startsWith(expectedPrefix) ? path.slice(expectedPrefix.length) : '';
@@ -3318,7 +3317,93 @@ export function mountProjectRoutes(app, {
       projectId,
       path,
     });
+    return { downloaded, attachment, objectName };
+  }
+
+  // 제출 요청 첨부를 읽는다(권한 확인 포함). 다운로드와 첨부 텍스트(정합성 검토)가 같이 쓴다.
+  // 2026-10-14: 기존 다운로드 라우트 본문을 그대로 옮겼다. 응답 전송만 호출한 쪽으로 넘겼다.
+  async function loadProjectRequestAttachment({ tenantId, actorId, requestId, documentKind }) {
+    const field = {
+      contract: 'contractDocument',
+      customer_business_registration: 'customerBusinessRegistrationDocument',
+      quote: 'quoteDocument',
+      proposal: 'proposalDocument',
+      proposal_word_original: 'proposalWordOriginalDocument',
+      proposal_ppt_original: 'proposalPptOriginalDocument',
+      presentation_ppt_original: 'presentationPptOriginalDocument',
+      rfp_request_evidence: 'rfpRequestEvidenceDocument',
+      performance_certificate: 'performanceCertificateDocument',
+      tax_invoice: 'taxInvoiceDocument',
+      final_settlement_report: 'finalSettlementReportDocument',
+      final_report: 'finalReportDocument',
+    }[documentKind];
+    if (!requestId || requestId.includes('/') || !field) {
+      throw createHttpError(400, 'Project request attachment is invalid', 'project_request_attachment_invalid');
+    }
+    const member = await readProjectAttachmentMember({ db, tenantId, actorId });
+    const projectRequest = await readProjectRequestById(db, tenantId, requestId);
+    if (!projectRequest) throw createHttpError(404, `Project request not found: ${requestId}`, 'not_found');
+    const projectId = readOptionalText(projectRequest.targetProjectId || projectRequest.approvedProjectId);
+    const payload = resolveProjectRequestPayloadForReview(projectRequest);
+    const storedRole = normalizeRole(member.role);
+    const requestApproverId = readOptionalText(payload?.executiveApproverId);
+    if (!['admin', 'finance'].includes(storedRole)) {
+      let isDesignatedApprover = requestApproverId === actorId;
+      if (!requestApproverId && projectId) {
+        const projectSnap = await db.doc(`orgs/${tenantId}/projects/${projectId}`).get();
+        isDesignatedApprover = projectSnap.exists
+          && readOptionalText(projectSnap.data()?.executiveApproverId) === actorId;
+      }
+      if (!isDesignatedApprover) {
+        throw createHttpError(403, 'Project attachment access denied', 'forbidden');
+      }
+    }
+    const attachment = payload?.[field];
+    const path = readOptionalText(attachment?.path);
+    if (isLegacyProjectAttachmentPath(path, tenantId)) {
+      const projectSnap = await db.doc(`orgs/${tenantId}/projects/${projectId}`).get();
+      const existingAttachment = projectSnap.exists ? projectSnap.data()?.[field] : null;
+      try {
+        assertExistingProjectAttachment({ tenantId, projectId, path, attachment, existingAttachment });
+      } catch {
+        throw createHttpError(409, 'Project request attachment is not ready', 'project_request_attachment_not_ready');
+      }
+      const downloaded = await projectRequestContractStorageService.downloadExistingProjectAttachment({
+        tenantId, projectId, path, attachment, existingAttachment,
+      });
+      return { downloaded, attachment, objectName: path.split('/').pop() };
+    }
+    const expectedPrefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
+    const objectName = projectId && path.startsWith(expectedPrefix) ? path.slice(expectedPrefix.length) : '';
+    if (!objectName || objectName.includes('/')) {
+      throw createHttpError(409, 'Project request attachment is not ready', 'project_request_attachment_not_ready');
+    }
+    if (typeof projectRequestContractStorageService?.downloadProjectRegistrationAttachment !== 'function') {
+      throw new Error('Project registration attachment storage is not configured');
+    }
+    const downloaded = await projectRequestContractStorageService.downloadProjectRegistrationAttachment({
+      tenantId,
+      projectId,
+      path,
+    });
+    return { downloaded, attachment, objectName };
+  }
+
+  app.get('/api/v1/projects/:projectId/attachments/:documentKind', asyncHandler(async (req, res) => {
+    const { tenantId, actorId } = req.context;
+    const projectId = readOptionalText(req.params.projectId);
+    const documentKind = readOptionalText(req.params.documentKind);
+    const { downloaded, attachment, objectName } = await loadProjectAttachment({ tenantId, actorId, projectId, documentKind });
     sendPrivateProjectAttachment(res, downloaded, attachment, objectName);
+  }));
+
+  // 정합성 검토 MCP 용 첨부 텍스트(읽기 전용). 권한과 파일 읽기는 위 다운로드와 같은 함수를 쓴다.
+  app.get('/api/v1/projects/:projectId/attachments/:documentKind/text', asyncHandler(async (req, res) => {
+    const { tenantId, actorId } = req.context;
+    const projectId = readOptionalText(req.params.projectId);
+    const documentKind = readOptionalText(req.params.documentKind);
+    const { downloaded, attachment } = await loadProjectAttachment({ tenantId, actorId, projectId, documentKind });
+    sendAttachmentText(res, await buildAttachmentTextBody({ kind: documentKind, downloaded, name: attachment?.name }));
   }));
 
   /*
@@ -3420,71 +3505,17 @@ export function mountProjectRoutes(app, {
     const { tenantId, actorId } = req.context;
     const requestId = readOptionalText(req.params.requestId);
     const documentKind = readOptionalText(req.params.documentKind);
-    const field = {
-      contract: 'contractDocument',
-      customer_business_registration: 'customerBusinessRegistrationDocument',
-      quote: 'quoteDocument',
-      proposal: 'proposalDocument',
-      proposal_word_original: 'proposalWordOriginalDocument',
-      proposal_ppt_original: 'proposalPptOriginalDocument',
-      presentation_ppt_original: 'presentationPptOriginalDocument',
-      rfp_request_evidence: 'rfpRequestEvidenceDocument',
-      performance_certificate: 'performanceCertificateDocument',
-      tax_invoice: 'taxInvoiceDocument',
-      final_settlement_report: 'finalSettlementReportDocument',
-      final_report: 'finalReportDocument',
-    }[documentKind];
-    if (!requestId || requestId.includes('/') || !field) {
-      throw createHttpError(400, 'Project request attachment is invalid', 'project_request_attachment_invalid');
-    }
-    const member = await readProjectAttachmentMember({ db, tenantId, actorId });
-    const projectRequest = await readProjectRequestById(db, tenantId, requestId);
-    if (!projectRequest) throw createHttpError(404, `Project request not found: ${requestId}`, 'not_found');
-    const projectId = readOptionalText(projectRequest.targetProjectId || projectRequest.approvedProjectId);
-    const payload = resolveProjectRequestPayloadForReview(projectRequest);
-    const storedRole = normalizeRole(member.role);
-    const requestApproverId = readOptionalText(payload?.executiveApproverId);
-    if (!['admin', 'finance'].includes(storedRole)) {
-      let isDesignatedApprover = requestApproverId === actorId;
-      if (!requestApproverId && projectId) {
-        const projectSnap = await db.doc(`orgs/${tenantId}/projects/${projectId}`).get();
-        isDesignatedApprover = projectSnap.exists
-          && readOptionalText(projectSnap.data()?.executiveApproverId) === actorId;
-      }
-      if (!isDesignatedApprover) {
-        throw createHttpError(403, 'Project attachment access denied', 'forbidden');
-      }
-    }
-    const attachment = payload?.[field];
-    const path = readOptionalText(attachment?.path);
-    if (isLegacyProjectAttachmentPath(path, tenantId)) {
-      const projectSnap = await db.doc(`orgs/${tenantId}/projects/${projectId}`).get();
-      const existingAttachment = projectSnap.exists ? projectSnap.data()?.[field] : null;
-      try {
-        assertExistingProjectAttachment({ tenantId, projectId, path, attachment, existingAttachment });
-      } catch {
-        throw createHttpError(409, 'Project request attachment is not ready', 'project_request_attachment_not_ready');
-      }
-      const downloaded = await projectRequestContractStorageService.downloadExistingProjectAttachment({
-        tenantId, projectId, path, attachment, existingAttachment,
-      });
-      sendPrivateProjectAttachment(res, downloaded, attachment, path.split('/').pop());
-      return;
-    }
-    const expectedPrefix = `orgs/${tenantId}/project-registration-documents/${projectId}/`;
-    const objectName = projectId && path.startsWith(expectedPrefix) ? path.slice(expectedPrefix.length) : '';
-    if (!objectName || objectName.includes('/')) {
-      throw createHttpError(409, 'Project request attachment is not ready', 'project_request_attachment_not_ready');
-    }
-    if (typeof projectRequestContractStorageService?.downloadProjectRegistrationAttachment !== 'function') {
-      throw new Error('Project registration attachment storage is not configured');
-    }
-    const downloaded = await projectRequestContractStorageService.downloadProjectRegistrationAttachment({
-      tenantId,
-      projectId,
-      path,
-    });
+    const { downloaded, attachment, objectName } = await loadProjectRequestAttachment({ tenantId, actorId, requestId, documentKind });
     sendPrivateProjectAttachment(res, downloaded, attachment, objectName);
+  }));
+
+  // 정합성 검토 MCP 용 첨부 텍스트(읽기 전용). 권한과 파일 읽기는 위 다운로드와 같은 함수를 쓴다.
+  app.get('/api/v1/project-requests/:requestId/attachments/:documentKind/text', asyncHandler(async (req, res) => {
+    const { tenantId, actorId } = req.context;
+    const requestId = readOptionalText(req.params.requestId);
+    const documentKind = readOptionalText(req.params.documentKind);
+    const { downloaded, attachment } = await loadProjectRequestAttachment({ tenantId, actorId, requestId, documentKind });
+    sendAttachmentText(res, await buildAttachmentTextBody({ kind: documentKind, downloaded, name: attachment?.name }));
   }));
 
   // ── POST /api/v1/projects ────────────────────────────────────────────────────
