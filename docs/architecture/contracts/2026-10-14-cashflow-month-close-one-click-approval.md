@@ -1,7 +1,7 @@
 # 월결산 승인 계약 — 조직장 승인은 버튼 한 번
 
 **날짜:** 2026-10-14
-**상태:** 설계 확정 · 구현 중
+**상태:** 구현 완료 · 배포 전
 **선행:** [읽기 경로 계약](./2026-08-18-cashflow-read-path-contract.md) · [시트 규칙 불일치 알림 전환](./2026-09-30-cashflow-sheet-notify-amendment.md)
 
 ## 원칙
@@ -121,7 +121,11 @@ BFF approve
 - `server/jvm-weekly-api/.../api/CashflowMonthCloseApprovalBlockedException.java` (신규) + `WeeklyExpenseController` 핸들러
 - `server/bff/routes/jvm-weekly-api.mjs` — `approveCanonicalCashflowSettlementCycle`, receipt 검사 축소
 - `server/bff/java-weekly-client.mjs` — `cashflow_month_close_approval_blocked` 사유 표시
-- 대응 테스트 (JVM · BFF)
+- `server/mcp/code-evidence.generated.mjs` — 줄 번호 이동에 따른 재생성 (`node scripts/generate-agent-code-evidence.mjs`)
+- 테스트
+  - BFF: 한 번 클릭 승인 + 반복 클릭은 JVM 재호출 없이 승인 상태로 응답, 회수·재제출된 요청은 사유 표시, JVM 차단 사유 코드 → 한국어 문장
+  - JVM 에뮬레이터: 제출 후 주차 값 변경 + 시트 반영 중이어도 승인되고 `cashflow_weeks` 를 쓰지 않음, 회수된 요청은 `REQUEST_CHANGED`
+    (이 테스트는 이전 코드에서 "Cashflow sheet values are being applied" 로 실패함을 확인)
 
 ## 배포 주의
 
@@ -132,4 +136,7 @@ main 의 JVM 을 배포하면 아직 운영에 없는 #854(정산 규칙 불일�
 
 - JVM: `mvn -f server/jvm-weekly-api/pom.xml test`
 - BFF: `npm test`, `npm run bff:test:integration`
+- JVM 에뮬레이터 통합 테스트(`FirestoreSettlementCycleEmulatorIT`)는 **CI 에 연결돼 있지 않고**, 안내된 실행 스크립트
+  (`scripts/test-settlement-cycle-emulator.sh`)도 저장소에 없다. 로컬 실행:
+  `FIREBASE_PROJECT_ID=demo-bff-it npx firebase-tools emulators:exec --only firestore --project demo-bff-it --config <rules 없는 설정> "mvn -f server/jvm-weekly-api/pom.xml -Dtest=FirestoreSettlementCycleEmulatorIT -Dsurefire.failIfNoSpecifiedTests=false test"`
 - 라이브 확인: 승인 대기 12건 중 1건 승인 → `monthly_closes` CLOSED · head · 결산 상태 LOCKED 확인
