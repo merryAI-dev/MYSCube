@@ -30,7 +30,6 @@ const TARGETS = {
     // 있으면 넣고 없으면 건너뛴다(회의록 드라이브 저장용 Apps Script).
     optionalSecrets: {
       NOTES_SAVE_URL: 'EMA_MCP_NOTES_SAVE_URL',
-      NOTES_SAVE_SECRET: 'EMA_MCP_NOTES_SAVE_SECRET',
     },
   },
 };
