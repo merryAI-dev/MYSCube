@@ -37,3 +37,36 @@ test('actual shared platform factory is exposed through the SDK without broadeni
   } finally { await s.close(); }
 });
 
+
+test('platform intake reads reporter errors through MCP before discovering any project', async () => {
+  let projectChecks = 0;
+  const queries = [];
+  const start = '2026-10-12T08:00:00Z', end = '2026-10-12T08:10:00Z';
+  const shared = await createPipelineInvestigationTools({
+    pipeline: { authorize: async () => {}, authorizeProject: async () => { projectChecks++; throw Error('no discovered project'); } },
+    auth: { getClient: async () => ({ request: async options => {
+      if (options.method === 'POST') { queries.push(options.data.structuredQuery); return {data:[]}; }
+      assert.ok(options.url.includes('/members/reporter?'));
+      return {data:{fields:{status:{stringValue:'ACTIVE'}}}};
+    } }) },
+    request: {policy:{cloudProject:'inner-platform-live-20260316',tenant:'mysc',scopeKind:'platform',
+      trustedActorId:'reporter',allowedProjectIds:[],allowedStartAt:start,allowedEndAt:end,
+      services:[{name:'innerplatform-jvm-weekly-api-live',region:'us-central1'}]},report:{server_context:{}}},
+    runBinding, env:{},
+  });
+  const s = await session({sources:shared,authorityBinding:binding,authorize:async()=>binding,synchronizeEvidence:async()=>{}});
+  try {
+    const catalog = (await s.client.listTools()).tools;
+    const clientErrors = catalog.find(tool=>tool.name==='query_client_errors');
+    assert.equal(clientErrors.inputSchema.properties.project_id, undefined);
+    const response = await s.client.callTool({name:'query_client_errors',arguments:{start_at:start,end_at:end}});
+    assert.notEqual(response.isError,true);
+    assert.equal(queries.length,1);
+    assert.deepEqual(queries[0].where.compositeFilter.filters.map(item=>item.fieldFilter),[
+      {field:{fieldPath:'actorId'},op:'EQUAL',value:{stringValue:'reporter'}},
+      {field:{fieldPath:'createdAt'},op:'GREATER_THAN_OR_EQUAL',value:{stringValue:new Date(start).toISOString()}},
+      {field:{fieldPath:'createdAt'},op:'LESS_THAN',value:{stringValue:new Date(end).toISOString()}},
+    ]);
+    assert.equal(projectChecks,0);
+  } finally { await s.close(); }
+});

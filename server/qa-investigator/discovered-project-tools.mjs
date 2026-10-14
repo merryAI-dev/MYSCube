@@ -9,7 +9,8 @@ export function createDiscoveredProjectTools({runBinding,requestLogAnchors,autho
   const schemaOnly=createSources('p0000000000',()=>fail('discovered_project_schema_only'));
   const tools={};
   for(const [name,template] of Object.entries(schemaOnly.tools)) {
-    if(!template.parameters?.properties?.project_id) continue;
+    // Reporter-scoped errors discover projects; requiring a discovered project here would create a cycle.
+    if(name === 'query_client_errors' || !template.parameters?.properties?.project_id) continue;
     const parameters=structuredClone(template.parameters);
     parameters.properties.project_id={type:'string',pattern:'^p[0-9]{10,20}$'};
     const valid=new Ajv({strict:false,formats:{'date-time':value=>Number.isFinite(Date.parse(value))}}).compile(parameters);
