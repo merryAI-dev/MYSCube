@@ -7,6 +7,7 @@ import { runImportCommit } from './commit.mjs';
 import { createStore, handleConfirm, handleFileDownload, handleUpload } from './files.mjs';
 import { createNoteStore, handleNotePage, noteSaverFrom } from './note-save.mjs';
 import { createEmaMcpServer } from './tools.mjs';
+import { clientOf, usageRecorder } from './usage.mjs';
 
 // MCP 액세스 토큰은 안에 담긴 Firebase ID 토큰(1시간)보다 먼저 끝나야 한다.
 const ACCESS_TOKEN_TTL = 55 * 60;
@@ -34,6 +35,7 @@ const mcpHandler = {
       notes: createNoteStore(env.OAUTH_KV),
       saveNote: noteSaverFrom(env),
       publicOrigin: env.PUBLIC_ORIGIN,
+      record: usageRecorder(env.USAGE, { uid: props.uid, role: props.role, client: clientOf(request.headers.get('user-agent')) }),
       access: { uid: props.uid, role: props.role, canExportAndImport: props.canExportAndImport === true, idToken: props.idToken, idTokenExpiresAt: props.expiresAt },
     });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -41,6 +43,16 @@ const mcpHandler = {
     return transport.handleRequest(request);
   },
 };
+
+// 저장·확정 화면은 버튼(POST)을 눌렀을 때만 기록한다. 미리보기(GET)는 세지 않는다.
+async function trackPage(env, request, name, handle, uid = '') {
+  if (request.method !== 'POST') return handle();
+  const started = Date.now();
+  const detail = name === 'note_save_page' ? String((await request.clone().formData().catch(() => null))?.get('destination') || '') : '';
+  const response = await handle();
+  usageRecorder(env.USAGE, { uid, client: 'web' })({ kind: 'page', name, outcome: response.status < 400 ? 'ok' : 'error', ms: Date.now() - started, detail });
+  return response;
+}
 
 const defaultHandler = {
   async fetch(request, env) {
@@ -54,17 +66,19 @@ const defaultHandler = {
       const store = createStore(env.OAUTH_KV);
       const link = await store.readConfirm(confirm[1]);
       const ema = link ? createEmaClient({ functionsBase: env.EMA_FUNCTIONS_BASE, idToken: link.idToken }) : null;
-      return handleConfirm(request, {
+      return trackPage(env, request, 'registry_confirm_page', () => handleConfirm(request, {
         store, ema, token: confirm[1],
         runCommit: (options) => runImportCommit({ ...options, store }),
-      });
+      }), link?.uid);
     }
     const note = /^\/note\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
     if (note) {
-      return handleNotePage(request, {
-        notes: createNoteStore(env.OAUTH_KV), token: note[1], saveNote: noteSaverFrom(env),
+      const notes = createNoteStore(env.OAUTH_KV);
+      const owner = request.method === 'POST' ? (await notes.get(note[1]))?.uid : '';
+      return trackPage(env, request, 'note_save_page', () => handleNotePage(request, {
+        notes, token: note[1], saveNote: noteSaverFrom(env),
         emaFor: (idToken) => createEmaClient({ functionsBase: env.EMA_FUNCTIONS_BASE, idToken }),
-      });
+      }), owner);
     }
     const file = /^\/files\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
     if (file && request.method === 'GET') return handleFileDownload(createStore(env.OAUTH_KV), file[1]);

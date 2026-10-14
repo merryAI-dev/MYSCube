@@ -11,5 +11,6 @@
     "EMA_WEB_ORIGIN": "https://emastation.myscguard.app",
     "EMA_FUNCTIONS_BASE": "https://asia-northeast3-startup-acceleration-platform.cloudfunctions.net"
   },
+  "analytics_engine_datasets": [{ "binding": "USAGE", "dataset": "ema_mcp_usage" }],
   "observability": { "enabled": true }
 }
