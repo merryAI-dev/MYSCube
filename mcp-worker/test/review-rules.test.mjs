@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nameSimilarity, normalizeOrgName, parseAmount, parseDate, reviewSubmission } from '../src/review/rules.mjs';
+import { nameSimilarity, normalizeOrgName, parseAmount, parseDate, reviewSubmission, valueInQuote } from '../src/review/rules.mjs';
 
 const payload = {
   officialContractName: '2026 청년 창업 지원 운영 용역', clientOrg: '(재)가상테스트재단', currency: 'KRW',
@@ -142,5 +142,39 @@ describe('business registration, quote and cross-document review', () => {
     expect(result.coverage.map((item) => [item.kind, item.status])).toEqual([['contract', 'unknown'], ['customer_business_registration', 'unknown'], ['quote', 'unknown']]);
     expect(result.unknowns.map((item) => item.kind)).toEqual(['contract', 'customer_business_registration', 'quote']);
     expect(result.unknowns.find((item) => item.kind === 'quote').resolveBy).toContain('대화에 첨부');
+  });
+});
+
+describe('code review fixes', () => {
+  it('requires the value to appear inside the quote before treating evidence as verified (review #6)', () => {
+    // 실제 서류 문장을 인용하면서 숫자만 다르게 넘기는 경우
+    const wrongValue = only([contract({ contractAmount: read('100,000,000', '총 계약금액: 금 일억일천만원정(₩110,000,000, 부가가치세 포함)') })]);
+    expect(find(wrongValue, 'contractAmount')).toMatchObject({ status: 'check', evidence: 'unverified' });
+    expect(find(wrongValue, 'contractAmount').message).toContain('인용 문장에 그 값이 없어');
+    // 값과 상관없는 문장을 인용한 경우
+    const unrelated = only([contract({ clientOrg: read('다른재단', '사업명: 2026년 청년 창업 지원 운영 용역') })]);
+    expect(find(unrelated, 'clientOrg')).toMatchObject({ status: 'check', evidence: 'unverified' });
+    expect(valueInQuote('amount', '110,000,000', '(₩110,000,000, 부가가치세 포함)')).toBe(true);
+    expect(valueInQuote('amount', '110,000,000', '금 일억일천만원정')).toBe(false);
+    expect(valueInQuote('amount', 11_000_000, '₩110,000,000')).toBe(false);
+    expect(valueInQuote('date', '2026-03-01', '계약기간: 2026. 3. 1. ~ 2026. 12. 31.')).toBe(true);
+    expect(valueInQuote('date', '2026-12-31', '계약기간: 2026. 3. 1. ~ 2026. 12. 31.')).toBe(true);
+    expect(valueInQuote('date', '2026-03-02', '계약기간: 2026. 3. 1. ~ 2026. 12. 31.')).toBe(false);
+  });
+
+  it('does not treat one name containing another as the same organization (review #2)', () => {
+    const pages = [`${contractPages[0]}\n수신: 삼성물산 주식회사`, contractPages[1]];
+    const result = only([contract({ clientOrg: read('삼성물산 주식회사', '수신: 삼성물산 주식회사') }, { pages })], { clientOrg: '삼성' });
+    expect(find(result, 'clientOrg').status).toBe('check');
+    const registration = { kind: 'customer_business_registration', source: 'attachment_text', readable: true, pages: ['상호(법인명): 삼성'], fields: { companyName: read('삼성', '상호(법인명): 삼성') } };
+    const cross = only([contract({ clientOrg: read('삼성물산 주식회사', '수신: 삼성물산 주식회사') }, { pages }), registration], { clientOrg: '삼성' });
+    expect(cross.findings.find((item) => item.rule === 'cross.org')).toMatchObject({ status: 'check', evidence: 'verified' });
+    expect(find(only([contract()]), 'clientOrg').status).toBe('match');
+  });
+
+  it('parses submitted dates with the same rules as document dates (review #7)', () => {
+    expect(find(only([contract()], { contractStart: '2026.3.1' }), 'contractStart').status).toBe('match');
+    expect(find(only([contract()], { contractStart: '2026-03-01T00:00:00.000Z' }), 'contractStart').status).toBe('match');
+    expect(parseDate('2026-03-01T09:00:00+09:00')).toBe('2026-03-01');
   });
 });

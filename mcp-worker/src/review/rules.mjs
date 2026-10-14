@@ -30,6 +30,9 @@ export function parseAmount(value) {
 
 // 날짜: 2026-03-01, 2026.3.1, 2026. 3. 1., 2026년 3월 1일 → 2026-03-01. 실제 날짜가 아니면 null.
 export function parseDate(value) {
+  // ISO 날짜·시각(2026-03-01T00:00:00Z)은 날짜 부분만 본다.
+  const iso8601 = /^(\d{4}-\d{2}-\d{2})T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?$/u.exec(text(value));
+  if (iso8601) return parseDate(iso8601[1]);
   const match = /^(\d{4})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})\s*(?:일|\.)?$/u.exec(text(value));
   if (!match) return null;
   const iso = `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
@@ -44,10 +47,10 @@ export function normalizeOrgName(value) {
     .replace(/[\s()[\]{}.,·・\-_'"]/gu, '');
 }
 
-const namesMatch = (left, right) => {
+// 정규화 후 같을 때만 확실한 일치로 본다. 포함 관계("삼성" ⊂ "삼성물산")는 다른 기관일 수 있어 사람 확인으로 돌린다.
+const sameName = (left, right) => {
   const a = normalizeOrgName(left);
-  const b = normalizeOrgName(right);
-  return Boolean(a && b) && (a === b || a.includes(b) || b.includes(a));
+  return Boolean(a) && a === normalizeOrgName(right);
 };
 
 // 문자 2-gram 겹침(Dice 계수, 0~1). 계약명처럼 표기가 조금씩 다른 이름에 쓴다("2026" / "2026년").
@@ -71,27 +74,57 @@ export function nameSimilarity(left, right) {
 }
 const NAME_SAME = 0.85;
 const NAME_CLOSE = 0.5;
-const contractNameCompare = (a, b) => {
-  if (namesMatch(a, b)) return true;
+// 이름 비교: true(일치) / 'close'(사람 확인) / false(다름).
+function compareNames(a, b) {
+  if (sameName(a, b)) return true;
+  const left = normalizeOrgName(a);
+  const right = normalizeOrgName(b);
+  if (!left || !right) return false;
   const score = nameSimilarity(a, b);
-  return score >= NAME_SAME ? true : score >= NAME_CLOSE ? 'close' : false;
-};
+  if (score >= NAME_SAME) return true;
+  if (score >= NAME_CLOSE || left.includes(right) || right.includes(left)) return 'close';
+  return false;
+}
+const orgCompare = compareNames;
+const contractNameCompare = compareNames;
 
 // 서류 하나의 판정 상태(필드별 판정·빠진 항목·미해결)를 모은다.
 function documentState(doc) {
   return { doc, label: DOCUMENT_LABELS[doc.kind], checked: [], missing: [] };
 }
 
+// 인용 안에 그 값이 실제로 들어 있는가. 인용이 서류에 있어도 값이 인용 밖이면 근거가 아니다.
+// 금액은 인용 속 아라비아 숫자(쉼표 제거) 중 하나와 같아야 한다. 한글로만 쓴 금액은 인정하지 않는다(보수적).
+export function valueInQuote(valueType, value, quote) {
+  const q = String(quote ?? '').normalize('NFKC');
+  if (valueType === 'amount') {
+    const amount = parseAmount(value);
+    return amount !== null && (q.replace(/(\d),(?=\d{3})/gu, '$1').match(/\d+/gu) ?? []).includes(String(amount));
+  }
+  if (valueType === 'date') {
+    const target = parseDate(value);
+    const found = q.match(/\d{4}\s*[-./년]\s*\d{1,2}\s*[-./월]\s*\d{1,2}\s*(?:일|\.)?/gu) ?? [];
+    return target !== null && found.some((candidate) => parseDate(candidate.trim()) === target);
+  }
+  const name = normalizeOrgName(value);
+  return Boolean(name) && normalizeOrgName(q).includes(name);
+}
+
 // 인용 근거 상태: attachment_text 는 서류 텍스트에서 찾고, 그 밖의 출처는 MCP 가 원문을 못 보므로 unverified.
-function evidenceOf(doc, read) {
+// 인용이 서류에 있어도 값이 인용 안에 없으면 unverified(valueNotInQuote)다.
+function evidenceOf(doc, read, valueType = 'text') {
   if (doc.source !== 'attachment_text' || !Array.isArray(doc.pages)) return { evidence: 'unverified', page: read?.page ?? null };
   const result = verifyQuote(doc.pages, read?.quote);
-  if (result.status === 'verified') return { evidence: 'verified', page: result.page };
+  if (result.status === 'verified') {
+    return valueInQuote(valueType, read?.value, read?.quote)
+      ? { evidence: 'verified', page: result.page }
+      : { evidence: 'unverified', page: result.page, valueNotInQuote: true };
+  }
   if (result.status === 'not_found') return { evidence: 'not_found', page: null };
   return { evidence: 'unverified', page: read?.page ?? null };
 }
 
-function judge(out, state, { field, docField = field, label, rule, submitted, read, parse = text, compare, show = (value) => value || '(없음)', evidenceOverride = null }) {
+function judge(out, state, { field, docField = field, label, rule, submitted, read, parse = text, compare, show = (value) => value || '(없음)', evidenceOverride = null, valueType = 'text' }) {
   const { doc } = state;
   const base = { documentKind: doc.kind, field, label, rule, submitted: show(submitted) };
   const value = read ? parse(read.value) : null;
@@ -101,7 +134,7 @@ function judge(out, state, { field, docField = field, label, rule, submitted, re
       message: `${state.label}에서 ${label}을(를) 읽지 못했습니다. 직접 확인해 주세요.` });
     return;
   }
-  const { evidence, page } = evidenceOverride ?? evidenceOf(doc, read);
+  const { evidence, page, valueNotInQuote } = evidenceOverride ?? evidenceOf(doc, read, valueType);
   const shown = { ...base, document: show(value), quote: read.quote ?? null, page, evidence };
   if (evidence === 'not_found') {
     state.missing.push({ field: docField, reason: '인용을 서류에서 찾지 못함' });
@@ -116,15 +149,16 @@ function judge(out, state, { field, docField = field, label, rule, submitted, re
   } else if (same === 'close') {
     out.findings.push({ ...shown, status: 'check', message: `${label}이(가) ${state.label}과 비슷하지만 표기가 다릅니다. 같은 것인지 확인해 주세요.` });
   } else if (evidence !== 'verified') {
-    out.findings.push({ ...shown, status: 'check', message: `${label}이(가) ${state.label}과 다를 수 있습니다(근거 미검증). 직접 확인해 주세요.` });
+    const why = valueNotInQuote ? '인용 문장에 그 값이 없어 근거로 인정하지 않음' : '근거 미검증';
+    out.findings.push({ ...shown, status: 'check', message: `${label}이(가) ${state.label}과 다를 수 있습니다(${why}). 직접 확인해 주세요.` });
   } else {
     out.findings.push({ ...shown, status: 'mismatch', message: `${label}이(가) ${state.label}과 다릅니다.` });
   }
 }
 
 // 제출값도 같은 규칙으로 해석해 비교한다(문자열로 와도 숫자와 같게 본다).
-const amountRule = { parse: parseAmount, compare: (a, b) => parseAmount(a) === b, show: (value) => won(parseAmount(value)), rule: 'amount.exact' };
-const dateRule = { parse: parseDate, compare: (a, b) => text(a) === b, rule: 'date.exact' };
+const amountRule = { parse: parseAmount, compare: (a, b) => parseAmount(a) === b, show: (value) => won(parseAmount(value)), rule: 'amount.exact', valueType: 'amount' };
+const dateRule = { parse: parseDate, compare: (a, b) => parseDate(a) === b, rule: 'date.exact', valueType: 'date' };
 
 // 총액 판정. 서류에 총액이 없으면 공급가액+부가세로 만든다.
 // 합산값은 인용 하나로 검증할 수 없으므로, 두 인용이 모두 검증돼야 verified, 하나라도 못 찾으면 not_found.
@@ -137,8 +171,8 @@ function judgeTotal(out, state, { field, docField, label, submitted, totalField,
   }
   const supply = fields[supplyField];
   const vat = fields[vatField];
-  const a = evidenceOf(state.doc, supply);
-  const b = evidenceOf(state.doc, vat);
+  const a = evidenceOf(state.doc, supply, 'amount');
+  const b = evidenceOf(state.doc, vat, 'amount');
   const evidence = a.evidence === 'not_found' || b.evidence === 'not_found' ? 'not_found'
     : a.evidence === 'verified' && b.evidence === 'verified' ? 'verified' : 'unverified';
   judge(out, state, {
@@ -151,7 +185,7 @@ function judgeTotal(out, state, { field, docField, label, submitted, totalField,
 function reviewContract(payload, state, out) {
   const f = state.doc.fields ?? {};
   judge(out, state, { field: 'officialContractName', label: '공식 계약명', rule: 'name.similarity', submitted: payload.officialContractName, read: f.officialContractName, compare: contractNameCompare });
-  judge(out, state, { field: 'clientOrg', label: '계약 상대방', rule: 'org.normalized', submitted: payload.clientOrg, read: f.clientOrg, compare: namesMatch });
+  judge(out, state, { field: 'clientOrg', label: '계약 상대방', rule: 'org.normalized', submitted: payload.clientOrg, read: f.clientOrg, compare: orgCompare });
   judge(out, state, { field: 'contractStart', label: '계약 시작일', ...dateRule, submitted: payload.contractStart, read: f.contractStart });
   if (payload.contractEndUndecided === true) {
     if (f.contractEnd?.value) {
@@ -179,7 +213,7 @@ function reviewPaymentSchedule(payload, state, out) {
   const rows = (state.doc.lists?.paymentSchedule ?? []).map((row) => ({ ...row, amount: parseAmount(row.amount) })).filter((row) => row.amount !== null);
   const plan = payload.paymentPlan && typeof payload.paymentPlan === 'object' ? payload.paymentPlan : null;
   if (!rows.length || !plan) return;
-  const evidences = rows.map((row) => evidenceOf(state.doc, row).evidence);
+  const evidences = rows.map((row) => evidenceOf(state.doc, { value: row.amount, quote: row.quote }, 'amount').evidence);
   if (evidences.includes('not_found')) {
     out.unknowns.push({ kind: 'contract', question: '대금 지급 조건 인용 중 서류에서 찾지 못한 것이 있습니다', resolveBy: '서류에서 해당 문장을 다시 찾아 인용' });
     return;
@@ -191,7 +225,7 @@ function reviewPaymentSchedule(payload, state, out) {
   const sorted = (list) => list.filter((value) => value > 0).sort((a, b) => a - b);
   const sameParts = JSON.stringify(sorted(planParts)) === JSON.stringify(sorted(rows.map((row) => row.amount)));
   const base = {
-    documentKind: 'contract', field: 'paymentPlan', label: '입금 계획', rule: 'payment.schedule', evidence, page: evidenceOf(state.doc, rows[0]).page,
+    documentKind: 'contract', field: 'paymentPlan', label: '입금 계획', rule: 'payment.schedule', evidence, page: evidenceOf(state.doc, { value: rows[0].amount, quote: rows[0].quote }, 'amount').page,
     submitted: `${won(planTotal)} (${Object.entries(PAYMENT_LABELS).map(([key, label]) => `${label} ${won(parseAmount(plan[key]))}`).join(', ')})`,
     document: `${won(scheduleTotal)} (${rows.map((row) => `${text(row.label) || '회차'} ${won(row.amount)}`).join(', ')})`,
     quote: rows.map((row) => row.quote).filter(Boolean).join(' / ') || null,
@@ -206,12 +240,12 @@ function reviewPaymentSchedule(payload, state, out) {
 }
 
 function reviewBusinessRegistration(payload, state, out) {
-  judge(out, state, { field: 'clientOrg', docField: 'companyName', label: '계약 대상(상호)', rule: 'org.normalized', submitted: payload.clientOrg, read: state.doc.fields?.companyName, compare: namesMatch });
+  judge(out, state, { field: 'clientOrg', docField: 'companyName', label: '계약 대상(상호)', rule: 'org.normalized', submitted: payload.clientOrg, read: state.doc.fields?.companyName, compare: orgCompare });
 }
 
 function reviewQuote(payload, state, out) {
   const f = state.doc.fields ?? {};
-  if (f.recipient?.value) judge(out, state, { field: 'clientOrg', docField: 'recipient', label: '견적 수신처', rule: 'org.normalized', submitted: payload.clientOrg, read: f.recipient, compare: namesMatch });
+  if (f.recipient?.value) judge(out, state, { field: 'clientOrg', docField: 'recipient', label: '견적 수신처', rule: 'org.normalized', submitted: payload.clientOrg, read: f.recipient, compare: orgCompare });
   if (payload.currency && payload.currency !== 'KRW') {
     state.missing.push({ field: 'totalAmount', reason: `통화가 ${payload.currency}라 금액은 자동 대조하지 않음` });
     return;
@@ -227,14 +261,16 @@ function reviewAcrossDocuments(states, out) {
   const registration = states.find((state) => state.doc.kind === 'customer_business_registration');
   const a = contract?.doc.fields?.clientOrg;
   const b = registration?.doc.fields?.companyName;
-  if (!text(a?.value) || !text(b?.value) || namesMatch(a.value, b.value)) return;
-  const ea = evidenceOf(contract.doc, a).evidence;
-  const eb = evidenceOf(registration.doc, b).evidence;
+  if (!text(a?.value) || !text(b?.value)) return;
+  const same = orgCompare(a.value, b.value);
+  if (same === true) return;
+  const ea = evidenceOf(contract.doc, a, 'text').evidence;
+  const eb = evidenceOf(registration.doc, b, 'text').evidence;
   if (ea === 'not_found' || eb === 'not_found') return;
   const verified = ea === 'verified' && eb === 'verified';
   out.findings.push({
     documentKind: 'customer_business_registration', field: 'clientOrg', label: '계약서 상대방과 사업자등록증 상호', rule: 'cross.org',
-    status: verified ? 'mismatch' : 'check', submitted: text(a.value), document: text(b.value), quote: b.quote ?? null, page: null, evidence: verified ? 'verified' : 'unverified',
+    status: verified && same === false ? 'mismatch' : 'check', submitted: text(a.value), document: text(b.value), quote: b.quote ?? null, page: null, evidence: verified ? 'verified' : 'unverified',
     message: '계약서의 상대방과 사업자등록증의 상호가 다릅니다. 다른 기관의 사업자등록증이 첨부됐을 수 있습니다.',
   });
 }
