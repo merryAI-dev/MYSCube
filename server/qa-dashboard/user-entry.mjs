@@ -170,14 +170,17 @@ export function createUserEntry({ auth, authorityOrigin, intakeOrigin, fetcher =
       if (req.method === 'GET') return serviceRequest(intakeOrigin, target, 'GET', qaBearer, null);
       if (req.method === 'POST') {
         if (!body || !/^[a-f0-9-]{36}$/i.test(body.idempotency_key || '')
-          || !['cancel', 'reopen', 'accept_assignment'].includes(body.action)
+          || !['cancel', 'reopen', 'accept_assignment', 'propose_assignment'].includes(body.action)
           || !Number.isSafeInteger(body.expected_version) || body.expected_version < 0
           || typeof body.reason !== 'string' || !body.reason.trim() || body.reason.length > 500
-          || Object.keys(body).sort().join(',') !== 'action,expected_version,idempotency_key,reason')
+          || (body.action === 'propose_assignment' && !/^[A-Za-z0-9._:-]{1,128}$/.test(body.assignee_id || ''))
+          || Object.keys(body).sort().join(',') !== (body.action === 'propose_assignment'
+            ? 'action,assignee_id,expected_version,idempotency_key,reason' : 'action,expected_version,idempotency_key,reason'))
           throw failure(400, 'invalid_request');
         return serviceRequest(intakeOrigin, target, 'POST', qaBearer, null, {
           key: body.idempotency_key,
-          payload: { action: body.action, expected_version: body.expected_version, reason: body.reason.trim() },
+          payload: { action: body.action, expected_version: body.expected_version, reason: body.reason.trim(),
+            ...(body.action === 'propose_assignment' ? { assignee_id: body.assignee_id } : {}) },
         });
       }
     }

@@ -73,7 +73,7 @@ function harness(request) {
     format: () => '10. 13. 오전 9:00', renderOwnCaseAnswer: () => {},
   };
   const source = between('      function mergeCasePage(', '      $("qa-sign-in").addEventListener(');
-  runInNewContext(`${source}\nglobalThis.actions={refreshCases,clearLinkedCases,renderCases,refreshSharedCases,renderSharedCases,refreshAssignments};`, state);
+  runInNewContext(`${source}\nglobalThis.actions={refreshCases,clearLinkedCases,renderCases,refreshSharedCases,renderSharedCases,refreshAssignments,renderAssignmentProposal};`, state);
   return { state, elements, ...state.actions };
 }
 
@@ -291,4 +291,40 @@ test('real entryRequest preserves HTTP conflict so assignment acceptance refresh
   const button = h.elements['assignment-inbox'].children[0].children.find(node => node.tagName === 'BUTTON');
   await button.listeners.get('click')();
   assert.match(h.elements['assignment-inbox'].children[0].textContent, /수락할 담당 제안이 없습니다/);
+});
+
+
+test('operator proposal requires server capability and verifies stored target and version', async () => {
+  const requests=[]; let reloads=0;
+  const h=harness(async(path,method,body)=>{requests.push({path,method,body}); return method==='POST'
+    ? {case_id:caseId,lifecycle_version:3} : {case_id:caseId,lifecycle_version:3,proposed_assignee_id:'recipient'};});
+  const target=new Node('div');
+  h.renderAssignmentProposal(target,caseId,{lifecycle_version:2},()=>true,async()=>{});
+  assert.equal(target.children.length,0);
+  h.renderAssignmentProposal(target,caseId,{lifecycle_version:2,allowed_actions:['propose_assignment']},()=>true,async()=>{reloads++;});
+  const form=target.children[0];const inputs=form.children.filter(n=>n.tagName==='INPUT');inputs[0].value='recipient';inputs[1].value='처리 요청';
+  await form.listeners.get('submit')({preventDefault(){}});
+  assert.equal(requests[0].body.assignee_id,'recipient');assert.equal(requests[0].body.expected_version,2);
+  assert.equal(requests.length,2);assert.equal(reloads,1);
+  assert.match(target.children.at(-1).textContent,/제안이 저장됐습니다/);
+});
+
+test('proposal readback mismatch never confirms success', async () => {
+  const h=harness(async(path,method)=>method==='POST'?{case_id:caseId,lifecycle_version:3}
+    : {case_id:caseId,lifecycle_version:4,proposed_assignee_id:'other'});
+  const target=new Node('div');let reloads=0;
+  h.renderAssignmentProposal(target,caseId,{lifecycle_version:2,allowed_actions:['propose_assignment']},()=>true,async()=>{reloads++;});
+  const form=target.children[0],inputs=form.children.filter(n=>n.tagName==='INPUT');inputs[0].value='recipient';inputs[1].value='처리 요청';
+  await form.listeners.get('submit')({preventDefault(){}});
+  assert.equal(reloads,0);assert.equal(form.children.at(-1).textContent,'readback_mismatch');
+});
+
+test('late proposal response after account change cannot confirm or read back', async () => {
+  let resolve,active=true,calls=0;
+  const h=harness(()=>{calls++;return new Promise(done=>{resolve=done;});});
+  const target=new Node('div');
+  h.renderAssignmentProposal(target,caseId,{lifecycle_version:2,allowed_actions:['propose_assignment']},()=>active,async()=>{});
+  const form=target.children[0],inputs=form.children.filter(n=>n.tagName==='INPUT');inputs[0].value='recipient';inputs[1].value='처리 요청';
+  const pending=form.listeners.get('submit')({preventDefault(){}});active=false;resolve({case_id:caseId,lifecycle_version:3});await pending;
+  assert.equal(calls,1);assert.equal(target.children.length,1);assert.equal(form.children.at(-1).textContent,'');
 });

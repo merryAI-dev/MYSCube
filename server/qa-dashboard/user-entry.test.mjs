@@ -218,3 +218,14 @@ test('assignment inbox fixes recipient on server and forwards only cursor and ac
   await assert.rejects(entry.handle({...req,method:'POST'},'member@mysc.co.kr',`/api/me/cases/${id}/lifecycle`,{...body,assignee_id:'other'}),{safeCode:'invalid_request'});
   assert.equal(requests.length,2);
 });
+
+test('proposal proxy requires exactly target code and lifecycle fields without trusting client role',async()=>{
+  const {entry,requests}=setup(),id='00000000-0000-4000-8000-000000000000';
+  const req={method:'POST',headers:{authorization:token('inner-platform-qa-20260310')}};
+  const body={action:'propose_assignment',assignee_id:'recipient',expected_version:1,reason:'처리 요청',idempotency_key:id};
+  await entry.handle(req,'member@mysc.co.kr',`/api/me/cases/${id}/lifecycle`,body);
+  assert.equal(JSON.parse(requests[0].options.body).assignee_id,'recipient');
+  for(const extra of [{role:'QA_OPERATOR'},{assignee_id:'../other'},{actor_id:'other'}])
+    await assert.rejects(entry.handle(req,'member@mysc.co.kr',`/api/me/cases/${id}/lifecycle`,{...body,...extra}),{safeCode:'invalid_request'});
+  assert.equal(requests.length,1);
+});

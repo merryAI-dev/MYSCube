@@ -1990,6 +1990,47 @@
         $("own-flow-summary").textContent =
           "계정을 연결하면 내 접수의 저장·조사 상태를 확인할 수 있습니다.";
       }
+      function renderAssignmentProposal(target, id, state, active, reload) {
+        if (!state.allowed_actions?.includes('propose_assignment')) return;
+        const form = el('form', 'entry-block');
+        const codeLabel = el('label', '', '구성원이 공유한 인계 코드');
+        const code = el('input'); code.id = 'assignment-code-' + id; codeLabel.htmlFor = code.id;
+        code.required = true; code.maxLength = 128;
+        const reasonLabel = el('label', '', '담당 제안 이유');
+        const reason = el('input'); reason.id = 'assignment-note-' + id; reasonLabel.htmlFor = reason.id;
+        reason.required = true; reason.maxLength = 500;
+        const submit = el('button', 'primary', '담당 제안 보내기'); submit.type = 'submit';
+        const message = el('p', 'message'); message.setAttribute('role', 'status');
+        form.append(codeLabel, code, reasonLabel, reason, submit, message); target.append(form);
+        form.addEventListener('submit', async event => {
+          event.preventDefault();
+          if (!active() || submit.disabled) return;
+          const recipient = code.value.trim(), note = reason.value.trim();
+          if (!/^[A-Za-z0-9._:-]{1,128}$/.test(recipient) || !note) {
+            message.textContent = '인계 코드와 제안 이유를 확인해 주세요.'; return;
+          }
+          submit.disabled = true;
+          try {
+            const saved = await entryRequest('/api/me/cases/' + id + '/lifecycle', 'POST', {
+              action:'propose_assignment', assignee_id:recipient, expected_version:state.lifecycle_version,
+              reason:note, idempotency_key:crypto.randomUUID(),
+            });
+            if (!active()) return;
+            const verified = await entryRequest('/api/me/cases/' + id + '/lifecycle');
+            if (!active()) return;
+            if (saved.case_id !== id || verified.case_id !== id || saved.lifecycle_version !== state.lifecycle_version + 1
+              || verified.lifecycle_version !== saved.lifecycle_version || verified.proposed_assignee_id !== recipient)
+              throw Error('readback_mismatch');
+            await reload();
+            if (active()) target.append(el('p', 'message', '담당 제안이 저장됐습니다. 상대방이 수락하면 담당자로 확정됩니다.'));
+          } catch (error) {
+            if (!active()) return;
+            message.textContent = friendlyError(error);
+            if ([401,403,409].includes(error.status)) { submit.disabled = true; return; }
+            submit.disabled = false;
+          }
+        });
+      }
       let assignmentEpoch = 0, assignmentNextCursor = null;
       async function refreshAssignments(cursor = null) {
         const epoch = ++assignmentEpoch, actor = qaAuth.currentUser?.uid, session = caseSessionVersion;
@@ -2002,6 +2043,8 @@
           if (!active()) return;
           if (!Array.isArray(result.items)) throw Error('invalid_case_list');
           target.replaceChildren();
+          if (/^[A-Za-z0-9._:-]{1,128}$/.test(result.assignment_code || ''))
+            target.append(el('p', 'small', '내 인계 코드: ' + result.assignment_code + ' · 운영자에게 이 코드를 알려주시면 담당 제안을 받을 수 있습니다.'));
           for (const item of result.items) {
             if (!caseIdPattern.test(item.case_id || '') || !Number.isSafeInteger(item.lifecycle_version)) throw Error('invalid_case_list');
             const card = el('article', 'own-case');
@@ -2294,7 +2337,11 @@
           const lifecycleBox = el("div", "own-lifecycle");
           lifecycleBox.hidden = true;
           let lifecycleVersion = null;
+          const lifecycleActor = qaAuth.currentUser?.uid, lifecycleSession = caseSessionVersion;
+          const lifecycleActive = () => linked && qaAuth.currentUser?.uid === lifecycleActor
+            && caseSessionVersion === lifecycleSession && box.isConnected;
           async function loadLifecycle() {
+            if (!lifecycleActive()) return;
             lifecycleButton.disabled = true;
             lifecycleBox.hidden = false;
             lifecycleBox.replaceChildren(
@@ -2309,6 +2356,7 @@
                 !Number.isSafeInteger(state.lifecycle_version)
               )
                 throw new Error("readback_mismatch");
+              if (!lifecycleActive()) return;
               lifecycleVersion = state.lifecycle_version;
               lifecycleBox.replaceChildren(
                 el(
@@ -2350,6 +2398,7 @@
                 lifecycleBox.append(
                   el("p", "small", "아직 변경 이력이 없습니다."),
                 );
+              renderAssignmentProposal(lifecycleBox, id, state, lifecycleActive, loadLifecycle);
               const action =
                 state.case_status === "cancelled" ||
                 state.case_status === "resolved"

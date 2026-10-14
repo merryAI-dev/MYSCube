@@ -120,7 +120,7 @@ export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReope
             case_status: qa.case_status, severity: qa.severity || null,
             priority: qa.priority || null, updated_at: qa.updated_at || null }];
         });
-        return { items, next_cursor: snapshot.docs.length > 50 ? page.at(-1).id : null,
+        return { items, assignment_code: context.actorId, next_cursor: snapshot.docs.length > 50 ? page.at(-1).id : null,
           observed_at: new Date(now()).toISOString() };
       }, { readOnly: true });
     },
@@ -146,6 +146,7 @@ export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReope
           lifecycle_version: qa.lifecycle_version || 0, input_aggregate_version: qa.aggregate_version,
           severity: qa.severity || null, priority: qa.priority || null,
           proposed_assignee_id: qa.proposed_assignee_id || null, assignee_id: qa.assignee_id || null,
+          allowed_actions: actor.operator && !['cancelled', 'resolved'].includes(qa.case_status) ? ['propose_assignment'] : [],
           events };
       }, { readOnly: true });
     },

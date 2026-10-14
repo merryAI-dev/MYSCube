@@ -236,3 +236,15 @@ test('inbox cursor preserves a full page without returning the lookahead row', a
   assert.equal(new Set([...first.items, ...second.items].map(item => item.case_id)).size, 52);
   await assert.rejects(f.service.inbox(context('assignee'), { cursor: '../other' }), { code: 'qa_lifecycle_input_invalid' });
 });
+
+test('proposal capability is server role based and self code does not reveal other members', async () => {
+  const f=fixture();
+  assert.deepEqual((await f.service.read(context('owner'),caseId)).allowed_actions,[]);
+  assert.deepEqual((await f.service.read(context('operator'),caseId)).allowed_actions,['propose_assignment']);
+  assert.equal((await f.service.inbox(context('assignee'))).assignment_code,'assignee');
+  f.rows.get(`${base}/members/operator`).role='MEMBER';
+  await assert.rejects(f.service.transition(context('operator'),caseId,input('propose_assignment',0,{assignee_id:'assignee'})),{code:'qa_lifecycle_operator_required'});
+  f.rows.get(`${base}/members/operator`).role='QA_OPERATOR';
+  await f.service.transition(context('owner'),caseId,input('cancel',0));
+  assert.deepEqual((await f.service.read(context('operator'),caseId)).allowed_actions,[]);
+});
