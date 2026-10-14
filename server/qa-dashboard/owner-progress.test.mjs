@@ -59,7 +59,7 @@ const item = (execution_status) => ({ case_id: caseId, title: '로그인 흐름'
   case_status: 'received', execution_status, updated_at: '2026-10-13T00:00:00Z' });
 function harness(request) {
   const elements = { 'my-cases': new Node('div'), 'own-flow-summary': new Node('p'),
-    'case-message': new Node('p'), ...Object.fromEntries(['shared-refresh','shared-next','shared-cases','shared-time'].map(id=>[id,new Node('div')])) };
+    'case-message': new Node('p'), ...Object.fromEntries(['shared-refresh','shared-next','shared-cases','shared-time','assignment-refresh','assignment-next','assignment-inbox'].map(id=>[id,new Node('div')])) };
   const state = {
     crypto: { randomUUID }, document: { hidden:false, createTextNode: value=>new Node('text','',value) }, setInterval: () => {}, qaAuth: { currentUser: { uid: 'owner' } }, linked: true,
     caseItems: [], caseNextCursor: null, caseListExpanded: false,
@@ -73,7 +73,7 @@ function harness(request) {
     format: () => '10. 13. 오전 9:00', renderOwnCaseAnswer: () => {},
   };
   const source = between('      function mergeCasePage(', '      $("qa-sign-in").addEventListener(');
-  runInNewContext(`${source}\nglobalThis.actions={refreshCases,clearLinkedCases,renderCases,refreshSharedCases,renderSharedCases};`, state);
+  runInNewContext(`${source}\nglobalThis.actions={refreshCases,clearLinkedCases,renderCases,refreshSharedCases,renderSharedCases,refreshAssignments,renderAssignmentProposal};`, state);
   return { state, elements, ...state.actions };
 }
 
@@ -234,4 +234,97 @@ test('reinvestigation clears prior result and delayed old response cannot restor
  version=2;await h.refreshCases({automatic:true});assert.equal(result.children.length,0);
  resolveResult({case_id:caseId,state:'completed',answer:{},github_issue:{}});await request;
  assert.equal(result.children.length,0);assert.equal(row.querySelector('.own-result-button').disabled,false);
+});
+
+
+test('assignment list accepts only its stored version and refreshes after success', async () => {
+  let accepted = false, calls = [];
+  const h = harness(async (path, method, body) => {
+    calls.push({ path, method, body });
+    if (method === 'POST') { accepted = true; return { lifecycle_version: 3 }; }
+    return { items: accepted ? [] : [{ case_id: caseId, lifecycle_version: 2, severity: 'high' }], next_cursor: null };
+  });
+  await h.refreshAssignments();
+  const card = h.elements['assignment-inbox'].children[0];
+  const button = card.children.find(node => node.tagName === 'BUTTON');
+  await button.listeners.get('click')();
+  assert.equal(calls[1].body.action, 'accept_assignment');
+  assert.equal(calls[1].body.expected_version, 2);
+  assert.equal(calls.length, 3);
+  assert.match(h.elements['assignment-inbox'].children[0].textContent, /수락할 담당 제안이 없습니다/);
+});
+
+test('late assignment inbox response cannot restore data after unlink', async () => {
+  let resolve;
+  const h = harness(() => new Promise(done => { resolve = done; }));
+  const pending = h.refreshAssignments();
+  h.clearLinkedCases('연결 해제');
+  resolve({ items: [{ case_id: caseId, lifecycle_version: 2 }], next_cursor: null });
+  await pending;
+  assert.match(h.elements['assignment-inbox'].children[0].textContent, /계정을 연결/);
+});
+
+test('assignment acceptance denial removes stale cards and disables paging', async () => {
+  const h = harness(async (path, method) => {
+    if (method === 'POST') throw Object.assign(Error('권한이 변경됐습니다.'), { status: 403 });
+    return { items: [{ case_id: caseId, lifecycle_version: 2 }], next_cursor: caseId };
+  });
+  await h.refreshAssignments();
+  const button = h.elements['assignment-inbox'].children[0].children.find(node => node.tagName === 'BUTTON');
+  await button.listeners.get('click')();
+  assert.equal(h.elements['assignment-next'].disabled, true);
+  assert.match(h.elements['assignment-inbox'].children[0].textContent, /권한이 변경/);
+});
+
+test('real entryRequest preserves HTTP conflict so assignment acceptance refreshes the inbox', async () => {
+  let accepted = false;
+  const realRequest = runInNewContext(between('      async function entryRequest(', '      function friendlyError(') + '\nentryRequest', {
+    qaAuth: { currentUser: { getIdToken: async () => 'test-token' } },
+    fetch: async () => ({ ok: false, status: 409, json: async () => ({ error: 'qa_lifecycle_version_changed' }) }),
+  });
+  await assert.rejects(realRequest('/test'), { status: 409, message: 'qa_lifecycle_version_changed' });
+  const h = harness(async (path, method) => {
+    if (method === 'POST') { accepted = true; return realRequest(path, method); }
+    return { items: accepted ? [] : [{ case_id: caseId, lifecycle_version: 2 }], next_cursor: null };
+  });
+  await h.refreshAssignments();
+  const button = h.elements['assignment-inbox'].children[0].children.find(node => node.tagName === 'BUTTON');
+  await button.listeners.get('click')();
+  assert.match(h.elements['assignment-inbox'].children[0].textContent, /수락할 담당 제안이 없습니다/);
+});
+
+
+test('operator proposal requires server capability and verifies stored target and version', async () => {
+  const requests=[]; let reloads=0;
+  const h=harness(async(path,method,body)=>{requests.push({path,method,body}); return method==='POST'
+    ? {case_id:caseId,lifecycle_version:3} : {case_id:caseId,lifecycle_version:3,proposed_assignee_id:'recipient'};});
+  const target=new Node('div');
+  h.renderAssignmentProposal(target,caseId,{lifecycle_version:2},()=>true,async()=>{});
+  assert.equal(target.children.length,0);
+  h.renderAssignmentProposal(target,caseId,{lifecycle_version:2,allowed_actions:['propose_assignment']},()=>true,async()=>{reloads++;});
+  const form=target.children[0];const inputs=form.children.filter(n=>n.tagName==='INPUT');inputs[0].value='recipient';inputs[1].value='처리 요청';
+  await form.listeners.get('submit')({preventDefault(){}});
+  assert.equal(requests[0].body.assignee_id,'recipient');assert.equal(requests[0].body.expected_version,2);
+  assert.equal(requests.length,2);assert.equal(reloads,1);
+  assert.match(target.children.at(-1).textContent,/제안이 저장됐습니다/);
+});
+
+test('proposal readback mismatch never confirms success', async () => {
+  const h=harness(async(path,method)=>method==='POST'?{case_id:caseId,lifecycle_version:3}
+    : {case_id:caseId,lifecycle_version:4,proposed_assignee_id:'other'});
+  const target=new Node('div');let reloads=0;
+  h.renderAssignmentProposal(target,caseId,{lifecycle_version:2,allowed_actions:['propose_assignment']},()=>true,async()=>{reloads++;});
+  const form=target.children[0],inputs=form.children.filter(n=>n.tagName==='INPUT');inputs[0].value='recipient';inputs[1].value='처리 요청';
+  await form.listeners.get('submit')({preventDefault(){}});
+  assert.equal(reloads,0);assert.equal(form.children.at(-1).textContent,'readback_mismatch');
+});
+
+test('late proposal response after account change cannot confirm or read back', async () => {
+  let resolve,active=true,calls=0;
+  const h=harness(()=>{calls++;return new Promise(done=>{resolve=done;});});
+  const target=new Node('div');
+  h.renderAssignmentProposal(target,caseId,{lifecycle_version:2,allowed_actions:['propose_assignment']},()=>active,async()=>{});
+  const form=target.children[0],inputs=form.children.filter(n=>n.tagName==='INPUT');inputs[0].value='recipient';inputs[1].value='처리 요청';
+  const pending=form.listeners.get('submit')({preventDefault(){}});active=false;resolve({case_id:caseId,lifecycle_version:3});await pending;
+  assert.equal(calls,1);assert.equal(target.children.length,1);assert.equal(form.children.at(-1).textContent,'');
 });

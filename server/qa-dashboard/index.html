@@ -722,6 +722,13 @@
         <div id="shared-cases" aria-live="polite"><p class="small">계정을 연결한 뒤 공유 목록을 확인해 주세요.</p></div>
         <p id="shared-time" class="small"></p><button id="shared-next" type="button" disabled>공유 사례 다음 페이지</button>
       </section>
+      <section class="panel entry" aria-label="내 담당 제안">
+        <h2>내게 온 담당 제안</h2>
+        <p class="small">운영자가 제안한 접수입니다. 접수 번호로 공유 사례를 확인하고, 담당하기로 합의한 건을 수락해 주세요.</p>
+        <button id="assignment-refresh" type="button">담당 제안 새로고침</button>
+        <div id="assignment-inbox" aria-live="polite"><p class="small">계정을 연결한 뒤 확인해 주세요.</p></div>
+        <button id="assignment-next" type="button" disabled>담당 제안 다음 페이지</button>
+      </section>
       <section class="panel entry" aria-label="내 QA 접수">
         <h2>내 문제 접수와 진행 상황</h2>
         <p>
@@ -1794,7 +1801,7 @@
           cache: "no-store",
         });
         const data = await response.json().catch(() => ({}));
-        if (!response.ok) throw new Error(data.error || "request_failed");
+        if (!response.ok) throw Object.assign(new Error(data.error || "request_failed"), { status: response.status });
         return data;
       }
       function friendlyError(error) {
@@ -1971,6 +1978,9 @@
         caseNextCursor = null;
         caseListExpanded = false;
         caseRefreshPromise = null;
+        assignmentEpoch++; assignmentNextCursor = null;
+        $('assignment-inbox').replaceChildren(el('p', 'small', '계정을 연결한 뒤 확인해 주세요.'));
+        $('assignment-next').disabled = true;
         sharedEpoch++; sharedCursor = null; sharedNextCursor = null;
         $('shared-cases').replaceChildren(el('p', 'small', '계정을 연결한 뒤 공유 목록을 확인해 주세요.'));
         $('shared-time').textContent = ''; $('shared-next').disabled = true;
@@ -1979,6 +1989,96 @@
         $("my-cases").replaceChildren(el("p", "small", message));
         $("own-flow-summary").textContent =
           "계정을 연결하면 내 접수의 저장·조사 상태를 확인할 수 있습니다.";
+      }
+      function renderAssignmentProposal(target, id, state, active, reload) {
+        if (!state.allowed_actions?.includes('propose_assignment')) return;
+        const form = el('form', 'entry-block');
+        const codeLabel = el('label', '', '구성원이 공유한 인계 코드');
+        const code = el('input'); code.id = 'assignment-code-' + id; codeLabel.htmlFor = code.id;
+        code.required = true; code.maxLength = 128;
+        const reasonLabel = el('label', '', '담당 제안 이유');
+        const reason = el('input'); reason.id = 'assignment-note-' + id; reasonLabel.htmlFor = reason.id;
+        reason.required = true; reason.maxLength = 500;
+        const submit = el('button', 'primary', '담당 제안 보내기'); submit.type = 'submit';
+        const message = el('p', 'message'); message.setAttribute('role', 'status');
+        form.append(codeLabel, code, reasonLabel, reason, submit, message); target.append(form);
+        form.addEventListener('submit', async event => {
+          event.preventDefault();
+          if (!active() || submit.disabled) return;
+          const recipient = code.value.trim(), note = reason.value.trim();
+          if (!/^[A-Za-z0-9._:-]{1,128}$/.test(recipient) || !note) {
+            message.textContent = '인계 코드와 제안 이유를 확인해 주세요.'; return;
+          }
+          submit.disabled = true;
+          try {
+            const saved = await entryRequest('/api/me/cases/' + id + '/lifecycle', 'POST', {
+              action:'propose_assignment', assignee_id:recipient, expected_version:state.lifecycle_version,
+              reason:note, idempotency_key:crypto.randomUUID(),
+            });
+            if (!active()) return;
+            const verified = await entryRequest('/api/me/cases/' + id + '/lifecycle');
+            if (!active()) return;
+            if (saved.case_id !== id || verified.case_id !== id || saved.lifecycle_version !== state.lifecycle_version + 1
+              || verified.lifecycle_version !== saved.lifecycle_version || verified.proposed_assignee_id !== recipient)
+              throw Error('readback_mismatch');
+            await reload();
+            if (active()) target.append(el('p', 'message', '담당 제안이 저장됐습니다. 상대방이 수락하면 담당자로 확정됩니다.'));
+          } catch (error) {
+            if (!active()) return;
+            message.textContent = friendlyError(error);
+            if ([401,403,409].includes(error.status)) { submit.disabled = true; return; }
+            submit.disabled = false;
+          }
+        });
+      }
+      let assignmentEpoch = 0, assignmentNextCursor = null;
+      async function refreshAssignments(cursor = null) {
+        const epoch = ++assignmentEpoch, actor = qaAuth.currentUser?.uid, session = caseSessionVersion;
+        const active = () => linked && epoch === assignmentEpoch && actor === qaAuth.currentUser?.uid && session === caseSessionVersion;
+        const target = $('assignment-inbox'); assignmentNextCursor = null; $('assignment-next').disabled = true;
+        target.replaceChildren(el('p', 'small', linked ? '담당 제안을 확인하고 있습니다.' : '계정을 연결한 뒤 확인해 주세요.'));
+        if (!linked) return;
+        try {
+          const result = await entryRequest('/api/me/assignment-inbox' + (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''));
+          if (!active()) return;
+          if (!Array.isArray(result.items)) throw Error('invalid_case_list');
+          target.replaceChildren();
+          if (/^[A-Za-z0-9._:-]{1,128}$/.test(result.assignment_code || ''))
+            target.append(el('p', 'small', '내 인계 코드: ' + result.assignment_code + ' · 운영자에게 이 코드를 알려주시면 담당 제안을 받을 수 있습니다.'));
+          for (const item of result.items) {
+            if (!caseIdPattern.test(item.case_id || '') || !Number.isSafeInteger(item.lifecycle_version)) throw Error('invalid_case_list');
+            const card = el('article', 'own-case');
+            card.append(el('strong', '', '접수 번호 ' + item.case_id));
+            const labels = { low:'낮음', normal:'보통', medium:'보통', high:'높음', critical:'매우 높음', urgent:'긴급' };
+            card.append(el('p', 'small', '심각도 ' + (labels[item.severity] || '미지정') + ' · 우선순위 ' + (labels[item.priority] || '미지정')));
+            const button = el('button', 'primary', '담당 수락'); button.type = 'button';
+            const message = el('p', 'message'); message.setAttribute('role', 'status');
+            button.addEventListener('click', async () => {
+              if (!active() || button.disabled) return;
+              button.disabled = true;
+              try {
+                await entryRequest('/api/me/cases/' + item.case_id + '/lifecycle', 'POST', {
+                  action:'accept_assignment', expected_version:item.lifecycle_version,
+                  reason:'담당자가 인계 제안을 수락했습니다.', idempotency_key:crypto.randomUUID(),
+                });
+                if (!active()) return;
+                await refreshAssignments();
+              } catch (error) {
+                if (!active()) return;
+                if (error.status === 409) { await refreshAssignments(); return; }
+                target.replaceChildren(el('p', 'message', friendlyError(error)));
+                assignmentNextCursor = null; $('assignment-next').disabled = true;
+              }
+            });
+            card.append(button, message); target.append(card);
+          }
+          if (!result.items.length) target.append(el('p', 'small', '이 페이지에 수락할 담당 제안이 없습니다.'));
+          assignmentNextCursor = caseIdPattern.test(result.next_cursor || '') ? result.next_cursor : null;
+          $('assignment-next').disabled = !assignmentNextCursor;
+        } catch (error) {
+          if (!active()) return;
+          target.replaceChildren(el('p', 'message', friendlyError(error)));
+        }
       }
       let sharedCursor = null, sharedNextCursor = null, sharedEpoch = 0;
       async function refreshSharedCases(cursor = null) {
@@ -2056,6 +2156,7 @@
                 if (!active()) return;
                 editor.append(el('p', 'message', action === 'withdraw' ? '공유를 회수했습니다.' : '공유 내용을 저장하고 다시 확인했습니다.'));
                 void refreshSharedCases();
+          void refreshAssignments();
               } catch (error) { if (active()) message.textContent = friendlyError(error); }
               finally { save.disabled = false; }
             }
@@ -2236,7 +2337,11 @@
           const lifecycleBox = el("div", "own-lifecycle");
           lifecycleBox.hidden = true;
           let lifecycleVersion = null;
+          const lifecycleActor = qaAuth.currentUser?.uid, lifecycleSession = caseSessionVersion;
+          const lifecycleActive = () => linked && qaAuth.currentUser?.uid === lifecycleActor
+            && caseSessionVersion === lifecycleSession && box.isConnected;
           async function loadLifecycle() {
+            if (!lifecycleActive()) return;
             lifecycleButton.disabled = true;
             lifecycleBox.hidden = false;
             lifecycleBox.replaceChildren(
@@ -2251,6 +2356,7 @@
                 !Number.isSafeInteger(state.lifecycle_version)
               )
                 throw new Error("readback_mismatch");
+              if (!lifecycleActive()) return;
               lifecycleVersion = state.lifecycle_version;
               lifecycleBox.replaceChildren(
                 el(
@@ -2292,6 +2398,7 @@
                 lifecycleBox.append(
                   el("p", "small", "아직 변경 이력이 없습니다."),
                 );
+              renderAssignmentProposal(lifecycleBox, id, state, lifecycleActive, loadLifecycle);
               const action =
                 state.case_status === "cancelled" ||
                 state.case_status === "resolved"
@@ -2452,6 +2559,8 @@
           target.append(more);
         }
       }
+      $('assignment-refresh').addEventListener('click',()=>void refreshAssignments());
+      $('assignment-next').addEventListener('click',()=>{if(assignmentNextCursor)void refreshAssignments(assignmentNextCursor);});
       $('shared-refresh').addEventListener('click',()=>void refreshSharedCases());
       $('shared-next').addEventListener('click',()=>{if(sharedNextCursor)void refreshSharedCases(sharedNextCursor);});
       setInterval(()=>{if(linked&&qaAuth.currentUser&&!document.hidden)void refreshSharedCases(sharedCursor);},30000);
@@ -2476,6 +2585,7 @@
           );
           void refreshCases();
           void refreshSharedCases();
+          void refreshAssignments();
         } catch (error) {
           clearLinkedCases("계정 연결을 확인한 뒤 내 접수를 불러옵니다.");
           entryMessage("case-message", friendlyError(error));
