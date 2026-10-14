@@ -39,15 +39,16 @@ describe('EMA tool surface', () => {
   it('shows read tools to every registry member and admin tools only to admins, all described', async () => {
     await connect({ ema: fakeEma(), admin: false });
     const staff = (await client.listTools()).tools.map((tool) => tool.name).sort();
-    expect(staff).toEqual(['ema_registry_get', 'ema_registry_search', 'ema_registry_status']);
+    expect(staff).toEqual(['ema_registry_get', 'ema_registry_search', 'ema_registry_status', 'meeting_note_compose', 'meeting_note_guide']);
     await client.close();
     await connect({ ema: fakeEma(), admin: true });
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
       'ema_meeting_draft_create', 'ema_meeting_draft_delete', 'ema_meeting_draft_get', 'ema_meeting_drafts_list',
-      'ema_meeting_note_markdown', 'ema_office_hour_get', 'ema_office_hour_list', 'ema_office_hour_summary',
+      'ema_office_hour_get', 'ema_office_hour_list', 'ema_office_hour_summary',
       'ema_registry_export', 'ema_registry_get', 'ema_registry_import_commit', 'ema_registry_import_confirm_link', 'ema_registry_import_preview',
       'ema_registry_import_template', 'ema_registry_import_upload_link', 'ema_registry_search', 'ema_registry_status',
+      'meeting_note_compose', 'meeting_note_guide',
     ]);
     for (const tool of tools) {
       expect(tool.description.length).toBeGreaterThan(30);
