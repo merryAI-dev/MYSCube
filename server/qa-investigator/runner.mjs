@@ -1,3 +1,4 @@
+import { collectInitialObservation } from './initial-observation.mjs';
 import { candidateHash } from '../qa-shared/candidate-integrity.mjs';
 import { connectPipelineMcpSources } from './pipeline-mcp.mjs';
 import { createPipelineInvestigationTools } from './pipeline-tools.mjs';
@@ -266,6 +267,7 @@ async function checkpoint(event) {
   const nextStage = nextPublicStage({ event, current: currentStage });
   const timestamp = new Date().toISOString();
   const writes = [];
+  const initialRecords = [];
   if (event.phase === "tool_completed") {
     toolCount++;
     for (const result of event.results || []) {
@@ -281,6 +283,7 @@ async function checkpoint(event) {
           alreadyStored: observedEvidence.has(item.evidence_id),
         });
         if (record) {
+          if (event.origin === "initial_observation") initialRecords.push({documentId:item.evidence_id,stored:record});
           writes.push(
             create(`${runPath}/evidence/${item.evidence_id}`, record),
           );
@@ -343,6 +346,10 @@ async function checkpoint(event) {
     }),
   );
   await commit(writes);
+  for (const record of initialRecords) {
+    priorEvidenceRecords.push(record);
+    priorEvidence.push(observedEvidence.get(record.documentId));
+  }
   if (persistedSession) durableSession = persistedSession;
   if (event.phase === 'pending_answer_saved') {durablePending = event.pending_answer;durableReviewReceipt = null;}
   if (event.phase === 'pending_answer_stale' || event.clear_pending_answer === true) {durablePending = null;durableReviewReceipt = null;}
@@ -391,8 +398,10 @@ async function validateAnswer(answer) {
       errors.push("Every fact needs observed evidence IDs.");
     for (const id of claim.evidence_ids) {
       const item = observedEvidence.get(id);
-      if (!item || item.status !== "available")
-        errors.push(`Fact references unavailable or unknown evidence: ${id}`);
+      if (!item)
+        errors.push(`Fact references unknown evidence: ${id}. Read the stored evidence manifest and use an observed available evidence ID that supports this fact; do not invent or substitute an ID without inspecting its content.`);
+      else if (item.status !== "available")
+        errors.push(`Fact references unavailable evidence: ${id}. This record does not establish a business fact. Move the access gap to unknowns, investigate the missing source when possible, and retain a fact only if other available evidence actually supports it. Do not change a cited ID merely to pass validation.`);
     }
   }
   for (const claim of answer.hypotheses)
@@ -550,6 +559,10 @@ try {
         : {}),
     };
   await checkpoint({ phase: "source_catalog_ready", step: 0 });
+  if (pipeline) await collectInitialObservation({
+    tools, policy:request.policy, runBinding, priorEvidence, resumeSession, pendingAnswer,
+    authorize:()=>pipeline.authorize(), onCheckpoint:checkpoint, signal,
+  });
   if (provider === "openai" && !investigationPlan)
     investigationPlan = await planOpenAIInvestigation({
       apiKey,
@@ -558,7 +571,7 @@ try {
       tools,
       signal,
       onCheckpoint: checkpoint,
-      ...(pipeline ? { beforeStep: () => pipeline.authorize() } : {}),
+      ...(pipeline ? { beforeStep: () => pipeline.authorize(), runBinding, priorEvidenceRecords } : {}),
     });
   const investigationReport = investigationPlan
     ? { ...request.report, investigation_plan: investigationPlan }

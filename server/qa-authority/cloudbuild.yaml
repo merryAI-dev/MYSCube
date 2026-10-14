@@ -1,0 +1,8 @@
+substitutions:
+  _IMAGE: ''
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', '${_IMAGE}', '.']
+  - name: gcr.io/cloud-builders/docker
+    args: ['run', '--rm', '--network=none', '${_IMAGE}', 'node', '--input-type=module', '-e', "await import('./server/qa-authority/app.mjs'); console.log('authority_runtime_imported')"]
+images: ['${_IMAGE}']

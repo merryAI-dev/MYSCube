@@ -224,6 +224,7 @@ export function createLiveSourceTools({
               "source_path_not_found",
               "history_commit_unobserved",
               "reporter_request_unobserved",
+              "source_page_not_pending",
             ].includes(e.safeCode)
               ? e.safeCode
               : "source_unavailable",
@@ -391,7 +392,7 @@ export function createLiveSourceTools({
   );
   registry.query_live_vercel_request_logs = tool(
     "query_live_vercel_request_logs",
-    "Read live bounded Vercel request metadata in the trusted incident window. Only server-authorized project paths and structured event metadata are returned; exact report request IDs are matched when supplied; raw messages never leave adapter. CLI-observed endpoint, not a guaranteed public REST contract. Page through next_page when present; a page is not the whole incident window.",
+    "Read live bounded Vercel request metadata in the trusted incident window. Only server-authorized project paths and structured event metadata are returned; exact report request IDs are matched when supplied; raw messages never leave adapter. CLI-observed endpoint, not a guaranteed public REST contract. Page through the returned next_page when present; a page is not the whole incident window. source_page_not_pending means that page is not currently available for this query (unissued or already consumed), not an authentication failure. Inspect stored observations first; never guess page numbers. Start at page 0 when a new query is required.",
     obj({ page: { type: "integer", minimum: 0 }, request_id: { type: "string", description: "Optional observed application request ID. Searches log text for this exact ID; use to narrow a broad search. This is not Vercel's infrastructure request ID." } }),
     async (a, signal) => {
       strict(a, ["page", "request_id"]);
@@ -402,7 +403,7 @@ export function createLiveSourceTools({
       const pageKey = `${requestId || '*'}:${page}`;
       if (!Number.isSafeInteger(page) || page < 0 || page > 100000)
         fail("invalid_scope");
-      if (platformOnly && page !== 0 && !pendingLogPages.has(pageKey)) fail('invalid_scope');
+      if (platformOnly && page !== 0 && !pendingLogPages.has(pageKey)) fail('source_page_not_pending');
       if (platformOnly && page !== 0 && [...reporterRequests].some(([id, anchor]) => (!requestId || id === requestId) && !attemptedRequestAnchors.has(`${id}:${anchor.path}`))) fail('invalid_scope');
       if (
         vercel.teamId !== "team_A7cbzLIfAhnrz35sykcSyM5L" ||

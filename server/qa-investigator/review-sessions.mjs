@@ -352,7 +352,7 @@ function boundedFindings(findings) {
   ];
 }
 
-/** Every evidence record is inspected, including uncited counterevidence. */
+/** Approval inspects every evidence record, including uncited counterevidence. */
 export async function reviewInBoundedSessions({
   apiKey,
   report,
@@ -780,6 +780,7 @@ export async function reviewInBoundedSessions({
     batch_count: batches.length,
   });
   for (const batch of batches) {
+    const hardFindings = [];
     const result = await callSession(
       "evidence_audit",
       batch,
@@ -812,19 +813,21 @@ export async function reviewInBoundedSessions({
           (claim.requires_support || assessment.support_kind !== "access_gap")
         ) {
           validatedRelation = "unknown";
-          findings.push({
+          hardFindings.push({
             code: "unsupported_claim",
             message: `${assessment.claim_id}는 읽지 못한 자료로 실제 업무 상태를 확정하고 있습니다. 접근하지 못했다는 설명과 확인된 사실을 구분해야 합니다.`,
             evidence_ids: [assessment.evidence_id],
           });
+          findings.push(hardFindings.at(-1));
         } else if (part.complete_envelope)
           supports.get(assessment.claim_id).add(assessment.evidence_id);
       } else if (assessment.relation === "counter") {
-        findings.push({
+        hardFindings.push({
           code: "contradiction",
           message: assessment.note,
           evidence_ids: [assessment.evidence_id],
         });
+        findings.push(hardFindings.at(-1));
       } else if (assessment.relation === "unknown" && !joinedReview) {
         findings.push({
           code: "missing_context",
@@ -851,6 +854,19 @@ export async function reviewInBoundedSessions({
       assessment_sha256: candidateHash(result),
       assessments: result.assessments,
     });
+    if (hardFindings.length) {
+      await onCheckpoint({phase:'review_stopped',provider:'openai',model,step,
+        review_manifest_sha256:manifestHash,reason:'candidate_rejected',
+        rejection_codes:[...new Set(hardFindings.map(finding=>finding.code))],
+        expected_batch_count:batches.length,verified_batch_count:visited.length,
+        evidence_audit_complete:visited.length===batches.length});
+      signal?.throwIfAborted();
+      if (beforeStep) await beforeStep();
+      signal?.throwIfAborted();
+      return {accepted:false,
+        findings:boundedFindings([...hardFindings,...findings.filter(finding=>!hardFindings.includes(finding))]),
+        usage:aggregateUsage,usage_accounted_in_sessions:true};
+    }
   }
   if (candidateHash(visited) !== candidateHash(reviewManifest.batches))
     fail("investigation_review_audit_incomplete");

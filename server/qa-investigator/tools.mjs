@@ -701,12 +701,12 @@ export function createInvestigationTools({
   registry.query_client_errors = tool(
     'query_client_errors',
     'Read bounded client error metadata for trusted actor or current active project managers. Actor association is a candidate, not proof of project or causal association.',
-    schema(platformOnly ? { ...timeParameters } : { ...timeParameters, project_id: projectParameter }, [
+    schema({ ...timeParameters, ...(!platformOnly ? {project_id:projectParameter} : {}), cursor:{type:'string',maxLength:4096}}, [
       'start_at',
       'end_at',
     ]),
     async (input) => {
-      strict(input, platformOnly ? ['start_at', 'end_at'] : ['start_at', 'end_at', 'project_id']);
+      strict(input, platformOnly ? ['start_at', 'end_at', 'cursor'] : ['start_at', 'end_at', 'project_id', 'cursor']);
       const span = window(input),
         ids = platformOnly ? [] : input.project_id
           ? [project(input.project_id)]
@@ -756,8 +756,22 @@ export function createInvestigationTools({
         'extra.requestId',
         'extra.responseRequestId',
       ];
+      const cursorScope=hash({actors:[...verified].sort(),span,projects:[...ids].sort(),platformOnly});
+      const prefix=`projects/${CLOUD_PROJECT}/databases/(default)/documents/${tenantPath}/client_error_events/`;
+      const validPosition=position=>position&&Object.keys(position).sort().join(',')==='created_at,name,scope'
+        &&position.scope===cursorScope&&timestamp(position.created_at)
+        &&Date.parse(position.created_at)>=Date.parse(span.start_at)&&Date.parse(position.created_at)<Date.parse(span.end_at)
+        &&typeof position.name==='string'&&position.name.startsWith(prefix)
+        &&/^[A-Za-z0-9_-]{1,128}$/.test(position.name.slice(prefix.length));
+      let after;
+      if(input.cursor!==undefined){
+        if(typeof input.cursor!=='string'||!input.cursor.length||input.cursor.length>4096||!/^[A-Za-z0-9_-]+$/.test(input.cursor))invalid();
+        try{after=JSON.parse(Buffer.from(input.cursor,'base64url').toString('utf8'));}catch{invalid();}
+        if(!validPosition(after))invalid();
+      }
       const result = await request(`${base}/${tenantPath}:runQuery`, 'POST', {
         structuredQuery: {
+          ...(after?{startAt:{values:[{stringValue:after.created_at},{referenceValue:after.name}],before:false}}:{}),
           from: [{ collectionId: 'client_error_events' }],
           select: { fields: fields(keys) },
           where: {
@@ -792,16 +806,21 @@ export function createInvestigationTools({
           },
           orderBy: [
             { field: { fieldPath: 'createdAt' }, direction: 'ASCENDING' },
+            { field: { fieldPath: '__name__' }, direction: 'ASCENDING' },
           ],
           limit: 101,
         },
       });
-      const docs = (result || [])
-        .filter((item) => item.document)
-        .map((item) => decodeFields(item.document.fields));
-      const rows = docs
+      const documents=(result||[]).filter(item=>item.document).map(item=>item.document);
+      const docs=documents.map(item=>decodeFields(item.fields));
+      let nextCursor=null;
+      if(documents.length>100){
+        const position={scope:cursorScope,created_at:docs[99].createdAt,name:documents[99].name};
+        if(!validPosition(position))invalid();
+        nextCursor=Buffer.from(JSON.stringify(position)).toString('base64url');
+      }
+      const rows = docs.slice(0,100)
         .filter((row) => verified.includes(row.actorId))
-        .slice(0, 100)
         .map((row) => {
           const reportedProject = row.extra?.projectId || row.tags?.projectId;
           return {
@@ -858,6 +877,7 @@ export function createInvestigationTools({
         status: 'available',
         ...span,
         rows,
+        next_cursor:nextCursor,
         coverage: {
           complete: false,
           // Client-reported request metadata cannot establish a server-side
@@ -867,6 +887,8 @@ export function createInvestigationTools({
           },
           scanned: Math.min(docs.length, 100),
           truncated: docs.length > 100,
+          page_exhausted:nextCursor===null,
+          snapshot_consistent:false,
           limit: 100,
           scope: config.trustedActorId
             ? 'trusted_actor'
@@ -877,7 +899,7 @@ export function createInvestigationTools({
           request_metadata_authority: 'client_reported',
           client_release_is_failing_server_release: false,
           ingest_release_is_failing_request_release: false,
-          note: 'Actor-filtered, time-bounded first page; batch failures do not identify the failing project. Request IDs/status/path are client reports, not server verification. Missing or later records and uncollected browser errors are not ruled out.',
+          note: 'Actor-filtered, time-bounded page; use next_cursor to continue. Pages are not a fixed-time snapshot; batch failures do not identify the failing project. Request IDs/status/path are client reports, not server verification. Missing or later records and uncollected browser errors are not ruled out.',
         },
       };
     }

@@ -1,3 +1,4 @@
+import { safeToolFailure } from './tool-failure.mjs';
 import { READER_LANGUAGE_INSTRUCTIONS } from './reader-language.mjs';
 import {
   candidateFindingsSchema,
@@ -516,9 +517,9 @@ export async function runInvestigation({
             result = {
               output: jsonValue(await tool.execute(args, { signal })),
             };
-          } catch {
+          } catch (error) {
             await checkAbort(step);
-            result = { error: "tool_execution_failed" };
+            result = safeToolFailure(error) || { error: "tool_execution_failed" };
           }
         }
       }

@@ -991,3 +991,38 @@ test('every duplicate receipt must pass context validation regardless of orderin
     assert.equal(next.requests.length,0);
   }
 });
+
+test('hard counter rejects after the stored batch without spending on remaining evidence',async()=>{
+ const state=fixture({observations:[evidence(1,28000),evidence(2,28000),evidence(3,28000)],
+  mutateAudit:(value)=>{Object.assign(value.assessments[0],{relation:'counter',support_kind:'none',note:'실제 저장 기록이 주장을 반박합니다.'});return value;}});
+ const result=await reviewInBoundedSessions(state.options);
+ assert.equal(result.accepted,false);assert.equal(state.requests.length,1);
+ assert.equal(result.findings[0].code,'contradiction');assert.deepEqual(result.usage,{input_tokens:10,output_tokens:20,total_tokens:30});
+ const stopped=state.events.find(e=>e.phase==='review_stopped');
+ assert.equal(stopped.verified_batch_count,1);assert(stopped.expected_batch_count>1);assert.equal(stopped.evidence_audit_complete,false);
+ assert(state.events.findIndex(e=>e.phase==='review_batch_verified')<state.events.indexOf(stopped));
+});
+
+test('unavailable factual support rejects early but ordinary unknown continues the full audit',async()=>{
+ const denied=fixture({observations:[{...evidence(1,28000),status:'unavailable'},evidence(2,28000)]});
+ const result=await reviewInBoundedSessions(denied.options);assert.equal(result.accepted,false);assert.equal(denied.requests.length,1);
+ assert.equal(result.findings[0].code,'unsupported_claim');
+ const unknown=fixture({observations:[evidence(1,28000),evidence(2,28000)],mutateAudit:value=>{
+  Object.assign(value.assessments[0],{relation:'unknown',support_kind:'none',note:'판단할 내용이 부족합니다.'});return value;}});
+ const uncertain=await reviewInBoundedSessions(unknown.options);assert.equal(uncertain.accepted,false);
+ const expected=unknown.events.find(e=>e.phase==='review_manifest_created').batch_count;
+ assert.equal(unknown.requests.length,expected);assert.equal(unknown.events.some(e=>e.phase==='review_stopped'),false);
+});
+
+for(const failurePoint of ['review_batch_verified','review_stopped','authority','abort'])test(`early rejection propagates ${failurePoint} failure rather than returning a result`,async()=>{
+ let stopped=false;const abort=new AbortController();
+ const state=fixture({observations:[evidence(1,28000),evidence(2,28000)],signal:abort.signal,
+  mutateAudit:value=>{Object.assign(value.assessments[0],{relation:'counter',support_kind:'none',note:'관측과 다릅니다.'});return value;},
+  onEvent:event=>{
+   if(event.phase==='review_stopped')stopped=true;
+   if(event.phase===failurePoint)throw Object.assign(Error('checkpoint_failed'),{code:'checkpoint_failed'});
+   if(event.phase==='review_stopped'&&failurePoint==='abort')abort.abort(Error('revoked'));
+  },beforeStep:async()=>{if(stopped&&failurePoint==='authority')throw Error('revoked');}});
+ await assert.rejects(reviewInBoundedSessions(state.options),failurePoint==='authority'||failurePoint==='abort'?/revoked/:/checkpoint_failed/);
+ assert.equal(state.requests.length,1);
+});

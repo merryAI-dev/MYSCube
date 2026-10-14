@@ -298,7 +298,7 @@ export async function loadPipelineContext({
         measured_operation_state: "reporter_registration_change_aggregates_at_read_time",
         business_state:
           scope.scope_kind === "platform"
-            ? "no_project_grant"
+            ? "correlated_server_request_project_and_current_reporter_acl_required"
             : "permitted_projects_only",
         server_execution_logs: "discover_connected_sources_in_tool_catalog",
         slack_history: slackGrant
@@ -631,6 +631,15 @@ export async function loadPipelineContext({
     commit: fencedCommit,
     recordMcpReceipt,
     authorize,
+    async authorizeProject(projectId) {
+      await authorize();
+      const decision = await authorizeScope({caseId:qa.case_id,runId,phase:'run',actorId:qa.actor_id,
+        scope,projectId,aggregateVersion:qa.aggregate_version});
+      if(decision.businessActorId !== businessActorId || decision.projectId !== projectId)
+        invalid('investigation_authority_invalid');
+      await authorize();
+      return decision;
+    },
     authorizeSlackHistory,
     reviewReceipts,
     reviewAuthorityBinding: () => ({actor_id:qa.actor_id, business_actor_id:businessActorId,

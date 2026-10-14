@@ -1,3 +1,4 @@
+import { firstPartyToolFailureReason } from './tool-failure.mjs';
 import { createMcpInvestigationTools } from './mcp-tools.mjs';
 import { cleanInvestigationJson } from './safe-json.mjs';
 import { candidateHash } from '../qa-shared/candidate-integrity.mjs';
@@ -19,7 +20,14 @@ export async function createMcpSourceInvestigationTools({ authorityBinding, reco
       async execute(args, call = {}) {
         const signal = options.signal && call.signal ? AbortSignal.any([options.signal, call.signal]) : call.signal || options.signal;
         const check = async () => { signal?.throwIfAborted(); await options.authorize(signal); signal?.throwIfAborted(); };
-        const envelope = await remote[entry.alias].execute(args, { signal });
+        let envelope;
+        try { envelope = await remote[entry.alias].execute(args, { signal }); }
+        catch(error) {
+          await check();
+          const code=firstPartyToolFailureReason(error);
+          if(code)throw Object.assign(new Error(code),{code});
+          throw error;
+        }
         await check();
         const response = envelope.result, output = response?.structuredContent, meta = response?._meta;
         if (envelope.status !== 'available' || output?.source !== entry.name
