@@ -154,6 +154,24 @@ suite('product operations persisted contracts', () => {
     expect(complete).not.toHaveBeenCalled();
   });
 
+  it('reads only business query fields from a serverless forwarded request', async () => {
+    const app = createBffApp({ db, authMode: 'headers' });
+    const headers = { 'x-tenant-id': context.tenantId, 'x-actor-id': 'a', 'x-actor-role': 'admin' };
+    for (const path of ['/api/v1/cashflow-evidence', '/api/v1/insight-cashflow-report']) {
+      const handler = (req: any, res: any) => {
+        Object.defineProperty(req, 'query', { configurable: true, value: { yearMonth: '2026-09', __path: path } });
+        req.url = path;
+        app(req, res);
+      };
+      const result = await request(handler).get('/api/bff').set(headers);
+      expect(result.status).toBe(200);
+      expect(result.body.rows).toEqual([]);
+      expect((await request(app).get(path).query({ yearMonth: '2026-09', unexpected: 'value' }).set(headers)).status).toBe(400);
+      const invalid = await request(app).get(path).query({ yearMonth: ['2026-09', '2026-10'], __path: path }).set(headers);
+      expect(invalid.status).toBe(400);
+    }
+  });
+
   it('rechecks revoked membership before any tool evidence can reach a model', async () => {
     const complete = vi.fn(async () => {
       await db.doc(`orgs/${context.tenantId}/members/a`).update({ role: 'pm' });
