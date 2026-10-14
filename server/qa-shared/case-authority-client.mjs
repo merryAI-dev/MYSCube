@@ -46,7 +46,18 @@ export function createCaseAuthorityClient({
       fail("investigation_authority_unavailable");
     }
     if (!response.ok) {
-      await response.body?.cancel();
+      if(projectRead && response.status===403) {
+        const reader=response.body?.getReader();let denied=false;
+        if(reader) {
+          try {
+            const chunks=[];let size=0;
+            while(true){const {done,value}=await reader.read();if(done)break;size+=value.byteLength;if(size>2048)throw Error('oversize');chunks.push(value);}
+            const body=JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            denied=body?.error==='qa_business_project_denied'&&Object.keys(body).join(',')==='error';
+          }catch{}finally{await reader.cancel().catch(()=>{});reader.releaseLock();}
+        }
+        if(denied)fail('investigation_project_access_denied');
+      } else await response.body?.cancel();
       fail(
         [401, 403, 404].includes(response.status)
           ? "investigation_authority_revoked"

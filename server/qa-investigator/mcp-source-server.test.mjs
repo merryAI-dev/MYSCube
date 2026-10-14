@@ -130,3 +130,40 @@ test('SDK source response projects unchanged into the worker ledger only after r
     ledger.observe(result);
   } finally { await s.close(); }
 });
+
+for(const code of ['investigation_project_unobserved','investigation_project_access_denied']) {
+ test(`actual MCP SDK delivers ${code} through projection to the model without evidence receipts`,async()=>{
+  const {runOpenAIInvestigation}=await import('./openai-agent.mjs');
+  const s=await session({sources:sources(async()=>{throw Object.assign(Error('Bearer PRIVATE'),{code});}),authorityBinding:binding,authorize:async()=>binding,synchronizeEvidence:async()=>{}});
+  let receipts=0,requests=0;const originalFetch=globalThis.fetch,bodies=[];
+  try {
+   const catalog=(await s.client.listTools()).tools;
+   const tools=await createMcpSourceInvestigationTools({serverId:'mysc',client:s.client,runBinding,authorityBinding:binding,
+    manifest:catalog.map(t=>({name:t.name,alias:'mcp_'+t.name,description:t.description,parameters:t.inputSchema,readOnly:true,remoteSchemaSha256:candidateHash(t.inputSchema)})),
+    authorize:async()=>{},scopeRequest:async({arguments:args})=>({arguments:args,scopeSha256:binding}),validateResponse:async()=>true,recordReceipt:async()=>{receipts++;}});
+   const answer={facts:[],hypotheses:[],unknowns:[],user_reply:'추가 확인이 필요합니다.',next_actions:[],cause_status:'not_established'};
+   globalThis.fetch=async(_url,options)=>{
+    bodies.push(JSON.parse(options.body));requests++;
+    if(requests>2)throw Error('unexpected model request');
+    return Response.json({id:'response'+requests,status:'completed',output:[{type:'function_call',call_id:'call'+requests,name:requests===1?'read_state':'finalize_investigation',arguments:JSON.stringify(requests===1?{}:answer)}],usage:{input_tokens:1,output_tokens:1,total_tokens:2}});
+   };
+   const result=await runOpenAIInvestigation({apiKey:'fixture',model:'gpt-6-sol',report:{text:'fixture'},tools,onCheckpoint:async()=>{},validateAnswer:async()=>({accepted:true})});
+   assert.deepEqual(result,answer);assert.equal(receipts,0);
+   const output=bodies[1].input.find(x=>x.type==='function_call_output'&&x.call_id==='call1');
+   const failure=JSON.parse(output.output);assert.equal(failure.error,code);assert.ok(failure.next_step);
+   assert.ok(!JSON.stringify(bodies).includes('PRIVATE'));
+  }finally{globalThis.fetch=originalFetch;await s.close();}
+ });
+}
+
+test('global authorization revocation overrides scoped MCP failure and cannot generate a receipt',async()=>{
+ let allowed=true,receipts=0;
+ const s=await session({sources:sources(async()=>{allowed=false;throw Object.assign(Error('private'),{code:'investigation_project_access_denied'});}),authorityBinding:binding,authorize:async()=>binding,synchronizeEvidence:async()=>{}});
+ try {
+  const catalog=(await s.client.listTools()).tools;
+  const tools=await createMcpSourceInvestigationTools({serverId:'mysc',client:s.client,runBinding,authorityBinding:binding,
+   manifest:catalog.map(t=>({name:t.name,alias:'mcp_'+t.name,description:t.description,parameters:t.inputSchema,readOnly:true,remoteSchemaSha256:candidateHash(t.inputSchema)})),
+   authorize:async()=>{if(!allowed)throw Error('global_authority_revoked');},scopeRequest:async({arguments:args})=>({arguments:args,scopeSha256:binding}),validateResponse:async()=>true,recordReceipt:async()=>{receipts++;}});
+  await assert.rejects(tools.read_state.execute({}),/global_authority_revoked/);assert.equal(receipts,0);
+ }finally{await s.close();}
+});

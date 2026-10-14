@@ -92,3 +92,12 @@ test('discovered project receipt binds project, case generation, event and read 
   await assert.rejects(check(request),/investigation_authority_invalid/);
  }
 });
+
+test('only explicit project ACL rejection is classified as scoped access denial',async()=>{
+ const request={...input,projectId:'p1779092105308',aggregateVersion:1};
+ for(const [body,expected] of [[{error:'qa_business_project_denied'},'investigation_project_access_denied'],[{error:'qa_case_binding_invalid'},'investigation_authority_revoked'],[{error:'qa_authority_worker_forbidden'},'investigation_authority_revoked'],[{error:'qa_business_project_denied',private:'secret'},'investigation_authority_revoked']]){
+  const check=createCaseAuthorityClient({auth,origin,fetchImpl:async()=>Response.json(body,{status:403})});
+  await assert.rejects(check(request),e=>e.code===expected);
+  await assert.rejects(check(input),e=>e.code==='investigation_authority_revoked');
+ }
+});

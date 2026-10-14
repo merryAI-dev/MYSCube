@@ -1,3 +1,4 @@
+import { safeToolFailure } from './tool-failure.mjs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema, McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import Ajv from 'ajv';
@@ -72,7 +73,14 @@ export function createInvestigationMcpSourceServer({ sources, authorize, synchro
       return { content: [{ type: 'text', text: JSON.stringify(safe) }], structuredContent: safe,
         _meta: { 'mysc/authority_binding': authorityBinding,
           'mysc/payload_sha256': candidateHash(safe), 'mysc/input_schema_sha256': candidateHash(entry.inputSchema) } };
-    } }); } catch { throw denied(); }
+    } }); } catch (error) {
+      const safe=safeToolFailure(error);
+      if(safe) {
+        try { await check(effective(extra)); } catch { throw denied(); }
+        throw new McpError(ErrorCode.InvalidRequest,'investigation_mcp_request_denied',{reason:safe.error});
+      }
+      throw denied();
+    }
   });
   return server;
 }
