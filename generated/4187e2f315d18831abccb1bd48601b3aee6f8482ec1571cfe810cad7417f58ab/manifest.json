@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "pageId": "5e9bcea0-0d41-4564-910c-cb46d69707f3",
+  "version": 1,
+  "entry": "App.tsx",
+  "sourceHash": "0a8aa0a3658946b9368cc79cb01e1289cb757c43e40a977ef293c87b933a39e7",
+  "packageSetHash": "d3ecfe633b9b3e193b906e3e8e9180dc9f60d6ee670aa0a1d2ab52a603501af4",
+  "apiIds": [],
+  "apis": [],
+  "runtime": "isolated-react",
+  "dataExportPolicy": "source-only-no-response-injection"
+}
