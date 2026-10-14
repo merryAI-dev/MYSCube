@@ -73,7 +73,7 @@ function harness(request) {
     format: () => '10. 13. 오전 9:00', renderOwnCaseAnswer: () => {},
   };
   const source = between('      function mergeCasePage(', '      $("qa-sign-in").addEventListener(');
-  runInNewContext(`${source}\nglobalThis.actions={refreshCases,clearLinkedCases,renderCases,refreshSharedCases,renderSharedCases,refreshAssignments,renderAssignmentProposal};`, state);
+  runInNewContext(`${source}\nglobalThis.actions={refreshCases,clearLinkedCases,renderCases,refreshSharedCases,renderSharedCases,refreshAssignments,renderAssignmentProposal,renderInvestigationRetry};`, state);
   return { state, elements, ...state.actions };
 }
 
@@ -327,4 +327,58 @@ test('late proposal response after account change cannot confirm or read back', 
   const form=target.children[0],inputs=form.children.filter(n=>n.tagName==='INPUT');inputs[0].value='recipient';inputs[1].value='처리 요청';
   const pending=form.listeners.get('submit')({preventDefault(){}});active=false;resolve({case_id:caseId,lifecycle_version:3});await pending;
   assert.equal(calls,1);assert.equal(target.children.length,1);assert.equal(form.children.at(-1).textContent,'');
+});
+
+test('retry requires explicit submit and readback of the new event; duplicate submit is ignored',async()=>{
+  const next='33333333-3333-4333-8333-333333333333',requests=[];
+  const h=harness(async(path,method,body)=>{
+    requests.push({path,method,body});
+    if(path.includes('/lifecycle'))return {case_id:caseId,lifecycle_version:3,input_aggregate_version:2,investigation_event_id:next};
+    return {items:[],next_cursor:null};
+  });
+  const target=new Node('div');let saved=0;
+  const state={lifecycle_version:2,input_aggregate_version:1,investigation_event_id:caseId,allowed_actions:['retry_investigation']};
+  h.renderInvestigationRetry(target,caseId,{...state,allowed_actions:[]},()=>true,async()=>{});
+  assert.equal(target.children.length,0);
+  h.renderInvestigationRetry(target,caseId,state,()=>true,async()=>{saved++;});
+  assert.equal(requests.length,0);
+  const form=target.children[0];form.children[1].value='API 이용 설정 복구';
+  await form.listeners.get('submit')({preventDefault(){}});
+  assert.equal(saved,1);assert.equal(requests[0].body.action,'retry_investigation');
+  assert.equal(requests[0].body.expected_version,2);
+  assert.equal(requests[1].path,'/api/me/cases/'+caseId+'/lifecycle');
+  assert.match(form.children[3].textContent,/새 조사 요청이 저장/);
+  await form.listeners.get('submit')({preventDefault(){}});
+  assert.equal(requests.filter(r=>r.method==='POST').length,1);
+});
+test('retry cannot show success for changed account or mismatched persisted event',async()=>{
+  for(const mode of ['switch','mismatch']) {
+    let active=true,saved=0;const next='33333333-3333-4333-8333-333333333333';
+    const h=harness(async(_path,method)=>{
+      if(mode==='switch')active=false;
+      return {case_id:caseId,lifecycle_version:3,input_aggregate_version:2,investigation_event_id:method==='POST'?next:caseId};
+    });
+    const target=new Node('div');
+    h.renderInvestigationRetry(target,caseId,{lifecycle_version:2,input_aggregate_version:1,investigation_event_id:caseId,
+      allowed_actions:['retry_investigation']},()=>active,async()=>{saved++;});
+    const form=target.children[0];form.children[1].value='설정 복구';
+    await form.listeners.get('submit')({preventDefault(){}});
+    assert.doesNotMatch(form.children[3].textContent,/새 조사 요청이 저장/);
+    assert.equal(saved,mode==='switch'?0:1);
+  }
+});
+
+test('actual lifecycle button renders retry form for server-confirmed failed case',async()=>{
+  const h=harness(async path=>path.includes('/lifecycle')
+    ? {case_id:caseId,case_status:'received',execution_status:'failed',lifecycle_version:10,
+      input_aggregate_version:6,investigation_event_id:'33333333-3333-4333-8333-333333333333',
+      allowed_actions:['retry_investigation'],events:[]}
+    : {items:[item('failed')],next_cursor:null});
+  await h.refreshCases();
+  const row=h.elements['my-cases'].children[0];
+  const button=row.children.find(n=>n.tagName==='BUTTON'&&n.textContent==='처리 상태와 변경 이력');
+  button.listeners.get('click')();
+  await new Promise(resolve=>setImmediate(resolve));
+  const box=row.querySelector('.own-lifecycle');
+  assert.ok(box.querySelector('.own-retry'),'real lifecycle handler must render the retry form');
 });

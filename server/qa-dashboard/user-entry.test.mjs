@@ -337,3 +337,15 @@ test('SDK through authenticated bridge and HTTP intake preserves report replay a
   assert.equal((await a.callTool({name:'qa_read',arguments:{case_id,actorId:'b'}})).isError,true);
  }finally{for(const client of clients)await client.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });
+
+test('retry forwards authenticated lifecycle request but rejects client-supplied run and authority',async()=>{
+  const {entry,requests}=setup(),id='00000000-0000-4000-8000-000000000000';
+  const req={method:'POST',headers:{authorization:token('inner-platform-qa-20260310')}};
+  const body={action:'retry_investigation',expected_version:1,reason:'API 설정 복구',idempotency_key:id};
+  await entry.handle(req,'member@mysc.co.kr',`/api/me/cases/${id}/lifecycle`,body);
+  assert.equal(JSON.parse(requests[0].options.body).action,'retry_investigation');
+  assert.equal(requests[0].options.headers.Authorization,req.headers.authorization);
+  for(const extra of [{actor_id:'other'},{run_id:'old-run'},{execution_status:'failed'},{role:'QA_OPERATOR'}])
+    await assert.rejects(entry.handle(req,'member@mysc.co.kr',`/api/me/cases/${id}/lifecycle`,{...body,...extra}),{safeCode:'invalid_request'});
+  assert.equal(requests.length,1);
+});

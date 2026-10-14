@@ -248,3 +248,65 @@ test('proposal capability is server role based and self code does not reveal oth
   await f.service.transition(context('owner'),caseId,input('cancel',0));
   assert.deepEqual((await f.service.read(context('operator'),caseId)).allowed_actions,[]);
 });
+
+function failedFixture() {
+  const f=fixture(), qa=f.rows.get(`${base}/qa_cases/${caseId}`);
+  qa.execution_status='failed'; qa.assignee_id='assignee';
+  f.rows.set(`${base}/qa_dispatches/${eventId}`, {dispatch_id:eventId,event_id:eventId,
+    case_id:caseId,workspace_id:'mysc',aggregate_version:1,run_id:`qa-${eventId}`,status:'failed'});
+  f.rows.set(`${base}/qa_runs/qa-${eventId}`,{run_id:`qa-${eventId}`,dispatch_id:eventId,
+    case_id:caseId,tenant_id:'mysc',case_actor_id:'owner',case_aggregate_version:1,status:'failed',
+    error_code:'investigation_provider_credit_exhausted'});
+  return f;
+}
+test('retry creates one new event on the same case and preserves the failed run and assignment',async()=>{
+  const f=failedFixture(), old=structuredClone(f.rows.get(`${base}/qa_runs/qa-${eventId}`));
+  assert.deepEqual((await f.service.read(context('owner'),caseId)).allowed_actions,['retry_investigation']);
+  const result=await f.service.transition(context('owner'),caseId,input('retry_investigation',0));
+  const read=await f.service.read(context('owner'),caseId);
+  assert.equal(read.input_aggregate_version,2);assert.equal(read.execution_status,'queued');
+  assert.equal(read.investigation_event_id,result.investigation_event_id);
+  assert.notEqual(read.investigation_event_id,eventId);assert.deepEqual(read.allowed_actions,[]);
+  assert.equal(f.rows.get(`${base}/qa_cases/${caseId}`).assignee_id,'assignee');
+  assert.deepEqual(f.rows.get(`${base}/qa_runs/qa-${eventId}`),old);
+  assert.equal(f.rows.get(`${base}/qa_kafka_outbox/${result.investigation_event_id}`).aggregate_version,2);
+  assert.equal(read.events[0].action,'retry_investigation');
+  await assert.rejects(f.service.transition(context('owner'),caseId,input('retry_investigation',0)),{code:'qa_lifecycle_version_changed'});
+  assert.equal([...f.rows.keys()].filter(p=>p.includes('/qa_kafka_outbox/')).length,1);
+});
+test('retry rejects missing, live, completed and foreign runs without writes',async()=>{
+  for(const patch of [null,{status:'running'},{status:'completed'},{case_id:eventId},{case_actor_id:'assignee'},
+    {case_aggregate_version:0},{dispatch_id:caseId},{tenant_id:'other'}]) {
+    const f=failedFixture(),path=`${base}/qa_runs/qa-${eventId}`;
+    if(patch===null)f.rows.delete(path);else Object.assign(f.rows.get(path),patch);
+    const before=structuredClone([...f.rows]);
+    assert.deepEqual((await f.service.read(context('owner'),caseId)).allowed_actions,[]);
+    await assert.rejects(f.service.transition(context('owner'),caseId,input('retry_investigation',0)),{code:'qa_lifecycle_retry_unavailable'});
+    assert.deepEqual([...f.rows],before);
+  }
+});
+test('retry rechecks run after live authority, including concurrent state changes',async()=>{
+  for(const patch of [{status:'running'},{updated_at:'changed'}]) {
+    const f=failedFixture(),service=createQaCaseLifecycleService({db:f.db,authorizeReopen:async()=>{
+      Object.assign(f.rows.get(`${base}/qa_runs/qa-${eventId}`),patch);return {businessActorId:'biz-owner'};
+    }});
+    await assert.rejects(service.transition(context('owner'),caseId,input('retry_investigation',0)));
+    assert.equal(f.rows.get(`${base}/qa_cases/${caseId}`).aggregate_version,1);
+    assert.equal([...f.rows.keys()].filter(p=>p.includes('/qa_kafka_outbox/')).length,0);
+  }
+});
+test('retry enforces caller and current business authority and excludes closed cases',async()=>{
+  for(const mode of ['foreign','revoked','authority','cancelled','resolved']) {
+    const f=failedFixture();let caller='owner',service=f.service;
+    if(mode==='foreign')caller='assignee';
+    if(mode==='revoked')f.rows.get(`${base}/members/owner`).status='DISABLED';
+    if(mode==='authority')service=createQaCaseLifecycleService({db:f.db,authorizeReopen:async()=>{
+      throw Object.assign(Error('revoked'),{code:'investigation_authority_revoked'});
+    }});
+    if(['cancelled','resolved'].includes(mode))f.rows.get(`${base}/qa_cases/${caseId}`).case_status=mode;
+    const before=structuredClone([...f.rows]);
+    await assert.rejects(service.transition(context(caller),caseId,input('retry_investigation',0)));
+    assert.deepEqual([...f.rows],before);
+  }
+  const f=failedFixture();assert.equal((await f.service.transition(context('operator'),caseId,input('retry_investigation',0))).execution_status,'queued');
+});
