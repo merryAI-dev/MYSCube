@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as z from 'zod/v4';
 import { runImportCommit } from './commit.mjs';
 import { registerMeetingTools } from './meeting-tools.mjs';
+import { registerOfficeHourTools } from './office-hour-tools.mjs';
 import { READ_ONLY, tool, WRITES } from './tool-kit.mjs';
 import { buildCsv, buildWorkbook, buildXlsx } from './xlsx.mjs';
 
@@ -34,6 +35,7 @@ const INSTRUCTIONS = [
   '등록은 반드시 미리보기 결과를 사용자에게 보여 주고 확인받은 뒤에만 하세요. 기본은 ema_registry_import_confirm_link로 웹 확정 링크를 받아 사용자가 화면에서 "등록 확정"을 누르게 하는 방식이고, 대화 안에서 직접 등록이 허용되는 환경에서만 ema_registry_import_commit을 쓸 수 있습니다.',
   '엑셀 내려받기는 ema_registry_export로 다운로드 링크를 만들어 사용자에게 전달합니다(파일 내용은 대화에 싣지 않습니다).',
   '컨설턴트·관리자는 회의록으로 보고서 초안을 만들 수 있습니다: 사용자의 Gmail·Drive·Calendar 커넥터(Meet 노트, 회의록 메일)나 Tiro MCP로 회의록을 먼저 읽고, 그 텍스트를 ema_meeting_draft_create에 넘기세요. 초안은 원장에 쓰이지 않으며 사용자가 EMA 화면 "회의록 추가 → 초안 불러오기"에서 확정합니다. 새로 올릴 때 "미작성"으로 거르지 마세요.',
+  '오피스아워 진행 횟수·목록·보고서 내용은 ema_office_hour_summary(집계) → ema_office_hour_list(목록, 내용 포함 가능) → ema_office_hour_get(한 건 전문) 순으로 조회합니다(관리자 전체, 컨설턴트 본인 건). 엑셀·워드 등 파일이 필요하면 조회 결과로 직접 만들어 주세요.',
 ].join(' ');
 
 export function maskBusinessNumber(value) {
@@ -287,7 +289,10 @@ export function createEmaMcpServer({ ema, store, publicOrigin, access, now = () 
   }
 
   // 회의록 초안함은 관리자와 활성 컨설턴트만 쓴다(최종 권한 판단은 EMA 함수가 한다).
-  if (['admin', 'consultant'].includes(access.role)) registerMeetingTools(server, { ema });
+  if (['admin', 'consultant'].includes(access.role)) {
+    registerMeetingTools(server, { ema });
+    registerOfficeHourTools(server, { ema });
+  }
 
   return server;
 }
