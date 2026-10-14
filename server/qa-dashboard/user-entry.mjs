@@ -60,7 +60,7 @@ export function createUserEntry({ auth, authorityOrigin, intakeOrigin, fetcher =
       throw failure(403, 'identity_mismatch');
     return payload;
   }
-  async function serviceRequest(origin, path, method, qaBearer, businessBearer, body) {
+  async function serviceRequest(origin, path, method, qaBearer, businessBearer, body, mcp = false) {
     let iamBearer;
     try {
       const client = await auth.getIdTokenClient(origin);
@@ -76,6 +76,8 @@ export function createUserEntry({ auth, authorityOrigin, intakeOrigin, fetcher =
         headers: {
           'Authorization': qaBearer,
           'X-Serverless-Authorization': iamBearer,
+          ...(mcp ? { Accept: 'application/json, text/event-stream',
+            ...(body.protocol ? { 'MCP-Protocol-Version': body.protocol } : {}) } : {}),
           ...(businessBearer ? { 'X-Business-Authorization': businessBearer } : {}),
           ...(body ? { 'Content-Type': 'application/json' } : {}),
           ...(origin === intakeOrigin && method === 'POST' && body?.key ? { 'Idempotency-Key': body.key } : {}),
@@ -87,6 +89,40 @@ export function createUserEntry({ auth, authorityOrigin, intakeOrigin, fetcher =
         credentials: 'omit',
       });
     } catch { throw failure(503, 'qa_service_unavailable'); }
+    if (mcp && response.status === 202) {
+      await response.body?.cancel();
+      if (Object.hasOwn(body.payload, 'id')) throw failure(503, 'qa_service_unavailable');
+      return { status: 202, body: null };
+    }
+    if (mcp && response.ok) {
+      if (response.status !== 200 || !/^application\/json(?:\s*;|$)/i.test(response.headers.get('content-type') || '')) {
+        await response.body?.cancel();
+        throw failure(503, 'qa_service_unavailable');
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw failure(503, 'qa_service_unavailable');
+      const chunks = []; let size = 0;
+      try {
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          size += value.byteLength;
+          if (size > 1024 * 1024) throw failure(503, 'qa_service_unavailable');
+          chunks.push(Buffer.from(value));
+        }
+        const result = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+        if (!result || Array.isArray(result) || result.jsonrpc !== '2.0'
+          || result.id !== body.payload.id || !Object.hasOwn(body.payload, 'id')
+          || (Object.hasOwn(result, 'result') === Object.hasOwn(result, 'error')))
+          throw failure(503, 'qa_service_unavailable');
+        return { status: 200, body: result };
+      } catch { throw failure(503, 'qa_service_unavailable'); }
+      finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+    }
+    if (mcp && !response.ok) {
+      await response.body?.cancel();
+      throw failure([400,401,403,404,409].includes(response.status) ? response.status : 503, 'qa_mcp_upstream_denied');
+    }
     if (!response.ok) {
       if (response.status === 503) {
         const error = await response.json().catch(() => ({}));
@@ -107,6 +143,21 @@ export function createUserEntry({ auth, authorityOrigin, intakeOrigin, fetcher =
   async function handle(req, iapEmail, path, body, searchParams = new URLSearchParams()) {
     const qaBearer = req.headers.authorization;
     const qa = await firebaseIdentity(qaBearer, QA_PROJECT, iapEmail);
+    if (path === '/api/me/mcp') {
+      if (req.method !== 'POST') throw failure(405, 'method_not_allowed');
+      if (req.headers['mcp-session-id'] !== undefined || searchParams.size
+        || !body || Array.isArray(body) || typeof body !== 'object' || body.jsonrpc !== '2.0'
+        || typeof body.method !== 'string' || !body.method
+        || Object.keys(body).some(key => !['jsonrpc', 'id', 'method', 'params'].includes(key))
+        || (Object.hasOwn(body, 'id') && typeof body.id !== 'string' && !Number.isSafeInteger(body.id))
+        || (body.params !== undefined && (!body.params || Array.isArray(body.params) || typeof body.params !== 'object'))
+        || Buffer.byteLength(JSON.stringify(body)) > 8192)
+        throw failure(400, 'invalid_request');
+      const protocol = req.headers['mcp-protocol-version'];
+      if (protocol !== undefined && (typeof protocol !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(protocol)))
+        throw failure(400, 'invalid_request');
+      return serviceRequest(intakeOrigin, '/api/v1/mcp', 'POST', qaBearer, null, {payload: body, protocol}, true);
+    }
     const needsBusiness = path === '/api/me/link' && req.method === 'POST'
       || /^\/api\/me\/project-grants\//.test(path);
     const businessBearer = needsBusiness ? req.headers['x-business-authorization'] : null;
@@ -156,12 +207,12 @@ export function createUserEntry({ auth, authorityOrigin, intakeOrigin, fetcher =
         return serviceRequest(intakeOrigin, target, 'POST', qaBearer, null, { key: idempotency_key, payload });
       }
     }
-    if (path === '/api/me/assignment-inbox' && req.method === 'GET') {
+    if (['/api/me/assignment-inbox', '/api/me/assignment-queue'].includes(path) && req.method === 'GET') {
       const cursor = searchParams.get('cursor');
       if ([...searchParams.keys()].some(key => key !== 'cursor')
         || searchParams.getAll('cursor').length > 1 || (cursor !== null && !CASE_ID.test(cursor)))
         throw failure(400, 'invalid_request');
-      return serviceRequest(intakeOrigin, '/api/v1/qa-assignment-inbox' +
+      return serviceRequest(intakeOrigin, (path === '/api/me/assignment-queue' ? '/api/v1/qa-assignment-queue' : '/api/v1/qa-assignment-inbox') +
         (cursor ? '?cursor=' + encodeURIComponent(cursor) : ''), 'GET', qaBearer, null);
     }
     const lifecycle = /^\/api\/me\/cases\/([a-f0-9-]{36})\/lifecycle$/i.exec(path);

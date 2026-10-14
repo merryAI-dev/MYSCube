@@ -297,7 +297,7 @@ http
     try {
       const email = await identity(req);
       const url = new URL(req.url, 'http://internal');
-      if (url.search && !(['/api/me/cases', '/api/me/shared-cases', '/api/me/assignment-inbox'].includes(url.pathname) && req.method === 'GET'))
+      if (url.search && !(['/api/me/cases', '/api/me/shared-cases', '/api/me/assignment-inbox', '/api/me/assignment-queue'].includes(url.pathname) && req.method === 'GET'))
         throw safeError(400, 'invalid_request');
       if (url.pathname.startsWith('/api/me/')) {
         if (!['GET', 'POST', 'PUT', 'DELETE'].includes(req.method))
@@ -322,7 +322,12 @@ http
           if (!body || Array.isArray(body) || typeof body !== 'object')
             throw safeError(400, 'invalid_request');
         }
-        return send(200, await userEntry.handle(req, email, url.pathname, body, url.searchParams));
+        const result = await userEntry.handle(req, email, url.pathname, body, url.searchParams);
+        if (url.pathname === '/api/me/mcp') {
+          if (result.status === 202) { res.writeHead(202); return res.end(); }
+          return send(result.status, result.body);
+        }
+        return send(200, result);
       }
       if (req.method !== 'GET') throw safeError(405, 'method_not_allowed');
       if (url.pathname === '/')

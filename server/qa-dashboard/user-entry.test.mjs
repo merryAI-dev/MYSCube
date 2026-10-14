@@ -9,10 +9,10 @@ const seconds = Math.floor(Date.now() / 1000);
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const certs = { test: publicKey.export({ type: 'spki', format: 'pem' }) };
 const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
-function token(project, email = 'member@mysc.co.kr') {
+function token(project, email = 'member@mysc.co.kr', sub = 'actor-1') {
   const header = encode({ alg: 'RS256', kid: 'test' });
   const payload = encode({ aud: project, iss: `https://securetoken.google.com/${project}`,
-    sub: 'actor-1', iat: seconds - 10, exp: seconds + 600,
+    sub, iat: seconds - 10, exp: seconds + 600,
     auth_time: seconds - 60, email, email_verified: true });
   const signed = `${header}.${payload}`;
   return `Bearer ${signed}.${sign('RSA-SHA256', Buffer.from(signed), privateKey).toString('base64url')}`;
@@ -228,4 +228,112 @@ test('proposal proxy requires exactly target code and lifecycle fields without t
   for(const extra of [{role:'QA_OPERATOR'},{assignee_id:'../other'},{actor_id:'other'}])
     await assert.rejects(entry.handle(req,'member@mysc.co.kr',`/api/me/cases/${id}/lifecycle`,{...body,...extra}),{safeCode:'invalid_request'});
   assert.equal(requests.length,1);
+});
+
+function mcpEntry(handler) {
+  const requests=[];
+  const entry=createUserEntry({authorityOrigin:qaOrigin,intakeOrigin,
+    auth:{getIdTokenClient:async()=>({getRequestHeaders:async()=>new Headers({Authorization:'Bearer service-identity'})})},
+    fetcher:async(url,options)=>{
+      if(url.startsWith('https://www.googleapis.com/robot/'))return new Response(JSON.stringify(certs),{headers:{'content-type':'application/json'}});
+      requests.push({url,options});return handler(url,options);
+    }});
+  return {entry,requests};
+}
+const rpc=(id=1)=>({jsonrpc:'2.0',id,method:'tools/list',params:{}});
+const mcpReq=(headers={})=>({method:'POST',headers:{authorization:token('inner-platform-qa-20260310'),...headers}});
+
+test('MCP bridge preserves protocol response and notification 202 without forwarding caller authority',async()=>{
+ const {entry,requests}=mcpEntry(async(_url,options)=>{
+  const body=JSON.parse(options.body);
+  return Object.hasOwn(body,'id')?Response.json({jsonrpc:'2.0',id:body.id,result:{isError:true,content:[]}}):new Response(null,{status:202});
+ });
+ const response=await entry.handle(mcpReq({origin:'https://dashboard.invalid','x-tenant-id':'other','x-serverless-authorization':'attacker','mcp-protocol-version':'2025-03-26'}),'member@mysc.co.kr','/api/me/mcp',rpc('read-1'));
+ assert.deepEqual(response,{status:200,body:{jsonrpc:'2.0',id:'read-1',result:{isError:true,content:[]}}});
+ const upstream=requests[0];assert.equal(upstream.url,intakeOrigin+'/api/v1/mcp');
+ assert.equal(upstream.options.headers['X-Tenant-Id'],'mysc');
+ assert.equal(upstream.options.headers['X-Serverless-Authorization'],'Bearer service-identity');
+ assert.equal(upstream.options.headers.Origin,undefined);assert.equal(upstream.options.headers.origin,undefined);
+ assert.equal(upstream.options.headers['MCP-Protocol-Version'],'2025-03-26');
+ assert.equal(upstream.options.headers.Accept,'application/json, text/event-stream');
+ const notification=await entry.handle(mcpReq(),'member@mysc.co.kr','/api/me/mcp',{jsonrpc:'2.0',method:'notifications/initialized'});
+ assert.deepEqual(notification,{status:202,body:null});
+});
+
+test('MCP bridge rejects malformed envelopes, sessions and identity mismatch before forwarding',async()=>{
+ const {entry,requests}=mcpEntry(()=>{throw Error('must not forward');});
+ for(const [req,body] of [[mcpReq(),[rpc()]],[mcpReq({'mcp-session-id':'foreign'}),rpc()],
+ [mcpReq(),{...rpc(),actor_id:'other'}],[mcpReq(),{...rpc(),id:null}],
+ [mcpReq({'mcp-protocol-version':'bad'}),rpc()],[mcpReq(),{...rpc(),params:{text:'x'.repeat(8192)}}]])
+  await assert.rejects(entry.handle(req,'member@mysc.co.kr','/api/me/mcp',body),{safeCode:'invalid_request'});
+ await assert.rejects(entry.handle(mcpReq(),'other@mysc.co.kr','/api/me/mcp',rpc()),{safeCode:'identity_mismatch'});
+ await assert.rejects(entry.handle({...mcpReq(),method:'GET'},'member@mysc.co.kr','/api/me/mcp',null),{status:405});
+ assert.equal(requests.length,0);
+});
+
+test('MCP bridge keeps concurrent identities separate and rejects oversized or mismatched responses',async()=>{
+ const {entry,requests}=mcpEntry(async(_url,options)=>Response.json({jsonrpc:'2.0',id:JSON.parse(options.body).id,result:{tools:[]}}));
+ await Promise.all(['a','b'].map((actor,i)=>entry.handle(mcpReq({authorization:token('inner-platform-qa-20260310',actor+'@mysc.co.kr',actor)}),actor+'@mysc.co.kr','/api/me/mcp',rpc(i))));
+ assert.notEqual(requests[0].options.headers.Authorization,requests[1].options.headers.Authorization);
+ for(const response of [Response.json({jsonrpc:'2.0',id:999,result:{}}),Response.json({jsonrpc:'2.0',id:1,result:{text:'x'.repeat(1048576)}}),new Response(null,{status:202})]){
+  const {entry:bad}=mcpEntry(()=>response);
+  await assert.rejects(bad.handle(mcpReq(),'member@mysc.co.kr','/api/me/mcp',rpc()),{safeCode:'qa_service_unavailable'});
+ }
+ for(const status of [401,403,503]){
+  const {entry:bad}=mcpEntry(()=>new Response('private error',{status}));
+  await assert.rejects(bad.handle(mcpReq(),'member@mysc.co.kr','/api/me/mcp',rpc()),{status,safeCode:'qa_mcp_upstream_denied'});
+ }
+});
+
+test('SDK through authenticated bridge and HTTP intake preserves report replay and owner-only reads',async()=>{
+ const [{default:express},{once},{mountQaMcpRoutes},{createIdempotencyService},{Client},{StreamableHTTPClientTransport}]=await Promise.all([
+  import('express'),import('node:events'),import('../bff/qa-mcp.mjs'),import('../bff/idempotency.mjs'),
+  import('@modelcontextprotocol/sdk/client/index.js'),import('@modelcontextprotocol/sdk/client/streamableHttp.js')]);
+ const docs=new Map();for(const actor of ['a','b']){
+  docs.set(`orgs/mysc/members/${actor}`,{status:'ACTIVE',role:'pm'});
+  docs.set(`orgs/mysc/qa_actor_business_links/${actor}`,{status:'ACTIVE',qa_actor_id:actor,source:'dual_firebase_tokens'});
+ }
+ let tail=Promise.resolve();
+ const db={doc:path=>({path}),runTransaction(fn){const task=tail.then(async()=>{
+  const writes=[];const result=await fn({get:async ref=>({exists:docs.has(ref.path),data:()=>structuredClone(docs.get(ref.path))}),
+   create:(ref,value)=>{assert(!docs.has(ref.path));writes.push([ref.path,value]);},set:(ref,value)=>writes.push([ref.path,value])});
+  for(const [key,value]of writes)docs.set(key,structuredClone(value));return result;
+ });tail=task.catch(()=>{});return task;}};
+ const app=express();app.use(express.json());app.use((req,_res,next)=>{
+  assert.equal(req.header('x-serverless-authorization'),'Bearer service-identity');
+  assert.equal(req.header('origin'),undefined);
+  const payload=JSON.parse(Buffer.from(req.header('authorization').split('.')[1],'base64url'));
+  req.context={tenantId:'mysc',actorId:payload.sub,authSource:'firebase'};next();
+ });
+ mountQaMcpRoutes(app,{db,idempotencyService:createIdempotencyService(db),authorizeCase:async()=>{},asyncHandler:fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next)});
+ app.use((_error,_req,res,_next)=>res.status(500).json({error:'unexpected'}));
+ const server=app.listen(0,'127.0.0.1');await once(server,'listening');const clients=[];let notifications=0;
+ const {entry}=mcpEntry((_url,options)=>fetch(`http://127.0.0.1:${server.address().port}/api/v1/mcp`,options));
+ async function connect(actor){
+  const client=new Client({name:'bridge-test',version:'1'});clients.push(client);
+  await client.connect(new StreamableHTTPClientTransport(new URL('https://dashboard.invalid/api/me/mcp'),{
+   fetch:async(_url,options)=>{
+    try{
+     const request={method:options.method||'GET',headers:{...Object.fromEntries(new Headers(options.headers)),authorization:token('inner-platform-qa-20260310',actor+'@mysc.co.kr',actor)}};
+     const response=await entry.handle(request,actor+'@mysc.co.kr','/api/me/mcp',options.body?JSON.parse(options.body):null);
+     if(response.status===202){notifications++;return new Response(null,{status:202});}
+     return Response.json(response.body,{status:response.status});
+    }catch(e){return Response.json({error:e.safeCode},{status:e.status||500});}
+   }
+  }));return client;
+ }
+ try{
+  const [a,b]=await Promise.all([connect('a'),connect('b')]);assert.equal(notifications,2);
+  assert.equal((await a.listTools()).tools.length,5);
+  const args={idempotency_key:'bridge-repeat',report:{platform_key:'myscube',title:'현금흐름 조회 오류',description:'확인 중 이후 오류'}};
+  const responses=await Promise.all([a.callTool({name:'qa_report',arguments:args}),a.callTool({name:'qa_report',arguments:args})]);
+  for(const response of responses)assert.notEqual(response.isError,true,JSON.stringify(response));
+  const values=responses.map(r=>JSON.parse(r.content[0].text));assert.equal(values[0].case.case_id,values[1].case.case_id);
+  assert.equal(values.filter(v=>v.replayed).length,1);
+  assert.equal([...docs.keys()].filter(k=>k.includes('/qa_kafka_outbox/')).length,1);
+  const case_id=values[0].case.case_id;
+  assert.notEqual((await a.callTool({name:'qa_read',arguments:{case_id}})).isError,true);
+  assert.equal((await b.callTool({name:'qa_read',arguments:{case_id}})).isError,true);
+  assert.equal((await a.callTool({name:'qa_read',arguments:{case_id,actorId:'b'}})).isError,true);
+ }finally{for(const client of clients)await client.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));}
 });

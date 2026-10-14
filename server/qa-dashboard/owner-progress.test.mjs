@@ -67,7 +67,7 @@ function harness(request) {
     caseLastCheckedAt: null, caseRefreshFailed: false,
     caseIdPattern: /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i,
     caseStatusLabels: { received: '접수됨', dispatch_pending: '조사 준비 중', running: '조사 중' },
-    entryRequest: request, entryMessage: (id, message) => { elements[id].textContent = message; },
+    qaTool: (_name, args) => request('/api/me/cases/' + args.case_id + '/result'), entryRequest: request, entryMessage: (id, message) => { elements[id].textContent = message; },
     friendlyError: (error) => error.message,
     $: (id) => elements[id], el: (tag, cls, value) => new Node(tag, cls, value),
     format: () => '10. 13. 오전 9:00', renderOwnCaseAnswer: () => {},
