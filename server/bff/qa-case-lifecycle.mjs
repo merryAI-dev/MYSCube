@@ -21,7 +21,7 @@ const actionSchema = z.discriminatedUnion('action', [
   ...['needs_information', 'investigating', 'fix_in_progress', 'verification_pending', 'deployment_pending', 'cancel']
     .map((action) => z.object({ action: z.literal(action), expected_version: z.number().int().nonnegative(),
       reason: safeText(500) }).strict()),
-  z.object({ action: z.literal('reopen'), expected_version: z.number().int().nonnegative(),
+  z.object({ action: z.enum(['reopen', 'retry_investigation']), expected_version: z.number().int().nonnegative(),
     reason: safeText(500) }).strict(),
 ]);
 const allowed = {
@@ -76,6 +76,23 @@ export function caseBound(qa, caseId, context) {
     || !ACTOR.test(qa.actor_id || '') || !Number.isSafeInteger(qa.aggregate_version)
     || qa.aggregate_version < 1 || !qa.investigation_scope) throw fail(404, 'qa_case_not_found');
 }
+function failedCurrentRun(qa, dispatch, run) {
+  const event = qa.investigation_event_id;
+  return UUID.safeParse(event).success && qa.execution_status === 'failed'
+    && !['resolved', 'cancelled'].includes(qa.case_status)
+    && dispatch?.dispatch_id === event && dispatch.event_id === event
+    && dispatch.case_id === qa.case_id && dispatch.workspace_id === qa.workspace_id
+    && dispatch.aggregate_version === qa.aggregate_version && dispatch.run_id === `qa-${event}`
+    && dispatch.status === 'failed' && run?.status === 'failed'
+    && run.run_id === dispatch.run_id && run.dispatch_id === event
+    && run.case_id === qa.case_id && run.tenant_id === qa.workspace_id
+    && run.case_actor_id === qa.actor_id && run.case_aggregate_version === qa.aggregate_version;
+}
+function requireFailedRun(action, qa, dispatch, run) {
+  if (action === 'retry_investigation' && !failedCurrentRun(qa, dispatch, run))
+    throw fail(409, 'qa_lifecycle_retry_unavailable', '현재 실패한 조사만 다시 요청할 수 있습니다.');
+}
+
 function nextStatus(current, body, actor, context) {
   const state = current.case_status;
   const action = body.action;
@@ -87,6 +104,12 @@ function nextStatus(current, body, actor, context) {
     if (current.proposed_assignee_id !== context.actorId || ['cancelled', 'resolved'].includes(state))
       throw fail(403, 'qa_lifecycle_assignee_required');
     return state;
+  }
+  if (action === 'retry_investigation') {
+    if (!(actor.operator || current.actor_id === context.actorId)) throw fail(403, 'qa_lifecycle_owner_required');
+    if (current.execution_status !== 'failed' || ['cancelled', 'resolved'].includes(state))
+      throw fail(409, 'qa_lifecycle_retry_unavailable');
+    return 'received';
   }
   if (action === 'reopen') {
     if (!(actor.operator || current.actor_id === context.actorId)) throw fail(403, 'qa_lifecycle_owner_required');
@@ -133,6 +156,8 @@ export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReope
         const qa = data(await tx.get(db.doc(`${base}/qa_cases/${caseId}`)));
         caseBound(qa, caseId, context);
         if (!(actor.operator || qa.actor_id === context.actorId)) throw fail(403, 'qa_lifecycle_owner_required');
+        const dispatch = qa.investigation_event_id ? data(await tx.get(db.doc(`${base}/qa_dispatches/${qa.investigation_event_id}`))) : null;
+        const run = dispatch?.run_id ? data(await tx.get(db.doc(`${base}/qa_runs/${dispatch.run_id}`))) : null;
         const count = Math.min(qa.lifecycle_version || 0, 50);
         const events = [];
         for (let version = Math.max(1, (qa.lifecycle_version || 0) - count + 1);
@@ -143,10 +168,14 @@ export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReope
             actor_id: event.actor_id, reason: event.reason, occurred_at: event.occurred_at });
         }
         return { case_id: caseId, case_status: qa.case_status,
+          execution_status: qa.execution_status, investigation_event_id: qa.investigation_event_id || null,
           lifecycle_version: qa.lifecycle_version || 0, input_aggregate_version: qa.aggregate_version,
           severity: qa.severity || null, priority: qa.priority || null,
           proposed_assignee_id: qa.proposed_assignee_id || null, assignee_id: qa.assignee_id || null,
-          allowed_actions: actor.operator && !['cancelled', 'resolved'].includes(qa.case_status) ? ['propose_assignment'] : [],
+          allowed_actions: [
+            ...(actor.operator && !['cancelled', 'resolved'].includes(qa.case_status) ? ['propose_assignment'] : []),
+            ...(failedCurrentRun(qa, dispatch, run) ? ['retry_investigation'] : []),
+          ],
           events };
       }, { readOnly: true });
     },
@@ -170,10 +199,11 @@ export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReope
         const eventId = qa.investigation_event_id;
         const dispatch = eventId ? data(await tx.get(db.doc(`${base}/qa_dispatches/${eventId}`))) : null;
         const run = dispatch ? data(await tx.get(db.doc(`${base}/qa_runs/${dispatch.run_id}`))) : null;
+        requireFailedRun(body.action, qa, dispatch, run);
         return { qa, actor, dispatch, run };
       }, { readOnly: true });
       let trustedBusinessActor;
-      const reopening = body.action === 'reopen';
+      const reopening = ['reopen', 'retry_investigation'].includes(body.action);
       if (reopening || (body.action !== 'cancel' && before.dispatch)) {
         const authorize = reopening ? authorizeReopen : authorizeCase;
         if (typeof authorize !== 'function' || !UUID.safeParse(before.qa.investigation_event_id).success)
@@ -203,6 +233,11 @@ export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReope
           ? data(await tx.get(db.doc(`${base}/qa_dispatches/${qa.investigation_event_id}`))) : null;
         if (candidateHash(latestDispatch) !== candidateHash(before.dispatch))
           throw fail(409, 'qa_lifecycle_version_changed');
+        if (body.action === 'retry_investigation') {
+          const latestRun = latestDispatch?.run_id ? data(await tx.get(db.doc(`${base}/qa_runs/${latestDispatch.run_id}`))) : null;
+          requireFailedRun(body.action, qa, latestDispatch, latestRun);
+          if (candidateHash(latestRun) !== candidateHash(before.run)) throw fail(409, 'qa_lifecycle_version_changed');
+        }
         if (trustedBusinessActor) {
           const ownerLink = data(await tx.get(db.doc(`${base}/qa_actor_business_links/${qa.actor_id}`)));
           if (ownerLink?.status !== 'ACTIVE' || ownerLink.business_actor_id !== trustedBusinessActor)
@@ -220,12 +255,12 @@ export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReope
           assignment_accepted_at: at, proposed_assignee_id: null });
         let nextEvent = null;
         if (body.action === 'cancel') patch.execution_status = 'cancelled';
-        if (body.action === 'reopen') {
+        if (reopening) {
           if (qa.aggregate_version >= Number.MAX_SAFE_INTEGER) throw fail(409, 'qa_lifecycle_version_exhausted');
           nextEvent = randomUUID();
           Object.assign(patch, { aggregate_version: qa.aggregate_version + 1,
             investigation_event_id: nextEvent, execution_status: 'queued',
-            assignee_id: null, proposed_assignee_id: null });
+            ...(body.action === 'reopen' ? { assignee_id: null, proposed_assignee_id: null } : {}) });
           tx.create(db.doc(`${base}/qa_kafka_outbox/${nextEvent}`), {
             event_id: nextEvent, schema_version: 1, event_type: 'qa.investigation.requested',
             workspace_id: context.tenantId, case_id: caseId,
@@ -246,6 +281,7 @@ export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReope
           ...(body.action === 'propose_assignment' ? { proposed_assignee_id: body.assignee_id } : {}),
         });
         return { case_id: caseId, case_status: status, lifecycle_version: version,
+          execution_status: patch.execution_status || qa.execution_status, input_aggregate_version: patch.aggregate_version || qa.aggregate_version,
           investigation_event_id: nextEvent || qa.investigation_event_id || null, updated_at: at };
       });
     },

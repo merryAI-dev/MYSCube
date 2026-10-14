@@ -2200,6 +2200,51 @@
         open.addEventListener('click',()=>void loadEditor());
       }
 
+      function renderInvestigationRetry(target, id, state, active, afterSaved) {
+        if (!state.allowed_actions?.includes('retry_investigation')) return;
+        const form = el('form', 'own-retry');
+        const label = el('label', '', '조사를 다시 요청하는 이유');
+        const reason = el('input');
+        reason.id = 'retry-reason-' + id; label.htmlFor = reason.id;
+        reason.type = 'text'; reason.maxLength = 500; reason.required = true;
+        reason.placeholder = '예: API 이용 설정을 복구했습니다.';
+        const submit = el('button', '', '실패한 조사 다시 요청'); submit.type = 'submit';
+        const message = el('p', 'small', '이전 기록을 보존하고 새 조사를 시작합니다. 실패 원인을 해결한 뒤 요청해 주세요.');
+        let pending = false;
+        form.addEventListener('submit', async event => {
+          event.preventDefault();
+          if (!active() || pending) return;
+          if (!reason.value.trim()) { message.textContent = '다시 요청하는 이유를 입력해 주세요.'; return; }
+          pending = true; submit.disabled = true;
+          try {
+            const saved = await entryRequest('/api/me/cases/' + id + '/lifecycle', 'POST', {
+              action: 'retry_investigation', expected_version: state.lifecycle_version,
+              reason: reason.value.trim(), idempotency_key: crypto.randomUUID(),
+            });
+            if (!active()) return;
+            if (saved.case_id !== id || saved.lifecycle_version !== state.lifecycle_version + 1
+              || saved.input_aggregate_version !== state.input_aggregate_version + 1
+              || !caseIdPattern.test(saved.investigation_event_id || '')
+              || saved.investigation_event_id === state.investigation_event_id)
+              throw new Error('readback_mismatch');
+            await afterSaved(saved);
+            if (!active()) return;
+            const read = await entryRequest('/api/me/cases/' + id + '/lifecycle');
+            if (!active()) return;
+            if (read.case_id !== id || read.investigation_event_id !== saved.investigation_event_id
+              || read.input_aggregate_version !== saved.input_aggregate_version
+              || read.lifecycle_version < saved.lifecycle_version) throw new Error('readback_mismatch');
+            message.textContent = '새 조사 요청이 저장됐습니다. 진행 상황에서 결과를 확인해 주세요.';
+            await refreshCases();
+          } catch (error) {
+            if (!active()) return;
+            message.textContent = friendlyError(error);
+            // Refresh the version before another attempt after an uncertain response.
+            message.textContent += ' 처리 상태와 변경 이력을 다시 열어 최신 상태를 확인해 주세요.';
+          }
+        });
+        form.append(label, reason, submit, message); target.append(form);
+      }
       function renderCases() {
         const target = $("my-cases");
         const progressStages = {
@@ -2426,6 +2471,11 @@
                   el("p", "small", "아직 변경 이력이 없습니다."),
                 );
               renderAssignmentProposal(lifecycleBox, id, state, lifecycleActive, loadLifecycle);
+              renderInvestigationRetry(lifecycleBox, id, state, lifecycleActive, async saved => {
+                box.dataset.resultBinding = 'retry:' + saved.investigation_event_id;
+                box.querySelector('.own-result')?.replaceChildren();
+                await refreshCases();
+              });
               const action =
                 state.case_status === "cancelled" ||
                 state.case_status === "resolved"
