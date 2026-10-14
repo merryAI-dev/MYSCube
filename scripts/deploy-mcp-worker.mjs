@@ -27,6 +27,11 @@ const TARGETS = {
       FIREBASE_WEB_API_KEY: 'EMA_MCP_FIREBASE_WEB_API_KEY',
       CONSENT_SECRET: 'EMA_MCP_CONSENT_SECRET',
     },
+    // 있으면 넣고 없으면 건너뛴다(회의록 드라이브 저장용 Apps Script).
+    optionalSecrets: {
+      NOTES_SAVE_URL: 'EMA_MCP_NOTES_SAVE_URL',
+      NOTES_SAVE_SECRET: 'EMA_MCP_NOTES_SAVE_SECRET',
+    },
   },
 };
 const targetName = process.argv[2] || 'myscube';
@@ -67,7 +72,7 @@ const wranglerEnv = { ...env, CLOUDFLARE_ACCOUNT_ID: accountId, WRANGLER_SEND_ME
 const wrangler = (...args) => execFileSync('npx', ['wrangler', ...args, '--config', generated.pathname], { cwd: workerDir, env: wranglerEnv, stdio: 'inherit' });
 try {
   wrangler('deploy');
-  writeFileSync(secretsFile, JSON.stringify(Object.fromEntries(Object.entries(target.secrets).map(([name, variable]) => [name, env[variable]]))), { mode: 0o600 });
+  writeFileSync(secretsFile, JSON.stringify(Object.fromEntries([...Object.entries(target.secrets), ...Object.entries(target.optionalSecrets ?? {}).filter(([, variable]) => env[variable])].map(([name, variable]) => [name, env[variable]]))), { mode: 0o600 });
   wrangler('secret', 'bulk', secretsFile.pathname);
 } finally {
   rmSync(secretsFile, { force: true });
