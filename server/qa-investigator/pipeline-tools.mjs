@@ -1,3 +1,4 @@
+import { createDiscoveredProjectTools } from './discovered-project-tools.mjs';
 import { createRequestDiagnosticTools } from './request-diagnostic-tools.mjs';
 import { createReporterOperationTools } from './reporter-operation-tools.mjs';
 import { createRevisionResolver } from './revision-resolver.mjs';
@@ -28,6 +29,7 @@ export async function createPipelineInvestigationTools({
   ];
   let live;
   let requestDiagnostics;
+  let discovered;
   const cloudDeployment = createCloudDeploymentTools({ auth, policy: request.policy,
     diagnosticRevisionAnchors: evidence => requestDiagnostics?.revisionAnchors(evidence) || [],
     diagnosticsReady: () => Boolean(requestDiagnostics) && requestDiagnostics.requiredFollowups().length === 0,
@@ -89,6 +91,7 @@ export async function createPipelineInvestigationTools({
   });
   observeSourceEvidence = (evidence) => {
     live.observeEvidence(evidence);
+    discovered?.observeEvidence(evidence);
     cloudDeployment.observeEvidence(evidence);
   };
   for (const evidence of priorEvidence) observeSourceEvidence(evidence);
@@ -140,6 +143,24 @@ export async function createPipelineInvestigationTools({
     operationSource.observeEvidence(evidence);
   };
   for (const evidence of priorEvidence) observeRuntimeEvidence(evidence);
+  if(!hasProjects) {
+    discovered=createDiscoveredProjectTools({runBinding,
+      requestLogAnchors: evidence=>live.requestLogAnchors(evidence),
+      authorizeProject: projectId=>pipeline.authorizeProject(projectId),
+      createSources(projectId,authorize) {
+        const policy={...request.policy,scopeKind:'project',allowedProjectIds:[projectId]};
+        const trace=createRuntimeTraceTools({auth,policy});
+        return {tools:{
+          ...createInvestigationTools({auth,policy,allowDynamicScope:true}),
+          ...createSheetSourceTools({policy,firestoreAuth:auth,
+            sheetsAuth:new GoogleAuth({scopes:['https://www.googleapis.com/auth/spreadsheets.readonly']}),authorize,labelContract}),
+          ...createMonthCloseApprovalTools({auth,policy,authorize}),
+          ...trace.tools,
+        },observeEvidence:trace.observeEvidence};
+      },
+    });
+    for(const evidence of priorEvidence)discovered.observeEvidence(evidence);
+  }
   const raw = {
     ...(hasProjects
       ? createMonthCloseApprovalTools({
@@ -160,6 +181,7 @@ export async function createPipelineInvestigationTools({
     }),
     ...cloudDeployment,
     ...live,
+    ...discovered?.tools,
   };
   dependencyResolvers = Object.fromEntries(
     Object.entries(raw)
