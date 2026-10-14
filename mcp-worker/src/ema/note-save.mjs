@@ -1,7 +1,7 @@
 import { escape, page } from './files.mjs';
 
 // 회의록 마크다운을 팀 드라이브 폴더에 저장한다. 드라이브 쓰기는 폴더 소유 계정의 Apps Script 웹 앱이 하고,
-// 이 Worker 는 공유 비밀과 함께 내용만 넘긴다. ChatGPT처럼 대화 안 쓰기가 막히면 저장 링크 화면의 버튼으로 저장한다.
+// 이 Worker 는 내용만 넘긴다(폴더는 회사 계정만 접근하는 공유 드라이브). ChatGPT처럼 대화 안 쓰기가 막히면 저장 링크 화면의 버튼으로 저장한다.
 const NOTE_TTL_SECONDS = 24 * 60 * 60;
 
 const randomToken = () => {
@@ -25,13 +25,13 @@ export function createNoteStore(kv) {
 }
 
 export function noteSaverFrom(env, fetchImpl = fetch) {
-  if (!env.NOTES_SAVE_URL || !env.NOTES_SAVE_SECRET) return null;
+  if (!env.NOTES_SAVE_URL) return null;
   return async ({ fileName, markdown, sourceRef }) => {
     const response = await fetchImpl(env.NOTES_SAVE_URL, {
       method: 'POST',
       redirect: 'follow',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ secret: env.NOTES_SAVE_SECRET, fileName, markdown, sourceRef: sourceRef || '' }),
+      body: JSON.stringify({ fileName, markdown, sourceRef: sourceRef || '' }),
     });
     const body = await response.json().catch(() => null);
     if (!response.ok || !body?.ok) throw new Error('드라이브에 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.');

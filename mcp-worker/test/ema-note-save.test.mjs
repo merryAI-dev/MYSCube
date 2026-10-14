@@ -70,16 +70,16 @@ describe('saving meeting notes to the team drive', () => {
     expect((await handleNotePage(new Request(url), { notes, token: 'x'.repeat(30), save })).status).toBe(410);
   });
 
-  it('the saver sends the shared secret to the Apps Script and surfaces failures', async () => {
+  it('the saver posts the note to the Apps Script and surfaces failures', async () => {
     expect(noteSaverFrom({})).toBeNull();
     const calls = [];
-    const saver = noteSaverFrom({ NOTES_SAVE_URL: 'https://script.google.com/x', NOTES_SAVE_SECRET: 's' }, async (target, init) => {
+    const saver = noteSaverFrom({ NOTES_SAVE_URL: 'https://script.google.com/x' }, async (target, init) => {
       calls.push([target, JSON.parse(init.body)]);
       return new Response(JSON.stringify({ ok: true, fileId: 'f', url: 'u', name: 'n.md', updated: false }));
     });
     expect((await saver({ fileName: 'n.md', markdown: 'm' })).fileId).toBe('f');
-    expect(calls[0][1]).toEqual({ secret: 's', fileName: 'n.md', markdown: 'm', sourceRef: '' });
-    const failing = noteSaverFrom({ NOTES_SAVE_URL: 'u', NOTES_SAVE_SECRET: 's' }, async () => new Response(JSON.stringify({ ok: false })));
+    expect(calls[0][1]).toEqual({ fileName: 'n.md', markdown: 'm', sourceRef: '' });
+    const failing = noteSaverFrom({ NOTES_SAVE_URL: 'u' }, async () => new Response(JSON.stringify({ ok: false })));
     await expect(failing({ fileName: 'n.md', markdown: 'm' })).rejects.toThrow('드라이브');
   });
 });

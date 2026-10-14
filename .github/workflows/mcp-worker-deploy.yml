@@ -71,5 +71,4 @@ jobs:
           EMA_MCP_FIREBASE_WEB_API_KEY: ${{ secrets.EMA_MCP_FIREBASE_WEB_API_KEY }}
           EMA_MCP_CONSENT_SECRET: ${{ secrets.EMA_MCP_CONSENT_SECRET }}
           EMA_MCP_NOTES_SAVE_URL: ${{ secrets.EMA_MCP_NOTES_SAVE_URL }}
-          EMA_MCP_NOTES_SAVE_SECRET: ${{ secrets.EMA_MCP_NOTES_SAVE_SECRET }}
         run: node scripts/deploy-mcp-worker.mjs ${{ matrix.target }}
