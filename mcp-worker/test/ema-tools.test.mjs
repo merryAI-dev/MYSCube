@@ -44,6 +44,7 @@ describe('EMA tool surface', () => {
     await connect({ ema: fakeEma(), admin: true });
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual([
+      'ema_meeting_draft_create', 'ema_meeting_draft_delete', 'ema_meeting_draft_get', 'ema_meeting_drafts_list',
       'ema_registry_export', 'ema_registry_get', 'ema_registry_import_commit', 'ema_registry_import_confirm_link', 'ema_registry_import_preview',
       'ema_registry_import_template', 'ema_registry_import_upload_link', 'ema_registry_search', 'ema_registry_status',
     ]);
