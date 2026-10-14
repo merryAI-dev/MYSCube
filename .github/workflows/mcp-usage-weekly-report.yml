@@ -1,0 +1,33 @@
+name: MCP Usage Weekly Report
+
+on:
+  schedule:
+    # 매주 월요일 09:00 Asia/Seoul
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 집계 일수
+        required: false
+        default: "7"
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+      - name: Report EMA MCP usage
+        env:
+          CLOUDFLARE_ZONE_ID: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          CLOUDFLARE_API_KEY: ${{ secrets.CLOUDFLARE_API_KEY }}
+          CLOUDFLARE_EMAIL: ${{ secrets.CLOUDFLARE_EMAIL }}
+          MCP_USAGE_SLACK_WEBHOOK_URL: ${{ secrets.MCP_USAGE_SLACK_WEBHOOK_URL }}
+          REPORT_DAYS: ${{ inputs.days || '7' }}
+        run: node scripts/mcp-usage-report.mjs
