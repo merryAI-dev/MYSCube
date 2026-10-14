@@ -67,20 +67,32 @@ async function fetchText(bff, subject, kind) {
   return { kind, name: String(body.name || ''), sha256: body.sha256, pageCount: body.pageCount, pages: body.pages, quality: body.quality === 'ok' ? 'ok' : 'sparse', reason: body.reason || null };
 }
 
-// from 쪽부터 글자 수 예산 안에서 쪽을 묶는다. 한 쪽이 예산보다 크면 그 쪽만 잘라서 싣는다.
-function pageWindow(pages, from) {
+// from 쪽의 offset 글자부터 예산 안에서 쪽을 묶는다. 한 쪽이 예산보다 길면 그 쪽을 나눠 싣고,
+// 다음 호출은 같은 쪽의 다음 위치(offset)부터 이어 준다(코드 리뷰 #4: 잘린 뒷부분이 빠지지 않게).
+export function pageWindow(pages, from, offset = 0) {
   const start = Math.min(Math.max(1, from), Math.max(1, pages.length));
-  let used = 0;
   const parts = [];
-  let last = start - 1;
+  let used = 0;
+  let next = null;
   for (let number = start; number <= pages.length; number += 1) {
-    const chunk = `[p.${number}]\n${pages[number - 1]}`;
-    if (parts.length && used + chunk.length > TEXT_CHARS_PER_RESPONSE) break;
-    parts.push(chunk.length > TEXT_CHARS_PER_RESPONSE ? `${chunk.slice(0, TEXT_CHARS_PER_RESPONSE)}\n[이 쪽은 길어서 잘렸습니다]` : chunk);
-    used += chunk.length;
-    last = number;
+    const body = pages[number - 1];
+    const begin = number === start ? Math.min(Math.max(0, offset), body.length) : 0;
+    const header = begin > 0 ? `[p.${number} 이어서]\n` : `[p.${number}]\n`;
+    const room = TEXT_CHARS_PER_RESPONSE - used - header.length;
+    if (parts.length && body.length - begin + header.length > TEXT_CHARS_PER_RESPONSE - used) {
+      next = { from: number, offset: 0 };
+      break;
+    }
+    if (body.length - begin > room) {
+      parts.push(`${header}${body.slice(begin, begin + room)}`);
+      next = { from: number, offset: begin + room };
+      break;
+    }
+    parts.push(`${header}${body.slice(begin)}`);
+    used += header.length + body.length - begin;
   }
-  return { text: parts.join('\n\n'), from: start, to: last };
+  const lastPage = next ? (next.offset > 0 ? next.from : next.from - 1) : pages.length;
+  return { text: parts.join('\n\n'), from: start, to: lastPage, next };
 }
 
 export function registerProjectReviewTools(server, { bff, textStore, uid }) {
@@ -114,7 +126,10 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
     title: '검토 대상 제출값',
     description: '검토 대상의 제출값(대조에 쓰는 필드만), 첨부 목록, 참여율 시트·사업관리 폴더 링크, 서버가 이미 알고 있는 제출 문제(serverReadiness)를 돌려줍니다. 드라이브 링크는 사용자의 커넥터로 읽습니다.',
     input: { subject: subjectShape },
-  }, ({ subject }) => loadSubmission(bff, subject));
+  }, async ({ subject }) => {
+    const { attachmentPaths, subjectKey, ...visible } = await loadSubmission(bff, subject);
+    return visible;
+  });
 
   register(server, 'project_attachment_text', {
     title: '첨부 서류 텍스트',
@@ -124,15 +139,21 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
       kind: kindShape,
       textRef: z.string().regex(SHA256).optional().describe('이전 결과의 textRef(있으면 캐시에서 이어 받음)'),
       from: z.number().int().min(1).optional().describe('시작 쪽(기본 1)'),
+      offset: z.number().int().min(0).optional().describe('시작 쪽 안의 글자 위치(continuation 이 준 값 그대로)'),
     },
     untrusted: true,
-  }, async ({ subject, kind, textRef, from = 1 }) => {
-    let text = textRef ? await textStore.get(uid, textRef) : null;
+  }, async ({ subject, kind, textRef, from = 1, offset = 0 }) => {
+    // 현재 첨부 경로를 확인해 캐시 범위를 정한다. 첨부가 없으면 BFF 를 부르지 않는다.
+    const loaded = await loadSubmission(bff, subject);
+    const path = loaded.attachmentPaths[kind];
+    if (!path) throw new BffError(404, { code: 'not_found', message: '이 검토 대상에는 그 서류 첨부가 없습니다.' });
+    const scope = { subjectKey: loaded.subjectKey, kind, path };
+    let text = textRef ? await textStore.get(uid, textRef, scope) : null;
     let changed = false;
     if (!text) {
-      text = await fetchText(bff, subject, kind);
+      text = await fetchText(bff, loaded.subject, kind);
       changed = Boolean(textRef && textRef !== text.sha256);
-      if (text.pages.length) await textStore.put(uid, text);
+      if (text.pages.length) await textStore.put(uid, text, scope);
     }
     if (text.reason || text.quality === 'sparse') {
       const why = { too_large: '파일이 커서(30MB·300쪽 초과) 읽지 않았습니다.', not_pdf: 'PDF가 아니라 읽지 않았습니다.', unreadable: '손상되었거나 열 수 없는 PDF입니다.' }[text.reason]
@@ -140,13 +161,12 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
       return { kind, name: text.name, pageCount: text.pageCount, quality: 'sparse', reason: text.reason, textRef: text.sha256, text: '',
         guidance: `${why} 사용자에게 MYSCube에서 이 서류를 내려받아 대화에 첨부해 달라고 요청하고, 첨부에서 읽은 값은 source "chat_attachment"로 넘기세요.` };
     }
-    const window = pageWindow(text.pages, from);
-    const more = window.to < text.pageCount;
+    const window = pageWindow(text.pages, from, offset);
     return {
       kind, name: text.name, pageCount: text.pageCount, quality: text.quality, textRef: text.sha256,
       pages: `${window.from}-${window.to}`, text: window.text,
       ...(changed ? { notice: '이전 textRef 뒤로 서류가 바뀌었습니다. 새 textRef를 쓰세요.' } : {}),
-      ...(more ? { continuation: { tool: 'project_attachment_text', arguments: { subject, kind, textRef: text.sha256, from: window.to + 1 } } } : {}),
+      ...(window.next ? { continuation: { tool: 'project_attachment_text', arguments: { subject, kind, textRef: text.sha256, from: window.next.from, ...(window.next.offset ? { offset: window.next.offset } : {}) } } } : {}),
     };
   });
 
@@ -172,13 +192,19 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
       const base = { kind: extraction.kind, source: extraction.source, fields: extraction.fields, lists: extraction.lists ?? {} };
       if (extraction.source !== 'attachment_text') { documents.push({ ...base, readable: true, sha256: null }); continue; }
       if (!extraction.textRef) { documents.push({ ...base, readable: false, reason: 'textRef 없음(project_attachment_text로 먼저 읽기)', sha256: null }); continue; }
-      let text = await textStore.get(uid, extraction.textRef);
+      const path = loaded.attachmentPaths[extraction.kind];
+      if (!path) { documents.push({ ...base, readable: false, reason: '첨부 없음', sha256: null }); continue; }
+      const scope = { subjectKey: loaded.subjectKey, kind: extraction.kind, path };
+      // 같은 대상·같은 서류·같은 첨부(경로)의 캐시만 쓴다. 없으면 BFF 에서 다시 받는다(권한 재확인).
+      let text = await textStore.get(uid, extraction.textRef, scope);
       if (!text) {
-        // 캐시가 없거나 만료: BFF 에서 다시 받는다(권한 재확인). 그사이 서류가 바뀌었으면 쓰지 않는다.
         text = await fetchText(bff, loaded.subject, extraction.kind);
-        if (text.pages.length) await textStore.put(uid, text);
-        if (text.sha256 !== extraction.textRef) { documents.push({ ...base, readable: false, reason: '서류가 바뀌었습니다. 다시 읽어 주세요', sha256: text.sha256 }); continue; }
+        if (text.pages.length) await textStore.put(uid, text, scope);
+        // 그사이 서류가 바뀌었거나 다른 대상·서류의 textRef 면 판정하지 않는다.
+        if (text.sha256 !== extraction.textRef) { documents.push({ ...base, readable: false, reason: '서류가 바뀌었거나 다른 서류의 textRef입니다. 다시 읽어 주세요', sha256: text.sha256 }); continue; }
       }
+      // 스캔본은 인용을 검증할 글자가 없다. 필드마다 "인용 없음"을 쌓지 않고 한 번에 안내한다(코드 리뷰 #5).
+      if (text.quality === 'sparse' || !text.pages.some((page) => page.trim())) { documents.push({ ...base, readable: false, reason: 'sparse', sha256: text.sha256 }); continue; }
       documents.push({ ...base, readable: true, pages: text.pages, sha256: text.sha256 });
     }
     const judged = reviewSubmission({ payload: loaded.submission, documents, attachedKinds: loaded.attachedKinds });

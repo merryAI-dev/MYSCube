@@ -35,6 +35,11 @@ export function parseSubject(input) {
   return { type, projectId: need('projectId') };
 }
 
+// 검토 대상을 한 줄 문자열로(캐시 범위 키). 구분자 '/'는 식별자에 쓸 수 없는 문자다(ID 정규식).
+export function subjectKey(subject) {
+  return [subject.type, subject.projectId ?? '', subject.requestId ?? '', subject.draftId ?? ''].join('/');
+}
+
 // 첨부 텍스트 엔드포인트 경로(BFF 5.7절). 권한은 BFF 가 판단한다.
 export function attachmentTextPath(subject, kind) {
   if (!ATTACHMENT_FIELDS[kind]) throw new Error('서류 종류가 올바르지 않습니다.');
@@ -60,8 +65,8 @@ function attachmentsFrom(source, refs = []) {
   return Object.entries(ATTACHMENT_FIELDS).map(([kind, field]) => {
     const ref = [...refs].reverse().find((item) => item?.documentKind === kind && text(item?.path));
     const stored = source?.[field];
-    const present = Boolean(ref || text(stored?.path));
-    return { kind, present, name: text(ref?.name) || text(stored?.name) };
+    const path = text(ref?.path) || text(stored?.path);
+    return { kind, present: Boolean(path), name: text(ref?.name) || text(stored?.name), path };
   });
 }
 
@@ -87,13 +92,16 @@ export async function loadSubmission(bff, input) {
     refs = Array.isArray(response?.draft?.attachmentRefs) ? response.draft.attachmentRefs : [];
     reviewToken = response?.draft ? `draft-revision:${response.draft.draftRevision ?? 0}` : null;
   }
-  const attachments = attachmentsFrom(source, refs);
+  const found = attachmentsFrom(source, refs);
   return {
     subject,
+    subjectKey: subjectKey(subject),
     reviewToken,
     submission: pick(source),
-    attachments,
-    attachedKinds: attachments.filter((item) => item.present).map((item) => item.kind),
+    // 첨부 경로는 캐시 범위(업로드마다 새 경로)를 정하는 데만 쓰고 AI 에게 내보내지 않는다.
+    attachments: found.map(({ path, ...rest }) => rest),
+    attachmentPaths: Object.fromEntries(found.filter((item) => item.path).map((item) => [item.kind, item.path])),
+    attachedKinds: found.filter((item) => item.present).map((item) => item.kind),
     links: {
       participationSheetLink: httpsLink(source?.participationSheetLink),
       businessManagementGoogleFolderLink: httpsLink(source?.businessManagementGoogleFolderLink),

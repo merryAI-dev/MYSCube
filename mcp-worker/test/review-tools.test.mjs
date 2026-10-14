@@ -86,7 +86,8 @@ describe('project review tools', () => {
     expect(bff.get.mock.calls.find(([path]) => path.endsWith('/text'))[2]).toEqual({ maxBytes: 8 * 1024 * 1024 });
     bff.get.mockClear();
     await call('project_attachment_text', { subject, kind: 'contract', textRef: SHA });
-    expect(bff.get).not.toHaveBeenCalled();
+    // 현재 첨부 경로 확인(검토 문서)만 부르고, 텍스트 엔드포인트(PDF 재파싱)는 다시 부르지 않는다.
+    expect(bff.get.mock.calls.map(([path]) => path)).toEqual(['/api/v1/projects/p1/review-document']);
   });
 
   it('splits long documents and hands back a ready-to-call continuation', async () => {
@@ -133,7 +134,7 @@ describe('project review tools', () => {
     await connect({ bff, kv });
     const { json } = await call('project_review_check', { subject, extractions: [extraction(amount)] });
     expect(json.coverage.find((item) => item.kind === 'contract').status).toBe('unknown');
-    expect(json.unknowns.some((item) => item.question.includes('바뀌었습니다'))).toBe(true);
+    expect(json.unknowns.some((item) => item.question.includes('바뀌었거나'))).toBe(true);
     expect(json.findings.filter((item) => item.documentKind === 'contract')).toEqual([]);
   });
 
@@ -151,5 +152,64 @@ describe('project review tools', () => {
     expect(result._meta?.provenance?.untrusted_content).toBe(true);
     const bad = await call('project_submission_get', { subject: { type: 'request', projectId: '../x', requestId: 'r1' } });
     expect(bad.json.error.code).toBe('invalid_request');
+  });
+
+  describe('code review fixes', () => {
+    it('does not reuse a textRef from another subject (review #1)', async () => {
+      const otherPayload = { ...payload, contractDocument: { path: 'orgs/mysc/project-registration-documents/p2/c2.pdf', name: '다른 계약서.pdf' } };
+      const bff = fakeBff({
+        '/api/v1/projects/p2/review-document': () => ({ request: { requestKind: 'REGISTRATION', payload: otherPayload }, reviewToken: 'tok-2' }),
+        '/api/v1/project-requests/r2/attachments/contract/text': () => ({ kind: 'contract', name: '다른 계약서.pdf', sha256: 'e'.repeat(64), pageCount: 1, pages: ['다른 계약서 본문 총 계약금액 ₩120,000,000'], quality: 'ok' }),
+      });
+      await connect({ bff });
+      await call('project_attachment_text', { subject, kind: 'contract' });
+      // p1 의 textRef 를 p2 대조에 넘김 → p2 의 실제 첨부를 받아 해시가 달라 판정하지 않는다.
+      const { json } = await call('project_review_check', { subject: { type: 'request', projectId: 'p2', requestId: 'r2' }, extractions: [extraction(amount)] });
+      expect(json.findings.filter((item) => item.documentKind === 'contract')).toEqual([]);
+      expect(json.coverage.find((item) => item.kind === 'contract').status).toBe('unknown');
+    });
+
+    it('does not reuse the cache after the author replaced the attachment (review #1)', async () => {
+      let currentPath = 'orgs/mysc/project-registration-documents/p1/c.pdf';
+      let currentSha = SHA;
+      const bff = fakeBff({
+        '/api/v1/projects/p1/review-document': () => ({ request: { requestKind: 'REGISTRATION', payload: { ...payload, contractDocument: { path: currentPath, name: '계약서.pdf' } } }, reviewToken: 'tok-1' }),
+        '/api/v1/project-requests/r1/attachments/contract/text': () => ({ kind: 'contract', name: '계약서.pdf', sha256: currentSha, pageCount: 2, pages: contractPages, quality: 'ok' }),
+      });
+      await connect({ bff });
+      await call('project_attachment_text', { subject, kind: 'contract' });
+      currentPath = 'orgs/mysc/project-registration-documents/p1/new.pdf';
+      currentSha = 'f'.repeat(64);
+      const { json } = await call('project_review_check', { subject, extractions: [extraction(amount)] });
+      expect(json.coverage.find((item) => item.kind === 'contract').status).toBe('unknown');
+    });
+
+    it('reports a scanned document once as unreadable instead of a missing quote per field (review #5)', async () => {
+      await connect({ bff: fakeBff({ '/api/v1/project-requests/r1/attachments/contract/text': () => ({ kind: 'contract', name: 'scan.pdf', sha256: SHA, pageCount: 1, pages: [''], quality: 'sparse' }) }) });
+      const { json } = await call('project_review_check', { subject, extractions: [extraction(amount)] });
+      const unknowns = json.unknowns.filter((item) => item.kind === 'contract');
+      expect(unknowns).toHaveLength(1);
+      expect(unknowns[0].resolveBy).toContain('대화에 첨부');
+    });
+
+    it('delivers every character of a page longer than one response (review #4)', async () => {
+      const long = `${'가'.repeat(90_000)}끝문장 총 계약금액 ₩110,000,000`;
+      await connect({ bff: fakeBff({ '/api/v1/project-requests/r1/attachments/contract/text': () => ({ kind: 'contract', name: 'long.pdf', sha256: SHA, pageCount: 1, pages: [long], quality: 'ok' }) }) });
+      let args = { subject, kind: 'contract' };
+      let collected = '';
+      for (let guard = 0; guard < 10 && args; guard += 1) {
+        const { json } = await call('project_attachment_text', args);
+        collected += json.text.replace(/\[p\.1( 이어서)?\]\n/gu, '');
+        args = json.continuation?.arguments;
+      }
+      expect(collected).toBe(long);
+    });
+
+    it('keeps the attachment path out of what the AI sees', async () => {
+      await connect();
+      const { json } = await call('project_submission_get', { subject });
+      expect(JSON.stringify(json)).not.toContain('orgs/mysc/');
+      expect(json.attachments.find((item) => item.kind === 'contract')).toEqual({ kind: 'contract', present: true, name: '계약서.pdf' });
+    });
   });
 });
