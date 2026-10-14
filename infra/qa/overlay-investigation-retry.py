@@ -39,6 +39,11 @@ elif kind == 'dashboard':
     new = (repo/'server/qa-dashboard/index.html').read_text()
     helper = section(new, '      function renderInvestigationRetry(', '      function renderCases()')
     old = replace_once(old, '      function renderCases()', helper+'      function renderCases()')
+    if 'const lifecycleActor = ' not in old:
+        declarations = section(new, '          let lifecycleVersion = null;', '          async function loadLifecycle()')
+        old = replace_once(old, '          let lifecycleVersion = null;\n', declarations)
+        old = replace_once(old, '          async function loadLifecycle() {\n', '          async function loadLifecycle() {\n            if (!lifecycleActive()) return;\n')
+        old = replace_once(old, '              lifecycleVersion = state.lifecycle_version;', '              if (!lifecycleActive()) return;\n              lifecycleVersion = state.lifecycle_version;')
     invocation = section(new, '              renderInvestigationRetry(lifecycleBox', '              const action =')
     old = replace_once(old, '              const action =', invocation+'              const action =')
     save(path, old)

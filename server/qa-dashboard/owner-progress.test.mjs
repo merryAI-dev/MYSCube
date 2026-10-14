@@ -367,3 +367,18 @@ test('retry cannot show success for changed account or mismatched persisted even
     assert.equal(saved,mode==='switch'?0:1);
   }
 });
+
+test('actual lifecycle button renders retry form for server-confirmed failed case',async()=>{
+  const h=harness(async path=>path.includes('/lifecycle')
+    ? {case_id:caseId,case_status:'received',execution_status:'failed',lifecycle_version:10,
+      input_aggregate_version:6,investigation_event_id:'33333333-3333-4333-8333-333333333333',
+      allowed_actions:['retry_investigation'],events:[]}
+    : {items:[item('failed')],next_cursor:null});
+  await h.refreshCases();
+  const row=h.elements['my-cases'].children[0];
+  const button=row.children.find(n=>n.tagName==='BUTTON'&&n.textContent==='처리 상태와 변경 이력');
+  button.listeners.get('click')();
+  await new Promise(resolve=>setImmediate(resolve));
+  const box=row.querySelector('.own-lifecycle');
+  assert.ok(box.querySelector('.own-retry'),'real lifecycle handler must render the retry form');
+});
