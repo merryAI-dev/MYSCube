@@ -333,3 +333,11 @@ S2 이후 티켓(재제출 비교, 제안서·참여율, 사업관리 폴더, �
 - 제출값은 **허용 목록**(`SUBMISSION_FIELDS`)만 내보낸다. 사업자번호·이메일·결재자 이름 같은 값은 목록에 없으므로 나가지 않고, 새 필드가 생겨도 자동으로 빠진다.
 - 초안은 `reviewToken`이 없어서 `draft-revision:<n>`을 대신 쓴다. 드라이브 링크는 `https://`만 통과(다른 스킴은 빈 값).
 - 테스트: 새 7개, MCP Worker 전체 124 통과. 사보타주(허용 목록 무시 / 제안 스냅숏 무시) 각각 실패 확인 후 복구.
+
+### T7 — 도구 5종 등록, 2026-10-14
+- `mcp-worker/src/review/tools.mjs`, `playbook.mjs`. `createMyscubeMcpServer`는 텍스트 저장소와 uid가 있을 때만 검토 도구를 등록한다(기존 도구·테스트 영향 없음). 서버 안내문 1줄, 사용량 세부값에 `kind` 추가.
+- `project_attachment_text`: 캐시 우선, 없으면 BFF(응답 상한 8MB, 스키마 검사). 4만 자 단위로 나누고 바로 부를 `continuation`을 준다. 스캔본·크기 초과·손상 PDF는 대화 첨부 안내. 결과와 오류 모두 `_meta.provenance.untrusted_content`.
+- `project_review_check`: 제출값은 BFF에서 다시 읽고(AI 입력을 믿지 않음), 캐시가 없으면 BFF에서 다시 받아 해시가 같을 때만 판정한다(서류가 바뀌었으면 unknown).
+- 오류는 공통 형식. 403은 "admin·finance·지정 결재자 / 초안은 작성자 본인" 안내.
+- **작업 중 실수**: main과 번들 크기를 비교하려고 `git checkout origin/main -- mcp-worker/src` 후 `git checkout HEAD -- mcp-worker/src`로 되돌리면서 커밋 전 연결 수정(`tools.mjs`·`index.mjs`)을 지웠다. 같은 수정을 다시 적용하고 끝에서 끝 테스트로 확인했다. 이후 비교는 별도 작업 공간에서 한다.
+- 테스트: 새 10개(실제 MCP 클라이언트로 호출), MCP Worker 전체 134 통과. 사보타주(해시 비교 제거 / untrusted 표시 제거) 각각 실패 확인 후 복구. `wrangler deploy --dry-run` 번들 1,405KiB(gzip 276KiB), main 대비 +56KiB.
