@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "pageId": "react-git-delivery-qa-20260923",
+  "version": 1,
+  "entry": "App.tsx",
+  "sourceHash": "434116da5364de8f8ce2df4b533dd6dbb0cefc83fa7bfe78360624b678cdb478",
+  "packageSetHash": "react19-validation-only",
+  "apiIds": [],
+  "runtime": "isolated-react",
+  "dataExportPolicy": "source-only-no-response-injection"
+}
