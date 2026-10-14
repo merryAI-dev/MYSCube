@@ -1,6 +1,6 @@
 import * as z from 'zod/v4';
 import { BffError } from '../bff.mjs';
-import { buildReviewResult, reviewError } from './contract.mjs';
+import { buildReviewResult, hashId, reviewError } from './contract.mjs';
 import { PLAYBOOK } from './playbook.mjs';
 import { REVIEW_DOCUMENT_KINDS, reviewSubmission } from './rules.mjs';
 import { attachmentTextPath, loadSubmission, SUBJECT_TYPES } from './submission.mjs';
@@ -107,7 +107,11 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
   }, async () => {
     const [assigned, drafts] = await Promise.all([
       bff.get('/api/v1/project-requests/assigned-to-me'),
-      bff.get('/api/v1/project-registration-drafts').catch(() => ({ drafts: [] })),
+      // 초안 목록은 역할상 못 보는 경우(403)만 빈 목록으로 둔다. 시간 초과·만료 등은 오류로 알린다(코드 리뷰 #10).
+      bff.get('/api/v1/project-registration-drafts').catch((error) => {
+        if (error instanceof BffError && error.status === 403) return { drafts: [] };
+        throw error;
+      }),
     ]);
     const requests = (assigned?.items ?? []).map((item) => {
       const snapshot = item.requestKind === 'CHANGE' && item.proposedSnapshot ? item.proposedSnapshot : (item.payload ?? {});
@@ -209,7 +213,11 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
     }
     const judged = reviewSubmission({ payload: loaded.submission, documents, attachedKinds: loaded.attachedKinds });
     const result = await buildReviewResult({
-      identity: { subject: loaded.subject, reviewToken: loaded.reviewToken, documents: documents.map(({ kind, sha256, source }) => ({ kind, sha256, source })), extractor: EXTRACTOR },
+      identity: {
+        subject: loaded.subject, reviewToken: loaded.reviewToken, extractor: EXTRACTOR,
+        documents: documents.map(({ kind, sha256, source }) => ({ kind, sha256, source })),
+        inputsDigest: await hashId('i', { submission: loaded.submission, extractions }),
+      },
       findings: judged.findings, coverage: judged.coverage, unknowns: judged.unknowns, limitations: judged.limitations,
     });
     return { ...result, serverReadiness: loaded.serverReadiness };

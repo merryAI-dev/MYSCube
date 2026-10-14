@@ -19,10 +19,12 @@ export async function hashId(prefix, value) {
   return `${prefix}_${hex.slice(0, 24)}`;
 }
 
-export function normalizeIdentity({ subject, reviewToken = null, documents = [], extractor, rulesVersion = RULES_VERSION }) {
+// inputsDigest: 판정에 쓴 제출값과 추출값의 해시. 같은 서류라도 입력이 다르면 다른 id 가 나와야 한다(코드 리뷰 #8).
+export function normalizeIdentity({ subject, reviewToken = null, documents = [], extractor, rulesVersion = RULES_VERSION, inputsDigest = null }) {
   return {
     subject,
     reviewToken,
+    inputsDigest,
     documents: [...documents]
       .map(({ kind, sha256 = null, source }) => ({ kind, sha256, source }))
       .sort((a, b) => `${a.kind}:${a.source}`.localeCompare(`${b.kind}:${b.source}`)),

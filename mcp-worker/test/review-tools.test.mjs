@@ -211,5 +211,28 @@ describe('project review tools', () => {
       expect(JSON.stringify(json)).not.toContain('orgs/mysc/');
       expect(json.attachments.find((item) => item.kind === 'contract')).toEqual({ kind: 'contract', present: true, name: '계약서.pdf' });
     });
+
+    it('gives a different review id when the extracted inputs differ (review #8)', async () => {
+      await connect();
+      await call('project_attachment_text', { subject, kind: 'contract' });
+      const a = await call('project_review_check', { subject, extractions: [extraction(amount)] });
+      const b = await call('project_review_check', { subject, extractions: [extraction({ ...amount, contractStart: { value: '2026. 3. 1.', quote: '계약기간: 2026. 3. 1. ~ 2026. 12. 31.' } })] });
+      const a2 = await call('project_review_check', { subject, extractions: [extraction(amount)] });
+      expect(b.json.review.reviewId).not.toBe(a.json.review.reviewId);
+      expect(a2.json.review.reviewId).toBe(a.json.review.reviewId);
+      expect(a.json.review.identity.inputsDigest).toMatch(/^i_[0-9a-f]{24}$/);
+    });
+
+    it('reports draft list failures instead of pretending there are no drafts (review #10)', async () => {
+      await connect({ bff: fakeBff({ '/api/v1/project-registration-drafts': () => { throw new BffError(504, { code: 'timeout' }, { retryable: true }); } }) });
+      const failed = await call('project_review_queue');
+      expect(failed.isError).toBe(true);
+      expect(failed.json.error.retryable).toBe(true);
+      await client.close();
+      await connect({ bff: fakeBff({ '/api/v1/project-registration-drafts': () => { throw new BffError(403, { code: 'forbidden' }); } }) });
+      const denied = await call('project_review_queue');
+      expect(denied.json.drafts).toEqual([]);
+      expect(denied.json.requests).toHaveLength(1);
+    });
   });
 });
