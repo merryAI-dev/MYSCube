@@ -1804,6 +1804,33 @@
         if (!response.ok) throw Object.assign(new Error(data.error || "request_failed"), { status: response.status });
         return data;
       }
+      async function qaTool(name, args) {
+        const user = qaAuth.currentUser;
+        if (!user) throw new Error("qa_login_required");
+        const sameUser = () => {
+          if (qaAuth.currentUser !== user) throw new Error("qa_login_required");
+        };
+        const invoke = async (method, params) => {
+          sameUser();
+          const id = crypto.randomUUID();
+          const value = await entryRequest("/api/me/mcp", "POST", {jsonrpc:"2.0", id, method, params});
+          sameUser();
+          if (value.jsonrpc !== "2.0" || value.id !== id || value.error || !value.result)
+            throw new Error("request_failed");
+          return value.result;
+        };
+        await invoke("initialize", {protocolVersion:"2025-03-26", capabilities:{},
+          clientInfo:{name:"mysc-qa-dashboard", version:"1"}});
+        sameUser();
+        await entryRequest("/api/me/mcp", "POST", {jsonrpc:"2.0", method:"notifications/initialized"});
+        const result = await invoke("tools/call", {name, arguments:args});
+        if (!Array.isArray(result.content) || result.content.length !== 1 || result.content[0].type !== "text")
+          throw new Error("request_failed");
+        let value;
+        try { value = JSON.parse(result.content[0].text); } catch { throw new Error("request_failed"); }
+        if (result.isError) throw new Error(value.error || "request_failed");
+        return value;
+      }
       function friendlyError(error) {
         const code = error?.code || error?.message;
         if (code === 'qa_publication_version_changed') return '다른 변경이 먼저 저장됐습니다. 공유 요약 관리를 다시 열어 최신 내용을 확인해 주세요.';
@@ -2509,9 +2536,7 @@
               el("p", "", "조사 결과를 확인하는 중입니다."),
             );
             try {
-              const result = await entryRequest(
-                "/api/me/cases/" + id + "/result",
-              );
+              const result = await qaTool("qa_result", {case_id:id});
               if (!active()) return;
               if (result.case_id !== id) throw new Error("readback_mismatch");
               if (result.state !== "completed" || !result.answer) {
