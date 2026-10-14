@@ -30,4 +30,17 @@ describe('meeting note markdown', () => {
   it('strips characters that are unsafe in file names', () => {
     expect(cleanFileName('a/b:c*d?  e')).toBe('a b c d e');
   });
+
+  it('adds a details section, merges several sources into one key, and accepts a custom title', async () => {
+    const { sourceKeyOf } = await import('../src/ema/note-tools.mjs');
+    const input = { counterpart: 'MYSC', title: 'MYSC 임팩트 스타트업 IR+AR', meetingDate: '2026-10-10', summary: ['행사 요약'],
+      details: '### 톡톡 구미\n- 웰니스 브랜드 전략', followUps: ['후속 미팅'], sourceRefs: ['tiro:b', 'tiro:a', 'tiro:a'] };
+    const note = buildMeetingNote(input);
+    expect(note.fileName).toBe('20261010 MYSC 임팩트 스타트업 IR+AR.md');
+    const order = ['## 요약', '## 상세내용', '## 향후 팔로업'].map((heading) => note.markdown.indexOf(heading));
+    expect(order.every((index, i) => index > 0 && (i === 0 || index > order[i - 1]))).toBe(true);
+    expect(note.markdown).toContain('sourceRefs:\n  - "tiro:a"\n  - "tiro:b"');
+    expect(sourceKeyOf(input).key).toBe('tiro:a+tiro:b');
+    expect(sourceKeyOf({ sourceRef: 'm1' }).key).toBe('m1');
+  });
 });
