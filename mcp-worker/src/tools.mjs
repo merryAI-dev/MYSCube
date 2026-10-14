@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import * as z from 'zod/v4';
 import { accountingEvidence, accountingInput } from '../../server/mcp/accounting-read.mjs';
 import { API_CATALOG, API_CATALOG_VERSION, PROJECT_FIELDS, catalogView, projectId, redact, yearMonth } from '../../server/mcp/api-catalog.mjs';
+import { instrumentServer } from './usage.mjs';
 
 // 모든 도구는 읽기 전용이고, 데이터는 로그인한 구성원의 토큰으로 MYSCube BFF 에서만 읽는다.
 // 권한 판단은 BFF 가 앱 화면과 똑같이 한다.
@@ -35,8 +36,10 @@ function tool(server, name, { title, description, input = {}, annotations = READ
   });
 }
 
-export function createMyscubeMcpServer({ bff }) {
+export function createMyscubeMcpServer({ bff, record }) {
   const server = new McpServer({ name: 'myscube', version: '1.0.0' }, { instructions: INSTRUCTIONS });
+  // api_read 는 어떤 카탈로그 항목을 읽었는지(id)만 남긴다.
+  if (record) instrumentServer(server, record, { detailKeys: ['id'] });
 
   // /api/v1/projects 는 화면의 사업 목록과 같은 응답이다. 한 요청 안에서만 재사용한다.
   let projectsPromise;

@@ -1,9 +1,12 @@
 // 주간 MCP 사용량 요약(Analytics Engine SQL 결과 → Slack 문구). 사람 이름 대신 사용자 수만 센다.
-export const DATASET = 'ema_mcp_usage';
+export const SERVERS = [
+  { title: 'MYSCube MCP', dataset: 'myscube_mcp_usage' },
+  { title: 'EMA Station MCP', dataset: 'ema_mcp_usage' },
+];
 
-export function usageQuery(days) {
+export function usageQuery(days, dataset = 'ema_mcp_usage') {
   return `SELECT blob1 AS name, blob2 AS kind, blob3 AS outcome, blob5 AS client, blob6 AS uid, blob7 AS detail,
-SUM(_sample_interval) AS calls FROM ${DATASET}
+SUM(_sample_interval) AS calls FROM ${dataset}
 WHERE timestamp > NOW() - INTERVAL '${Number(days)}' DAY
 GROUP BY name, kind, outcome, client, uid, detail`;
 }
@@ -11,6 +14,8 @@ GROUP BY name, kind, outcome, client, uid, detail`;
 const LABELS = {
   meeting_note_compose: '회의록 정리', meeting_note_save: '회의록 저장', meeting_note_guide: '회의록 가이드',
   note_save_page: '회의록 저장 링크(버튼)', registry_confirm_page: '기업 등록 확정 링크(버튼)',
+  project_list: '프로젝트 목록', project_search: '프로젝트 검색', project_get: '프로젝트 상세', cashflow_status: '캐시플로 현황',
+  accounting_read: '회계 조회', sheet_check: '시트 점검', api_catalog: 'API 카탈로그', api_read: 'API 조회',
 };
 const DESTINATION_LABELS = { drive: '팀 드라이브', ema_draft: 'EMA 보고서 초안함', both: '둘 다' };
 
@@ -46,13 +51,13 @@ export function summarizeUsage(rows) {
 
 const pct = (part, whole) => (whole ? `${Math.round((part / whole) * 100)}%` : '0%');
 
-export function formatUsageReport(summary, { days, from, to }) {
-  if (!summary.calls) return `*EMA Station MCP 사용량 (${from} ~ ${to}, ${days}일)*\n이 기간에 기록된 호출이 없습니다.`;
+export function formatUsageReport(summary, { days, from, to, title = 'EMA Station MCP' }) {
+  if (!summary.calls) return `*${title} 사용량 (${from} ~ ${to}, ${days}일)*\n이 기간에 기록된 호출이 없습니다.`;
   const clients = Object.entries(summary.byClient).map(([client, calls]) => `${client} ${calls}`).join(' · ') || '없음';
   const lines = summary.byName.map((entry) => `- ${LABELS[entry.name] || entry.name}: ${entry.calls}회 (사용자 ${entry.users}명${entry.errors ? `, 실패 ${entry.errors}회` : ''})`);
   const dest = Object.entries(summary.destinations).map(([key, calls]) => `${DESTINATION_LABELS[key] || key} ${calls}`).join(' · ');
   return [
-    `*EMA Station MCP 사용량 (${from} ~ ${to}, ${days}일)*`,
+    `*${title} 사용량 (${from} ~ ${to}, ${days}일)*`,
     `- 전체 호출 ${summary.calls}회, 사용자 ${summary.users}명, 실패율 ${pct(summary.errors, summary.calls)}`,
     `- 앱별(도구 호출): ${clients}`,
     ...(dest ? [`- 회의록 저장 위치: ${dest}`] : []),
