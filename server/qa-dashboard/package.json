@@ -1,0 +1,1 @@
+{"name":"mysc-qa-dashboard","private":true,"type":"module","version":"0.1.0","engines":{"node":">=24"},"dependencies":{"google-auth-library":"11.2.0"}}
