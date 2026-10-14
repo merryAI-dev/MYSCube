@@ -86,8 +86,8 @@ describe('project review tools', () => {
     expect(bff.get.mock.calls.find(([path]) => path.endsWith('/text'))[2]).toEqual({ maxBytes: 8 * 1024 * 1024 });
     bff.get.mockClear();
     await call('project_attachment_text', { subject, kind: 'contract', textRef: SHA });
-    // 현재 첨부 경로 확인(검토 문서)만 부르고, 텍스트 엔드포인트(PDF 재파싱)는 다시 부르지 않는다.
-    expect(bff.get.mock.calls.map(([path]) => path)).toEqual(['/api/v1/projects/p1/review-document']);
+    // 쪽 넘김(textRef)은 캐시만 본다. 검토 문서도, 텍스트 엔드포인트(PDF 재파싱)도 다시 부르지 않는다(2차 리뷰 #2).
+    expect(bff.get).not.toHaveBeenCalled();
   });
 
   it('splits long documents and hands back a ready-to-call continuation', async () => {
@@ -233,6 +233,37 @@ describe('project review tools', () => {
       const denied = await call('project_review_queue');
       expect(denied.json.drafts).toEqual([]);
       expect(denied.json.requests).toHaveLength(1);
+    });
+
+    it('gives the same review id when extractions arrive in a different order (2nd #6)', async () => {
+      await connect({ bff: fakeBff({ '/api/v1/projects/p1/review-document': () => ({ request: { requestKind: 'REGISTRATION', payload: { ...payload, quoteDocument: { path: 'orgs/mysc/project-registration-documents/p1/q.pdf', name: 'q.pdf' } } }, reviewToken: 'tok-1' }) }) });
+      const quoteExtraction = { kind: 'quote', source: 'chat_attachment', fields: { totalAmount: { value: '110,000,000', quote: '합계 110,000,000원' } } };
+      const a = await call('project_review_check', { subject, extractions: [extraction(amount, { source: 'chat_attachment', textRef: undefined }), quoteExtraction] });
+      const b = await call('project_review_check', { subject, extractions: [quoteExtraction, extraction(amount, { source: 'chat_attachment', textRef: undefined })] });
+      expect(b.json.review.reviewId).toBe(a.json.review.reviewId);
+    });
+
+    it('never splits a surrogate pair at a window boundary (2nd #8)', async () => {
+      // 헤더 "[p.1]\n"(6자) 뒤 예산 39,994자 안에서, 이모지 쌍이 정확히 경계에 걸치도록 홀수 위치에서 시작한다.
+      const page = `${'가'.repeat(39_991)}${'😀'.repeat(40)}끝`;
+      await connect({ bff: fakeBff({ '/api/v1/project-requests/r1/attachments/contract/text': () => ({ kind: 'contract', name: 'e.pdf', sha256: SHA, pageCount: 1, pages: [page], quality: 'ok' }) }) });
+      let args = { subject, kind: 'contract' };
+      let collected = '';
+      for (let guard = 0; guard < 10 && args; guard += 1) {
+        const { json } = await call('project_attachment_text', args);
+        // 응답 하나하나에 짝 없는 서로게이트가 없어야 한다(이어 붙이면 원래대로 보여도 각 응답은 깨진 문자열).
+        expect(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(json.text)).toBe(false);
+        collected += json.text.replace(/\[p\.1( 이어서)?\]\n/gu, '');
+        args = json.continuation?.arguments;
+      }
+      expect(collected).toBe(page);
+    });
+
+    it('restarts from the first page when the document changed between continuations (2nd #8)', async () => {
+      await connect({ bff: fakeBff({ '/api/v1/project-requests/r1/attachments/contract/text': () => ({ kind: 'contract', name: 'n.pdf', sha256: 'f'.repeat(64), pageCount: 2, pages: ['새 1쪽 내용입니다', '새 2쪽 내용입니다'], quality: 'ok' }) }) });
+      const { json } = await call('project_attachment_text', { subject, kind: 'contract', textRef: SHA, from: 2, offset: 3 });
+      expect(json).toMatchObject({ pages: '1-2', notice: expect.stringContaining('바뀌었습니다') });
+      expect(json.text.startsWith('[p.1]\n새 1쪽')).toBe(true);
     });
   });
 });

@@ -178,3 +178,39 @@ describe('code review fixes', () => {
     expect(parseDate('2026-03-01T09:00:00+09:00')).toBe('2026-03-01');
   });
 });
+
+describe('second code review fixes', () => {
+  it('never treats similar or containing organization names as the same organization (2nd #1)', () => {
+    const pages = (line) => [`${contractPages[0]}\n${line}`, contractPages[1]];
+    const longer = only([contract({ clientOrg: read('A사회적기업지원센터협의회', '발주: A사회적기업지원센터협의회') }, { pages: pages('발주: A사회적기업지원센터협의회') })], { clientOrg: 'A사회적기업지원센터' });
+    expect(find(longer, 'clientOrg').status).toBe('check');
+    const oneCharOff = only([contract({ clientOrg: read('한국사회혁신금융진흥재단본부', '발주: 한국사회혁신금융진흥재단본부') }, { pages: pages('발주: 한국사회혁신금융진흥재단본부') })], { clientOrg: '한국사회혁신금융진흥재단분부' });
+    expect(find(oneCharOff, 'clientOrg').status).toBe('check');
+    // 계약명: 포함 관계는 확인 필요, 표기 차이는 일치
+    const nameContains = only([contract({ officialContractName: read('2026 청년 창업 지원 운영 용역 2차', '사업명: 2026 청년 창업 지원 운영 용역 2차') }, { pages: pages('사업명: 2026 청년 창업 지원 운영 용역 2차') })]);
+    expect(find(nameContains, 'officialContractName').status).toBe('check');
+    expect(find(only([contract()]), 'officialContractName').status).toBe('match');
+  });
+
+  it('matches names copied with full-width characters (2nd #3)', () => {
+    expect(valueInQuote('text', '（주）엠와이에스', '수행기관: （주）엠와이에스')).toBe(true);
+    expect(normalizeOrgName('（주）엠와이에스')).toBe(normalizeOrgName('(주)엠와이에스'));
+  });
+
+  it('reads time-zoned ISO dates as Korean calendar days (2nd #4)', () => {
+    expect(parseDate('2026-02-28T15:00:00.000Z')).toBe('2026-03-01');
+    expect(parseDate('2026-03-01T00:00:00+09:00')).toBe('2026-03-01');
+    expect(parseDate('2026-03-01T23:30:00')).toBe('2026-03-01');
+  });
+
+  it('keeps the page of payment rows from unverifiable sources (2nd #5)', () => {
+    const rows = [{ label: '잔금', amount: 110_000_000, quote: '잔금 110,000,000원', page: 3 }];
+    const result = only([contract({}, { source: 'chat_attachment', pages: undefined, lists: { paymentSchedule: rows } })]);
+    expect(find(result, 'paymentPlan').page).toBe(3);
+  });
+
+  it('explains when a supply or VAT quote does not contain its value (2nd #10)', () => {
+    const result = only([contract({ contractAmount: read('', ''), salesVatAmount: read('20,000,000', '공급가액: 100,000,000원 / 부가가치세: 10,000,000원') })]);
+    expect(find(result, 'contractAmount').message).toContain('인용 문장에 그 값이 없어');
+  });
+});

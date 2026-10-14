@@ -28,12 +28,21 @@ export function parseAmount(value) {
   return /^\d{1,15}$/u.test(cleaned) ? Number(cleaned) : null;
 }
 
-// 날짜: 2026-03-01, 2026.3.1, 2026. 3. 1., 2026년 3월 1일 → 2026-03-01. 실제 날짜가 아니면 null.
+// 날짜 표기 하나(2026-03-01, 2026.3.1, 2026. 3. 1., 2026년 3월 1일). parseDate 와 valueInQuote 가 같이 쓴다.
+const DATE_NOTATION = '(\\d{4})\\s*[-./년]\\s*(\\d{1,2})\\s*[-./월]\\s*(\\d{1,2})\\s*(?:일|\\.)?';
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+// 날짜: 위 표기 → 2026-03-01. 실제 날짜가 아니면 null.
 export function parseDate(value) {
-  // ISO 날짜·시각(2026-03-01T00:00:00Z)은 날짜 부분만 본다.
-  const iso8601 = /^(\d{4}-\d{2}-\d{2})T[\d:.]+(?:Z|[+-]\d{2}:?\d{2})?$/u.exec(text(value));
-  if (iso8601) return parseDate(iso8601[1]);
-  const match = /^(\d{4})\s*[-./년]\s*(\d{1,2})\s*[-./월]\s*(\d{1,2})\s*(?:일|\.)?$/u.exec(text(value));
+  const raw = text(value);
+  // ISO 날짜·시각: 시간대가 붙어 있으면 한국 시간의 날짜로 바꾼다(UTC 로 저장된 자정이 하루 앞당겨지지 않게).
+  const iso8601 = /^(\d{4}-\d{2}-\d{2})T[\d:.]+(Z|[+-]\d{2}:?\d{2})?$/u.exec(raw);
+  if (iso8601) {
+    if (!iso8601[2]) return parseDate(iso8601[1]);
+    const instant = Date.parse(raw);
+    return Number.isNaN(instant) ? null : new Date(instant + KST_OFFSET_MS).toISOString().slice(0, 10);
+  }
+  const match = new RegExp(`^${DATE_NOTATION}$`, 'u').exec(raw);
   if (!match) return null;
   const iso = `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
   const date = new Date(`${iso}T00:00:00Z`);
@@ -42,7 +51,8 @@ export function parseDate(value) {
 
 // 기관명 비교용: 법인 형태 표기, 괄호, 공백, 구두점을 지운다.
 export function normalizeOrgName(value) {
-  return text(value).toLowerCase()
+  // 전각 괄호·로마 숫자 같은 호환 문자를 먼저 맞춘다(인용은 NFKC 로 비교하므로 값도 같게).
+  return text(value).normalize('NFKC').toLowerCase()
     .replace(/주식회사|유한회사|유한책임회사|재단법인|사단법인|사회적협동조합|협동조합|\(주\)|\(유\)|\(재\)|\(사\)|㈜|㈔|㈕/gu, '')
     .replace(/[\s()[\]{}.,·・\-_'"]/gu, '');
 }
@@ -74,19 +84,26 @@ export function nameSimilarity(left, right) {
 }
 const NAME_SAME = 0.85;
 const NAME_CLOSE = 0.5;
-// 이름 비교: true(일치) / 'close'(사람 확인) / false(다름).
-function compareNames(a, b) {
-  if (sameName(a, b)) return true;
+// 기관명: 정규화 후 같을 때만 일치. 포함 관계·비슷한 이름은 다른 기관일 수 있어 사람 확인(코드 리뷰 #2, 2차 #1).
+function orgCompare(a, b) {
   const left = normalizeOrgName(a);
   const right = normalizeOrgName(b);
   if (!left || !right) return false;
-  const score = nameSimilarity(a, b);
-  if (score >= NAME_SAME) return true;
-  if (score >= NAME_CLOSE || left.includes(right) || right.includes(left)) return 'close';
+  if (left === right) return true;
+  if (left.includes(right) || right.includes(left) || nameSimilarity(a, b) >= NAME_CLOSE) return 'close';
   return false;
 }
-const orgCompare = compareNames;
-const contractNameCompare = compareNames;
+
+// 계약명: 표기 차이("2026"/"2026년")는 일치로 보되, 한쪽이 다른 쪽을 포함하면(예: "…용역"과 "…용역 2차") 확인 필요.
+function contractNameCompare(a, b) {
+  const left = normalizeOrgName(a);
+  const right = normalizeOrgName(b);
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (left.includes(right) || right.includes(left)) return 'close';
+  const score = nameSimilarity(a, b);
+  return score >= NAME_SAME ? true : score >= NAME_CLOSE ? 'close' : false;
+}
 
 // 서류 하나의 판정 상태(필드별 판정·빠진 항목·미해결)를 모은다.
 function documentState(doc) {
@@ -103,7 +120,7 @@ export function valueInQuote(valueType, value, quote) {
   }
   if (valueType === 'date') {
     const target = parseDate(value);
-    const found = q.match(/\d{4}\s*[-./년]\s*\d{1,2}\s*[-./월]\s*\d{1,2}\s*(?:일|\.)?/gu) ?? [];
+    const found = q.match(new RegExp(DATE_NOTATION, 'gu')) ?? [];
     return target !== null && found.some((candidate) => parseDate(candidate.trim()) === target);
   }
   const name = normalizeOrgName(value);
@@ -178,7 +195,7 @@ function judgeTotal(out, state, { field, docField, label, submitted, totalField,
   judge(out, state, {
     field, docField, label, ...amountRule, rule: 'amount.supply_plus_vat', submitted,
     read: { value: parseAmount(supply.value) + parseAmount(vat.value), quote: [supply.quote, vat.quote].filter(Boolean).join(' / ') },
-    evidenceOverride: { evidence, page: a.page },
+    evidenceOverride: { evidence, page: a.page, valueNotInQuote: Boolean(a.valueNotInQuote || b.valueNotInQuote) },
   });
 }
 
@@ -213,7 +230,7 @@ function reviewPaymentSchedule(payload, state, out) {
   const rows = (state.doc.lists?.paymentSchedule ?? []).map((row) => ({ ...row, amount: parseAmount(row.amount) })).filter((row) => row.amount !== null);
   const plan = payload.paymentPlan && typeof payload.paymentPlan === 'object' ? payload.paymentPlan : null;
   if (!rows.length || !plan) return;
-  const evidences = rows.map((row) => evidenceOf(state.doc, { value: row.amount, quote: row.quote }, 'amount').evidence);
+  const evidences = rows.map((row) => evidenceOf(state.doc, { value: row.amount, quote: row.quote, page: row.page }, 'amount').evidence);
   if (evidences.includes('not_found')) {
     out.unknowns.push({ kind: 'contract', question: '대금 지급 조건 인용 중 서류에서 찾지 못한 것이 있습니다', resolveBy: '서류에서 해당 문장을 다시 찾아 인용' });
     return;
@@ -225,7 +242,7 @@ function reviewPaymentSchedule(payload, state, out) {
   const sorted = (list) => list.filter((value) => value > 0).sort((a, b) => a - b);
   const sameParts = JSON.stringify(sorted(planParts)) === JSON.stringify(sorted(rows.map((row) => row.amount)));
   const base = {
-    documentKind: 'contract', field: 'paymentPlan', label: '입금 계획', rule: 'payment.schedule', evidence, page: evidenceOf(state.doc, { value: rows[0].amount, quote: rows[0].quote }, 'amount').page,
+    documentKind: 'contract', field: 'paymentPlan', label: '입금 계획', rule: 'payment.schedule', evidence, page: evidenceOf(state.doc, { value: rows[0].amount, quote: rows[0].quote, page: rows[0].page }, 'amount').page,
     submitted: `${won(planTotal)} (${Object.entries(PAYMENT_LABELS).map(([key, label]) => `${label} ${won(parseAmount(plan[key]))}`).join(', ')})`,
     document: `${won(scheduleTotal)} (${rows.map((row) => `${text(row.label) || '회차'} ${won(row.amount)}`).join(', ')})`,
     quote: rows.map((row) => row.quote).filter(Boolean).join(' / ') || null,

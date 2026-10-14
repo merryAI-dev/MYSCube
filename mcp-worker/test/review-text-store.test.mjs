@@ -77,3 +77,16 @@ describe('grant scope (code review #1)', () => {
     await expect(store.put('u1', text, { subjectKey: 'x', kind: 'contract' })).rejects.toThrow('text_store_invalid_scope');
   });
 });
+
+describe('shared text across kinds (2nd review #7)', () => {
+  it('serves the same file to different users under different kinds without overwriting each other', async () => {
+    const store = createTextStore(memoryKv());
+    await store.put('u1', text, scope);
+    await store.put('u2', { ...text, kind: 'quote' }, { ...scope, kind: 'quote' });
+    expect((await store.get('u1', sha, scope))?.kind).toBe('contract');
+    expect((await store.get('u2', sha, { ...scope, kind: 'quote' }))?.kind).toBe('quote');
+    // 경로를 넘기면 받았을 때의 경로와 같아야 하고, 넘기지 않으면(쪽 넘김) 대상·종류만 본다.
+    expect(await store.get('u1', sha, { subjectKey: scope.subjectKey, kind: 'contract' })).not.toBeNull();
+    expect(await store.get('u1', sha, { ...scope, path: 'orgs/mysc/project-registration-documents/p1/other.pdf' })).toBeNull();
+  });
+});

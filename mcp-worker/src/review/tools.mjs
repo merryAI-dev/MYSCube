@@ -3,7 +3,7 @@ import { BffError } from '../bff.mjs';
 import { buildReviewResult, hashId, reviewError } from './contract.mjs';
 import { PLAYBOOK } from './playbook.mjs';
 import { REVIEW_DOCUMENT_KINDS, reviewSubmission } from './rules.mjs';
-import { attachmentTextPath, loadSubmission, SUBJECT_TYPES } from './submission.mjs';
+import { attachmentTextPath, loadSubmission, parseSubject, SUBJECT_TYPES, subjectKey } from './submission.mjs';
 
 // 프로젝트 제출 서류 정합성 검토 도구(스펙 5절). 모두 읽기 전용이다.
 // 서류 본문을 돌려주는 결과에는 _meta.provenance 로 "신뢰할 수 없는 내용"을 표시한다(REA 방식).
@@ -84,8 +84,12 @@ export function pageWindow(pages, from, offset = 0) {
       break;
     }
     if (body.length - begin > room) {
-      parts.push(`${header}${body.slice(begin, begin + room)}`);
-      next = { from: number, offset: begin + room };
+      // UTF-16 서로게이트 쌍(확장 한자·이모지)을 반으로 자르지 않는다(2차 리뷰 #8).
+      let end = begin + room;
+      const unit = body.charCodeAt(end - 1);
+      if (unit >= 0xD800 && unit <= 0xDBFF) end -= 1;
+      parts.push(`${header}${body.slice(begin, end)}`);
+      next = { from: number, offset: end };
       break;
     }
     parts.push(`${header}${body.slice(begin)}`);
@@ -147,17 +151,21 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
     },
     untrusted: true,
   }, async ({ subject, kind, textRef, from = 1, offset = 0 }) => {
-    // 현재 첨부 경로를 확인해 캐시 범위를 정한다. 첨부가 없으면 BFF 를 부르지 않는다.
-    const loaded = await loadSubmission(bff, subject);
-    const path = loaded.attachmentPaths[kind];
-    if (!path) throw new BffError(404, { code: 'not_found', message: '이 검토 대상에는 그 서류 첨부가 없습니다.' });
-    const scope = { subjectKey: loaded.subjectKey, kind, path };
-    let text = textRef ? await textStore.get(uid, textRef, scope) : null;
+    const parsed = parseSubject(subject);
+    // 쪽 넘김(textRef 있음)은 같은 대상·서류의 캐시만 본다. 검토 문서를 다시 조회하지 않는다(2차 리뷰 #2).
+    // 첨부가 바뀌었는지는 판정 단계(project_review_check)가 현재 첨부 경로로 확인한다.
+    let text = textRef ? await textStore.get(uid, textRef, { subjectKey: subjectKey(parsed), kind }) : null;
     let changed = false;
     if (!text) {
+      // 처음 읽기·캐시 없음: 현재 첨부 경로를 확인하고 BFF 에서 받는다. 첨부가 없으면 텍스트 엔드포인트를 부르지 않는다.
+      const loaded = await loadSubmission(bff, parsed);
+      const path = loaded.attachmentPaths[kind];
+      if (!path) throw new BffError(404, { code: 'not_found', message: '이 검토 대상에는 그 서류 첨부가 없습니다.' });
       text = await fetchText(bff, loaded.subject, kind);
       changed = Boolean(textRef && textRef !== text.sha256);
-      if (text.pages.length) await textStore.put(uid, text, scope);
+      if (text.pages.length) await textStore.put(uid, text, { subjectKey: loaded.subjectKey, kind, path });
+      // 서류가 바뀌었으면 이전 위치에서 이어 읽지 않고 처음부터 준다(2차 리뷰 #8).
+      if (changed) { from = 1; offset = 0; }
     }
     if (text.reason || text.quality === 'sparse') {
       const why = { too_large: '파일이 커서(30MB·300쪽 초과) 읽지 않았습니다.', not_pdf: 'PDF가 아니라 읽지 않았습니다.', unreadable: '손상되었거나 열 수 없는 PDF입니다.' }[text.reason]
@@ -185,7 +193,7 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
         textRef: z.string().regex(SHA256).optional().describe('attachment_text일 때 project_attachment_text의 textRef'),
         fields: z.record(z.string().max(60), readShape).describe('필드명 → { value, quote }. 필드명은 플레이북 extractionFields를 따른다'),
         lists: z.object({
-          paymentSchedule: z.array(z.object({ label: z.string().max(40), amount: z.union([z.string().max(40), z.number()]), quote: z.string().max(1000) })).max(30).optional(),
+          paymentSchedule: z.array(z.object({ label: z.string().max(40), amount: z.union([z.string().max(40), z.number()]), quote: z.string().max(1000), page: z.number().int().min(1).optional() })).max(30).optional(),
         }).optional().describe('계약서 대금 지급 회차'),
       })).max(10).describe('서류별 추출 결과'),
     },
@@ -216,7 +224,8 @@ export function registerProjectReviewTools(server, { bff, textStore, uid }) {
       identity: {
         subject: loaded.subject, reviewToken: loaded.reviewToken, extractor: EXTRACTOR,
         documents: documents.map(({ kind, sha256, source }) => ({ kind, sha256, source })),
-        inputsDigest: await hashId('i', { submission: loaded.submission, extractions }),
+        // 추출값 순서만 다른 같은 입력은 같은 id 가 되게 서류 종류·출처 순으로 정렬한다(2차 리뷰 #6).
+        inputsDigest: await hashId('i', { submission: loaded.submission, extractions: [...extractions].sort((a, b) => `${a.kind}:${a.source}`.localeCompare(`${b.kind}:${b.source}`)) }),
       },
       findings: judged.findings, coverage: judged.coverage, unknowns: judged.unknowns, limitations: judged.limitations,
     });

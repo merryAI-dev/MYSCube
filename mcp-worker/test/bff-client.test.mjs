@@ -85,4 +85,10 @@ describe('BFF client limits and retries', () => {
     const broken = new ReadableStream({ pull() { throw new TypeError('connection reset'); } });
     await expect(client(vi.fn(async () => new Response(broken))).bff.get('/api/v1/projects')).rejects.toMatchObject({ status: 502, code: 'network_error', retryable: true });
   });
+
+  it('keeps the real HTTP status when an error body cannot be read (2nd review #9)', async () => {
+    const broken = new ReadableStream({ pull() { throw Object.assign(new Error('timed out'), { name: 'TimeoutError' }); } });
+    const fetchImpl = vi.fn(async () => new Response(broken, { status: 403 }));
+    await expect(client(fetchImpl).bff.get('/api/v1/projects')).rejects.toMatchObject({ status: 403, retryable: false });
+  });
 });
