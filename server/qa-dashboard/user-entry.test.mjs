@@ -204,3 +204,17 @@ test('shared list and owner publication use fixed intake routes and authenticate
  for(const search of ['actor_id=other','limit=51','limit=1&limit=2'])await assert.rejects(entry.handle(req,'member@mysc.co.kr','/api/me/shared-cases',null,new URLSearchParams(search)),{safeCode:'invalid_request'});
  assert.equal(requests.length,3);
 });
+
+test('assignment inbox fixes recipient on server and forwards only cursor and acceptance', async () => {
+  const {entry, requests}=setup(), id='00000000-0000-4000-8000-000000000000';
+  const req={method:'GET',headers:{authorization:token('inner-platform-qa-20260310')}};
+  await entry.handle(req,'member@mysc.co.kr','/api/me/assignment-inbox',null,new URLSearchParams({cursor:id}));
+  assert.equal(requests[0].url,`${intakeOrigin}/api/v1/qa-assignment-inbox?cursor=${id}`);
+  for(const query of ['actor_id=other','cursor=invalid','cursor='+id+'&cursor='+id])
+    await assert.rejects(entry.handle(req,'member@mysc.co.kr','/api/me/assignment-inbox',null,new URLSearchParams(query)),{safeCode:'invalid_request'});
+  const body={action:'accept_assignment',expected_version:1,reason:'담당 수락',idempotency_key:id};
+  await entry.handle({...req,method:'POST'},'member@mysc.co.kr',`/api/me/cases/${id}/lifecycle`,body);
+  assert.equal(JSON.parse(requests[1].options.body).action,'accept_assignment');
+  await assert.rejects(entry.handle({...req,method:'POST'},'member@mysc.co.kr',`/api/me/cases/${id}/lifecycle`,{...body,assignee_id:'other'}),{safeCode:'invalid_request'});
+  assert.equal(requests.length,2);
+});

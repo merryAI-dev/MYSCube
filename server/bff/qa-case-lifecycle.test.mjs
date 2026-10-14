@@ -20,11 +20,18 @@ function fixture() {
       investigation_scope: { authority: 'server_binding', tenant_id: 'mysc', scope_kind: 'platform', project_ids: [] } }],
   ]);
   let inTransaction = false;
-  const db = { doc: (path) => ({ path }), runTransaction: async (fn) => {
+  const db = { doc: (path) => ({ path }), collection: path => {
+    const query = { path, where(field, op, value) { assert.equal(field, 'proposed_assignee_id'); assert.equal(op, '=='); this.actor = value; return this; },
+      orderBy(field) { assert.equal(field, '__name__'); return this; }, limit(count) { this.count = count; return this; },
+      startAfter(ref) { this.cursor = ref.path; return this; } }; return query;
+  }, runTransaction: async (fn) => {
     const writes = [];
     inTransaction = true;
     try {
-      const value = await fn({ get: async (ref) => ({ data: () => structuredClone(rows.get(ref.path)) }),
+      const value = await fn({ get: async (ref) => ref.actor ? { docs: [...rows].filter(([path, value]) => path.startsWith(ref.path + '/') &&
+          value.proposed_assignee_id === ref.actor && (!ref.cursor || path > ref.cursor)).sort(([a], [b]) => a.localeCompare(b))
+          .slice(0, ref.count).map(([path, value]) => ({ id: path.split('/').at(-1), data: () => structuredClone(value) })) }
+          : ({ data: () => structuredClone(rows.get(ref.path)) }),
         update: (ref, patch) => writes.push(['update', ref.path, patch]),
         create: (ref, row) => writes.push(['create', ref.path, row]) });
       for (const [kind, path, row] of writes) {
@@ -188,4 +195,44 @@ test('assignment acceptance does not grant access to private lifecycle history',
   await assert.rejects(f.service.read(context('assignee'), caseId), { code: 'qa_lifecycle_owner_required' });
   await f.service.transition(context('assignee'), caseId, input('accept_assignment', 1));
   await assert.rejects(f.service.read(context('assignee'), caseId), { code: 'qa_lifecycle_owner_required' });
+});
+
+
+test('inbox is recipient scoped, minimal and removes accepted proposals', async () => {
+  const f = fixture();
+  await f.service.transition(context('operator'), caseId, input('propose_assignment', 0, { assignee_id: 'assignee' }));
+  assert.deepEqual((await f.service.inbox(context('owner'))).items, []);
+  const page = await f.service.inbox(context('assignee'));
+  assert.equal(page.items.length, 1);
+  assert.deepEqual(Object.keys(page.items[0]).sort(), ['case_id','case_status','lifecycle_version','priority','severity','updated_at']);
+  assert.equal(page.items[0].lifecycle_version, 1);
+  await f.service.transition(context('assignee'), caseId, input('accept_assignment', 1));
+  assert.deepEqual((await f.service.inbox(context('assignee'))).items, []);
+  await assert.rejects(f.service.transition(context('assignee'), caseId, input('accept_assignment', 1)),
+    { code: 'qa_lifecycle_version_changed' });
+});
+
+test('inbox rechecks membership and links and excludes cancelled proposals', async () => {
+  const f = fixture();
+  await f.service.transition(context('operator'), caseId, input('propose_assignment', 0, { assignee_id: 'assignee' }));
+  await f.service.transition(context('owner'), caseId, input('cancel', 1));
+  assert.deepEqual((await f.service.inbox(context('assignee'))).items, []);
+  await assert.rejects(f.service.transition(context('assignee'), caseId, input('accept_assignment', 2)),
+    { code: 'qa_lifecycle_assignee_required' });
+  f.rows.get(`${base}/qa_actor_business_links/assignee`).status = 'REVOKED';
+  await assert.rejects(f.service.inbox(context('assignee')), { code: 'qa_lifecycle_actor_revoked' });
+});
+
+test('inbox cursor preserves a full page without returning the lookahead row', async () => {
+  const f = fixture(), original = f.rows.get(`${base}/qa_cases/${caseId}`);
+  for (let index = 1; index <= 52; index++) {
+    const id = `33333333-3333-4333-8333-${String(index).padStart(12, '0')}`;
+    f.rows.set(`${base}/qa_cases/${id}`, { ...original, case_id: id, proposed_assignee_id: 'assignee' });
+  }
+  const first = await f.service.inbox(context('assignee'));
+  assert.equal(first.items.length, 50);
+  const second = await f.service.inbox(context('assignee'), { cursor: first.next_cursor });
+  assert.equal(second.items.length, 2); assert.equal(second.next_cursor, null);
+  assert.equal(new Set([...first.items, ...second.items].map(item => item.case_id)).size, 52);
+  await assert.rejects(f.service.inbox(context('assignee'), { cursor: '../other' }), { code: 'qa_lifecycle_input_invalid' });
 });

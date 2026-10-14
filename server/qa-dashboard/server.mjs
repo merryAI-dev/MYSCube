@@ -297,7 +297,7 @@ http
     try {
       const email = await identity(req);
       const url = new URL(req.url, 'http://internal');
-      if (url.search && !(['/api/me/cases', '/api/me/shared-cases'].includes(url.pathname) && req.method === 'GET'))
+      if (url.search && !(['/api/me/cases', '/api/me/shared-cases', '/api/me/assignment-inbox'].includes(url.pathname) && req.method === 'GET'))
         throw safeError(400, 'invalid_request');
       if (url.pathname.startsWith('/api/me/')) {
         if (!['GET', 'POST', 'PUT', 'DELETE'].includes(req.method))

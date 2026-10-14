@@ -99,6 +99,31 @@ function nextStatus(current, body, actor, context) {
 
 export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReopen, now = () => new Date() }) {
   return {
+    async inbox(context, { cursor } = {}) {
+      contextGuard(context);
+      if (cursor !== undefined && !UUID.safeParse(cursor).success)
+        throw fail(400, 'qa_lifecycle_input_invalid');
+      const base = `orgs/${context.tenantId}`;
+      return db.runTransaction(async tx => {
+        await actorInTransaction(tx, db, context);
+        let query = db.collection(`${base}/qa_cases`)
+          .where('proposed_assignee_id', '==', context.actorId).orderBy('__name__').limit(51);
+        if (cursor) query = query.startAfter(db.doc(`${base}/qa_cases/${cursor}`));
+        const snapshot = await tx.get(query);
+        const page = snapshot.docs.slice(0, 50);
+        const items = page.flatMap(doc => {
+          const qa = doc.data();
+          caseBound(qa, doc.id, context);
+          if (qa.proposed_assignee_id !== context.actorId) throw fail(403, 'qa_lifecycle_assignee_required');
+          if (['cancelled', 'resolved'].includes(qa.case_status)) return [];
+          return [{ case_id: qa.case_id, lifecycle_version: qa.lifecycle_version || 0,
+            case_status: qa.case_status, severity: qa.severity || null,
+            priority: qa.priority || null, updated_at: qa.updated_at || null }];
+        });
+        return { items, next_cursor: snapshot.docs.length > 50 ? page.at(-1).id : null,
+          observed_at: new Date(now()).toISOString() };
+      }, { readOnly: true });
+    },
     async read(context, caseId) {
       contextGuard(context);
       if (!UUID.safeParse(caseId).success) throw fail(400, 'qa_lifecycle_input_invalid');
@@ -228,6 +253,11 @@ export function createQaCaseLifecycleService({ db, authorizeCase, authorizeReope
 
 export function mountQaCaseLifecycleRoutes(app, { db, authorizeCase, authorizeReopen, asyncHandler }) {
   const service = createQaCaseLifecycleService({ db, authorizeCase, authorizeReopen });
+  app.get('/api/v1/qa-assignment-inbox', asyncHandler(async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    if (Object.keys(req.query).some(key => key !== 'cursor')) throw fail(400, 'qa_lifecycle_input_invalid');
+    res.json(await service.inbox(req.context, req.query));
+  }));
   app.get('/api/v1/qa-cases/:id/lifecycle', asyncHandler(async (req, res) => {
     res.setHeader('Cache-Control', 'no-store');
     res.json(await service.read(req.context, req.params.id));
