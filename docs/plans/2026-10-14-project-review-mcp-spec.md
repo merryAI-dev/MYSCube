@@ -64,7 +64,7 @@ MCP는 권한 판단 코드를 갖지 않는다. BFF 응답(403 등)을 그대�
 
 ### 5.4 `project_attachment_text`
 - 입력: subject, `kind`, `pages?`(예: `"1-10"`)
-- 처리(경로 B): 5.7절 BFF 텍스트 엔드포인트를 사용자 권한으로 부른다. 응답의 `sha256`을 `textRef`로 삼고, 쪽별 텍스트를 KV `pdftext:<sha256>`에 1시간 둔다. 같은 `textRef`의 다음 쪽 범위 요청은 KV에서 준다(BFF 재호출 없음, 단 grant 확인. 10.3절). 쪽마다 `[p.N]` 표시.
+- 처리(경로 B): 5.7절 BFF 텍스트 엔드포인트를 사용자 권한으로 부른다. 응답의 `sha256`을 `textRef`로 삼고, 쪽별 텍스트를 KV `review:text:<sha256>`에 1시간 둔다. 같은 `textRef`의 다음 쪽 범위 요청은 KV에서 준다(BFF 재호출 없음, 단 grant 확인. 10.3절). 쪽마다 `[p.N]` 표시.
 - 출력: `{ kind, name, pageCount, pages: "1-10", text, textRef, textQuality: "ok"|"sparse", nextPages? }`
 - `sparse`일 때(경로 C, 스캔본 추정):
   - 텍스트 대신 "이 서류는 글자 레이어가 거의 없어 직접 읽을 수 없습니다. MYSCube에서 파일을 내려받아 이 대화에 첨부해 주세요"라고 안내하고, MYSCube 화면의 해당 서류 위치를 알려 준다.
@@ -203,7 +203,7 @@ MCP는 권한 판단 코드를 갖지 않는다. BFF 응답(403 등)을 그대�
 
 ### 10.2 캐시: 내용 주소(content-addressed) 방식
 - PDF 파싱은 BFF가 한다(5.7절). Worker는 파싱하지 않으므로 Worker CPU 한도 문제는 없다(S0 측정 참고).
-- **키는 경로가 아니라 내용 해시다.** BFF가 돌려준 `sha256`을 `textRef`로 쓰고, 쪽별 텍스트를 KV `pdftext:<sha256>`에 1시간 둔다.
+- **키는 경로가 아니라 내용 해시다.** BFF가 돌려준 `sha256`을 `textRef`로 쓰고, 쪽별 텍스트를 KV `review:text:<sha256>`에 1시간 둔다.
 - 첫 요청은 항상 BFF를 거친다. 그 단계에서 BFF가 권한을 판단하므로 캐시가 권한을 우회하지 않는다. 이후 같은 `textRef`의 쪽 범위·검색 요청만 KV에서 처리하고, 이때는 grant(10.3절)로 같은 사용자인지 확인한다.
 - 내용이 바뀌면 해시가 바뀌므로 ETag가 없어도 낡은 캐시가 생기지 않는다.
 - `no-store`의 뜻은 지킨다. 원본 PDF는 Worker에 두지 않고, 파생 텍스트만 1시간 둔다. 이 예외는 이 절에 명시한다.
@@ -211,7 +211,7 @@ MCP는 권한 판단 코드를 갖지 않는다. BFF 응답(403 등)을 그대�
 ### 10.3 세션과 상태
 - MCP 클라이언트(ChatGPT·Claude)의 세션 유지나 쿠키에 기대지 않는다. 클라이언트마다 재연결·세션 처리가 다르고, 현재 전송은 상태가 없다.
 - 대화 사이의 상태는 **명시적 핸들**로 넘긴다. AI가 받은 `textRef`를 다음 도구(`project_attachment_search`, `project_review_check`)에 그대로 넘긴다.
-- 핸들 남용 방지: 첨부를 받을 때 `grant:<uid>:<sha256>`(1시간)를 함께 남긴다. 검색·출처 검증은 이 grant가 있는 사용자만 그 텍스트를 쓸 수 있다. 해시를 다른 사람에게 전달해도 그 사람은 쓸 수 없다.
+- 핸들 남용 방지: 첨부를 받을 때 `review:grant:<uid>:<sha256>`(1시간)를 함께 남긴다. 검색·출처 검증은 이 grant가 있는 사용자만 그 텍스트를 쓸 수 있다. 해시를 다른 사람에게 전달해도 그 사람은 쓸 수 없다.
 - 쿠키는 MCP 경로에서 쓰지 않는다. BFF 인증은 Bearer(Firebase ID 토큰)이고, Worker가 토큰을 갱신한다(기존 구조).
 
 ### 10.4 응답 수신과 파싱
@@ -242,7 +242,7 @@ MCP는 권한 판단 코드를 갖지 않는다. BFF 응답(403 등)을 그대�
 | T2 | 결과 계약 모듈: `reviewId`·`findingId`·`unknownId` 해시, `coverage` 계산, 요약, 공통 오류 형식, `rulesVersion` | 같은 입력 → 같은 id, 순서만 다른 입력 → 같은 id, coverage 세 상태 | — |
 | T3 | 출처 검증: 인용(quote)을 쪽별 텍스트에서 정규화(공백·줄바꿈·전각/반각·하이픈) 후 찾기, 쪽 번호 반환 | 일치·불일치·쪽 경계 걸침·너무 짧은 인용(오탐 방지 최소 길이) | — |
 | T4 | 대조 규칙(7절): 보류 브랜치(`b0c72821`)의 BFF 대조 로직을 Worker로 옮기고 결과 계약(T2)·출처 검증(T3)에 맞춤. 근거 미검증 값의 `mismatch` → `check` 강등 | 기존 11개 테스트 의미 유지 + 강등·coverage 테스트 | T2, T3 |
-| T5 | 텍스트 캐시와 grant(10.2·10.3절): KV `pdftext:<sha256>`, `grant:<uid>:<sha256>`, 1시간 | 다른 사용자 grant 거부, 만료, 해시 형식 검사 | T1 |
+| T5 | 텍스트 캐시와 grant(10.2·10.3절): KV `review:text:<sha256>`, `review:grant:<uid>:<sha256>`, 1시간 | 다른 사용자 grant 거부, 만료, 해시 형식 검사 | T1 |
 | T6 | 제출값 읽기: `review-document`·초안 조회 응답에서 대조 필드만 뽑기(8절 개인정보 가림), `serverReadiness`, 첨부 목록 | 요청·등록 초안·수정 초안·프로젝트 네 종류, 403·404 전달 | T1 |
 | T7 | 도구 5종 등록: `project_review_playbook`, `project_review_queue`, `project_submission_get`, `project_attachment_text`(이어받기 요청 포함), `project_review_check`. `_meta.provenance.untrusted_content`, 사용량 기록 detail 키 | 도구 목록·설명·스키마 테스트, 읽기 전용 표시, 서류 본문 결과에 untrusted 표시 | T1~T6 |
 | T8 | 운영 QA: 실제 요청 1건 이상을 Claude·ChatGPT에서 끝까지(검토함 → 제출값 → 텍스트 → 판정). 지연·응답 크기·오탐 기록 | QA 기록 작성, 발견 사항 티켓화 | T7 배포 |
@@ -321,3 +321,9 @@ S2 이후 티켓(재제출 비교, 제안서·참여율, 사업관리 폴더, �
 - 값 해석은 엄격하게: 금액은 쉼표·"원"·"₩"만 허용(예 "1.1억" → 해석 안 함), 날짜는 한국식 표기 3종을 실제 날짜로 확인. 제출값도 같은 규칙으로 해석.
 - 다시 읽다 고친 점: ① 총액 합산 처리를 사후 수정 방식에서 `evidenceOverride` 인자로 단순화 ② 제출값이 문자열이면 금액 비교가 틀리던 문제 ③ "종료 기간 없음" 제출 시 종료일 부재를 판정한 것으로 세던 문제(부재는 인용으로 증명 불가 → coverage 빠진 항목으로).
 - 테스트: 새 15개(이전 11개 의미 포함), MCP Worker 전체 111 통과. 사보타주(인용 검증 무력화 3실패 / 강등 제거 1실패 / 제출값 해석 제거 1실패) 확인 후 복구.
+
+### T5 — 텍스트 캐시와 grant, 2026-10-14
+- `mcp-worker/src/review/text-store.mjs`: `review:text:<sha256>`(사용자 간 공유), `review:grant:<uid>:<sha256>`(그 파일을 BFF에서 받은 사용자만), 1시간. KV 만료와 별개로 값 안의 만료 시각도 읽을 때 확인.
+- **발견해 고친 스펙 결함**: 스펙의 `grant:<uid>:…` 키는 같은 KV를 쓰는 OAuth 라이브러리의 `grant:${userId}:${grantId}`와 겹친다. 라이브러리는 `grant:${userId}:` 접두어로 로그인 grant 목록을 조회하므로, 그대로 썼다면 로그인 처리가 깨질 수 있었다. 접두어를 `review:`로 바꾸고 스펙 전체를 고쳤다.
+- 8MB 넘는 텍스트는 캐시하지 않고 grant만 준다(다음 요청은 BFF 재호출). 해시·uid 형식이 틀리면 저장하지 않는다. 키와 값의 해시가 다르면 쓰지 않는다.
+- 테스트: 새 6개, MCP Worker 전체 117 통과. 사보타주(grant 확인 제거 / OAuth와 겹치는 키) 각각 실패 확인 후 복구.
