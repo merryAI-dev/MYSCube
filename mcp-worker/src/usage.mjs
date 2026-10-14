@@ -1,7 +1,5 @@
-// MCP 사용량 기록(Workers Analytics Engine). 도구 이름·결과·시간 같은 메타데이터만 남기고 입력·응답 내용은 남기지 않는다.
+// MCP 사용량 기록(Workers Analytics Engine, EMA Station·MYSCube 공용). 도구 이름·결과·시간 같은 메타데이터만 남기고 입력·응답 내용은 남기지 않는다.
 // blobs: [이름, 종류(tool|page), 결과(ok|error), 역할, 클라이언트, uid, 세부(저장 위치 등)] / doubles: [소요 ms]
-const DETAIL_KEYS = ['destination'];
-
 export function clientOf(userAgent) {
   const agent = String(userAgent || '').toLowerCase();
   if (agent.includes('openai') || agent.includes('chatgpt')) return 'chatgpt';
@@ -23,7 +21,8 @@ export function usageRecorder(dataset, { uid = '', role = '', client = '' } = {}
 }
 
 // 모든 도구 등록을 감싸 호출마다 한 줄씩 기록한다. 도구 파일은 바꿀 필요가 없다.
-export function instrumentServer(server, record, now = () => Date.now()) {
+// detailKeys: 내용이 아니라 분류용 값만(예: 저장 위치, API 카탈로그 id). 입력 본문은 넣지 않는다.
+export function instrumentServer(server, record, { detailKeys = [], now = () => Date.now() } = {}) {
   const register = server.registerTool.bind(server);
   server.registerTool = (name, config, handler) => register(name, config, async (args, extra) => {
     const started = now();
@@ -32,7 +31,7 @@ export function instrumentServer(server, record, now = () => Date.now()) {
       result = await handler(args, extra);
       return result;
     } finally {
-      const detail = DETAIL_KEYS.map((key) => args?.[key]).filter((value) => typeof value === 'string').join(',');
+      const detail = detailKeys.map((key) => args?.[key]).filter((value) => typeof value === 'string').join(',');
       record({ kind: 'tool', name, outcome: result && !result.isError ? 'ok' : 'error', ms: now() - started, detail });
     }
   });

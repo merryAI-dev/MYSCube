@@ -11,5 +11,6 @@
     "BFF_BASE_URL": "https://myscube.myscguard.app",
     "GOOGLE_HOSTED_DOMAIN": "mysc.co.kr"
   },
+  "analytics_engine_datasets": [{ "binding": "USAGE", "dataset": "myscube_mcp_usage" }],
   "observability": { "enabled": true }
 }

@@ -4,6 +4,7 @@ import { handleAuthorize, handleCallback, SCOPES } from './auth.mjs';
 import { createBffClient } from './bff.mjs';
 import { refreshFirebase } from './identity.mjs';
 import { createMyscubeMcpServer } from './tools.mjs';
+import { clientOf, usageRecorder } from './usage.mjs';
 
 const ORIGIN = 'https://mcp.myscguard.app';
 // MCP 액세스 토큰은 그 안에 담긴 Firebase ID 토큰(1시간)보다 먼저 끝나야 한다.
@@ -25,7 +26,10 @@ const mcpHandler = {
     if (request.method !== 'POST') return new Response(null, { status: 405, headers: { allow: 'POST' } });
     let props = ctx.props;
     if (!props?.firebaseIdToken || props.firebaseExpiresAt < Date.now() + 60_000) props = await refreshedProps(props, env);
-    const server = createMyscubeMcpServer({ bff: createBffClient({ baseUrl: env.BFF_BASE_URL, idToken: props.firebaseIdToken }) });
+    const server = createMyscubeMcpServer({
+      bff: createBffClient({ baseUrl: env.BFF_BASE_URL, idToken: props.firebaseIdToken }),
+      record: usageRecorder(env.USAGE, { uid: props.uid, role: 'member', client: clientOf(request.headers.get('user-agent')) }),
+    });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);
     return transport.handleRequest(request);

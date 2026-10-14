@@ -3,7 +3,7 @@ import * as z from 'zod/v4';
 import { runImportCommit } from './commit.mjs';
 import { registerMeetingTools } from './meeting-tools.mjs';
 import { registerNoteTools } from './note-tools.mjs';
-import { instrumentServer } from './usage.mjs';
+import { instrumentServer } from '../usage.mjs';
 import { registerOfficeHourTools } from './office-hour-tools.mjs';
 import { READ_ONLY, tool, WRITES } from './tool-kit.mjs';
 import { buildCsv, buildWorkbook, buildXlsx } from './xlsx.mjs';
@@ -80,7 +80,7 @@ const rowShape = z.record(z.string(), z.union([z.string(), z.number(), z.boolean
 
 export function createEmaMcpServer({ ema, store, notes, saveNote, publicOrigin, access, record, now = () => Date.now() }) {
   const server = new McpServer({ name: 'ema-station', version: '1.0.0' }, { instructions: INSTRUCTIONS });
-  if (record) instrumentServer(server, record);
+  if (record) instrumentServer(server, record, { detailKeys: ['destination'] });
   const isAdmin = access.canExportAndImport === true;
 
   tool(server, 'ema_registry_status', {

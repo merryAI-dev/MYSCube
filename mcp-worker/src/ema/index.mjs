@@ -7,7 +7,7 @@ import { runImportCommit } from './commit.mjs';
 import { createStore, handleConfirm, handleFileDownload, handleUpload } from './files.mjs';
 import { createNoteStore, handleNotePage, noteSaverFrom } from './note-save.mjs';
 import { createEmaMcpServer } from './tools.mjs';
-import { clientOf, usageRecorder } from './usage.mjs';
+import { clientOf, usageRecorder } from '../usage.mjs';
 
 // MCP 액세스 토큰은 안에 담긴 Firebase ID 토큰(1시간)보다 먼저 끝나야 한다.
 const ACCESS_TOKEN_TTL = 55 * 60;

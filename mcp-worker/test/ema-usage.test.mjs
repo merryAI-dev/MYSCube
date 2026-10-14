@@ -4,7 +4,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createStore } from '../src/ema/files.mjs';
 import { createNoteStore } from '../src/ema/note-save.mjs';
 import { createEmaMcpServer } from '../src/ema/tools.mjs';
-import { clientOf, usageRecorder } from '../src/ema/usage.mjs';
+import { clientOf, usageRecorder } from '../src/usage.mjs';
 import { fakeEma, memoryKv } from './ema-support.mjs';
 
 describe('MCP usage tracking', () => {
@@ -51,7 +51,7 @@ describe('MCP usage tracking', () => {
 });
 
 describe('weekly usage report', async () => {
-  const { formatUsageReport, summarizeUsage, usageQuery } = await import('../src/ema/usage-report.mjs');
+  const { formatUsageReport, summarizeUsage, usageQuery } = await import('../src/usage-report.mjs');
   it('summarizes calls, users, apps, save destinations and failures', () => {
     const rows = [
       { name: 'meeting_note_compose', kind: 'tool', outcome: 'ok', client: 'chatgpt', uid: 'a', detail: '', calls: 3 },
@@ -67,5 +67,25 @@ describe('weekly usage report', async () => {
     expect(text).toContain('회의록 저장 위치: 팀 드라이브 2 · 둘 다 1');
     expect(formatUsageReport(summarizeUsage([]), { days: 7, from: 'a', to: 'b' })).toContain('호출이 없습니다');
     expect(usageQuery(7)).toContain("INTERVAL '7' DAY");
+  });
+});
+
+describe('MYSCube MCP usage tracking', async () => {
+  const { createMyscubeMcpServer } = await import('../src/tools.mjs');
+  it('records MYSCube tool calls with the catalog id but not the params', async () => {
+    const points = [];
+    const server = createMyscubeMcpServer({
+      bff: { get: async () => ({ items: [] }), post: async () => ({}) },
+      record: usageRecorder({ writeDataPoint: (point) => points.push(point) }, { uid: 'm1', role: 'member', client: 'claude' }),
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport);
+    const client = new Client({ name: 'myscube-usage-test', version: '1.0.0' });
+    await client.connect(clientTransport);
+    await client.callTool({ name: 'api_catalog', arguments: { keyword: '비밀키워드' } });
+    await client.close();
+    expect(points).toHaveLength(1);
+    expect(points[0].blobs.slice(0, 6)).toEqual(['api_catalog', 'tool', 'ok', 'member', 'claude', 'm1']);
+    expect(JSON.stringify(points)).not.toContain('비밀키워드');
   });
 });
