@@ -37,7 +37,7 @@ const INSTRUCTIONS = [
   '엑셀 내려받기는 ema_registry_export로 다운로드 링크를 만들어 사용자에게 전달합니다(파일 내용은 대화에 싣지 않습니다).',
   '컨설턴트·관리자는 회의록으로 보고서 초안을 만들 수 있습니다: 사용자의 Gmail·Drive·Calendar 커넥터(Meet 노트, 회의록 메일)나 Tiro MCP로 회의록을 먼저 읽고, 그 텍스트를 ema_meeting_draft_create에 넘기세요. 초안은 원장에 쓰이지 않으며 사용자가 EMA 화면 "회의록 추가 → 초안 불러오기"에서 확정합니다. 새로 올릴 때 "미작성"으로 거르지 마세요.',
   '오피스아워 진행 횟수·목록·보고서 내용은 ema_office_hour_summary(집계) → ema_office_hour_list(목록, 내용 포함 가능) → ema_office_hour_get(한 건 전문) 순으로 조회합니다(관리자 전체, 컨설턴트 본인 건). 엑셀·워드 등 파일이 필요하면 조회 결과로 직접 만들어 주세요.',
-  '회의록을 팀 드라이브에 저장하려면 회의록(Gmail·Tiro)을 읽고, Google Calendar 커넥터로 비슷한 일정을 찾아 calendarEvent로 넘겨 ema_meeting_note_markdown을 부른 뒤, 돌려준 fileName·markdown을 Drive 커넥터로 folderId 폴더에 저장하세요(같은 sourceRef 파일이 있으면 갱신).',
+  '회의록을 팀 드라이브에 저장하려면 회의록(Gmail·Tiro)을 읽고, Google Calendar 커넥터로 비슷한 일정을 찾아 calendarEvent로 넘겨 ema_meeting_note_markdown을 부른 뒤, 돌려준 saveUrl을 사용자에게 주어 "드라이브에 저장"을 누르게 하세요(대화 안 쓰기가 허용되면 ema_meeting_note_save). 같은 파일명·sourceRef가 있으면 갱신됩니다.',
 ].join(' ');
 
 export function maskBusinessNumber(value) {
@@ -77,7 +77,7 @@ const filterShape = {
 
 const rowShape = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]));
 
-export function createEmaMcpServer({ ema, store, publicOrigin, access, now = () => Date.now() }) {
+export function createEmaMcpServer({ ema, store, notes, saveNote, publicOrigin, access, now = () => Date.now() }) {
   const server = new McpServer({ name: 'ema-station', version: '1.0.0' }, { instructions: INSTRUCTIONS });
   const isAdmin = access.canExportAndImport === true;
 
@@ -294,7 +294,7 @@ export function createEmaMcpServer({ ema, store, publicOrigin, access, now = () 
   if (['admin', 'consultant'].includes(access.role)) {
     registerMeetingTools(server, { ema });
     registerOfficeHourTools(server, { ema });
-    registerNoteTools(server);
+    registerNoteTools(server, { notes, saveNote, publicOrigin, uid: access.uid });
   }
 
   return server;

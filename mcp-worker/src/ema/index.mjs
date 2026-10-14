@@ -5,6 +5,7 @@ import { handleAuthorize, handleSession, SCOPES } from './auth.mjs';
 import { createEmaClient } from './client.mjs';
 import { runImportCommit } from './commit.mjs';
 import { createStore, handleConfirm, handleFileDownload, handleUpload } from './files.mjs';
+import { createNoteStore, handleNotePage, noteSaverFrom } from './note-save.mjs';
 import { createEmaMcpServer } from './tools.mjs';
 
 // MCP 액세스 토큰은 안에 담긴 Firebase ID 토큰(1시간)보다 먼저 끝나야 한다.
@@ -30,6 +31,8 @@ const mcpHandler = {
     const server = createEmaMcpServer({
       ema: createEmaClient({ functionsBase: env.EMA_FUNCTIONS_BASE, idToken: props.idToken }),
       store: createStore(env.OAUTH_KV),
+      notes: createNoteStore(env.OAUTH_KV),
+      saveNote: noteSaverFrom(env),
       publicOrigin: env.PUBLIC_ORIGIN,
       access: { uid: props.uid, role: props.role, canExportAndImport: props.canExportAndImport === true, idToken: props.idToken, idTokenExpiresAt: props.expiresAt },
     });
@@ -56,6 +59,8 @@ const defaultHandler = {
         runCommit: (options) => runImportCommit({ ...options, store }),
       });
     }
+    const note = /^\/note\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
+    if (note) return handleNotePage(request, { notes: createNoteStore(env.OAUTH_KV), token: note[1], save: noteSaverFrom(env) });
     const file = /^\/files\/([A-Za-z0-9_-]{20,80})$/u.exec(pathname);
     if (file && request.method === 'GET') return handleFileDownload(createStore(env.OAUTH_KV), file[1]);
     if (pathname === '/') {
