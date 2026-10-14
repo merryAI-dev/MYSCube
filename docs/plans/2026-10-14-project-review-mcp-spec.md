@@ -327,3 +327,9 @@ S2 이후 티켓(재제출 비교, 제안서·참여율, 사업관리 폴더, �
 - **발견해 고친 스펙 결함**: 스펙의 `grant:<uid>:…` 키는 같은 KV를 쓰는 OAuth 라이브러리의 `grant:${userId}:${grantId}`와 겹친다. 라이브러리는 `grant:${userId}:` 접두어로 로그인 grant 목록을 조회하므로, 그대로 썼다면 로그인 처리가 깨질 수 있었다. 접두어를 `review:`로 바꾸고 스펙 전체를 고쳤다.
 - 8MB 넘는 텍스트는 캐시하지 않고 grant만 준다(다음 요청은 BFF 재호출). 해시·uid 형식이 틀리면 저장하지 않는다. 키와 값의 해시가 다르면 쓰지 않는다.
 - 테스트: 새 6개, MCP Worker 전체 117 통과. 사보타주(grant 확인 제거 / OAuth와 겹치는 키) 각각 실패 확인 후 복구.
+
+### T6 — 제출값 읽기, 2026-10-14
+- `mcp-worker/src/review/submission.mjs`: 네 종류(제출 요청, 등록 초안, 수정 초안, 승인된 프로젝트)를 BFF 기존 조회 경로로 읽는다. 제출 요청의 기준 제출본은 BFF `resolveProjectRequestPayloadForReview`와 같은 규칙(수정 요청이면 `proposedSnapshot`).
+- 제출값은 **허용 목록**(`SUBMISSION_FIELDS`)만 내보낸다. 사업자번호·이메일·결재자 이름 같은 값은 목록에 없으므로 나가지 않고, 새 필드가 생겨도 자동으로 빠진다.
+- 초안은 `reviewToken`이 없어서 `draft-revision:<n>`을 대신 쓴다. 드라이브 링크는 `https://`만 통과(다른 스킴은 빈 값).
+- 테스트: 새 7개, MCP Worker 전체 124 통과. 사보타주(허용 목록 무시 / 제안 스냅숏 무시) 각각 실패 확인 후 복구.
