@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import { PlatformApiError } from './api-client';
 import {
+  apiErrorDetail,
+  apiErrorToastOptions,
   describeApiError,
   formatApiErrorDescription,
   resolveApiErrorMessage,
   resolveCashflowMonthReopenErrorMessage,
   resolveCashflowWeeklyCompletionErrorMessage,
+  withApiErrorDetail,
 } from './api-error-message';
 import { resolveApiErrorPresentation } from './api-error-messages';
 
@@ -180,5 +183,36 @@ describe('server message pass-through', () => {
 
     expect(resolveCashflowWeeklyCompletionErrorMessage(weekly, 'fallback')).toContain('완료 요청된 주간 정산만 확정할 수 있습니다.');
     expect(resolveCashflowMonthReopenErrorMessage(reopen, 'fallback')).toContain('변경되었거나 처리된 재오픈 요청입니다.');
+  });
+});
+
+describe('engine reason "자세히" line', () => {
+  // 라이브 2026-10: 정산 엔진 409 사유가 모두 같은 안내 문장으로 가려져 무엇이 막았는지 알 수 없었다.
+  const rejected = () => new PlatformApiError('Conflict', 409, 'req_eng', {
+    error: 'weekly_expense_conflict',
+    message: '요청을 처리할 수 없습니다. 최신 상태와 입력 내용을 확인해 주세요.',
+    engineReason: 'Stored weekly cashflow completion scope is invalid.',
+  });
+
+  it('keeps the guide as the message and shows the engine reason with the request ID as detail', () => {
+    const error = rejected();
+    // 안내 문장은 원인을 하나로 단정하지 않는다(사유는 "자세히" 에 있다).
+    expect(resolveCashflowWeeklyCompletionErrorMessage(error, 'fallback')).toBe(
+      '요청을 처리할 수 없습니다. 최신 상태와 입력 내용을 확인해 주세요. 현재 기록과 맞지 않아 처리하지 못했어요. 화면을 새로 고친 뒤 다시 시도하고, 계속되면 아래 사유와 요청 ID로 문의해 주세요.',
+    );
+    expect(apiErrorDetail(error)).toBe('자세히: Stored weekly cashflow completion scope is invalid. · 요청 ID req_eng');
+    expect(apiErrorToastOptions(error)).toEqual({ description: apiErrorDetail(error) });
+    expect(withApiErrorDetail('저장하지 못했습니다.', error))
+      .toBe('저장하지 못했습니다. (자세히: Stored weekly cashflow completion scope is invalid. · 요청 ID req_eng)');
+    expect(formatApiErrorDescription(describeApiError(error, { fallback: 'fallback' })))
+      .toContain('(자세히: Stored weekly cashflow completion scope is invalid.)');
+  });
+
+  it('never reads an engine reason from a server failure, and stays empty without one', () => {
+    const failed = new PlatformApiError('Unavailable', 503, '', { error: 'x', engineReason: 'NullPointerException' });
+    expect(failed.engineReason).toBe('');
+    expect(apiErrorDetail(failed)).toBe('');
+    expect(apiErrorToastOptions(failed)).toBeUndefined();
+    expect(withApiErrorDetail('실패', new Error('boom'))).toBe('실패');
   });
 });

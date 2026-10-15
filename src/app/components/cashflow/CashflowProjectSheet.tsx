@@ -33,10 +33,12 @@ import { useAuth } from '../../data/auth-store';
 import { useFirebase } from '../../lib/firebase-context';
 import { getAuthInstance } from '../../lib/firebase';
 import {
+  apiErrorToastOptions,
   describeApiError,
   formatApiErrorDescription,
   resolveApiErrorMessage,
   resolveCashflowWeeklyCompletionErrorMessage,
+  withApiErrorDetail,
 } from '../../platform/api-error-message';
 import { PlatformApiError } from '../../platform/api-client';
 import { isRequestTimeoutError, reconcileMonthCloseRequestAfterTimeout } from '../../data/cashflow-month-close-request-reconcile';
@@ -1067,7 +1069,7 @@ export function CashflowProjectSheet({
         error,
         '주간 정산 완료 상태를 저장하지 못했습니다.',
       );
-      setWeeklyCompletionError(message);
+      setWeeklyCompletionError(withApiErrorDetail(message, error));
       setWeeklyProjectionWarning(weeklyProjectionValidation(error));
     } finally {
       setWeeklyCompletionBusy(false);
@@ -1129,7 +1131,7 @@ export function CashflowProjectSheet({
         setWeeklyWithdrawError('');
         return;
       }
-      setWeeklyWithdrawError(resolveApiErrorMessage(error, '주간 정산을 회수하지 못했습니다. 화면을 다시 불러온 뒤 시도해 주세요.'));
+      setWeeklyWithdrawError(withApiErrorDetail(resolveApiErrorMessage(error, '주간 정산을 회수하지 못했습니다. 화면을 다시 불러온 뒤 시도해 주세요.'), error));
     } finally {
       setWeeklyWithdrawBusy(false);
     }
@@ -1177,7 +1179,7 @@ export function CashflowProjectSheet({
         durationMs: Date.now() - startedAt,
         error,
       });
-      setWeeklyWithdrawError(resolveApiErrorMessage(error, '주간 정산을 확정하지 못했습니다. 화면을 다시 불러온 뒤 시도해 주세요.'));
+      setWeeklyWithdrawError(withApiErrorDetail(resolveApiErrorMessage(error, '주간 정산을 확정하지 못했습니다. 화면을 다시 불러온 뒤 시도해 주세요.'), error));
     } finally {
       setWeeklyConfirmBusy(false);
     }
@@ -1967,6 +1969,13 @@ export function CashflowProjectSheet({
         durationMs: Date.now() - startedAt,
         error,
       });
+      // 예전에는 상태만 다시 불러와, 요청이 왜 안 됐는지 화면 어디에도 남지 않았다.
+      toast.error(
+        error instanceof PlatformApiError || !(error instanceof Error) || !/[가-힣]/.test(error.message)
+          ? resolveApiErrorMessage(error, '월 결산 승인 요청을 보내지 못했습니다.')
+          : error.message,
+        apiErrorToastOptions(error),
+      );
       await loadCashflowMonthClose();
       if (!isCurrentMonthCloseMutation(mutationScope)) return;
     } finally {

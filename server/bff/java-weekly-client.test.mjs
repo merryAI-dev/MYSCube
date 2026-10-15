@@ -976,6 +976,35 @@ describe('Java weekly cashflow client', () => {
     expect(error.message).not.toMatch(/Cashflow|Stored|Firestore|revision/i);
   });
 
+  it('keeps the engine reason of a rejection apart from the guide, for the "자세히" line', async () => {
+    // 라이브 2026-10: 409 사유 171종이 모두 같은 안내 문장으로 가려져 무엇이 막았는지 알 수 없었다.
+    const reject = (status, message) => createJavaWeeklyClient({
+      env: liveEnv(),
+      fetchImpl: vi.fn(async () => chunkedResponse([JSON.stringify({ code: 'weekly_expense_conflict', message })], { status })),
+    }).requestJson({
+      context,
+      method: 'POST',
+      path: '/api/v1/cashflow/project-a/weekly-update-complete',
+      command: 'complete_cashflow_weekly_update',
+      body: { idempotencyKey: `engine-reason-${status}` },
+    }).catch((caught) => caught);
+
+    const conflict = await reject(409, 'Stored weekly cashflow completion\nscope is invalid.');
+    expect(conflict).toMatchObject({
+      statusCode: 409,
+      code: 'weekly_expense_conflict',
+      message: '요청을 처리할 수 없습니다. 최신 상태와 입력 내용을 확인해 주세요.',
+      engineReason: 'Stored weekly cashflow completion scope is invalid.',
+    });
+
+    const long = await reject(409, 'x'.repeat(400));
+    expect(long.engineReason).toBe(`${'x'.repeat(300)}…`);
+
+    // 5xx 는 내부 오류 문장일 수 있어 싣지 않는다.
+    const failure = await reject(500, 'NullPointerException at FirestoreInheritedWeeklyExpensePersistence');
+    expect(failure.engineReason).toBeUndefined();
+  });
+
   it.each([
     [409, 'cashflow_unknown_conflict', 409, 'cashflow_unknown_conflict', '요청을 처리할 수 없습니다. 최신 상태와 입력 내용을 확인해 주세요.'],
     [500, 'internal_error', 503, 'jvm_weekly_api_internal_error', '현금흐름 저장 서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'],

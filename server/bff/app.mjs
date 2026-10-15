@@ -1911,7 +1911,7 @@ export function createBffApp(options = {}) {
   });
 
   app.use((error, req, res, _next) => {
-    const { statusCode, code: errorCode, message } = resolveErrorResponse(error);
+    const { statusCode, code: errorCode, message, engineReason } = resolveErrorResponse(error);
     res.locals.errorCode = errorCode;
 
     if (statusCode >= 500) {
@@ -1934,6 +1934,7 @@ export function createBffApp(options = {}) {
       message,
       requestId: req.requestId || req.context?.requestId,
       ...(statusCode < 500 && error?.details ? { details: error.details } : {}),
+      ...(engineReason ? { engineReason } : {}),
     });
   });
 

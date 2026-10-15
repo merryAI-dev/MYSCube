@@ -14,6 +14,31 @@ export function userFacingServerMessage(error: unknown): string {
   return message;
 }
 
+/**
+ * 안내 문장 아래 "자세히" 로 보여 줄 한 줄: 정산 엔진이 거절한 사유 원문과 문의용 요청 ID.
+ * 둘 다 없으면 빈 문자열. 원문은 영어 기술 문장일 수 있어 안내 문장 자리에는 쓰지 않는다.
+ */
+export function apiErrorDetail(error: unknown): string {
+  if (!(error instanceof PlatformApiError)) return '';
+  const reason = error.engineReason && error.engineReason !== error.serverMessage ? error.engineReason : '';
+  return [
+    reason ? `자세히: ${reason}` : '',
+    error.requestId ? `요청 ID ${error.requestId}` : '',
+  ].filter(Boolean).join(' · ');
+}
+
+/** 토스트 아래 줄(description)로 "자세히" 를 붙일 때. 보여 줄 것이 없으면 undefined. */
+export function apiErrorToastOptions(error: unknown): { description: string } | undefined {
+  const detail = apiErrorDetail(error);
+  return detail ? { description: detail } : undefined;
+}
+
+/** 그 자리 오류 문장 뒤에 "자세히" 를 붙일 때. */
+export function withApiErrorDetail(message: string, error: unknown): string {
+  const detail = apiErrorDetail(error);
+  return detail ? `${message} (${detail})` : message;
+}
+
 export interface ApiErrorDescription {
   /** 어느 단계에서 난 오류인지. 화면이 알려 준다. */
   phase: string;
@@ -23,25 +48,28 @@ export interface ApiErrorDescription {
   guide: string;
   code: string;
   requestId: string;
+  /** 정산 엔진이 거절한 사유 원문. 없으면 빈 문자열. */
+  engineReason: string;
 }
 
 /** 오류를 "단계 · 서버 문구 · 고치는 법 · 문의용 코드" 로 나눈다. */
 export function describeApiError(error: unknown, options: { fallback: string; phase?: string }): ApiErrorDescription {
   const phase = options.phase || '';
   if (!(error instanceof PlatformApiError)) {
-    return { phase, message: options.fallback, guide: '', code: '', requestId: '' };
+    return { phase, message: options.fallback, guide: '', code: '', requestId: '', engineReason: '' };
   }
   const code = error.code || '';
   const requestId = error.requestId || '';
   const server = userFacingServerMessage(error);
+  const engineReason = error.engineReason && error.engineReason !== server ? error.engineReason : '';
   const mappedGuide = hasApiErrorPresentation(code) ? resolveApiErrorPresentation(code, error.status).guide : '';
   if (server) {
-    return { phase, message: server, guide: mappedGuide && mappedGuide !== server ? mappedGuide : '', code, requestId };
+    return { phase, message: server, guide: mappedGuide && mappedGuide !== server ? mappedGuide : '', code, requestId, engineReason };
   }
-  return { phase, message: resolveApiErrorMessage(error, options.fallback), guide: '', code, requestId };
+  return { phase, message: resolveApiErrorMessage(error, options.fallback), guide: '', code, requestId, engineReason };
 }
 
-/** 한 줄로 보여 줄 때: "[② 반영 검토] 서버 문구 고치는 법 (문의용: 코드 · 요청 ID ...)" */
+/** 한 줄로 보여 줄 때: "[② 반영 검토] 서버 문구 고치는 법 (자세히: 엔진 사유) (문의용: 코드 · 요청 ID ...)" */
 export function formatApiErrorDescription(description: ApiErrorDescription): string {
   const reference = [description.code, description.requestId ? `요청 ID ${description.requestId}` : '']
     .filter(Boolean)
@@ -50,6 +78,7 @@ export function formatApiErrorDescription(description: ApiErrorDescription): str
     description.phase ? `[${description.phase}]` : '',
     description.message,
     description.guide,
+    description.engineReason ? `(자세히: ${description.engineReason})` : '',
     reference ? `(문의용: ${reference})` : '',
   ].filter(Boolean).join(' ');
 }

@@ -32,6 +32,10 @@ export function resolveErrorResponse(error) {
     code: error?.code || (statusCode >= 500 ? 'internal_error' : 'request_error'),
     message: exposeMessage ? (error?.message || 'Request failed') : 'Internal server error',
     exposed: exposeMessage,
+    // 정산 엔진이 거절한 사유 원문(4xx 만). 화면은 안내 문장 아래 "자세히" 로만 보여 준다.
+    ...(statusCode < 500 && typeof error?.engineReason === 'string' && error.engineReason
+      ? { engineReason: error.engineReason }
+      : {}),
   };
 }
 

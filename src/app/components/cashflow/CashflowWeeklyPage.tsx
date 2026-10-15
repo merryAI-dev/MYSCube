@@ -27,6 +27,7 @@ import {
 import { getMonthMondayWeeks } from '../../platform/cashflow-weeks';
 import { getProjectRegistrationCicOptions, normalizeProjectDepartment } from '../../platform/project-cic';
 import { recordDevtoolsLog, toDevtoolsError } from '../../platform/devtools-transaction-log';
+import { apiErrorToastOptions } from '../../platform/api-error-message';
 import type { PersonRecord } from '../../lib/platform-bff-client';
 import type { Project } from '../../data/types';
 
@@ -417,7 +418,7 @@ export function CashflowWeeklyPage() {
       setRefreshSequence((current) => current + 1);
       toast.success(action === 'APPROVE' ? '정산을 승인했습니다.' : '조직장 승인 대기로 변경했습니다.');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '결산 상태를 변경하지 못했습니다.');
+      toast.error(error instanceof Error ? error.message : '결산 상태를 변경하지 못했습니다.', apiErrorToastOptions(error));
     } finally {
       setActionKey('');
     }
@@ -449,7 +450,7 @@ export function CashflowWeeklyPage() {
       setRefreshSequence((currentSequence) => currentSequence + 1);
       toast.success('월 결산을 승인했습니다.');
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : '월 결산을 승인하지 못했습니다.');
+      toast.error(error instanceof Error ? error.message : '월 결산을 승인하지 못했습니다.', apiErrorToastOptions(error));
     } finally {
       setActionKey('');
     }
