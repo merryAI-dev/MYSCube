@@ -610,35 +610,19 @@ function cashflowMonthCloseTimeoutError() {
   );
 }
 
-function requireCashflowSettlementCycleApprovalReceipt(result, expected) {
-  if (!objectValue(result)
-    || result.ok !== true
-    || result.commandName !== 'cashflowMonth.close'
-    || result.projectId !== expected.projectId
-    || result.yearMonth !== expected.cycleYearMonth
-    || result.status !== 'CLOSED'
-    || !Number.isSafeInteger(result.revision)
-    || result.revision !== expected.monthCloseRevision + 1
-    || result.requestId !== expected.requestId
-    || !Number.isSafeInteger(result.requestRevision)
-    || result.requestRevision !== expected.evidenceRevision
-    || result.manifestHash !== expected.manifestHash
-    || result.rootHash !== expected.manifestHash
-    || !Number.isSafeInteger(result.headRevision)
-    || result.headRevision < 1
-    || !validJvmInstant(result.closedAt)
-    || result.closedByUid !== expected.actorUid
-    || typeof result.auditId !== 'string'
-    || !result.auditId
-    || result.auditId.trim() !== result.auditId) {
-    throw createHttpError(
-      502,
-      'JVM 캐시플로 저장 결과를 확인할 수 없습니다.',
-      'cashflow_jvm_invalid_response',
-    );
-  }
-  return result;
-}
+const MONTH_CLOSE_APPROVAL_DENIALS = {
+  NOT_CURRENT_APPROVER: { status: 403, message: '지정된 승인자만 월 결산 요청을 승인할 수 있어요.' },
+  BUSINESS_STATE_NOT_ELIGIBLE: {
+    status: 409,
+    message: '검토하던 월 결산 요청이 회수되었거나 이미 처리됐어요. 화면을 새로 고친 뒤 다시 확인해 주세요.',
+  },
+  ACTOR_INACTIVE: { status: 403, message: '구성원 정보가 비활성 상태라 승인할 수 없어요. 관리자에게 문의해 주세요.' },
+  PROJECTION_NOT_READY: {
+    status: 409,
+    message: '이 사업의 결산 진행 기록이 서로 맞지 않아 승인할 수 없어요. AXR 관리자에게 문의해 주세요.',
+  },
+  default: { status: 409, message: '지금은 이 월 결산을 승인할 수 없어요. 화면을 새로 고친 뒤 다시 확인해 주세요.' },
+};
 
 function requireCashflowSettlementCycleReopenReceipt(result, expected) {
   const requestReceipt = expected.decision === '';
@@ -5628,6 +5612,8 @@ export function mountJvmWeeklyApiRoutes(app, {
     return record;
   }
 
+  // 조직장 승인은 결재 버튼이다. 지정 승인자인지, 내가 본 그 요청인지만 보고 JVM 에 상태 전환을 맡긴다.
+  // 결산 근거는 제출 때 고정됐으므로 승인 시점에 시트 상태를 다시 비교하지 않는다.
   async function approveCanonicalCashflowSettlementCycle(req, { projectId, requestId }) {
     const body = objectValue(req.body);
     const evidenceRevision = body?.expectedRevision;
@@ -5642,105 +5628,67 @@ export function mountJvmWeeklyApiRoutes(app, {
       || body.decision !== 'APPROVE'
       || typeof projectId !== 'string'
       || !projectId
-      || projectId.trim() !== projectId
       || projectId.includes('/')
-      || typeof requestId !== 'string'
       || requestId !== `${projectId}-${cycleYearMonth}`
-      || requestId.includes('/')
       || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(cycleYearMonth)
       || !Number.isSafeInteger(evidenceRevision)
-      || evidenceRevision < 1
       || typeof manifestHash !== 'string'
-      || !/^sha256:[a-f0-9]{64}$/.test(manifestHash)
+      || !manifestHash
       || typeof reason !== 'string'
-      || reason.trim() !== reason
       || reason.length > 1_000
       || typeof idempotencyKey !== 'string'
-      || !idempotencyKey
-      || idempotencyKey.trim() !== idempotencyKey) {
+      || !idempotencyKey.trim()) {
       throw createHttpError(400, '월 결산 검토 입력값이 올바르지 않습니다.', 'cashflow_month_close_review_invalid');
     }
     requireMutableCashflowSettlementCycle(cycleYearMonth);
 
-    const monthCloseTargetYearMonth = previousYearMonth(cycleYearMonth);
     const before = await readCanonicalCashflowSettlementCycleState(req, projectId, cycleYearMonth);
-    const monthClose = objectValue(before.source?.monthClose);
-    const initial = before.context.businessState === 'SUBMITTED'
-      && before.record?.status === 'PENDING_APPROVAL'
-      && monthClose?.status === 'OPEN';
-    const replay = before.context.businessState === 'LOCKED'
-      && before.record?.status === 'APPROVED'
-      && monthClose?.status === 'CLOSED'
-      && before.record?.reviewIdempotencyKey === idempotencyKey
-      && before.record?.decisionReason === reason;
-    const currentMonthCloseRevision = monthClose?.revision;
-    const monthCloseRevision = initial
-      ? currentMonthCloseRevision
-      : Number.isSafeInteger(currentMonthCloseRevision) ? currentMonthCloseRevision - 1 : -1;
-    const expectedWorkflowRevision = initial
-      ? before.context.workflowRevision
-      : before.context.workflowRevision - 1;
-    if (before.context.health !== 'OK'
-      || (!initial && !replay)
-      || before.context.requestId !== requestId
-      || before.context.requestCycleYearMonth !== cycleYearMonth
-      || before.context.requestTargetYearMonth !== monthCloseTargetYearMonth
-      || before.record?.requestId !== requestId
-      || before.record?.revision !== evidenceRevision
-      || before.record?.evidenceRevision !== evidenceRevision
-      || before.record?.manifestHash !== manifestHash
-      || before.record?.workflowRevision !== before.context.workflowRevision
-      || monthClose?.projectId !== projectId
-      || monthClose?.yearMonth !== cycleYearMonth
-      || !Number.isSafeInteger(monthCloseRevision)
-      || monthCloseRevision < 0
-      || (replay && (before.record?.ledgerRevision !== currentMonthCloseRevision
-        || before.context.ledgerRevision !== currentMonthCloseRevision
-        || before.context.rootHash !== manifestHash))) {
+    const record = before.record;
+    const sameRequest = record?.requestId === requestId
+      && record?.evidenceRevision === evidenceRevision
+      && record?.manifestHash === manifestHash;
+    if (sameRequest && record.status === 'APPROVED') {
+      return { record, monthClose: objectValue(before.source?.monthClose) };
+    }
+    if (!sameRequest || record.status !== 'PENDING_APPROVAL') {
       throw createHttpError(
         409,
-        '이미 검토가 시작되었거나 변경된 월 결산 요청입니다.',
+        '검토하던 월 결산 요청이 회수되었거나 다시 제출됐어요. 화면을 새로 고친 뒤 최신 요청을 승인해 주세요.',
         'cashflow_month_close_request_already_reviewed',
       );
     }
-    const capability = before.context.commandCapabilities.APPROVE_MONTH_CLOSE;
-    if (initial && capability.allowed !== true) {
-      throw createHttpError(
-        capability.reasonCode === 'NOT_CURRENT_APPROVER' ? 403 : 409,
-        '지정된 승인자만 월 결산 요청을 검토할 수 있습니다.',
-        'cashflow_month_close_approver_mismatch',
-      );
+    const capability = objectValue(before.context.commandCapabilities?.APPROVE_MONTH_CLOSE);
+    if (capability?.allowed !== true) {
+      const denial = MONTH_CLOSE_APPROVAL_DENIALS[capability?.reasonCode] || MONTH_CLOSE_APPROVAL_DENIALS.default;
+      throw createHttpError(denial.status, denial.message, 'cashflow_month_close_approver_mismatch');
     }
 
-    const expectation = {
-      projectId, cycleYearMonth, monthCloseTargetYearMonth, requestId,
-      evidenceRevision, manifestHash, monthCloseRevision, expectedWorkflowRevision,
-      actorUid: req.context.actorId,
-    };
-    const closeBody = {
-      idempotencyKey,
-      yearMonth: cycleYearMonth,
-      expectedRevision: monthCloseRevision,
-      expectedDraftRevision: 0,
-      humanReviewed: true,
-      requestId,
-      requestRevision: evidenceRevision,
-      manifestHash,
-      cycleYearMonth,
-      monthCloseTargetYearMonth,
-      expectedWorkflowRevision,
-      decisionReason: reason,
-    };
-    requireCashflowSettlementCycleApprovalReceipt(await proxyMutation(
+    const monthClose = objectValue(before.source?.monthClose);
+    const receipt = await proxyMutation(
       req,
       `/api/v1/cashflow/${encodeURIComponent(projectId)}/month-close`,
-      closeBody,
+      {
+        idempotencyKey,
+        yearMonth: cycleYearMonth,
+        expectedRevision: Number.isSafeInteger(monthClose?.revision) ? monthClose.revision : 0,
+        expectedDraftRevision: 0,
+        humanReviewed: true,
+        requestId,
+        requestRevision: evidenceRevision,
+        manifestHash,
+        cycleYearMonth,
+        monthCloseTargetYearMonth: previousYearMonth(cycleYearMonth),
+        expectedWorkflowRevision: before.context.workflowRevision,
+        decisionReason: reason.trim(),
+      },
       { cashflowWrite: true, deadlineAtMs: Date.now() + monthCloseRouteTimeoutMs },
-    ), expectation);
+    );
+    if (objectValue(receipt)?.ok !== true || receipt.status !== 'CLOSED' || receipt.requestId !== requestId) {
+      throw createHttpError(502, 'JVM 캐시플로 저장 결과를 확인할 수 없습니다.', 'cashflow_jvm_invalid_response');
+    }
     const after = await readCanonicalCashflowSettlementCycleState(req, projectId, cycleYearMonth);
-    const closed = objectValue(after.source?.monthClose);
-    if (initial) notifyCashflowMonthCloseSlack({ tenantId: req.context.tenantId, record: after.record, event: 'APPROVED' });
-    return { record: after.record, monthClose: closed };
+    notifyCashflowMonthCloseSlack({ tenantId: req.context.tenantId, record: after.record, event: 'APPROVED' });
+    return { record: after.record, monthClose: objectValue(after.source?.monthClose) };
   }
 
   async function mutateCanonicalCashflowMonthReopen(req, { projectId, decision = '' }) {
