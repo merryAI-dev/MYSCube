@@ -7721,7 +7721,7 @@ describe('JVM weekly API BFF proxy', () => {
     expect(cashflowSlackService.notifyMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('tells the approver to reload when the request they saw was withdrawn or resubmitted', async () => {
+  it('approves the stored request without comparing the revision or hash the approver saw', async () => {
     const cycleYearMonth = '2026-09';
     const requestId = `project-a-${cycleYearMonth}`;
     const { app, source, monthCloseBodies } = canonicalCycleMonthCloseFixture(
@@ -7729,19 +7729,19 @@ describe('JVM weekly API BFF proxy', () => {
       { approve: true, actorId: 'finance-1', actorRole: 'finance' },
     );
     const pending = source.documents.get(`orgs/tenant-a/cashflow_month_close_requests/${requestId}`);
-    const response = await request(app)
+    await request(app)
       .post(`/api/v1/cashflow/project-a/month-close/requests/${requestId}/status-review`)
       .set('idempotency-key', 'approve-stale-view')
       .send({
         decision: 'APPROVE', expectedRevision: pending.evidenceRevision,
         expectedManifestHash: `sha256:${'b'.repeat(64)}`,
       })
-      .expect(409);
-    expect(response.body).toMatchObject({
-      code: 'cashflow_month_close_request_already_reviewed',
-      message: '검토하던 월 결산 요청이 회수되었거나 다시 제출됐어요. 화면을 새로 고친 뒤 최신 요청을 승인해 주세요.',
+      .expect(200);
+    // 화면이 들고 있던 해시가 아니라 저장된 요청의 값으로 JVM 에 넘긴다.
+    expect(monthCloseBodies).toHaveLength(1);
+    expect(monthCloseBodies[0]).toMatchObject({
+      requestId, requestRevision: pending.evidenceRevision, manifestHash: pending.manifestHash,
     });
-    expect(monthCloseBodies).toEqual([]);
   });
 
   it('routes a cumulative close rejection through the JVM transition', async () => {

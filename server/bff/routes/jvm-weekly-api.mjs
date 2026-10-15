@@ -5616,8 +5616,6 @@ export function mountJvmWeeklyApiRoutes(app, {
   // 결산 근거는 제출 때 고정됐으므로 승인 시점에 시트 상태를 다시 비교하지 않는다.
   async function approveCanonicalCashflowSettlementCycle(req, { projectId, requestId }) {
     const body = objectValue(req.body);
-    const evidenceRevision = body?.expectedRevision;
-    const manifestHash = body?.expectedManifestHash;
     const reason = body?.reason === undefined ? '' : body.reason;
     const idempotencyKey = req.context.idempotencyKey;
     const requestPrefix = `${projectId}-`;
@@ -5631,9 +5629,6 @@ export function mountJvmWeeklyApiRoutes(app, {
       || projectId.includes('/')
       || requestId !== `${projectId}-${cycleYearMonth}`
       || !/^20\d{2}-(0[1-9]|1[0-2])$/.test(cycleYearMonth)
-      || !Number.isSafeInteger(evidenceRevision)
-      || typeof manifestHash !== 'string'
-      || !manifestHash
       || typeof reason !== 'string'
       || reason.length > 1_000
       || typeof idempotencyKey !== 'string'
@@ -5644,16 +5639,14 @@ export function mountJvmWeeklyApiRoutes(app, {
 
     const before = await readCanonicalCashflowSettlementCycleState(req, projectId, cycleYearMonth);
     const record = before.record;
-    const sameRequest = record?.requestId === requestId
-      && record?.evidenceRevision === evidenceRevision
-      && record?.manifestHash === manifestHash;
-    if (sameRequest && record.status === 'APPROVED') {
+    // 승인은 상태 전환만 한다. 화면이 들고 있던 리비전·해시와 다시 비교하지 않고 저장된 요청을 승인한다.
+    if (record?.requestId === requestId && record.status === 'APPROVED') {
       return { record, monthClose: objectValue(before.source?.monthClose) };
     }
-    if (!sameRequest || record.status !== 'PENDING_APPROVAL') {
+    if (record?.requestId !== requestId || record.status !== 'PENDING_APPROVAL') {
       throw createHttpError(
         409,
-        '검토하던 월 결산 요청이 회수되었거나 다시 제출됐어요. 화면을 새로 고친 뒤 최신 요청을 승인해 주세요.',
+        '승인할 월 결산 요청이 회수되었거나 다시 제출됐어요. 화면을 새로 고친 뒤 최신 요청을 승인해 주세요.',
         'cashflow_month_close_request_already_reviewed',
       );
     }
@@ -5674,8 +5667,8 @@ export function mountJvmWeeklyApiRoutes(app, {
         expectedDraftRevision: 0,
         humanReviewed: true,
         requestId,
-        requestRevision: evidenceRevision,
-        manifestHash,
+        requestRevision: record.evidenceRevision,
+        manifestHash: record.manifestHash,
         cycleYearMonth,
         monthCloseTargetYearMonth: previousYearMonth(cycleYearMonth),
         expectedWorkflowRevision: before.context.workflowRevision,
@@ -5683,10 +5676,16 @@ export function mountJvmWeeklyApiRoutes(app, {
       },
       { cashflowWrite: true, deadlineAtMs: Date.now() + monthCloseRouteTimeoutMs },
     );
-    if (objectValue(receipt)?.ok !== true || receipt.status !== 'CLOSED' || receipt.requestId !== requestId) {
+    if (objectValue(receipt)?.ok !== true) {
       throw createHttpError(502, 'JVM 캐시플로 저장 결과를 확인할 수 없습니다.', 'cashflow_jvm_invalid_response');
     }
-    const after = await readCanonicalCashflowSettlementCycleState(req, projectId, cycleYearMonth);
+    // 승인은 이미 저장됐다. 화면에 보여 줄 최신 상태를 읽다 실패해도 승인을 실패로 돌리지 않는다.
+    let after;
+    try {
+      after = await readCanonicalCashflowSettlementCycleState(req, projectId, cycleYearMonth);
+    } catch {
+      after = { record: { ...record, status: 'APPROVED' }, source: before.source };
+    }
     notifyCashflowMonthCloseSlack({ tenantId: req.context.tenantId, record: after.record, event: 'APPROVED' });
     return { record: after.record, monthClose: objectValue(after.source?.monthClose) };
   }
