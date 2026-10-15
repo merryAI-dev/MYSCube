@@ -627,6 +627,7 @@ jobs:
         if: steps.release_mode.outputs.release_mode == 'web'
         env:
           SETTLEMENT_CANARY_BASE_URL: ${{ steps.vercel_deploy.outputs.deployment_url }}
+          SETTLEMENT_CANARY_SKIP_MONTH_PREVIEW: 'true'
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
         run: node scripts/check-settlement-runtime.mjs
