@@ -92,6 +92,13 @@ function readErrorMessage(body: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+// 정산 엔진이 거절한 사유 원문(BFF 가 4xx 에만 싣는다). 화면은 "자세히" 로만 보여 준다.
+function readEngineReason(body: unknown): string {
+  if (!body || typeof body !== 'object') return '';
+  const value = (body as { engineReason?: unknown }).engineReason;
+  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+}
+
 function isBinaryBody(value: unknown): value is Blob | ArrayBuffer | Uint8Array {
   return (
     (typeof Blob !== 'undefined' && value instanceof Blob)
@@ -125,6 +132,7 @@ export class PlatformApiError extends Error {
   body?: unknown;
   code: string;
   serverMessage: string;
+  engineReason: string;
 
   constructor(message: string, status: number, requestId?: string, body?: unknown) {
     super(message);
@@ -136,6 +144,7 @@ export class PlatformApiError extends Error {
       || (body && typeof body === 'object' ? (body as { code?: unknown }).code : undefined);
     this.code = typeof responseCode === 'string' ? responseCode : '';
     this.serverMessage = readErrorMessage(body) || '';
+    this.engineReason = status < 500 ? readEngineReason(body) : '';
   }
 }
 

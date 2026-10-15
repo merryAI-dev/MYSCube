@@ -63,3 +63,19 @@ describe('createHttpError', () => {
     expect(createHttpError(503, '담당자에게 문의해 주세요.', 'x').expose).toBe(true);
   });
 });
+
+describe('resolveErrorResponse engine reason', () => {
+  it('carries the engine reason of a rejection, never of a server failure', () => {
+    const rejected = createHttpError(409, '요청을 처리할 수 없습니다. 최신 상태와 입력 내용을 확인해 주세요.', 'weekly_expense_conflict');
+    rejected.engineReason = 'Stored weekly cashflow completion scope is invalid.';
+    expect(resolveErrorResponse(rejected)).toMatchObject({
+      statusCode: 409,
+      engineReason: 'Stored weekly cashflow completion scope is invalid.',
+    });
+
+    const failed = createHttpError(503, '잠시 후 다시 시도해 주세요.', 'jvm_weekly_api_internal_error');
+    failed.engineReason = 'NullPointerException';
+    expect(resolveErrorResponse(failed)).not.toHaveProperty('engineReason');
+    expect(resolveErrorResponse(createHttpError(409, '충돌', 'x'))).not.toHaveProperty('engineReason');
+  });
+});

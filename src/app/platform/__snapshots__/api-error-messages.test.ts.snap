@@ -99,7 +99,7 @@ exports[`resolveApiErrorPresentation > keeps the approved guides reviewable as a
     "resolution": "contact",
   },
   "weekly_expense_conflict": {
-    "guide": "검토하는 동안 MYSCube의 캐시플로우 값이 변경됐어요. 최신 시트 값을 다시 가져온 뒤 반영해 주세요.",
+    "guide": "현재 기록과 맞지 않아 처리하지 못했어요. 화면을 새로 고친 뒤 다시 시도하고, 계속되면 아래 사유와 요청 ID로 문의해 주세요.",
     "resolution": "retry",
   },
 }

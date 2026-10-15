@@ -455,6 +455,51 @@ describe('cashflow sheet pinned snapshot', () => {
     expect(facts.controlTotals.projection[0]).toMatchObject({ sourceCell: 'BS14', value: 300, computed: 300, matches: true });
   });
 
+  it('checks the Total balance as deposits minus withdrawals, not the sum of weekly balances', () => {
+    // 라이브 AXR(p1773817948751) 2026-10: 잔액이 계속 마이너스인 시트에서 BS33(-1,495,947)을
+    // 주차별 잔액 합(-57,650,126)과 비교해 거짓 불일치 경고가 났다.
+    const matrix = Array.from({ length: 56 }, () => Array.from({ length: 72 }, () => ''));
+    const weekColumns = [
+      { yearMonth: '2026-12', weekNo: 4, columnIndex: 4 },
+      { yearMonth: '2026-12', weekNo: 5, columnIndex: 5 },
+      { yearMonth: '2027-01', weekNo: 1, columnIndex: 6 },
+    ];
+    const write = (rowIndex, weekly, total) => {
+      weekly.forEach((value, index) => { matrix[rowIndex][4 + index] = String(value); });
+      matrix[rowIndex][70] = String(total);
+    };
+    write(21, [0, 500, 0], 500); // 입금 합계
+    write(31, [1_000, 300, 700], 2_000); // 출금 합계
+    write(32, [-1_000, -800, -1_500], -1_500); // 잔액: BS33 = BS22 - BS32
+    const section = (mode, offset) => ({
+      mode,
+      weekColumns,
+      lineRows: [],
+      derivedRows: [
+        { rowIndex: 21 + offset, kind: 'deposit_total' },
+        { rowIndex: 31 + offset, kind: 'withdrawal_total' },
+        { rowIndex: 32 + offset, kind: 'balance' },
+      ],
+    });
+    const facts = extractCashflowSheetFacts({ matrix, template: { sections: [section('projection', 0), section('actual', 0)] } });
+    const balance = facts.controlTotals.projection.find((row) => row.derivedKind === 'balance');
+
+    expect(balance).toMatchObject({
+      sourceCell: 'BS33',
+      value: -1_500,
+      computed: -1_500,
+      matches: true,
+      annualValues: [{ year: 2026, value: -800 }, { year: 2027, value: -700 }],
+    });
+    expect(facts.controlTotals.projection.every((row) => row.matches === true)).toBe(true);
+
+    // 시트 Total 잔액이 실제로 입금-출금과 다르면 여전히 불일치로 잡는다.
+    matrix[32][70] = '-1,499';
+    const changed = extractCashflowSheetFacts({ matrix, template: { sections: [section('projection', 0), section('actual', 0)] } });
+    expect(changed.controlTotals.projection.find((row) => row.derivedKind === 'balance'))
+      .toMatchObject({ value: -1_499, computed: -1_500, matches: false });
+  });
+
   it('groups sheet finance checks by calendar year using the registered cashflow lines', () => {
     const matrix = Array.from({ length: 55 }, () => Array.from({ length: 72 }, () => ''));
     const weekColumns = [

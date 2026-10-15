@@ -787,6 +787,36 @@ class WeeklyExpenseControllerTest {
     }
 
     @Test
+    @org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
+    void conflictReasonIsLoggedWithTheRequestId(org.springframework.boot.test.system.CapturedOutput output) throws Exception {
+        // 409 사유가 응답 본문에만 담겨 사라지던 문제(라이브 2026-10 승인 차단 조사). 화면의 요청 ID 로 찾을 수 있어야 한다.
+        String first = """
+            {
+              "idempotencyKey": "idem-log",
+              "rows": []
+            }
+            """;
+        String second = first.replace("\"rows\": []", "\"rows\": [{\"rowIndex\": 0, \"cells\": []}]");
+        mockMvc.perform(asActor(post("/api/v1/weekly-expenses/project-log/sheets/default/save-draft"), "tenant-log", "pm-1", "pm")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(first))
+            .andExpect(status().isOk());
+
+        mockMvc.perform(asActor(post("/api/v1/weekly-expenses/project-log/sheets/default/save-draft"), "tenant-log", "pm-1", "pm")
+                .header("x-request-id", "req_log_1\nforged=1")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(second))
+            .andExpect(status().isConflict());
+
+        assertThat(output.getAll()).contains(
+            "cashflow_request_rejected status=409 code=weekly_expense_conflict method=POST"
+                + " path=/api/v1/weekly-expenses/project-log/sheets/default/save-draft"
+                + " requestId=req_log_1forged1"
+                + " reason=Idempotency key already exists with a different request body."
+        );
+    }
+
+    @Test
     void sameIdempotencyKeyWithDifferentBodyReturnsConflict() throws Exception {
         String first = """
             {

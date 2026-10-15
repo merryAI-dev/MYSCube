@@ -412,6 +412,27 @@ function controlRow({ matrix, row, weekColumns, issues, controlColumnIndex }) {
   };
 }
 
+// 잔액은 시점 값이라 주차를 더하면 안 된다. 표준 시트의 Total 잔액(BS33·BS56)은
+// `=입금 합계 Total - 출금 합계 Total` 이므로 같은 식으로 검산한다.
+// (예전에는 주차별 잔액을 모두 더해, 잔액이 0이 아닌 프로젝트마다 거짓 불일치가 났다.)
+function balanceControl(balance, controls) {
+  const flow = (kind) => controls.find((control) => control.kind === 'derived' && control.derivedKind === kind);
+  const deposit = flow('deposit_total');
+  const withdrawal = flow('withdrawal_total');
+  const computed = Number.isSafeInteger(deposit?.computed) && Number.isSafeInteger(withdrawal?.computed)
+    ? deposit.computed - withdrawal.computed
+    : null;
+  const annualValue = (control, year) => control?.annualValues?.find((item) => item.year === year)?.value || 0;
+  const years = [...new Set([...(deposit?.annualValues || []), ...(withdrawal?.annualValues || [])].map((item) => item.year))]
+    .sort((left, right) => left - right);
+  return {
+    ...balance,
+    computed,
+    matches: balance.value === null || computed === null ? null : balance.value === computed,
+    annualValues: years.map((year) => ({ year, value: annualValue(deposit, year) - annualValue(withdrawal, year) })),
+  };
+}
+
 function annualSheetFinancialTotals({ depositScheduleRows, projectionControls }) {
   const years = new Set(depositScheduleRows.map((row) => Number(String(row.yearMonth).slice(0, 4))));
   for (const control of projectionControls) {
@@ -479,13 +500,18 @@ export function extractCashflowSheetFacts({
   const modeControls = (mode) => {
     const section = template?.sections?.find((candidate) => candidate.mode === mode);
     const columns = section?.weekColumns || [];
-    return controlRows(section).map((row) => controlRow({
+    const controls = controlRows(section).map((row) => controlRow({
       matrix,
       row,
       weekColumns: columns,
       issues,
       controlColumnIndex: depositControlColumnIndex,
     }));
+    return controls.map((control) => (
+      control.kind === 'derived' && control.derivedKind === 'balance'
+        ? balanceControl(control, controls)
+        : control
+    ));
   };
   const depositValues = weekColumns.map((week) => readWholeWon(
     matrix,

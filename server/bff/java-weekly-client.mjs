@@ -121,12 +121,24 @@ function readJavaError(status, payload) {
     : (upstreamFailure ? 'jvm_weekly_api_internal_error' : 'java_weekly_api_error');
   const error = createHttpError(normalizedStatus, message, code);
   error.upstreamStatus = status;
+  // 거절(4xx) 사유 원문은 위 안내 문장에 가려진다. 화면의 "자세히" 에 보이도록 따로 싣는다.
+  // 5xx 는 내부 오류 문장일 수 있어 싣지 않는다.
+  const engineReason = upstreamFailure ? '' : engineReasonText(payload?.message);
+  if (engineReason && engineReason !== message) error.engineReason = engineReason;
   if (payload?.details && typeof payload.details === 'object' && !Array.isArray(payload.details)) {
     error.details = payload.details;
   } else if (Number.isSafeInteger(payload?.expectedWriteCount)) {
     error.details = { expectedWriteCount: payload.expectedWriteCount };
   }
   return error;
+}
+
+const ENGINE_REASON_MAX_LENGTH = 300;
+
+function engineReasonText(value) {
+  if (typeof value !== 'string') return '';
+  const text = value.replace(/[\u0000-\u001f\u007f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return text.length > ENGINE_REASON_MAX_LENGTH ? `${text.slice(0, ENGINE_REASON_MAX_LENGTH)}…` : text;
 }
 
 function responseTooLargeError() {
