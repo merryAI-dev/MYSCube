@@ -432,6 +432,7 @@ export function buildSettlementCycleRolloutInventory({ requests = [], heads = []
   const recoverableHeads = [];
   const invalidHeads = [];
   const verificationTargets = [];
+  const headCycleByProject = new Map();
   let canonicalHeadCount = 0;
   for (const document of heads) {
     const record = dataOf(document);
@@ -442,7 +443,10 @@ export function buildSettlementCycleRolloutInventory({ requests = [], heads = []
     );
     if (canonical) {
       canonicalHeadCount += 1;
-      if (canonical.target) verificationTargets.push(canonical.target);
+      if (canonical.target) {
+        verificationTargets.push(canonical.target);
+        headCycleByProject.set(projectId, canonical.target.cycleYearMonth);
+      }
       if (recoverable) recoverableHeads.push(recoverable);
     } else if (recoverable) {
       recoverableHeads.push(recoverable);
@@ -531,11 +535,16 @@ export function buildSettlementCycleRolloutInventory({ requests = [], heads = []
     if (documentType === 'REQUEST'
       && text(record.contractVersion) === CONTRACT_VERSION
       && status === 'APPROVED') {
-      verificationTargets.push({
-        projectId: text(record.projectId),
-        cycleYearMonth: text(record.cycleYearMonth),
-        requestId: text(record.requestId) || text(document.id),
-      });
+      const headCycle = headCycleByProject.get(text(record.projectId));
+      // 프로젝트 헤드가 이미 더 나중 사이클을 닫았다면 지난 사이클의 승인 요청은
+      // 현재 프로젝션과 대조할 대상이 아니다 (헤드 대상이 최신 사이클을 대표한다).
+      if (!headCycle || text(record.cycleYearMonth) >= headCycle) {
+        verificationTargets.push({
+          projectId: text(record.projectId),
+          cycleYearMonth: text(record.cycleYearMonth),
+          requestId: text(record.requestId) || text(document.id),
+        });
+      }
     }
   }
 
