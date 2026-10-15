@@ -1,7 +1,8 @@
 import { parseIcsEvents, busyIntervalsForDate } from './ics-calendar.mjs';
 import { availableRoomWindows, WORKING_HOURS } from './merryhere-request.mjs';
 
-const MAX_BYTES = 2000000;
+// Live room feeds include years of history (3.8–5.8 MB); bound reads before buffering.
+const MAX_BYTES = 16 * 1024 * 1024;
 const minutesOf = (time) => Number(time.slice(0, 2)) * 60 + Number(time.slice(3));
 const timeOf = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 
@@ -41,8 +42,24 @@ async function fetchIcsText(url, fetchImpl) {
   try { response = await fetchImpl(url, { redirect: 'error', signal: AbortSignal.timeout(10000) }); }
   catch { throw new Error('calendar_transport_error'); }
   if (!response.ok) throw new Error('calendar_provider_error');
-  const text = await response.text();
-  if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('calendar_response_large');
+  let text;
+  if (response.body?.getReader) {
+    const reader = response.body.getReader(), chunks = [];
+    let bytes = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytes += value.byteLength;
+        if (bytes > MAX_BYTES) { await reader.cancel(); throw new Error('calendar_response_large'); }
+        chunks.push(Buffer.from(value));
+      }
+      text = Buffer.concat(chunks).toString('utf8');
+    } finally { reader.releaseLock(); }
+  } else {
+    text = await response.text();
+    if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('calendar_response_large');
+  }
   if (!/^BEGIN:VCALENDAR\r?$/m.test(text) || !/^END:VCALENDAR\r?$/m.test(text)) throw new Error('calendar_format_changed');
   return text;
 }

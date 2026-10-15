@@ -123,3 +123,15 @@ it('never treats an HTML login response as an empty, available calendar', async 
   expect(result.windows).toEqual([]);
   expect(result.checks.every(c => c.status === 'failed')).toBe(true);
 });
+
+it('reads a valid historical feed larger than 2 MB and still enforces a streaming ceiling', async () => {
+  const large = vevent(['UID:busy', 'DTSTART;TZID=Asia/Seoul:20261001T130000', 'DTEND;TZID=Asia/Seoul:20261001T140000', 'DESCRIPTION:' + 'x'.repeat(6000000)]);
+  const rooms = createGoogleCalendarRooms({ env: { GOOGLE_CALENDAR_ROOMS_JSON: JSON.stringify([floor6]) }, fetchImpl: async () => new Response(large), now: () => Date.parse('2026-09-30T00:00:00+09:00') });
+  expect((await rooms.readForDate('2026-10-01', { start: '11:00', end: '12:00', duration: 60 })).windows).toHaveLength(1);
+  const cancel = vi.fn();
+  const blocked = createGoogleCalendarRooms({ env, fetchImpl: async () => new Response(new ReadableStream({ pull(controller) { controller.enqueue(new Uint8Array(1024 * 1024)); }, cancel })) });
+  const result = await blocked.readForDate('2026-10-01', {});
+  expect(result.windows).toEqual([]);
+  expect(result.checks.every(x => x.status === 'failed')).toBe(true);
+  expect(cancel).toHaveBeenCalledTimes(2);
+});
