@@ -154,6 +154,29 @@ describe('cashflow settlement-cycle rollout audit', () => {
     expect(invalid.verificationTargets).toEqual([]);
   });
 
+  it('verifies only the head cycle once a project has several approved cycles', () => {
+    const request = (cycle) => document(`project-a-${cycle}`, {
+      documentType: 'REQUEST', contractVersion: 'cashflow-cumulative-close-v2',
+      projectId: 'project-a', requestId: `project-a-${cycle}`, cycleYearMonth: cycle, status: 'APPROVED',
+    });
+    const inventory = buildSettlementCycleRolloutInventory({
+      heads: [document('project-a', {
+        contractVersion: 'cashflow-cumulative-close-v2', projectId: 'project-a',
+        status: 'CLOSED', authorityExists: true, revision: 3, rootHash,
+        fromMonth: '2023-01', closedThrough: '2026-09', settlementMonth: '2026-10',
+        closedRanges: [{
+          affectedFromMonth: '2023-01', affectedThroughMonth: '2026-09',
+          closedByCycleYearMonth: '2026-10', approvalVersionId: 'version-a',
+          requestId: 'project-a-2026-10', ledgerRevision: 2, rootHash,
+        }],
+      })],
+      requests: [request('2026-08'), request('2026-09'), request('2026-10')],
+    });
+    expect(inventory.verificationTargets).toEqual([{
+      projectId: 'project-a', cycleYearMonth: '2026-10', requestId: 'project-a-2026-10',
+    }]);
+  });
+
   it('accepts only the cycle-keyed request identity for a canonical authority range', () => {
     const targetKeyed = buildSettlementCycleRolloutInventory({
       heads: [document('project-a', {
