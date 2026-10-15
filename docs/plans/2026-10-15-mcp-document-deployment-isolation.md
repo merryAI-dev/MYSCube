@@ -51,5 +51,8 @@ flowchart LR
 - 이 독립 패키지에서 기존에 권한 있게 확보한 실제 계약1·견적2·과업3쪽 모두 렌더링 및 원본 SHA 일치 확인. 다운로드 함수는 로컬 원본 바이트를 반환하도록 주입했으므로 운영 인증·MCP 전달·일반 GPT 판독 성공으로 집계하지 않는다.
 - PR #927 / main `7b41ecd5`의 CI는 통과했다. 최초 독립 배포 run `38698892547`은 후보 프로젝트 정체성 검사에서 실패했고 전용 도메인 승격 및 Worker 전환은 실행되지 않았다.
 - 원인은 CLI가 스테이징 `.vercel/project.json`보다 상속된 웹용 `VERCEL_PROJECT_ID`를 우선하여 웹 프로젝트에 `--skip-domain` 후보를 만든 것이다. CLI 자식 환경의 프로젝트 ID를 검증된 문서 프로젝트 ID로 명시적으로 덮어쓰도록 보완한다. 후보 정체성 검사와 도메인 미승격 가드는 유지한다.
-- 독립 서비스 readiness 및 실제 GPT 원문 검증은 아직 통과하지 않았다.
+- PR #928 / main `ad49a859` 배포 run `38700237968`에서 별도 프로젝트 `prj_vapHnMwhLA0GpQwSpwNgxQq6SzTB` 배포·후보 확인·도메인 승격을 완료했다. 실제 PDF→JPEG readiness, 비업무 경로 404, 무토큰 문서 401 검사 모두 통과했다. 공개 healthz에서도 같은 release와 renderer=ready를 확인했다.
+- 기존 웹 운영 도메인은 배포 실패 직후에도 `20b64a3` / `4wtXTsSgrAsHvavWyg3DVrF6iCi7`을 유지함을 Vercel 대시보드에서 확인했다.
+- 생성된 문서 프로젝트 ID를 저장소 변수에 고정하고 일회성 생성 승인 변수를 false로 변경했다. 준비 완료 후 `MCP_DOCUMENTS_ACTIVE_ORIGIN`을 지정했다. 이 기록의 정상 main CI 배포에서 Worker 전환을 검증한다.
+- 실제 일반 GPT 원문 판독·내용 대조는 아직 통과하지 않았다. 서비스 readiness를 사용자 목표 달성으로 집계하지 않는다.
 - Drive 링크의 대용량 파일은 이 서비스가 자동으로 가져오지 않는다. 이번 범위는 MYSCube 인증 첨부 경로다.
