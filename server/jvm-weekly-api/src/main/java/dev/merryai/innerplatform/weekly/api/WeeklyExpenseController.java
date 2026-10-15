@@ -1353,37 +1353,13 @@ public class WeeklyExpenseController {
     ) {
     }
 
-    // 거절 응답(409 등)의 사유는 응답 본문에만 담기고 어디에도 남지 않았다. 화면의 "요청 ID" 로
-    // Cloud Logging 에서 무엇이 막았는지 찾을 수 있게 한 줄 남긴다. details(금액·셀 목록)는 남기지 않는다.
-    static String rejectionLogLine(HttpServletRequest request, int status, String code, String reason) {
-        String method = request == null ? "" : String.valueOf(request.getMethod());
-        String path = request == null ? "" : String.valueOf(request.getRequestURI());
-        String rawRequestId = request == null ? null : request.getHeader("x-request-id");
-        String requestId = rawRequestId == null ? "" : rawRequestId.replaceAll("[^A-Za-z0-9_.:-]", "");
-        if (requestId.length() > 128) requestId = requestId.substring(0, 128);
-        String text = reason == null ? "" : reason.replaceAll("[\\r\\n\\t]+", " ").trim();
-        if (text.length() > 500) text = text.substring(0, 500) + "…";
-        return "cashflow_request_rejected status=" + status
-            + " code=" + code
-            + " method=" + method
-            + " path=" + path
-            + " requestId=" + requestId
-            + " reason=" + text;
-    }
-
-    private static void logRejection(HttpServletRequest request, int status, String code, String reason) {
-        LOGGER.log(System.Logger.Level.WARNING, rejectionLogLine(request, status, code, reason));
-    }
-
     @org.springframework.web.bind.annotation.ExceptionHandler(CashflowMonthReopenPolicy.Violation.class)
     public ResponseEntity<Map<String, String>> cashflowMonthReopenConflict(
-        CashflowMonthReopenPolicy.Violation error,
-        HttpServletRequest request
+        CashflowMonthReopenPolicy.Violation error
     ) {
         int status = error.reason() == CashflowMonthReopenPolicy.ViolationReason.DECISION_FORBIDDEN
             ? 403
             : 409;
-        logRejection(request, status, cashflowMonthReopenConflictCode(error.reason()), error.reason().name());
         return ResponseEntity.status(status).body(Map.of(
             "ok", "false",
             "code", cashflowMonthReopenConflictCode(error.reason()),
@@ -1443,11 +1419,7 @@ public class WeeklyExpenseController {
     }
 
     @org.springframework.web.bind.annotation.ExceptionHandler(CashflowMonthCloseApprovalBlockedException.class)
-    public ResponseEntity<Map<String, Object>> monthCloseApprovalBlocked(
-        CashflowMonthCloseApprovalBlockedException error,
-        HttpServletRequest request
-    ) {
-        logRejection(request, 409, "cashflow_month_close_approval_blocked", error.reason().name() + " " + error.getMessage());
+    public ResponseEntity<Map<String, Object>> monthCloseApprovalBlocked(CashflowMonthCloseApprovalBlockedException error) {
         return ResponseEntity.status(409).body(Map.of(
             "ok", "false",
             "code", "cashflow_month_close_approval_blocked",
@@ -1457,8 +1429,7 @@ public class WeeklyExpenseController {
     }
 
     @org.springframework.web.bind.annotation.ExceptionHandler(WeeklyExpenseConflictException.class)
-    public ResponseEntity<Map<String, String>> conflict(WeeklyExpenseConflictException error, HttpServletRequest request) {
-        logRejection(request, 409, "weekly_expense_conflict", error.getMessage());
+    public ResponseEntity<Map<String, String>> conflict(WeeklyExpenseConflictException error) {
         return ResponseEntity.status(409).body(Map.of(
             "ok", "false",
             "code", "weekly_expense_conflict",
@@ -1468,10 +1439,8 @@ public class WeeklyExpenseController {
 
     @org.springframework.web.bind.annotation.ExceptionHandler(CashflowSettledWeekChangeConfirmationRequiredException.class)
     public ResponseEntity<Map<String, Object>> settledWeekChangeConfirmationRequired(
-        CashflowSettledWeekChangeConfirmationRequiredException error,
-        HttpServletRequest request
+        CashflowSettledWeekChangeConfirmationRequiredException error
     ) {
-        logRejection(request, 409, "cashflow_settled_week_change_confirmation_required", error.getMessage());
         return ResponseEntity.status(409).body(Map.of(
             "ok", false,
             "code", "cashflow_settled_week_change_confirmation_required",
@@ -1486,10 +1455,8 @@ public class WeeklyExpenseController {
 
     @org.springframework.web.bind.annotation.ExceptionHandler(CashflowSettledWeekChangeConfirmationExpiredException.class)
     public ResponseEntity<Map<String, Object>> settledWeekChangeConfirmationExpired(
-        CashflowSettledWeekChangeConfirmationExpiredException error,
-        HttpServletRequest request
+        CashflowSettledWeekChangeConfirmationExpiredException error
     ) {
-        logRejection(request, 409, "cashflow_settled_week_change_confirmation_expired", error.getMessage());
         return ResponseEntity.status(409).body(Map.of(
             "ok", false,
             "code", "cashflow_settled_week_change_confirmation_expired",
@@ -1498,11 +1465,7 @@ public class WeeklyExpenseController {
     }
 
     @org.springframework.web.bind.annotation.ExceptionHandler(WeeklyExpenseAtomicWriteLimitException.class)
-    public ResponseEntity<Map<String, Object>> atomicWriteLimit(
-        WeeklyExpenseAtomicWriteLimitException error,
-        HttpServletRequest request
-    ) {
-        logRejection(request, error.statusCode(), error.code(), error.getMessage());
+    public ResponseEntity<Map<String, Object>> atomicWriteLimit(WeeklyExpenseAtomicWriteLimitException error) {
         return ResponseEntity.status(error.statusCode()).body(Map.of(
             "ok", false,
             "code", error.code(),
@@ -1512,8 +1475,7 @@ public class WeeklyExpenseController {
     }
 
     @org.springframework.web.bind.annotation.ExceptionHandler(WeeklyExpenseEditLeaseException.class)
-    public ResponseEntity<Map<String, Object>> editLease(WeeklyExpenseEditLeaseException error, HttpServletRequest request) {
-        logRejection(request, error.statusCode(), error.code(), error.getMessage());
+    public ResponseEntity<Map<String, Object>> editLease(WeeklyExpenseEditLeaseException error) {
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("ok", false);
         response.put("code", error.code());
@@ -1526,9 +1488,7 @@ public class WeeklyExpenseController {
         DataIntegrityViolationException.class,
         ObjectOptimisticLockingFailureException.class
     })
-    public ResponseEntity<Map<String, String>> persistenceConflict(Exception error, HttpServletRequest request) {
-        logRejection(request, 409, "weekly_expense_persistence_conflict",
-            error.getClass().getSimpleName() + " " + error.getMessage());
+    public ResponseEntity<Map<String, String>> persistenceConflict(Exception error) {
         return ResponseEntity.status(409).body(Map.of(
             "ok", "false",
             "code", "weekly_expense_persistence_conflict",
