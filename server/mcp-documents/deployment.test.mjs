@@ -30,4 +30,11 @@ describe('document release isolation', () => {
     const worker = await readFile(new URL('../../.github/workflows/mcp-worker-deploy.yml', import.meta.url), 'utf8');
     expect(worker).toContain('MCP_DOCUMENTS_ACTIVE_ORIGIN');
   });
+
+  it('overrides the website project environment before invoking the deployment CLI', async () => {
+    const script = await readFile(new URL('../../scripts/deploy-mcp-documents.mjs', import.meta.url), 'utf8');
+    expect(script).toContain('env: { ...env, VERCEL_PROJECT_ID: project.id, VERCEL_ORG_ID: env.VERCEL_ORG_ID }');
+    expect(script).toContain("'--skip-domain'");
+    expect(script.indexOf("throw new Error('Wrong candidate identity')")).toBeLessThan(script.indexOf('await verify(candidate, true)'));
+  });
 });
