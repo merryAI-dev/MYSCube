@@ -40,6 +40,21 @@ function harness({ actor = 'head-a', role = 'pm', projectIds = [], contractPath 
 describe('project request attachment text', () => {
   const url = '/api/v1/project-requests/req-1/attachments/contract/text';
 
+  it('renders authorized pages and preserves denial and path checks for images', async () => {
+    const h = harness();
+    const image = await h.api.get(`${url}?format=image&page=1`).expect(200);
+    expect(image.body).toMatchObject({ page: 1, pageCount: 2, mimeType: 'image/jpeg' });
+    expect(image.headers['cache-control']).toBe('private, no-store');
+    expect(h.writes).not.toHaveBeenCalled();
+    const other = harness({ actor: 'other-head' });
+    await other.api.get(`${url}?format=image&page=1`).expect(403);
+    expect(other.download).not.toHaveBeenCalled();
+    const forged = harness({ contractPath: 'orgs/other/project-registration-documents/p001/contract.pdf' });
+    await forged.api.get(`${url}?format=image&page=1`).expect(409);
+    expect(forged.download).not.toHaveBeenCalled();
+    await h.api.get(`${url}?format=image&page=0`).expect(400);
+  });
+
   it('gives the designated approver the page texts of the same file the download serves', async () => {
     const h = harness();
     const text = await h.api.get(url).expect(200);
@@ -73,6 +88,16 @@ describe('project request attachment text', () => {
 
 describe('project attachment text', () => {
   const url = '/api/v1/projects/p001/attachments/contract/text';
+
+  it('renders an assigned members page and denies an unrelated member', async () => {
+    const h = harness({ actor: 'pm-a', projectIds: ['p001'] });
+    const image = await h.api.get(`${url}?format=image&page=2`).expect(200);
+    expect(image.body).toMatchObject({ page: 2, pageCount: 2, mimeType: 'image/jpeg' });
+    expect(h.writes).not.toHaveBeenCalled();
+    const other = harness({ actor: 'pm-b', projectIds: ['p999'] });
+    await other.api.get(`${url}?format=image&page=1`).expect(403);
+    expect(other.download).not.toHaveBeenCalled();
+  });
 
   it('gives an assigned member the page texts', async () => {
     const h = harness({ actor: 'pm-a', projectIds: ['p001'] });

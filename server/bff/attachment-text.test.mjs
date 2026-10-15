@@ -1,11 +1,42 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
-import { ATTACHMENT_TEXT_MAX_BYTES, attachmentTextQuality, buildAttachmentTextBody } from './attachment-text.mjs';
+import { ATTACHMENT_TEXT_MAX_BYTES, attachmentTextQuality, buildAttachmentTextBody, buildAttachmentContentBody } from './attachment-text.mjs';
 import { makePdf } from './test-pdf.fixture.mjs';
 
 const contractText = 'Total contract amount 110,000,000 KRW including VAT, period 2026-03-01 to 2026-12-31';
 
 describe('attachment text body', () => {
+  it('renders only the requested page as a bounded JPEG without requiring a text layer', async () => {
+    const buffer = makePdf([contractText, '']);
+    const downloaded = { buffer, contentType: 'application/pdf' };
+    const image = await buildAttachmentContentBody({ kind: 'contract', downloaded, query: { format: 'image', page: '2' } });
+    expect(image).toMatchObject({ page: 2, pageCount: 2, mimeType: 'image/jpeg' });
+    expect(image.sha256).toBe(createHash('sha256').update(buffer).digest('hex'));
+    const bytes = Buffer.from(image.data, 'base64');
+    expect(bytes.subarray(0, 3)).toEqual(Buffer.from([255, 216, 255]));
+    expect(bytes.length).toBeLessThanOrEqual(2 * 1024 * 1024);
+    expect(Math.max(image.width, image.height)).toBeLessThanOrEqual(2400);
+    const missing = await buildAttachmentContentBody({ kind: 'contract', downloaded, query: { format: 'image', page: '3' } });
+    expect(missing).toMatchObject({ reason: 'invalid_page', pageCount: 2 });
+    expect(missing.data).toBeUndefined();
+    expect((await buildAttachmentContentBody({ kind: 'contract', downloaded })).pages[0]).toContain('110,000,000');
+  });
+
+  it.each([
+    { format: 'other', page: '1' }, { format: 'image', page: '0' }, { format: 'image', page: '301' },
+    { format: 'image', page: '1.5' }, { format: 'image', page: ['1'] }, { format: 'image' },
+  ])('rejects malformed image queries %j', async (query) => {
+    await expect(buildAttachmentContentBody({ kind: 'contract', downloaded: {}, query })).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('refuses non-PDF and oversized image inputs without returning bytes', async () => {
+    const query = { format: 'image', page: '1' };
+    const invalid = await buildAttachmentContentBody({ kind: 'contract', downloaded: { buffer: Buffer.from('not pdf') }, query });
+    expect(invalid).toMatchObject({ reason: 'not_pdf' });
+    const huge = await buildAttachmentContentBody({ kind: 'contract', downloaded: { buffer: Buffer.alloc(ATTACHMENT_TEXT_MAX_BYTES + 1) }, query });
+    expect(huge).toMatchObject({ reason: 'too_large' });
+    expect(huge.data).toBeUndefined();
+  });
   it('returns page texts with a content hash and the original metadata', async () => {
     const pdf = makePdf([contractText, 'Article 9 Liquidated damages 0.3 percent per day of delay for the service']);
     const body = await buildAttachmentTextBody({ kind: 'contract', name: '계약서.pdf', downloaded: { buffer: pdf, contentType: 'application/pdf' } });
@@ -16,7 +47,7 @@ describe('attachment text body', () => {
     expect(body.reason).toBeUndefined();
   });
 
-  it('marks a PDF without a text layer as sparse so the user attaches it to the chat', async () => {
+  it('marks a PDF without a text layer as sparse for page-image reading', async () => {
     const body = await buildAttachmentTextBody({ kind: 'contract', downloaded: { buffer: makePdf(['', '']), contentType: 'application/pdf' } });
     expect(body).toMatchObject({ pageCount: 2, quality: 'sparse', pages: ['', ''] });
   });

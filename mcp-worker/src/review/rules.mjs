@@ -319,7 +319,7 @@ export function reviewSubmission({ payload, documents, attachedKinds = REVIEW_DO
     states.push(state);
     REVIEWERS[kind](payload ?? {}, state, out);
     coverage.push(coverageFor({ kind, readable: true, expected: EXPECTED_FIELDS[kind], checked: state.checked, missing: state.missing }));
-    if (doc.source !== 'attachment_text') out.limitations.push(`${DOCUMENT_LABELS[kind]}은(는) ${doc.source === 'connector' ? '커넥터' : '대화 첨부'}로 읽어 MCP가 원문을 확인하지 못했습니다(근거 미검증).`);
+    if (doc.source !== 'attachment_text') out.limitations.push(`${DOCUMENT_LABELS[kind]}은(는) ${doc.source === 'connector' ? '커넥터' : doc.source === 'attachment_image' ? '원문 쪽 이미지' : '대화 첨부'}로 읽어 MCP가 인용 텍스트를 자동 검증하지 못했습니다(근거 미검증).`);
   }
   reviewAcrossDocuments(states, out);
   out.limitations.push('PDF 글자 레이어만 대조합니다(OCR 없음). 판정은 경고이며 승인은 사람이 합니다.');

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { extractPdfPages } from './pdf-text.mjs';
+import { extractPdfPages, renderPdfPage } from './pdf-text.mjs';
 
 // 첨부 텍스트 응답(정합성 검토 MCP 용, 읽기 전용).
 // 권한 확인과 파일 읽기는 각 라우트의 기존 다운로드 함수가 하고, 여기서는 받은 바이트만 다룬다.
@@ -55,4 +55,31 @@ export function sendAttachmentText(res, body) {
   res.setHeader('cache-control', 'private, no-store');
   res.setHeader('x-content-type-options', 'nosniff');
   res.status(200).json(body);
+}
+
+export async function buildAttachmentContentBody({ query = {}, ...input }) {
+  if (query.format === undefined || query.format === 'text') return buildAttachmentTextBody(input);
+  const invalid = (message) => Object.assign(new Error(message), { statusCode: 400, code: 'attachment_format_invalid' });
+  if (query.format !== 'image' || typeof query.page !== 'string' || !/^[1-9]\d{0,2}$/.test(query.page)) {
+    throw invalid('format=image requires page 1-300');
+  }
+  const page = Number(query.page);
+  if (page > ATTACHMENT_TEXT_MAX_PAGES) throw invalid('page exceeds limit');
+  const buffer = toBuffer(input.downloaded?.buffer);
+  const base = {
+    kind: input.kind, name: readText(input.name) || readText(input.downloaded?.name), page,
+    sha256: createHash('sha256').update(buffer).digest('hex'),
+  };
+  if (buffer.length > ATTACHMENT_TEXT_MAX_BYTES) return { ...base, reason: 'too_large' };
+  if (buffer.subarray(0, 5).toString('latin1') !== '%PDF-') return { ...base, reason: 'not_pdf' };
+  let rendered;
+  try {
+    rendered = await renderPdfPage(buffer, { pageNumber: page, maxPages: ATTACHMENT_TEXT_MAX_PAGES });
+  } catch {
+    return { ...base, reason: 'unreadable' };
+  }
+  if (rendered.reason) return { ...base, pageCount: rendered.pageCount, reason: rendered.reason };
+  if (rendered.bytes.length > 2 * 1024 * 1024) return { ...base, pageCount: rendered.pageCount, reason: 'image_too_large' };
+  return { ...base, pageCount: rendered.pageCount, width: rendered.width, height: rendered.height,
+    mimeType: 'image/jpeg', data: rendered.bytes.toString('base64') };
 }

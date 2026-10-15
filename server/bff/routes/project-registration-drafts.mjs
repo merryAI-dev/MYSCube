@@ -34,7 +34,7 @@ import {
   projectDocumentValidationError,
   projectProposalFileMetadataError,
 } from '../project-document-validation.mjs';
-import { buildAttachmentTextBody, sendAttachmentText } from '../attachment-text.mjs';
+import { buildAttachmentContentBody, sendAttachmentText } from '../attachment-text.mjs';
 
 const RESOURCE_TYPE = 'project-registration';
 const DOCUMENT_FIELD_BY_KIND = {
@@ -1599,7 +1599,7 @@ export function mountProjectRegistrationDraftRoutes(app, {
       draftId: routeDraftId(req),
       documentKind,
     });
-    sendAttachmentText(res, await buildAttachmentTextBody({ kind: documentKind, downloaded, name: downloaded?.name }));
+    sendAttachmentText(res, await buildAttachmentContentBody({ kind: documentKind, downloaded, name: downloaded?.name, query: req.query }));
   }));
 
   app.post('/api/v1/project-registration-drafts/:draftId/history/:revision/restore', asyncHandler(async (req, res) => {

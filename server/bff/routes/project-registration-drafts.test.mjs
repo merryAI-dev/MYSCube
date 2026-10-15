@@ -2201,11 +2201,11 @@ describe('project registration draft routes', () => {
     expect(response.headers['x-test']).toBeUndefined();
   });
 
-  it('refuses draft attachment text exactly when the download would be refused', async () => {
+  it.each(['', '?format=image&page=1'])('refuses draft attachment reads with the download permissions: %s', async (query) => {
     const { app, service } = createRouteApp();
     service.readAttachment.mockRejectedValueOnce(Object.assign(new Error('Draft owner required'), { statusCode: 403, code: 'forbidden' }));
     const response = await request(app)
-      .get('/api/v1/project-registration-drafts/draft-a/attachments/contract/text')
+      .get(`/api/v1/project-registration-drafts/draft-a/attachments/contract/text${query}`)
       .expect(403);
     expect(response.body.error).toBe('forbidden');
     expect(response.body.pages).toBeUndefined();

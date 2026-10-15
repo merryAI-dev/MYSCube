@@ -32,11 +32,28 @@ describe('review subject', () => {
     expect(attachmentTextPath({ type: 'registration_draft', draftId: 'd1' }, 'quote')).toBe('/api/v1/project-registration-drafts/d1/attachments/quote/text');
     expect(attachmentTextPath({ type: 'edit_draft', projectId: 'p1' }, 'contract')).toBe('/api/v1/project-info-drafts/p1/attachments/contract/text');
     expect(attachmentTextPath({ type: 'project', projectId: 'p1' }, 'customer_business_registration')).toBe('/api/v1/projects/p1/attachments/customer_business_registration/text');
-    expect(() => attachmentTextPath({ type: 'project', projectId: 'p1' }, 'tax_invoice')).toThrow();
+    expect(attachmentTextPath({ type: 'project', projectId: 'p1' }, 'rfp_request_evidence')).toBe('/api/v1/projects/p1/attachments/rfp_request_evidence/text');
+    expect(() => attachmentTextPath({ type: 'project', projectId: 'p1' }, 'unknown')).toThrow();
   });
 });
 
 describe('loading a submission', () => {
+  it('exposes linked proposal and presentation files for the users Drive connector', async () => {
+    const project = { ...payload, rfpRequestEvidenceDocument: doc('rfp.pdf'), registrationConfirmations: {
+      proposalPptOriginal: 'https://drive.google.com/file/d/proposal/view?resourcekey=key',
+      presentationPptOriginal: 'https://docs.google.com/presentation/d/slides/edit',
+    } };
+    const bff = bffWith({ '/api/v1/projects/p1/review-document': { project } });
+    const result = await loadSubmission(bff, { type: 'project', projectId: 'p1' });
+    expect(result.attachedKinds).toContain('rfp_request_evidence');
+    expect(result.linkedDocuments).toEqual([
+      { kind: 'proposalPptOriginal', url: project.registrationConfirmations.proposalPptOriginal, readWith: 'google_drive', evidence: 'unverified' },
+      { kind: 'presentationPptOriginal', url: project.registrationConfirmations.presentationPptOriginal, readWith: 'google_drive', evidence: 'unverified' },
+    ]);
+    project.registrationConfirmations.proposalPptOriginal = 'https://drive.google.com.attacker.example/file/d/x';
+    project.registrationConfirmations.presentationPptOriginal = 'https://user:secret@drive.google.com/file/d/x';
+    expect((await loadSubmission(bff, { type: 'project', projectId: 'p1' })).linkedDocuments).toEqual([]);
+  });
   it('reads a registration request, exposing only allow-listed fields', async () => {
     const bff = bffWith({ '/api/v1/projects/p1/review-document?requestId=r1': { request: { requestKind: 'REGISTRATION', payload }, reviewToken: 'tok', readiness: { issues: [{ code: 'missing_quote', field: 'quoteDocument', message: '견적서 확인', secret: 'x' }] } } });
     const result = await loadSubmission(bff, { type: 'request', projectId: 'p1', requestId: 'r1' });

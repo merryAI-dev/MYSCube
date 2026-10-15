@@ -52,10 +52,10 @@ const extraction = (fields, extra = {}) => ({ kind: 'contract', source: 'attachm
 const amount = { contractAmount: { value: '120,000,000', quote: '(₩120,000,000, 부가가치세 포함)' } };
 
 describe('project review tools', () => {
-  it('registers five read-only, described tools only when a text store and uid are given', async () => {
+  it('registers six read-only, described tools only when a text store and uid are given', async () => {
     await connect();
     const tools = (await client.listTools()).tools.filter((tool) => tool.name.startsWith('project_review') || tool.name.startsWith('project_attachment') || tool.name === 'project_submission_get');
-    expect(tools.map((tool) => tool.name).sort()).toEqual(['project_attachment_text', 'project_review_check', 'project_review_playbook', 'project_review_queue', 'project_submission_get']);
+    expect(tools.map((tool) => tool.name).sort()).toEqual(['project_attachment_page', 'project_attachment_text', 'project_review_check', 'project_review_playbook', 'project_review_queue', 'project_submission_get']);
     for (const tool of tools) {
       expect(tool.annotations.readOnlyHint).toBe(true);
       expect(tool.description.length).toBeGreaterThan(40);
@@ -101,11 +101,39 @@ describe('project review tools', () => {
     expect(second.json.continuation).toBeUndefined();
   });
 
-  it('tells the user to attach a scanned document to the chat instead of returning empty text', async () => {
+  it('directs scanned documents to the page tool without requiring another upload', async () => {
     await connect({ bff: fakeBff({ '/api/v1/project-requests/r1/attachments/contract/text': () => ({ kind: 'contract', name: 'scan.pdf', sha256: SHA, pageCount: 1, pages: [''], quality: 'sparse' }) }) });
     const { json } = await call('project_attachment_text', { subject, kind: 'contract' });
     expect(json).toMatchObject({ quality: 'sparse', text: '' });
-    expect(json.guidance).toContain('chat_attachment');
+    expect(json.guidance).toContain('attachment_image');
+    expect(json.imageFallback).toEqual({ tool: 'project_attachment_page', arguments: { subject, kind: 'contract', page: 1, expectedSha256: SHA } });
+  });
+
+  it('returns an image block with a pinned continuation and checks permission on every page', async () => {
+    const body = { name: 'scan.pdf', sha256: SHA, page: 1, pageCount: 2, mimeType: 'image/jpeg', data: '/9j/2Q==' };
+    const bff = fakeBff({ '/api/v1/project-requests/r1/attachments/rfp_request_evidence/text': () => body });
+    await connect({ bff });
+    const args = { subject, kind: 'rfp_request_evidence', page: 1, expectedSha256: SHA };
+    const result = await call('project_attachment_page', args);
+    expect(result.isError).not.toBe(true);
+    expect(result.content[1]).toEqual({ type: 'image', mimeType: 'image/jpeg', data: body.data });
+    expect(result._meta.provenance.untrusted_content).toBe(true);
+    expect(result.json).toMatchObject({ evidence: 'unverified', source: 'attachment_image', continuation: { arguments: { page: 2, expectedSha256: SHA } } });
+    expect(result.content[0].text).not.toContain(body.data);
+    expect(bff.get).toHaveBeenCalledWith('/api/v1/project-requests/r1/attachments/rfp_request_evidence/text', { format: 'image', page: 1 }, { maxBytes: 3 * 1024 * 1024 });
+    body.sha256 = 'd'.repeat(64);
+    expect((await call('project_attachment_page', args)).isError).toBe(true);
+    bff.get.mockRejectedValue(new BffError(403, { code: 'forbidden' }));
+    const denied = await call('project_attachment_page', args);
+    expect(denied.isError).toBe(true);
+    expect(denied.content.some((item) => item.type === 'image')).toBe(false);
+  });
+
+  it('does not certify image readings as verified text evidence', async () => {
+    await connect();
+    const result = await call('project_review_check', { subject, extractions: [{ kind: 'contract', source: 'attachment_image', fields: amount }] });
+    expect(result.json.findings.find((item) => item.field === 'contractAmount')).toMatchObject({ status: 'check', evidence: 'unverified' });
+    expect(result.json.limitations.join(' ')).toContain('원문 쪽 이미지');
   });
 
   it('judges against the submission read fresh from MYSCube, with verified evidence and a reproducible review id', async () => {
