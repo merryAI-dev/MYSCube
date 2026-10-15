@@ -2376,11 +2376,9 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
                     return weeklySettlementStatusRecord(actor.tenantId(), projectId, yearMonth, weekNo, completion);
                 }
                 if ("SUBMITTED".equals(completionState)) {
-                    CashflowSettlementStatusRecord canonical = weeklySettlementStatusRecord(
-                        actor.tenantId(), projectId, yearMonth, weekNo, completion);
-                    confirmCashflowWeeklyUpdate(actor, projectId, new ConfirmCashflowWeeklyUpdateRequest(
-                        "settlement-approval", yearMonth, weekNo, canonical.revision()));
-                    Map<String, Object> confirmed = cachedDocumentIfPresent(completionSnapshot.getReference()).orElseThrow();
+                    // 시트·월 상태·쓰기 범위 검증 없이 완료 문서를 확정(LOCKED)하고 버전만 남긴다.
+                    Map<String, Object> confirmed = lockWeeklyCompletionForApproval(
+                        actor, projectId, yearMonth, weekNo, completionSnapshot.getReference(), completion);
                     return syncWeeklySettlementStatus(actor, projectId, yearMonth, weekNo, confirmed);
                 }
             }
@@ -3951,6 +3949,50 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         set(versionRef, version);
         syncWeeklySettlementStatus(actor, projectId, request.yearMonth(), request.weekNo(), completion);
         return toWeeklyCompletionRecord(projectId, request.yearMonth(), request.weekNo(), completion, false);
+    }
+
+    private Map<String, Object> lockWeeklyCompletionForApproval(
+        TrustedActorContext actor,
+        String projectId,
+        String yearMonth,
+        int weekNo,
+        DocumentReference ref,
+        Map<String, Object> current
+    ) {
+        String documentId = projectId + "-" + yearMonth + "-w" + weekNo;
+        long currentRevision = longValue(current.get("revision"), 0);
+        long nextRevision = Math.addExact(currentRevision, 1);
+        Instant confirmedAt = clock.instant();
+        DocumentReference versionRef = db.document(
+            cashflowWeeklyUpdateCompletionVersionPath(actor.tenantId(), documentId + "-r" + nextRevision));
+        Map<String, Object> patch = new LinkedHashMap<>();
+        patch.put("status", "LOCKED");
+        patch.put("revision", nextRevision);
+        patch.put("confirmedAt", confirmedAt.toString());
+        patch.put("confirmedByUid", actor.id());
+        patch.put("confirmedByName", actor.name());
+        patch.put("updatedAt", confirmedAt.toString());
+        set(ref, patch);
+        Map<String, Object> version = new LinkedHashMap<>();
+        version.put("id", documentId + "-r" + nextRevision);
+        version.put("tenantId", actor.tenantId());
+        version.put("projectId", projectId);
+        version.put("yearMonth", yearMonth);
+        version.put("weekNo", weekNo);
+        version.put("revision", nextRevision);
+        version.put("complianceStatus", text(current.get("complianceStatus"), ""));
+        version.put("lockState", "LOCKED");
+        version.put("deadline", text(current.get("deadline"), ""));
+        version.put("completedAt", text(current.get("completedAt"), ""));
+        version.put("completedBy", text(current.get("completedByName"), text(current.get("completedByUid"), "")));
+        version.put("operationId", text(current.get("operationId"), ""));
+        version.put("auditId", text(current.get("auditId"), ""));
+        version.put("updateResult", text(current.get("updateResult"), ""));
+        version.put("confirmedAt", confirmedAt.toString());
+        version.put("confirmedByUid", actor.id());
+        version.put("createdAt", confirmedAt.toString());
+        set(versionRef, version);
+        return merge(current, patch);
     }
 
     private CashflowSettlementStatusRecord syncWeeklySettlementStatus(
