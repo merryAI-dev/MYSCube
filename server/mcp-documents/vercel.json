@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "framework": null,
+  "functions": {
+    "api/*.mjs": {
+      "maxDuration": 60,
+      "includeFiles": "node_modules/{pdfjs-dist/{package.json,legacy/build/**,cmaps/**,standard_fonts/**,wasm/**},@napi-rs/canvas*/**}"
+    }
+  },
+  "rewrites": [
+    { "source": "/healthz", "destination": "/api/healthz" },
+    { "source": "/api/v1/:path*", "destination": "/api/render?__path=/api/v1/:path*" }
+  ]
+}

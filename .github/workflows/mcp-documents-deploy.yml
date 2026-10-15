@@ -1,0 +1,53 @@
+name: MCP Documents Deploy
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: mcp-documents-production
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && (vars.MCP_DOCUMENTS_PROJECT_ID != '' || vars.MCP_DOCUMENTS_PROVISION_APPROVED == 'true') && vars.MCP_DOCUMENTS_ORIGIN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: Production
+    env:
+      TARGET_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: .nvmrc
+      - name: Verify green CI on current main
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          if [ "$(git rev-parse origin/main)" != "$TARGET_SHA" ]; then
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${TARGET_SHA}&event=push" \
+            --jq '.workflow_runs | any(.conclusion == "success" and .head_branch == "main")' | grep -qx true
+          echo "current=true" >> "$GITHUB_OUTPUT"
+      - name: Deploy isolated renderer and verify native runtime
+        if: steps.gate.outputs.current == 'true'
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_DEPLOY_TOKEN_PRODUCTION }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+          MCP_DOCUMENTS_PROJECT_ID: ${{ vars.MCP_DOCUMENTS_PROJECT_ID }}
+          MCP_DOCUMENTS_PROVISION_APPROVED: ${{ vars.MCP_DOCUMENTS_PROVISION_APPROVED }}
+          MCP_DOCUMENTS_ORIGIN: ${{ vars.MCP_DOCUMENTS_ORIGIN }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.MCP_DOCUMENTS_AUTOMATION_BYPASS_SECRET }}
+        run: node scripts/deploy-mcp-documents.mjs
