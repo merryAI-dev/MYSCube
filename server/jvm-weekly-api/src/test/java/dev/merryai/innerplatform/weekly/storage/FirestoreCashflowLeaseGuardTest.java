@@ -431,7 +431,7 @@ class FirestoreCashflowLeaseGuardTest {
     }
 
     @Test
-    void rejectsManagerApprovalBeforeWeeklyCompletion() {
+    void approvesWeeklySettlementStatusWithoutCompletionDocument() {
         Fixture fixture = fixture(activeMember(), Map.of());
         fixture.documents.put("orgs/tenant-a/projects/project-a", Map.of(
             "id", "project-a",
@@ -442,13 +442,33 @@ class FirestoreCashflowLeaseGuardTest {
             "tenant-a", "manager-1", "manager@example.com", "manager", "Manager"
         );
 
+        // 조직장 승인은 상태 전환만 한다. 제출 여부를 다시 따지지 않는다.
+        WeeklyExpensePersistence.CashflowSettlementStatusRecord approved = fixture.persistence
+            .runCommandTransaction(() -> fixture.persistence.transitionCashflowSettlementStatus(
+                manager, "project-a", "2026-08", "WEEK_2", "APPROVE"));
+
+        assertThat(approved.status()).isEqualTo("COMPLETED");
+        assertThat(approved.approvedBy()).isEqualTo("Manager");
+    }
+
+    @Test
+    void rejectsWeeklyApprovalFromSomeoneWhoIsNotTheDesignatedApprover() {
+        Fixture fixture = fixture(activeMember(), Map.of());
+        fixture.documents.put("orgs/tenant-a/projects/project-a", Map.of(
+            "id", "project-a",
+            "tenantId", "tenant-a",
+            "executiveApproverId", "manager-1"
+        ));
+        TrustedActorContext other = new TrustedActorContext(
+            "tenant-a", "someone-else", "other@example.com", "manager", "Other"
+        );
+
         assertThatThrownBy(() -> fixture.persistence.runCommandTransaction(() ->
             fixture.persistence.transitionCashflowSettlementStatus(
-                manager, "project-a", "2026-08", "WEEK_2", "APPROVE"
+                other, "project-a", "2026-08", "WEEK_2", "APPROVE"
             )
         ))
-            .isInstanceOf(WeeklyExpenseConflictException.class)
-            .hasMessageContaining("status changed");
+            .hasMessageContaining("designated executive approver");
     }
 
     @Test
