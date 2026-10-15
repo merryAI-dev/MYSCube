@@ -19,7 +19,6 @@ import dev.merryai.innerplatform.weekly.api.SubmitCashflowSettlementCycleRequest
 import dev.merryai.innerplatform.weekly.api.TransitionCashflowSettlementCycleRequest;
 import dev.merryai.innerplatform.weekly.api.TransitionCashflowSettlementStatusRequest;
 import dev.merryai.innerplatform.weekly.api.TrustedActorContext;
-import dev.merryai.innerplatform.weekly.api.CashflowMonthCloseApprovalBlockedException;
 import dev.merryai.innerplatform.weekly.api.WeeklyExpenseConflictException;
 import dev.merryai.innerplatform.weekly.domain.CashflowSettlementCycleWorkflow;
 import dev.merryai.innerplatform.weekly.service.WeeklyExpenseAuthorizationService;
@@ -682,90 +681,6 @@ class FirestoreSettlementCycleEmulatorIT {
         assertThat(projectDocuments(harness, "weekly_api_audit_events")).hasSize(6);
         assertThat(projectDocuments(harness, "weekly_api_idempotency")).hasSize(6);
         assertThat(projectDocuments(harness, "monthly_close_versions")).hasSize(2);
-    }
-
-    @Test
-    void approvalIsOneClickEvenWhenTheSheetChangedAfterSubmission() throws Exception {
-        Harness harness = harness("it-one-click", "project-one-click");
-        seedCanonicalActorsAndProject(harness);
-        String cycleYearMonth = "2026-09";
-        Evidence evidence = seedStagedEvidence(
-            harness,
-            cycleYearMonth,
-            1,
-            FirestoreInheritedWeeklyExpensePersistence.computeCashflowTargetRevision(List.of()),
-            0,
-            Map.of("stage-one-click", "submit-one-click")
-        );
-        seedDocuments(Map.of(harness.settlementPath(cycleYearMonth), Map.of(
-            "tenantId", harness.tenantId(), "projectId", harness.projectId(), "yearMonth", cycleYearMonth,
-            "periods", Map.of()
-        )));
-        transaction(harness, () -> harness.service().submitCashflowSettlementCycle(
-            harness.approver(), harness.projectId(), evidence.submit("submit-one-click", "stage-one-click", 0)
-        ));
-        // 제출 뒤 실무자가 시트를 고치고 다시 반영하는 중이다. 승인은 이것을 보지 않는다.
-        Map<String, Object> projection = new LinkedHashMap<>();
-        CUMULATIVE_LINES.forEach(line -> projection.put(line, 1_000L));
-        String weekId = harness.projectId() + "-2026-08-w2";
-        seedDocuments(Map.of(
-            "orgs/" + harness.tenantId() + "/cashflow_weeks/" + weekId, Map.of(
-                "id", weekId, "projectId", harness.projectId(), "tenantId", harness.tenantId(),
-                "yearMonth", "2026-08", "weekNo", 2, "projection", projection),
-            "orgs/" + harness.tenantId() + "/cashflow_sheet_publications/" + harness.projectId(), Map.of(
-                "projectId", harness.projectId(), "status", "APPLYING",
-                "stagedRunId", "run-after-submit", "applyStartedAt", NOW.toString())
-        ));
-        Map<String, Map<String, Object>> weeksBefore = projectDocuments(harness, "cashflow_weeks");
-
-        CashflowMonthCloseResponse approval = transaction(harness, () ->
-            harness.service().closeCashflowMonth(
-                harness.approver(), harness.projectId(), null,
-                evidence.approval("approve-one-click", 0, 1, "")
-            )
-        );
-
-        assertThat(approval.status()).isEqualTo("CLOSED");
-        assertThat(document(harness.requestPath())).containsEntry("status", "APPROVED");
-        assertPeriod(harness, cycleYearMonth, "MONTH", "LOCKED");
-        assertThat(projectDocuments(harness, "cashflow_weeks"))
-            .as("승인은 상태 전환만 하고 주차 문서를 다시 쓰지 않는다")
-            .isEqualTo(weeksBefore);
-    }
-
-    @Test
-    void approvalOfAWithdrawnRequestNamesWhyItWasBlocked() throws Exception {
-        Harness harness = harness("it-one-click-stale", "project-one-click-stale");
-        seedCanonicalActorsAndProject(harness);
-        String cycleYearMonth = "2026-09";
-        Evidence evidence = seedStagedEvidence(
-            harness,
-            cycleYearMonth,
-            1,
-            FirestoreInheritedWeeklyExpensePersistence.computeCashflowTargetRevision(List.of()),
-            0,
-            Map.of("stage-stale", "submit-stale")
-        );
-        seedDocuments(Map.of(harness.settlementPath(cycleYearMonth), Map.of(
-            "tenantId", harness.tenantId(), "projectId", harness.projectId(), "yearMonth", cycleYearMonth,
-            "periods", Map.of()
-        )));
-        transaction(harness, () -> harness.service().submitCashflowSettlementCycle(
-            harness.approver(), harness.projectId(), evidence.submit("submit-stale", "stage-stale", 0)
-        ));
-        Map<String, Object> withdrawn = new LinkedHashMap<>(document(harness.requestPath()));
-        withdrawn.put("status", "WITHDRAWN");
-        seedDocuments(Map.of(harness.requestPath(), withdrawn));
-
-        assertThatThrownBy(() -> transaction(harness, () ->
-            harness.service().closeCashflowMonth(
-                harness.approver(), harness.projectId(), null,
-                evidence.approval("approve-stale", 0, 1, "")
-            )
-        ))
-            .isInstanceOfSatisfying(CashflowMonthCloseApprovalBlockedException.class, error ->
-                assertThat(error.reason()).isEqualTo(CashflowMonthCloseApprovalBlockedException.Reason.REQUEST_CHANGED));
-        assertThat(documentOrEmpty(harness.monthlyClosePath())).isEmpty();
     }
 
     @Test

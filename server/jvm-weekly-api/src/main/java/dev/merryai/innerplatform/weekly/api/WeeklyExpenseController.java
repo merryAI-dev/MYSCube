@@ -1418,16 +1418,6 @@ public class WeeklyExpenseController {
         };
     }
 
-    @org.springframework.web.bind.annotation.ExceptionHandler(CashflowMonthCloseApprovalBlockedException.class)
-    public ResponseEntity<Map<String, Object>> monthCloseApprovalBlocked(CashflowMonthCloseApprovalBlockedException error) {
-        return ResponseEntity.status(409).body(Map.of(
-            "ok", "false",
-            "code", "cashflow_month_close_approval_blocked",
-            "message", error.getMessage(),
-            "details", error.details()
-        ));
-    }
-
     @org.springframework.web.bind.annotation.ExceptionHandler(WeeklyExpenseConflictException.class)
     public ResponseEntity<Map<String, String>> conflict(WeeklyExpenseConflictException error) {
         return ResponseEntity.status(409).body(Map.of(
