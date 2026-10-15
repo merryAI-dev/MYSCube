@@ -2883,7 +2883,8 @@ class WeeklyExpenseControllerTest {
         ResponseEntity<Map<String, String>> response = controller.cashflowMonthReopenConflict(
             new CashflowMonthReopenPolicy.Violation(
                 CashflowMonthReopenPolicy.ViolationReason.REVISION_CHANGED
-            )
+            ),
+            null
         );
 
         assertThat(response.getStatusCode().value()).isEqualTo(409);
@@ -2901,7 +2902,8 @@ class WeeklyExpenseControllerTest {
         ResponseEntity<Map<String, String>> response = controller.cashflowMonthReopenConflict(
             new CashflowMonthReopenPolicy.Violation(
                 CashflowMonthReopenPolicy.ViolationReason.DECISION_FORBIDDEN
-            )
+            ),
+            null
         );
 
         assertThat(response.getStatusCode().value()).isEqualTo(403);
