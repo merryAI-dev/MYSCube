@@ -10,6 +10,7 @@
   },
   "functions": {
     "api/bff.js": {
+      "includeFiles": "node_modules/{pdfjs-dist/{package.json,legacy/build/**,cmaps/**,standard_fonts/**,wasm/**},@napi-rs/canvas*/**}",
       "maxDuration": 300,
       "regions": [
         "iad1"

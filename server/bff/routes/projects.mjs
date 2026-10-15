@@ -51,7 +51,7 @@ import {
   projectExecutiveResubmitSchema,
   projectManagementPlanningReviewSchema,
 } from '../schemas.mjs';
-import { buildAttachmentTextBody, sendAttachmentText } from '../attachment-text.mjs';
+import { buildAttachmentContentBody, sendAttachmentText } from '../attachment-text.mjs';
 
 function trimSlackText(value, maxLength = 200) {
   const text = readOptionalText(value);
@@ -3403,7 +3403,7 @@ export function mountProjectRoutes(app, {
     const projectId = readOptionalText(req.params.projectId);
     const documentKind = readOptionalText(req.params.documentKind);
     const { downloaded, attachment } = await loadProjectAttachment({ tenantId, actorId, projectId, documentKind });
-    sendAttachmentText(res, await buildAttachmentTextBody({ kind: documentKind, downloaded, name: attachment?.name }));
+    sendAttachmentText(res, await buildAttachmentContentBody({ kind: documentKind, downloaded, name: attachment?.name, query: req.query }));
   }));
 
   /*
@@ -3515,7 +3515,7 @@ export function mountProjectRoutes(app, {
     const requestId = readOptionalText(req.params.requestId);
     const documentKind = readOptionalText(req.params.documentKind);
     const { downloaded, attachment } = await loadProjectRequestAttachment({ tenantId, actorId, requestId, documentKind });
-    sendAttachmentText(res, await buildAttachmentTextBody({ kind: documentKind, downloaded, name: attachment?.name }));
+    sendAttachmentText(res, await buildAttachmentContentBody({ kind: documentKind, downloaded, name: attachment?.name, query: req.query }));
   }));
 
   // ── POST /api/v1/projects ────────────────────────────────────────────────────

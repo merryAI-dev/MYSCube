@@ -2268,10 +2268,10 @@ describe('project information private drafts', () => {
     expect(response.body).toMatchObject({ kind: 'contract', name: 'contract.pdf', reason: 'not_pdf', pages: [] });
   });
 
-  it('refuses edit-draft attachment text exactly when the download would be refused', async () => {
+  it.each(['', '?format=image&page=1'])('refuses edit-draft attachment reads with the download permissions: %s', async (query) => {
     const { app } = textRouteApp(async () => { throw Object.assign(new Error('not found'), { statusCode: 404, code: 'not_found' }); });
     const response = await request(app)
-      .get('/api/v1/project-info-drafts/project-a/attachments/contract/text')
+      .get(`/api/v1/project-info-drafts/project-a/attachments/contract/text${query}`)
       .expect(404);
     expect(response.body).toEqual({ error: 'not_found' });
   });

@@ -40,7 +40,7 @@ import {
   projectDocumentValidationError,
   projectProposalFileMetadataError,
 } from '../project-document-validation.mjs';
-import { buildAttachmentTextBody, sendAttachmentText } from '../attachment-text.mjs';
+import { buildAttachmentContentBody, sendAttachmentText } from '../attachment-text.mjs';
 
 const RESOURCE_TYPE = 'project-info';
 // Every member works across all projects; see CROSS_PROJECT_ROLES in src/app/platform/rbac.ts.
@@ -1813,7 +1813,7 @@ export function mountProjectInfoDraftRoutes(app, {
       projectId: routeProjectId(req),
       documentKind,
     });
-    sendAttachmentText(res, await buildAttachmentTextBody({ kind: documentKind, downloaded, name: downloaded?.name }));
+    sendAttachmentText(res, await buildAttachmentContentBody({ kind: documentKind, downloaded, name: downloaded?.name, query: req.query }));
   }));
 
   app.post('/api/v1/project-info-drafts/:projectId/open', asyncHandler(async (req, res) => {

@@ -8,6 +8,11 @@ export const ATTACHMENT_FIELDS = {
   customer_business_registration: 'customerBusinessRegistrationDocument',
   quote: 'quoteDocument',
   proposal: 'proposalDocument',
+  rfp_request_evidence: 'rfpRequestEvidenceDocument',
+  performance_certificate: 'performanceCertificateDocument',
+  tax_invoice: 'taxInvoiceDocument',
+  final_settlement_report: 'finalSettlementReportDocument',
+  final_report: 'finalReportDocument',
 };
 
 // 대조와 화면 안내에 쓰는 필드만. 인력은 S2 에서 필요한 범위로 따로 다룬다.
@@ -72,6 +77,17 @@ function attachmentsFrom(source, refs = []) {
 
 const httpsLink = (value) => (/^https:\/\//u.test(text(value)) ? text(value) : '');
 
+function linkedDocuments(source) {
+  return ['proposalPptOriginal', 'presentationPptOriginal'].flatMap((kind) => {
+    try {
+      const url = new URL(text(source?.registrationConfirmations?.[kind]));
+      if (url.protocol !== 'https:' || url.username || url.password || url.port
+        || !['drive.google.com', 'docs.google.com'].includes(url.hostname)) return [];
+      return [{ kind, url: url.href, readWith: 'google_drive', evidence: 'unverified' }];
+    } catch { return []; }
+  });
+}
+
 export async function loadSubmission(bff, input) {
   const subject = parseSubject(input);
   let source;
@@ -106,6 +122,7 @@ export async function loadSubmission(bff, input) {
       participationSheetLink: httpsLink(source?.participationSheetLink),
       businessManagementGoogleFolderLink: httpsLink(source?.businessManagementGoogleFolderLink),
     },
+    linkedDocuments: linkedDocuments(source),
     serverReadiness,
   };
 }
