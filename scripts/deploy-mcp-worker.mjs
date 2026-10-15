@@ -64,6 +64,14 @@ const kv = namespaces.find((item) => item.title === KV_TITLE) || await cf(`/acco
 const workerDir = new URL('../mcp-worker/', import.meta.url);
 const config = JSON.parse(readFileSync(new URL(target.config, workerDir), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
 config.kv_namespaces = [{ binding: 'OAUTH_KV', id: kv.id }];
+if (targetName === 'myscube' && env.MCP_DOCUMENTS_ORIGIN) {
+  const origin = new URL(env.MCP_DOCUMENTS_ORIGIN);
+  if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw new Error('Invalid document service origin');
+  const response = await fetch(`${origin.origin}/healthz`, { redirect: 'error', signal: AbortSignal.timeout(30_000) });
+  const health = response.ok ? await response.json() : null;
+  if (health?.service !== 'myscube-mcp-documents' || health.renderer !== 'ready' || !/^[a-f0-9]{40}$/u.test(health.release || '')) throw new Error('Document service must be ready before routing changes');
+  config.vars.ATTACHMENT_BASE_URL = origin.origin;
+}
 const generated = new URL(target.generated, workerDir);
 writeFileSync(generated, JSON.stringify(config, null, 2));
 const secretsFile = new URL('.deploy-secrets.json', workerDir);

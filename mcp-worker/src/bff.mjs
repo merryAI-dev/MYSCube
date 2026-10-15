@@ -1,5 +1,7 @@
 // MYSCube BFF 를 로그인한 구성원 본인의 Firebase ID 토큰으로 부른다. BFF 는 앱 화면과 똑같이
 // 토큰을 검증하고 구성원·역할·프로젝트 범위를 확인하므로, 이 서비스에는 권한 판단 코드가 없다.
+import { attachmentRoute } from './review/attachment-route.mjs';
+
 const USER_AGENT = 'myscube-mcp-worker/1.0';
 // 응답 본문 상한. 헤더(content-length)를 믿지 않고 읽는 동안 센다. 호출마다 maxBytes 로 낮출 수 있다.
 export const DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
@@ -53,12 +55,18 @@ function retryDelayMs(response, attempt, random) {
 }
 
 export function createBffClient({
-  baseUrl, idToken, fetchImpl = fetch, timeoutMs = 25_000,
+  baseUrl, attachmentBaseUrl, idToken, fetchImpl = fetch, timeoutMs = 25_000,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, now = () => Date.now(),
 }) {
+  if (attachmentBaseUrl) {
+    const origin = new URL(attachmentBaseUrl);
+    if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
+      throw new Error('attachment_origin_invalid');
+    }
+  }
   async function request(method, path, { query, body, maxBytes = DEFAULT_MAX_RESPONSE_BYTES } = {}) {
     if (!path.startsWith('/api/v1/')) throw new Error('bff_path_invalid');
-    const url = new URL(path, baseUrl);
+    const url = new URL(path, method === 'GET' && attachmentBaseUrl && attachmentRoute(path) ? attachmentBaseUrl : baseUrl);
     for (const [key, value] of Object.entries(query || {})) {
       if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
     }
@@ -75,7 +83,7 @@ export function createBffClient({
       let response;
       try {
         response = await fetchImpl(url, {
-          method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(remaining),
+          method, headers, redirect: 'error', ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(remaining),
         });
       } catch (error) {
         const canRetry = method === 'GET' && attempt < MAX_RETRIES;
