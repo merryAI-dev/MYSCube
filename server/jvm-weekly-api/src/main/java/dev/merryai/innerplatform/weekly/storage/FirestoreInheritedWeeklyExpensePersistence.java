@@ -2364,7 +2364,27 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         });
         Map<String, Object> periods = nestedMap(document.get("periods"));
         Map<String, Object> current = nestedMap(periods.get(period));
-        // 조직장 승인은 상태 전환만 한다. 주차 완료 문서·재확정·시트 동기화 없이 지정 승인자가 상태를 바꾼다.
+        // 조직장 승인은 상태 전환만 한다. 제출 여부·현재 상태를 다시 따지지 않고 지정 승인자가 상태를 바꾼다.
+        if (period.startsWith("WEEK_") && "APPROVE".equals(action)) {
+            int weekNo = Integer.parseInt(period.substring(5));
+            DocumentSnapshot completionSnapshot = get(db.document(cashflowWeeklyUpdateCompletionPath(
+                actor.tenantId(), projectId + "-" + yearMonth + "-w" + weekNo)));
+            if (completionSnapshot.exists()) {
+                Map<String, Object> completion = effectiveWeeklyCompletion(data(completionSnapshot), document, weekNo);
+                String completionState = text(completion.get("status"), "OPEN");
+                if ("LOCKED".equals(completionState)) {
+                    return weeklySettlementStatusRecord(actor.tenantId(), projectId, yearMonth, weekNo, completion);
+                }
+                if ("SUBMITTED".equals(completionState)) {
+                    CashflowSettlementStatusRecord canonical = weeklySettlementStatusRecord(
+                        actor.tenantId(), projectId, yearMonth, weekNo, completion);
+                    confirmCashflowWeeklyUpdate(actor, projectId, new ConfirmCashflowWeeklyUpdateRequest(
+                        "settlement-approval", yearMonth, weekNo, canonical.revision()));
+                    Map<String, Object> confirmed = cachedDocumentIfPresent(completionSnapshot.getReference()).orElseThrow();
+                    return syncWeeklySettlementStatus(actor, projectId, yearMonth, weekNo, confirmed);
+                }
+            }
+        }
         CashflowSettlementStatusRecord effective = settlementStatusRecord(period, current);
         String next = "SUBMIT".equals(action) ? "PENDING_APPROVAL" : "APPROVE".equals(action) ? "COMPLETED" : "";
         if (next.isBlank()) throw new IllegalArgumentException("Cashflow settlement action is invalid.");
@@ -2385,25 +2405,6 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         } else {
             updated.put("approvedAt", now.toString());
             updated.put("approvedBy", actor.name().isBlank() ? actor.id() : actor.name());
-            if (period.startsWith("WEEK_")) {
-                // 화면은 주차 완료 문서에서 상태를 읽는다. 제출된 주차 문서의 상태만 확정으로 바꾼다.
-                int weekNo = Integer.parseInt(period.substring(5));
-                DocumentReference completionRef = db.document(cashflowWeeklyUpdateCompletionPath(
-                    actor.tenantId(), projectId + "-" + yearMonth + "-w" + weekNo));
-                DocumentSnapshot completionSnapshot = get(completionRef);
-                if (completionSnapshot.exists()) {
-                    Map<String, Object> completion = data(completionSnapshot);
-                    if ("SUBMITTED".equals(text(completion.get("status"), ""))) {
-                        updated.put("submittedAt", text(completion.get("completedAt"), now.toString()));
-                        Map<String, Object> completionPatch = new LinkedHashMap<>();
-                        completionPatch.put("status", "LOCKED");
-                        completionPatch.put("confirmedAt", now.toString());
-                        completionPatch.put("confirmedByUid", actor.id());
-                        completionPatch.put("confirmedByName", actor.name().isBlank() ? actor.id() : actor.name());
-                        set(completionRef, completionPatch);
-                    }
-                }
-            }
         }
         periods.put(period, updated);
         Map<String, Object> patch = new LinkedHashMap<>();
