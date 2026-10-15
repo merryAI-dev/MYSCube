@@ -1430,6 +1430,9 @@ public class WeeklyExpenseController {
 
     @org.springframework.web.bind.annotation.ExceptionHandler(WeeklyExpenseConflictException.class)
     public ResponseEntity<Map<String, String>> conflict(WeeklyExpenseConflictException error) {
+        // 임시 진단 로그: weekly_expense_conflict 는 15곳 이상의 던지는 지점을 공유하는 범용
+        // 핸들러라 응답 바디만으로는 어디서 막혔는지 특정이 안 된다. 원인 확정되면 제거.
+        LOGGER.log(System.Logger.Level.WARNING, "weekly_expense_conflict: " + error.getMessage());
         return ResponseEntity.status(409).body(Map.of(
             "ok", "false",
             "code", "weekly_expense_conflict",
