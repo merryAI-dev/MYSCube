@@ -7674,7 +7674,7 @@ describe('JVM weekly API BFF proxy', () => {
       .expect((response) => expect(response.body.code).toBe('cashflow_month_reopen_authority_unavailable'));
   });
 
-  it('trusts the JVM approval receipt when the reread ledger has no audit id', async () => {
+  it('approves with one click and answers a repeated click from the approved state without calling JVM', async () => {
     const cycleYearMonth = '2026-09';
     const requestId = `project-a-${cycleYearMonth}`;
     const { app, appFor, source, monthCloseBodies, bffWrites, cashflowSlackService, setCapability } = canonicalCycleMonthCloseFixture(
@@ -7715,10 +7715,33 @@ describe('JVM weekly API BFF proxy', () => {
     await request(app)
       .post(`/api/v1/cashflow/project-a/month-close/requests/${requestId}/review`)
       .set('idempotency-key', 'month-close-review-approve').send(payload).expect(200, approved.body);
-    expect(monthCloseBodies).toHaveLength(2);
+    expect(monthCloseBodies).toHaveLength(1);
     expect(bffWrites).toEqual([]);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(cashflowSlackService.notifyMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the approver to reload when the request they saw was withdrawn or resubmitted', async () => {
+    const cycleYearMonth = '2026-09';
+    const requestId = `project-a-${cycleYearMonth}`;
+    const { app, source, monthCloseBodies } = canonicalCycleMonthCloseFixture(
+      cycleYearMonth,
+      { approve: true, actorId: 'finance-1', actorRole: 'finance' },
+    );
+    const pending = source.documents.get(`orgs/tenant-a/cashflow_month_close_requests/${requestId}`);
+    const response = await request(app)
+      .post(`/api/v1/cashflow/project-a/month-close/requests/${requestId}/status-review`)
+      .set('idempotency-key', 'approve-stale-view')
+      .send({
+        decision: 'APPROVE', expectedRevision: pending.evidenceRevision,
+        expectedManifestHash: `sha256:${'b'.repeat(64)}`,
+      })
+      .expect(409);
+    expect(response.body).toMatchObject({
+      code: 'cashflow_month_close_request_already_reviewed',
+      message: '검토하던 월 결산 요청이 회수되었거나 다시 제출됐어요. 화면을 새로 고친 뒤 최신 요청을 승인해 주세요.',
+    });
+    expect(monthCloseBodies).toEqual([]);
   });
 
   it('routes a cumulative close rejection through the JVM transition', async () => {

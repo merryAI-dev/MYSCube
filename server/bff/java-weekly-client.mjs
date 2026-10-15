@@ -105,6 +105,21 @@ function weekDocumentInvalidMessage(code, details) {
   return `${where || '일부'} 주차 기록이 표준 형태가 아닙니다${problem ? `: ${problem}` : ''}. 관리자에게 기록 정리를 요청해 주세요.`;
 }
 
+const MONTH_CLOSE_APPROVAL_BLOCKED_MESSAGES = new Map([
+  ['REQUEST_MISSING', '월 결산 요청을 찾을 수 없어요. 화면을 새로 고친 뒤 다시 확인해 주세요.'],
+  ['REQUEST_CHANGED', '검토하던 월 결산 요청이 회수되었거나 다시 제출됐어요. 화면을 새로 고친 뒤 최신 요청을 승인해 주세요.'],
+  ['EVIDENCE_MISSING', '제출된 결산 근거 일부를 읽을 수 없어요. AXR 관리자에게 문의해 주세요.'],
+  ['SETTLEMENT_STATUS_MISSING', '이 달의 결산 진행 기록을 찾을 수 없어요. AXR 관리자에게 문의해 주세요.'],
+  ['ALREADY_CLOSED', '이미 결산된 기간이에요. 화면을 새로 고쳐 결산 상태를 확인해 주세요.'],
+]);
+
+// 월결산 승인 차단은 엔진이 보낸 사유 코드로 문장을 고른다.
+function monthCloseApprovalBlockedMessage(code, details) {
+  if (code !== 'cashflow_month_close_approval_blocked') return '';
+  return MONTH_CLOSE_APPROVAL_BLOCKED_MESSAGES.get(readOptionalText(details?.reason))
+    || '지금은 이 월 결산을 승인할 수 없어요. 화면을 새로 고친 뒤 다시 확인해 주세요.';
+}
+
 function readJavaError(status, payload) {
   const upstreamCode = readOptionalText(payload?.code);
   const hasStableCode = /^[a-z][a-z0-9_]{2,100}$/.test(upstreamCode)
@@ -114,6 +129,7 @@ function readJavaError(status, payload) {
   const message = upstreamFailure
     ? '현금흐름 저장 서버에서 요청을 처리하지 못했습니다. 잠시 후 다시 시도해 주세요.'
     : (weekDocumentInvalidMessage(upstreamCode, payload?.details)
+      || monthCloseApprovalBlockedMessage(upstreamCode, payload?.details)
       || SAFE_UPSTREAM_CLIENT_MESSAGES.get(upstreamCode)
       || '요청을 처리할 수 없습니다. 최신 상태와 입력 내용을 확인해 주세요.');
   const code = hasStableCode

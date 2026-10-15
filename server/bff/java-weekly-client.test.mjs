@@ -925,6 +925,32 @@ describe('Java weekly cashflow client', () => {
     expect(error.message).not.toMatch(/malformed|non-canonical|migration/i);
   });
 
+  it('names why a month-close approval was blocked from the engine reason code', async () => {
+    const fetchImpl = vi.fn(async () => chunkedResponse([
+      JSON.stringify({
+        code: 'cashflow_month_close_approval_blocked',
+        message: 'engine text that must not reach the screen',
+        details: { reason: 'REQUEST_CHANGED' },
+      }),
+    ], { status: 409 }));
+    const client = createJavaWeeklyClient({ env: liveEnv(), fetchImpl });
+
+    const error = await client.requestJson({
+      context,
+      method: 'POST',
+      path: '/api/v1/cashflow/project-a/month-close',
+      command: 'close_cashflow_month',
+      body: { idempotencyKey: 'approval-blocked' },
+    }).catch((caught) => caught);
+
+    expect(error).toMatchObject({
+      statusCode: 409,
+      code: 'cashflow_month_close_approval_blocked',
+      message: '검토하던 월 결산 요청이 회수되었거나 다시 제출됐어요. 화면을 새로 고친 뒤 최신 요청을 승인해 주세요.',
+      details: { reason: 'REQUEST_CHANGED' },
+    });
+  });
+
   it('replaces a technical authority contract error with a recovery guide', async () => {
     const fetchImpl = vi.fn(async () => chunkedResponse([
       JSON.stringify({
