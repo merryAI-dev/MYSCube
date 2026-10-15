@@ -83,7 +83,7 @@ export function createBffClient({
       let response;
       try {
         response = await fetchImpl(url, {
-          method, headers, redirect: 'error', ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(remaining),
+          method, headers, redirect: 'manual', ...(body !== undefined ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(remaining),
         });
       } catch (error) {
         const canRetry = method === 'GET' && attempt < MAX_RETRIES;
@@ -92,6 +92,10 @@ export function createBffClient({
           throw new BffError(504, { code: 'timeout', message: 'MYSCube 응답이 늦어 중단했습니다.' }, { retryable: true });
         }
         throw new BffError(502, { code: 'network_error', message: 'MYSCube 에 연결하지 못했습니다.' }, { retryable: true });
+      }
+      if (response.status >= 300 && response.status < 400) {
+        await response.body?.cancel().catch(() => {});
+        throw new BffError(502, { code: 'redirect_rejected', message: 'MYSCube 응답이 다른 주소로 이동하여 중단했습니다.' });
       }
       if (method === 'GET' && RETRY_STATUSES.has(response.status) && attempt < MAX_RETRIES) {
         const wait = retryDelayMs(response, attempt, random);

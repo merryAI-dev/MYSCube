@@ -55,4 +55,6 @@ flowchart LR
 - 기존 웹 운영 도메인은 배포 실패 직후에도 `20b64a3` / `4wtXTsSgrAsHvavWyg3DVrF6iCi7`을 유지함을 Vercel 대시보드에서 확인했다.
 - 생성된 문서 프로젝트 ID를 저장소 변수에 고정하고 일회성 생성 승인 변수를 false로 변경했다. 준비 완료 후 `MCP_DOCUMENTS_ACTIVE_ORIGIN`을 지정했다. 이 기록의 정상 main CI 배포에서 Worker 전환을 검증한다.
 - 실제 일반 GPT 원문 판독·내용 대조는 아직 통과하지 않았다. 서비스 readiness를 사용자 목표 달성으로 집계하지 않는다.
+- PR #929의 Worker 배포 `38701491546`은 첨부 전용 origin과 버전 `ee912d73-166a-41cd-a344-178bdd2a077a`를 활성화했다. 하지만 새 일반 Chat `6ad08632-afe0-83ec-9cf0-9cb3470fbecc`에서 본문·이미지 모두 network_error로 실패하여 판독 0쪽이었다.
+- workerd로 공개 healthz를 호출하는 독립 실험에서 `redirect: error`가 네트워크 전송 전에 TypeError를 내며, manual은 200임을 재현했다. Node 기반 테스트가 놓친 런타임 차이다. Worker를 manual + 모든 3xx 명시 거절로 수정하고 실제 workerd에서 정상 요청 및 외부 주소 리디렉션 차단을 회귀 검증한다. 토큰의 외부 주소 전달은 허용하지 않는다.
 - Drive 링크의 대용량 파일은 이 서비스가 자동으로 가져오지 않는다. 이번 범위는 MYSCube 인증 첨부 경로다.
