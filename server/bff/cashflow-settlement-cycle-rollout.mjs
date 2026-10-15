@@ -996,7 +996,10 @@ export function assertSettlementCycleCutoverReady(inventory, projections, expect
     `${record.projectId}\n${record.cycleYearMonth}\n${record.requestId}\n${record.workflowRevision}`
   )).sort();
   const activeMismatch = stableStringify(activeRequests) !== stableStringify(activeCoordinators);
+  // 허용 목록은 전환 시점(CUTOFF 월 이하)에 검토한 진행 중 요청만 대상으로 한다.
+  // 그 이후 사이클의 정상 진행 요청은 코디네이터 일치(activeMismatch)로 이미 검증한다.
   const activeProjects = (inventory?.canonicalActiveRequests || [])
+    .filter(({ cycleYearMonth }) => text(cycleYearMonth) <= CASHFLOW_SETTLEMENT_CYCLE_CUTOFF_MONTH)
     .map(({ projectId }) => projectId).sort();
   const expectedActiveProjectSet = new Set(expectedActiveProjects);
   const unexpectedActive = expectedActiveProjects.length > 0
