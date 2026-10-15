@@ -40,7 +40,11 @@ await mkdir(join(directory, '.vercel'));
 await writeFile(join(directory, '.vercel/project.json'), JSON.stringify({ projectId: project.id, orgId: env.VERCEL_ORG_ID }));
 const output = execFileSync('npx', ['--yes', 'vercel@50.14.0', 'deploy', '--prod', '--yes', '--skip-domain',
   '--token', env.VERCEL_TOKEN, '--scope', 'merryai-devs-projects', '--env', `RELEASE_SHA=${sha}`,
-  '--meta', `githubCommitSha=${sha}`], { cwd: directory, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  '--meta', `githubCommitSha=${sha}`], {
+  cwd: directory,
+  env: { ...env, VERCEL_PROJECT_ID: project.id, VERCEL_ORG_ID: env.VERCEL_ORG_ID },
+  encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
+});
 const candidate = output.match(/https:\/\/[A-Za-z0-9.-]+\.vercel\.app/gu)?.at(-1);
 if (!candidate) throw new Error('Missing candidate URL');
 const deployment = await api(`/v13/deployments/${new URL(candidate).host}`);
