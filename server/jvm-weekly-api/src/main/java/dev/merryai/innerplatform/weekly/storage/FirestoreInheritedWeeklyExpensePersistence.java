@@ -2364,28 +2364,12 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         });
         Map<String, Object> periods = nestedMap(document.get("periods"));
         Map<String, Object> current = nestedMap(periods.get(period));
-        if (period.startsWith("WEEK_") && "APPROVE".equals(action)) {
-            int weekNo = Integer.parseInt(period.substring(5));
-            DocumentSnapshot completionSnapshot = get(db.document(cashflowWeeklyUpdateCompletionPath(
-                actor.tenantId(), projectId + "-" + yearMonth + "-w" + weekNo)));
-            if (!completionSnapshot.exists()) {
-                throw new WeeklyExpenseConflictException("Cashflow settlement status changed. Submit the week before approving.");
-            }
-            Map<String, Object> completion = effectiveWeeklyCompletion(data(completionSnapshot), document, weekNo);
-            CashflowSettlementStatusRecord canonical = weeklySettlementStatusRecord(
-                actor.tenantId(), projectId, yearMonth, weekNo, completion);
-            if ("COMPLETED".equals(canonical.status())) return canonical;
-            confirmCashflowWeeklyUpdate(actor, projectId, new ConfirmCashflowWeeklyUpdateRequest(
-                "settlement-approval", yearMonth, weekNo, canonical.revision()));
-            Map<String, Object> confirmed = cachedDocumentIfPresent(completionSnapshot.getReference()).orElseThrow();
-            return syncWeeklySettlementStatus(actor, projectId, yearMonth, weekNo, confirmed);
-        }
+        // 조직장 승인은 상태 전환만 한다. 주차 완료 문서·재확정·시트 동기화 없이 지정 승인자가 상태를 바꾼다.
         CashflowSettlementStatusRecord effective = settlementStatusRecord(period, current);
-        String expected = "SUBMIT".equals(action) ? "WAITING_FOR_UPDATE" : "PENDING_APPROVAL";
         String next = "SUBMIT".equals(action) ? "PENDING_APPROVAL" : "APPROVE".equals(action) ? "COMPLETED" : "";
         if (next.isBlank()) throw new IllegalArgumentException("Cashflow settlement action is invalid.");
         if (next.equals(effective.status())) return effective;
-        if (!expected.equals(effective.status())) {
+        if ("SUBMIT".equals(action) && !"WAITING_FOR_UPDATE".equals(effective.status())) {
             throw new WeeklyExpenseConflictException("Cashflow settlement status changed. Check the current status and try again.");
         }
         Instant now = clock.instant();
@@ -2401,6 +2385,25 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         } else {
             updated.put("approvedAt", now.toString());
             updated.put("approvedBy", actor.name().isBlank() ? actor.id() : actor.name());
+            if (period.startsWith("WEEK_")) {
+                // 화면은 주차 완료 문서에서 상태를 읽는다. 제출된 주차 문서의 상태만 확정으로 바꾼다.
+                int weekNo = Integer.parseInt(period.substring(5));
+                DocumentReference completionRef = db.document(cashflowWeeklyUpdateCompletionPath(
+                    actor.tenantId(), projectId + "-" + yearMonth + "-w" + weekNo));
+                DocumentSnapshot completionSnapshot = get(completionRef);
+                if (completionSnapshot.exists()) {
+                    Map<String, Object> completion = data(completionSnapshot);
+                    if ("SUBMITTED".equals(text(completion.get("status"), ""))) {
+                        updated.put("submittedAt", text(completion.get("completedAt"), now.toString()));
+                        Map<String, Object> completionPatch = new LinkedHashMap<>();
+                        completionPatch.put("status", "LOCKED");
+                        completionPatch.put("confirmedAt", now.toString());
+                        completionPatch.put("confirmedByUid", actor.id());
+                        completionPatch.put("confirmedByName", actor.name().isBlank() ? actor.id() : actor.name());
+                        set(completionRef, completionPatch);
+                    }
+                }
+            }
         }
         periods.put(period, updated);
         Map<String, Object> patch = new LinkedHashMap<>();
@@ -3245,7 +3248,7 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
                 ? requireSettlementCycleApproval(actor, projectId, request)
                 : requireCumulativeCloseApproval(actor, projectId, request);
         YearMonth closeThrough = cumulative == null ? targetMonth : requireYearMonth(cumulative.throughMonth());
-        if (!closeThrough.isBefore(YearMonth.from(today))) {
+        if (!settlementCycleClose && !closeThrough.isBefore(YearMonth.from(today))) {
             throw new WeeklyExpenseConflictException("Cashflow month close is available after the target month ends.");
         }
         Map<String, Object> approval = cumulative == null
@@ -3302,13 +3305,7 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         }
         requireMutableMonthStatus(currentStatus);
         long currentRevision = current.isEmpty() ? 0 : canonicalMonthCounter(current, "revision");
-        if (currentRevision != request.expectedRevision()) {
-            if (settlementCycleClose) {
-                throw approvalBlocked(
-                    CashflowMonthCloseApprovalBlockedException.Reason.REQUEST_CHANGED,
-                    "승인하는 사이 월 결산 상태가 바뀌었어요. 화면을 새로 고친 뒤 다시 승인해 주세요."
-                );
-            }
+        if (!settlementCycleClose && currentRevision != request.expectedRevision()) {
             throw new WeeklyExpenseConflictException("Cashflow month close revision changed. Reload before closing.");
         }
         List<Map<String, Object>> projectCloses = readProjectMonthCloses(actor.tenantId(), projectId);
@@ -3429,10 +3426,15 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             head.put("fromMonth", CASHFLOW_CUMULATIVE_BASELINE.toString());
             head.put("closedThrough", cumulative.throughMonth());
             head.put("settlementMonth", YearMonth.parse(cumulative.throughMonth()).plusMonths(1).toString());
-            head.put("rootHash", request.manifestHash());
+            // 조직장 승인은 저장된 요청 값을 그대로 결산 기록에 쓴다 (화면이 들고 있던 값과 다시 비교하지 않는다).
+            head.put("rootHash", settlementCycleClose
+                ? text(cumulative.requestRecord().get("manifestHash"), request.manifestHash())
+                : request.manifestHash());
             head.put("revision", cumulative.headRevision());
             head.put("requestId", request.requestId());
-            head.put("requestRevision", request.requestRevision());
+            head.put("requestRevision", settlementCycleClose
+                ? longValue(cumulative.requestRecord().get("evidenceRevision"), request.requestRevision())
+                : request.requestRevision());
             head.put("approvalId", cumulative.approvalId());
             head.put("operationId", cumulative.operationId());
             head.put("closedAt", now.toString());
@@ -6358,17 +6360,16 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             );
         }
         Map<String, Object> header = data(headerSnapshot);
-        CashflowSettlementCyclePolicy.Identity identity = CashflowSettlementCyclePolicy.identity(request.cycleYearMonth());
+        // 승인은 상태 전환만 한다. 요청에 담긴 리비전·해시와 다시 비교하지 않고 저장된 요청 값을 그대로 쓴다.
+        CashflowSettlementCyclePolicy.Identity identity = CashflowSettlementCyclePolicy.identity(
+            text(header.get("cycleYearMonth"), request.cycleYearMonth())
+        );
         if (!projectId.equals(text(header.get("projectId"), ""))
-            || !request.requestId().equals(text(header.get("requestId"), ""))
-            || !request.yearMonth().equals(identity.cycleYearMonth())
-            || !request.monthCloseTargetYearMonth().equals(identity.monthCloseTargetYearMonth())
-            || !"PENDING_APPROVAL".equals(text(header.get("status"), ""))
-            || request.requestRevision() != longValue(header.get("evidenceRevision"), -1)
-            || !request.manifestHash().equals(text(header.get("manifestHash"), ""))
-            || request.expectedWorkflowRevision() != longValue(header.get("workflowRevision"), -1)) {
+            || !"PENDING_APPROVAL".equals(text(header.get("status"), ""))) {
             throw requestChanged();
         }
+        long approvalRequestRevision = longValue(header.get("evidenceRevision"), request.requestRevision());
+        long approvalWorkflowRevision = longValue(header.get("workflowRevision"), request.expectedWorkflowRevision());
         CashflowSettlementCycleWorkflow.Coordinator nextCoordinator;
         try {
             nextCoordinator = CashflowSettlementCycleWorkflow.finishReview(
@@ -6378,7 +6379,7 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
                     projectId
                 ),
                 request.requestId(),
-                request.expectedWorkflowRevision()
+                approvalWorkflowRevision
             );
         } catch (CashflowSettlementCycleWorkflow.Violation error) {
             throw requestChanged();
@@ -6393,13 +6394,17 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         List<DocumentSnapshot> shardSnapshots = months.isEmpty() ? List.of() : getAll(months.stream()
             .map(yearMonth -> db.document(
                 "orgs/" + actor.tenantId() + "/cashflow_month_close_request_months/"
-                    + request.requestId() + "-r" + request.requestRevision() + "-" + yearMonth
+                    + request.requestId() + "-r" + approvalRequestRevision + "-" + yearMonth
             ))
             .toArray(DocumentReference[]::new));
         List<Map<String, Object>> manifestMonths = new ArrayList<>();
         Map<String, Object> selectedShard = null;
         for (int index = 0; index < months.size(); index++) {
-            if (!shardSnapshots.get(index).exists()) throw evidenceMissing();
+            if (!shardSnapshots.get(index).exists()) {
+                // 결산 값이 되는 대상 월 shard 만 필수. 나머지는 승인을 막지 않는다.
+                if (months.get(index).equals(throughMonth.toString())) throw evidenceMissing();
+                continue;
+            }
             Map<String, Object> shard = data(shardSnapshots.get(index));
             manifestMonths.add(Map.of("yearMonth", months.get(index), "shardHash", text(shard.get("shardHash"), "")));
             if (months.get(index).equals(throughMonth.toString())) selectedShard = shard;
@@ -6415,14 +6420,14 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         DocumentSnapshot settlementSnapshot = get(settlementStatusRef(
             actor.tenantId(), projectId, identity.cycleYearMonth()
         ));
-        if (!settlementSnapshot.exists()) {
-            throw approvalBlocked(
-                CashflowMonthCloseApprovalBlockedException.Reason.SETTLEMENT_STATUS_MISSING,
-                "이 달의 결산 진행 기록을 찾을 수 없어요. AXR 관리자에게 문의해 주세요."
-            );
-        }
-        Map<String, Object> settlementStatus = data(settlementSnapshot);
-        requireSettlementScope(settlementStatus, true, actor.tenantId(), projectId, identity.cycleYearMonth());
+        Map<String, Object> settlementStatus = settlementSnapshot.exists()
+            ? data(settlementSnapshot)
+            : new LinkedHashMap<>(Map.of(
+                "tenantId", actor.tenantId(), "projectId", projectId, "yearMonth", identity.cycleYearMonth()
+            ));
+        requireSettlementScope(
+            settlementStatus, settlementSnapshot.exists(), actor.tenantId(), projectId, identity.cycleYearMonth()
+        );
 
         Map<String, Object> currentHead = cumulativeCloseHeadRecord(actor.tenantId(), projectId);
         String closedThrough = text(currentHead.get("closedThrough"), "");
@@ -6670,7 +6675,7 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         range.put("approvalVersionId", approvalVersionId);
         range.put("requestId", request.requestId());
         range.put("ledgerRevision", ledgerRevision);
-        range.put("rootHash", request.manifestHash());
+        range.put("rootHash", text(cumulative.requestRecord().get("manifestHash"), request.manifestHash()));
         ranges.add(Map.copyOf(range));
         return canonicalClosedRanges(ranges);
     }
@@ -6797,9 +6802,14 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         snapshot.put("projectId", projectId);
         snapshot.put("yearMonth", request.yearMonth());
         snapshot.put("requestId", request.requestId());
-        snapshot.put("requestRevision", request.requestRevision());
-        snapshot.put("manifestHash", request.manifestHash());
-        snapshot.put("rootHash", request.manifestHash());
+        snapshot.put("requestRevision", cumulative.settlementCycle()
+            ? longValue(cumulative.requestRecord().get("evidenceRevision"), request.requestRevision())
+            : request.requestRevision());
+        String storedManifestHash = cumulative.settlementCycle()
+            ? text(cumulative.requestRecord().get("manifestHash"), request.manifestHash())
+            : request.manifestHash();
+        snapshot.put("manifestHash", storedManifestHash);
+        snapshot.put("rootHash", storedManifestHash);
         snapshot.put("headRevision", cumulative.headRevision());
         snapshot.put("approvalId", cumulative.approvalId());
         snapshot.put("operationId", cumulative.operationId());
