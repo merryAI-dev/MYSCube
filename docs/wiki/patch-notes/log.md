@@ -1,5 +1,11 @@
 # Patch Notes Log
 
+## [2026-10-16] hotfix | cashflow-first-close-sheet-year | 첫 월결산 구간을 시트 연도 1월부터 계산·잔여 연도 연동 정리
+- pages: [admin-cashflow-project-sheet](./pages/admin-cashflow-project-sheet.md)
+- pr: [#933](https://github.com/merryAI-dev/MYSCube/pull/933)
+- commit: `6e655868`
+- summary: 결산 기록이 없는 프로젝트의 첫 월결산을 고정 기준월 2023-01이 아니라 결산 대상 월이 속한 해의 1월부터 계산한다. 2026-09까지 결산하는 첫 승인이 45개월로 계산되어 `Cumulative close affected range exceeds 44 months.` 로 거부되던 문제(2026 팁스 딥테크)를 해결했다. 이미 2023-01부터로 저장된 결산 기록은 그대로 두고, 재오픈 범위도 기존과 같게 계산한다. 44개월 한도와 BFF 근거 생성 범위(2023-01~, 최대 240개월)는 바꾸지 않았다. 운영 DB에서는 화면에서 지울 수 없는 다른 연도 시트 연동을 정리했다: 2026 팁스 딥테크의 2027 연동과 검토본(시트 반영 `cashflow_sheet_formula_evidence_incomplete` 원인), 25현대모비스CSV·IBS그린임팩트사업의 2025 연동. 25현대모비스CSV는 대표 연동 설정 연도를 2025에서 2026으로 맞췄다. 2026 연동과 검토본은 바꾸지 않았다.
+
 ## [2026-09-10] patch-note | cashflow-legacy-regressions | 기존 승인 보존 및 레거시 통장내역 화면 제거
 - pages: [portal-bank-statement](./pages/portal-bank-statement.md), [portal-weekly-expense](./pages/portal-weekly-expense.md)
 - summary: 동일 제출에 대한 과거 주정산 승인 증거를 보존하고, 새 재제출은 승인 대기로 유지한다. 실제 반영 기록 패널의 제목·배지·필터를 분리해 좁은 폭의 줄바꿈 문제를 수정한다. 레거시 통장내역 페이지·라우트·메뉴·검색·연결 버튼을 제거하며 기존 거래 데이터와 공유 저장 경로는 보존한다.
