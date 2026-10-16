@@ -557,7 +557,7 @@ class FirestoreSettlementCycleEmulatorIT {
         assertPeriod(harness, cycleYearMonth, "MONTH", "WAITING_FOR_UPDATE");
         assertPeriod(harness, targetYearMonth, "MONTH", "COMPLETED");
         assertThat(projectDocuments(harness, "cashflow_weekly_update_completion_versions"))
-            .hasSize(44 * 5);
+            .hasSize(affectedMonths.size() * 5);
 
         String currentTargetRevision = FirestoreInheritedWeeklyExpensePersistence
             .computeCashflowTargetRevision(projectDocuments(harness, "cashflow_weeks").values());
