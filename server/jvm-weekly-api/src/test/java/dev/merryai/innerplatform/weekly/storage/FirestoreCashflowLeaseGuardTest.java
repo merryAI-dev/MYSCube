@@ -7895,8 +7895,10 @@ class FirestoreCashflowLeaseGuardTest {
             monthCloseVersionPath("project-a", "2026-09", 1)
         ).get("snapshot");
         assertThat(immutableSnapshot)
-            .containsEntry("affectedFromMonth", "2023-01")
+            .containsEntry("affectedFromMonth", "2026-01")
             .containsEntry("affectedThroughMonth", "2026-08");
+        // 운영의 기존 첫 결산 기록(2023-01 시작, 44개월)과 같은 형태로 바꿔 재오픈 동작이 그대로인지 본다.
+        rewriteFirstCloseRangeAsLegacyBaseline(fixture);
         YearMonth affectedMonth = YearMonth.parse("2023-01");
         for (int offset = 0; offset < 44; offset++) {
             String yearMonth = affectedMonth.plusMonths(offset).toString();
@@ -7960,29 +7962,151 @@ class FirestoreCashflowLeaseGuardTest {
     }
 
     @Test
-    void cumulativeApprovalRejectsAFortyFiveMonthAffectedRangeWithoutCanonicalWrites() {
+    @SuppressWarnings("unchecked")
+    void firstCloseFromTheMonthlyYearReopensOnlyItsOwnMonths() {
         Fixture fixture = fixture(
             member(Map.of("role", "finance")),
             activeLease(),
             true,
-            LocalDate.parse("2026-11-01")
+            LocalDate.parse("2026-10-01")
         );
+        fixture.documents.put("orgs/tenant-a/projects/project-a", Map.of(
+            "id", "project-a",
+            "tenantId", "tenant-a",
+            "executiveApproverId", "pm-1"
+        ));
+        WeeklyExpenseCommandService service = commandService(fixture.persistence);
+
+        fixture.persistence.runCommandTransaction(() -> service.closeCashflowMonth(
+            ACTOR,
+            "project-a",
+            SESSION,
+            explicitSettlementCycleCloseRequest(
+                fixture,
+                "2026-09",
+                "monthly-year-first-close",
+                "sha256:298012959db83e193536ff7f60735889252ceaa4325de6944465e2dd197fcb44"
+            )
+        ));
+        Map<String, Object> immutableSnapshot = (Map<String, Object>) fixture.documents.get(
+            monthCloseVersionPath("project-a", "2026-09", 1)
+        ).get("snapshot");
+        assertThat(immutableSnapshot)
+            .containsEntry("affectedFromMonth", "2026-01")
+            .containsEntry("affectedThroughMonth", "2026-08");
+        YearMonth affectedMonth = YearMonth.parse("2026-01");
+        for (int offset = 0; offset < 8; offset++) {
+            String yearMonth = affectedMonth.plusMonths(offset).toString();
+            for (int weekNo = 1; weekNo <= 5; weekNo++) {
+                fixture.documents.put(
+                    "orgs/tenant-a/cashflow_weekly_update_completions/project-a-"
+                        + yearMonth + "-w" + weekNo,
+                    lockedWeeklyCompletion(yearMonth, weekNo, 1)
+                );
+            }
+        }
+
+        CashflowMonthCloseResponse requested = fixture.persistence.runCommandTransaction(() ->
+            service.requestCashflowMonthReopen(
+                ACTOR,
+                "project-a",
+                "stage-data-project",
+                explicitSettlementCycleReopenRequest(
+                    fixture, "2026-09", 1, "monthly-year-reopen-request",
+                    "baseline 전체 승인 정정"
+                )
+            )
+        );
+        org.mockito.Mockito.clearInvocations(fixture.transaction);
+        fixture.persistence.runCommandTransaction(() -> service.decideCashflowMonthReopen(
+            ACTOR,
+            "project-a",
+            "stage-data-project",
+            explicitSettlementCycleReopenDecision(
+                fixture, "2026-09", requested.revision(), "monthly-year-reopen-decision",
+                "2026 첫 결산 보상 복원"
+            )
+        ));
+        long transactionWrites = org.mockito.Mockito.mockingDetails(fixture.transaction)
+            .getInvocations()
+            .stream()
+            .filter(invocation -> Set.of("set", "create").contains(invocation.getMethod().getName()))
+            .count();
+
+        assertThat(transactionWrites).isEqualTo(8 * 11 + (491 - 44 * 11));
+        assertThat(fixture.documents.get("orgs/tenant-a/cashflow_cumulative_close_heads/project-a"))
+            .containsEntry("authorityExists", false)
+            .containsEntry("closedRanges", List.of())
+            .containsEntry("revision", 2L);
+        Map<String, Object> firstPeriods = (Map<String, Object>) fixture.documents.get(
+            "orgs/tenant-a/cashflow_settlement_statuses/project-a-2026-01"
+        ).get("periods");
+        Map<String, Object> lastPeriods = (Map<String, Object>) fixture.documents.get(
+            "orgs/tenant-a/cashflow_settlement_statuses/project-a-2026-08"
+        ).get("periods");
+        assertThat((Map<String, Object>) firstPeriods.get("WEEK_1"))
+            .containsEntry("status", "WAITING_FOR_UPDATE");
+        assertThat((Map<String, Object>) lastPeriods.get("WEEK_5"))
+            .containsEntry("status", "WAITING_FOR_UPDATE");
+        Map<String, Object> cyclePeriods = (Map<String, Object>) fixture.documents.get(
+            "orgs/tenant-a/cashflow_settlement_statuses/project-a-2026-09"
+        ).get("periods");
+        assertThat((Map<String, Object>) cyclePeriods.get("MONTH"))
+            .containsEntry("status", "WAITING_FOR_UPDATE");
+        assertThat(lastPeriods).doesNotContainKey("MONTH");
+        assertThat(fixture.documents)
+            .doesNotContainKey("orgs/tenant-a/cashflow_settlement_statuses/project-a-2025-12");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void firstCumulativeCloseWithoutHistoryStartsAtTheMonthlySheetYear() {
+        Fixture fixture = fixture(activeMember(), activeLease(), true, LocalDate.parse("2026-10-01"));
         CloseCashflowMonthRequest request = cumulativeCloseRequest(
             fixture,
             "2026-10",
-            "forty-five-month-baseline"
+            "first-close-from-monthly-year"
+        );
+
+        CashflowMonthCloseResponse response = fixture.persistence.runCommandTransaction(() -> commandService(
+            fixture.persistence
+        ).closeCashflowMonth(ACTOR, "project-a", SESSION, request));
+
+        assertThat(response.status()).isEqualTo("CLOSED");
+
+        Map<String, Object> head = fixture.documents.get("orgs/tenant-a/cashflow_cumulative_close_heads/project-a");
+        // 이 경로는 구간 목록을 남기지 않는다. 구간 기록(2026-01 시작)은 조직장 승인 경로 테스트에서 확인한다.
+        assertThat(head)
+            .containsEntry("fromMonth", "2023-01")
+            .containsEntry("closedThrough", "2026-09");
+        assertThat(fixture.documents).containsKey(monthClosePath("project-a", "2026-10"));
+    }
+
+    @Test
+    void catchUpCumulativeCloseStillRejectsAFortyFiveMonthAffectedRangeWithoutCanonicalWrites() {
+        Fixture fixture = fixture(activeMember(), activeLease(), true, LocalDate.parse("2026-02-01"));
+        CloseCashflowMonthRequest first = cumulativeCloseRequest(fixture, "2026-02", "first-close-january");
+        fixture.persistence.runCommandTransaction(() -> commandService(
+            fixture.persistence
+        ).closeCashflowMonth(ACTOR, "project-a", SESSION, first));
+        Map<String, Object> headAfterFirst = deepCopy(fixture.documents.get(
+            "orgs/tenant-a/cashflow_cumulative_close_heads/project-a"
+        ));
+        assertThat(headAfterFirst).containsEntry("closedThrough", "2026-01");
+        CloseCashflowMonthRequest catchUp = cumulativeCloseRequest(
+            fixture,
+            "2029-11",
+            "forty-five-month-catch-up"
         );
 
         assertThatThrownBy(() -> fixture.persistence.runCommandTransaction(() -> commandService(
             fixture.persistence
-        ).closeCashflowMonth(ACTOR, "project-a", SESSION, request)))
+        ).closeCashflowMonth(ACTOR, "project-a", SESSION, catchUp)))
             .isInstanceOf(WeeklyExpenseConflictException.class)
             .hasMessageContaining("exceeds 44 months");
-        assertThat(fixture.documents)
-            .doesNotContainKeys(
-                "orgs/tenant-a/cashflow_cumulative_close_heads/project-a",
-                monthClosePath("project-a", "2026-10")
-            );
+        assertThat(fixture.documents.get("orgs/tenant-a/cashflow_cumulative_close_heads/project-a"))
+            .isEqualTo(headAfterFirst);
+        assertThat(fixture.documents).doesNotContainKey(monthClosePath("project-a", "2029-11"));
     }
 
     @Test
@@ -9580,6 +9704,46 @@ class FirestoreCashflowLeaseGuardTest {
         mirror.put("cells", sourceCells);
         mirror.put("sheetFacts", facts);
         return mirror;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void rewriteFirstCloseRangeAsLegacyBaseline(Fixture fixture) {
+        for (Map.Entry<String, Map<String, Object>> entry : new ArrayList<>(fixture.documents.entrySet())) {
+            if (!entry.getKey().contains("project-a")) continue;
+            Map<String, Object> rewritten = (Map<String, Object>) legacyBaselineCopy(entry.getValue());
+            rehashSnapshots(fixture, rewritten);
+            fixture.documents.put(entry.getKey(), rewritten);
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Object legacyBaselineCopy(Object value) {
+        if (value instanceof Map<?, ?> map) {
+            Map<String, Object> copy = new LinkedHashMap<>();
+            for (Map.Entry<?, ?> entry : map.entrySet()) {
+                String key = String.valueOf(entry.getKey());
+                copy.put(key, "affectedFromMonth".equals(key) && "2026-01".equals(entry.getValue())
+                    ? "2023-01"
+                    : legacyBaselineCopy(entry.getValue()));
+            }
+            return copy;
+        }
+        if (value instanceof List<?> list) {
+            List<Object> copy = new ArrayList<>();
+            for (Object item : list) copy.add(legacyBaselineCopy(item));
+            return copy;
+        }
+        return value;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static void rehashSnapshots(Fixture fixture, Map<String, Object> document) {
+        for (Object value : document.values()) {
+            if (value instanceof Map<?, ?> nested) rehashSnapshots(fixture, (Map<String, Object>) nested);
+        }
+        if (document.get("snapshot") instanceof Map<?, ?> snapshot && document.containsKey("snapshotHash")) {
+            document.put("snapshotHash", fixture.persistence.hashCanonicalJson((Map<String, Object>) snapshot));
+        }
     }
 
     private static String monthClosePath(String projectId, String yearMonth) {

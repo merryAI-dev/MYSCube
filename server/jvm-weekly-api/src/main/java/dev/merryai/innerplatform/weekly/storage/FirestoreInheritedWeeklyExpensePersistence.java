@@ -4424,7 +4424,10 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
         try {
             exactRange = affectedCloseRange(
                 preApprovalAuthority,
-                YearMonth.parse(text(currentHead.get("closedThrough"), ""))
+                YearMonth.parse(text(currentHead.get("closedThrough"), "")),
+                CASHFLOW_CUMULATIVE_BASELINE.toString().equals(affectedFromMonth)
+                    ? CASHFLOW_CUMULATIVE_BASELINE
+                    : firstCloseFrom(YearMonth.parse(affectedThroughMonth))
             );
         } catch (RuntimeException error) {
             return invalidCumulativeReopenEvidence();
@@ -6673,10 +6676,24 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
     }
 
     private AffectedCloseRange affectedCloseRange(Map<String, Object> previousHead, YearMonth nextClosedThrough) {
+        return affectedCloseRange(previousHead, nextClosedThrough, firstCloseFrom(nextClosedThrough));
+    }
+
+    // 시트는 지난 연도를 연 단위로만 둔다. 기록이 없는 프로젝트의 첫 결산 구간은 결산 대상 월이 속한 해의 1월부터다.
+    // 이미 2023-01 부터 저장된 첫 구간(기존 결산 기록)은 저장된 그대로 인정한다.
+    private static YearMonth firstCloseFrom(YearMonth closedThrough) {
+        return YearMonth.of(closedThrough.getYear(), 1);
+    }
+
+    private AffectedCloseRange affectedCloseRange(
+        Map<String, Object> previousHead,
+        YearMonth nextClosedThrough,
+        YearMonth firstCloseFrom
+    ) {
         boolean previousAuthorityExists = cumulativeAuthorityExists(previousHead);
         YearMonth affectedFrom = previousAuthorityExists
             ? requireYearMonth(text(previousHead.get("closedThrough"), "")).plusMonths(1)
-            : CASHFLOW_CUMULATIVE_BASELINE;
+            : firstCloseFrom;
         if (affectedFrom.isAfter(nextClosedThrough)) {
             throw new WeeklyExpenseConflictException("Cumulative close does not add a canonical monthly authority range.");
         }
@@ -6733,7 +6750,7 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             "approvalVersionId", "requestId", "ledgerRevision", "rootHash"
         );
         List<Map<String, Object>> ranges = new ArrayList<>();
-        YearMonth expectedFrom = CASHFLOW_CUMULATIVE_BASELINE;
+        YearMonth expectedFrom = null;
         for (Object item : iterable) {
             Map<String, Object> range = nestedMap(item);
             if (!range.keySet().equals(requiredFields)) {
@@ -6745,7 +6762,10 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
             long affectedMonthCount = java.time.temporal.ChronoUnit.MONTHS.between(
                 affectedFrom, affectedThrough
             ) + 1;
-            if (!affectedFrom.equals(expectedFrom)
+            boolean expectedStart = expectedFrom == null
+                ? affectedFrom.equals(CASHFLOW_CUMULATIVE_BASELINE) || affectedFrom.equals(firstCloseFrom(affectedThrough))
+                : affectedFrom.equals(expectedFrom);
+            if (!expectedStart
                 || affectedFrom.isAfter(affectedThrough)
                 || affectedMonthCount > CASHFLOW_CUMULATIVE_REOPEN_MAX_AFFECTED_MONTHS
                 || !affectedThrough.plusMonths(1).equals(cycle)

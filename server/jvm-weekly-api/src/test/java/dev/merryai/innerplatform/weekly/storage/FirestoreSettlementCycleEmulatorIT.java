@@ -391,7 +391,7 @@ class FirestoreSettlementCycleEmulatorIT {
             .containsEntry("approvalVersionId", firstVersionId)
             .containsEntry("previousAuthorityExists", false)
             .containsEntry("preApprovalAuthority", Map.of())
-            .containsEntry("affectedFromMonth", "2023-01")
+            .containsEntry("affectedFromMonth", "2026-01")
             .containsEntry("affectedThroughMonth", targetYearMonth)
             .containsEntry("headRevision", 1L)
             .containsEntry("rootHash", firstEvidence.manifestHash())
@@ -399,14 +399,14 @@ class FirestoreSettlementCycleEmulatorIT {
         assertThat(firstVersion)
             .containsEntry("previousAuthorityExists", false)
             .containsEntry("preApprovalAuthority", Map.of())
-            .containsEntry("affectedFromMonth", "2023-01")
+            .containsEntry("affectedFromMonth", "2026-01")
             .containsEntry("affectedThroughMonth", targetYearMonth);
         Map<String, Object> firstLedgerSnapshot = nestedMap(firstLedger.get("snapshot"));
         assertThat(snapshotDifferences(firstLedgerSnapshot, firstSnapshot)).isEmpty();
         assertThat(harness.persistence().hashCanonicalJson(firstLedgerSnapshot))
             .isEqualTo(harness.persistence().hashCanonicalJson(firstSnapshot));
         assertThat(firstRange)
-            .containsEntry("affectedFromMonth", "2023-01")
+            .containsEntry("affectedFromMonth", "2026-01")
             .containsEntry("affectedThroughMonth", targetYearMonth)
             .containsEntry("closedByCycleYearMonth", cycleYearMonth)
             .containsEntry("approvalVersionId", firstVersionId)
@@ -417,7 +417,7 @@ class FirestoreSettlementCycleEmulatorIT {
             .containsEntry("approvalVersionId", firstVersionId)
             .containsEntry("ledgerRevision", 1L);
 
-        seedLockedWeeklyCompletions(harness, "2023-01", targetYearMonth);
+        seedLockedWeeklyCompletions(harness, "2026-01", targetYearMonth);
         CashflowMonthReopenCommands.RequestReopen reopenRequest =
             new CashflowMonthReopenCommands.RequestReopen(
                 "reopen-request-v1",
@@ -539,7 +539,7 @@ class FirestoreSettlementCycleEmulatorIT {
             .hasMessageContaining("different request body");
         assertThat(projectState(harness)).isEqualTo(afterReopenDecision);
 
-        List<String> affectedMonths = monthsBetween("2023-01", targetYearMonth);
+        List<String> affectedMonths = monthsBetween("2026-01", targetYearMonth);
         for (String yearMonth : affectedMonths) {
             for (int weekNo = 1; weekNo <= 5; weekNo++) {
                 assertPeriod(harness, yearMonth, "WEEK_" + weekNo, "WAITING_FOR_UPDATE");
@@ -557,7 +557,7 @@ class FirestoreSettlementCycleEmulatorIT {
         assertPeriod(harness, cycleYearMonth, "MONTH", "WAITING_FOR_UPDATE");
         assertPeriod(harness, targetYearMonth, "MONTH", "COMPLETED");
         assertThat(projectDocuments(harness, "cashflow_weekly_update_completion_versions"))
-            .hasSize(44 * 5);
+            .hasSize(affectedMonths.size() * 5);
 
         String currentTargetRevision = FirestoreInheritedWeeklyExpensePersistence
             .computeCashflowTargetRevision(projectDocuments(harness, "cashflow_weeks").values());
@@ -766,36 +766,6 @@ class FirestoreSettlementCycleEmulatorIT {
             .isInstanceOfSatisfying(CashflowMonthCloseApprovalBlockedException.class, error ->
                 assertThat(error.reason()).isEqualTo(CashflowMonthCloseApprovalBlockedException.Reason.REQUEST_CHANGED));
         assertThat(documentOrEmpty(harness.monthlyClosePath())).isEmpty();
-    }
-
-    @Test
-    void fortyFiveMonthCycleIsRejectedBeforeAnyCanonicalOrReceiptWrite() throws Exception {
-        Harness harness = harness("it-cycle-45", "project-cycle-45");
-        seedCanonicalActorsAndProject(harness);
-        String emptyTargetRevision = FirestoreInheritedWeeklyExpensePersistence
-            .computeCashflowTargetRevision(List.of());
-        Evidence evidence = seedDirectApprovalEvidence(
-            harness, "2026-10", 1, emptyTargetRevision, "close-45"
-        );
-        Map<String, Map<String, Map<String, Object>>> before = projectState(harness);
-
-        assertThatThrownBy(() -> transaction(harness, () ->
-            harness.service().closeCashflowMonth(
-                harness.approver(), harness.projectId(), null,
-                evidence.directApproval("close-45", 0)
-            )
-        ))
-            .isInstanceOf(WeeklyExpenseConflictException.class)
-            .hasMessageContaining("exceeds 44 months");
-
-        assertThat(projectState(harness))
-            .as("The 45-month guard must fail before ledger/head/audit/idempotency writes")
-            .isEqualTo(before);
-        assertThat(documentOrEmpty(harness.headPath())).isEmpty();
-        assertThat(documentOrEmpty(harness.monthlyClosePath("2026-10"))).isEmpty();
-        assertThat(projectDocuments(harness, "weekly_api_audit_events")).isEmpty();
-        assertThat(projectDocuments(harness, "weekly_api_idempotency")).isEmpty();
-        assertThat(projectDocuments(harness, "cashflow_weeks")).isEmpty();
     }
 
     @Test
