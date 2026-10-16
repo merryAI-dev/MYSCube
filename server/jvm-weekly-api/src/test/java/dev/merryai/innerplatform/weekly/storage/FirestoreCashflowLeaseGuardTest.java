@@ -8061,21 +8061,18 @@ class FirestoreCashflowLeaseGuardTest {
     @Test
     @SuppressWarnings("unchecked")
     void firstCumulativeCloseWithoutHistoryStartsAtTheMonthlySheetYear() {
-        Fixture fixture = fixture(
-            member(Map.of("role", "finance")),
-            activeLease(),
-            true,
-            LocalDate.parse("2026-11-01")
-        );
+        Fixture fixture = fixture(activeMember(), activeLease(), true, LocalDate.parse("2026-10-01"));
         CloseCashflowMonthRequest request = cumulativeCloseRequest(
             fixture,
             "2026-10",
             "first-close-from-monthly-year"
         );
 
-        fixture.persistence.runCommandTransaction(() -> commandService(
+        CashflowMonthCloseResponse response = fixture.persistence.runCommandTransaction(() -> commandService(
             fixture.persistence
         ).closeCashflowMonth(ACTOR, "project-a", SESSION, request));
+
+        assertThat(response.status()).isEqualTo("CLOSED");
 
         Map<String, Object> head = fixture.documents.get("orgs/tenant-a/cashflow_cumulative_close_heads/project-a");
         assertThat(head)
@@ -8091,12 +8088,7 @@ class FirestoreCashflowLeaseGuardTest {
 
     @Test
     void catchUpCumulativeCloseStillRejectsAFortyFiveMonthAffectedRangeWithoutCanonicalWrites() {
-        Fixture fixture = fixture(
-            member(Map.of("role", "finance")),
-            activeLease(),
-            true,
-            LocalDate.parse("2029-12-01")
-        );
+        Fixture fixture = fixture(activeMember(), activeLease(), true, LocalDate.parse("2026-02-01"));
         CloseCashflowMonthRequest first = cumulativeCloseRequest(fixture, "2026-02", "first-close-january");
         fixture.persistence.runCommandTransaction(() -> commandService(
             fixture.persistence
@@ -8104,6 +8096,7 @@ class FirestoreCashflowLeaseGuardTest {
         Map<String, Object> headAfterFirst = deepCopy(fixture.documents.get(
             "orgs/tenant-a/cashflow_cumulative_close_heads/project-a"
         ));
+        assertThat(headAfterFirst).containsEntry("closedThrough", "2026-01");
         CloseCashflowMonthRequest catchUp = cumulativeCloseRequest(
             fixture,
             "2029-11",
