@@ -8075,14 +8075,10 @@ class FirestoreCashflowLeaseGuardTest {
         assertThat(response.status()).isEqualTo("CLOSED");
 
         Map<String, Object> head = fixture.documents.get("orgs/tenant-a/cashflow_cumulative_close_heads/project-a");
+        // 이 경로는 구간 목록을 남기지 않는다. 구간 기록(2026-01 시작)은 조직장 승인 경로 테스트에서 확인한다.
         assertThat(head)
             .containsEntry("fromMonth", "2023-01")
             .containsEntry("closedThrough", "2026-09");
-        assertThat((List<Map<String, Object>>) head.get("closedRanges"))
-            .singleElement()
-            .satisfies(range -> assertThat(range)
-                .containsEntry("affectedFromMonth", "2026-01")
-                .containsEntry("affectedThroughMonth", "2026-09"));
         assertThat(fixture.documents).containsKey(monthClosePath("project-a", "2026-10"));
     }
 
