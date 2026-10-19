@@ -19,6 +19,24 @@ export class BffError extends Error {
   }
 }
 
+function tenantHeaders(idToken, fallbackTenantId) {
+  let claims;
+  try {
+    const parts = String(idToken).split('.');
+    if (parts.length !== 3) return {};
+    const payload = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    claims = JSON.parse(atob(payload.padEnd(Math.ceil(payload.length / 4) * 4, '=')));
+    if (!claims || typeof claims !== 'object' || Array.isArray(claims)) return {};
+  } catch { return {}; }
+  // This is only a routing hint. The BFF still verifies the token and current membership.
+  if (['tenantId', 'tenant_id', 'orgId', 'org_id'].some((key) => typeof claims[key] === 'string' && claims[key].trim())) return {};
+  const tenantId = typeof fallbackTenantId === 'string' ? fallbackTenantId.trim().toLowerCase() : '';
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(tenantId)) {
+    throw new BffError(503, { code: 'tenant_context_unconfigured', message: '조직 연결 설정을 확인해야 합니다.' });
+  }
+  return { 'x-tenant-id': tenantId };
+}
+
 async function readCapped(response, maxBytes) {
   const declared = Number(response.headers.get('content-length'));
   if (Number.isFinite(declared) && declared > maxBytes) {
@@ -55,7 +73,7 @@ function retryDelayMs(response, attempt, random) {
 }
 
 export function createBffClient({
-  baseUrl, attachmentBaseUrl, idToken, fetchImpl = fetch, timeoutMs = 25_000,
+  baseUrl, attachmentBaseUrl, idToken, tenantId, fetchImpl = fetch, timeoutMs = 25_000,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random = Math.random, now = () => Date.now(),
 }) {
   if (attachmentBaseUrl) {
@@ -70,7 +88,7 @@ export function createBffClient({
     for (const [key, value] of Object.entries(query || {})) {
       if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, String(value));
     }
-    const headers = { authorization: `Bearer ${idToken}`, accept: 'application/json', 'user-agent': USER_AGENT };
+    const headers = { authorization: `Bearer ${idToken}`, accept: 'application/json', 'user-agent': USER_AGENT, ...tenantHeaders(idToken, tenantId) };
     if (method !== 'GET') {
       headers['content-type'] = 'application/json';
       headers['idempotency-key'] = crypto.randomUUID();

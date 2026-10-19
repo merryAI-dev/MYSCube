@@ -11,6 +11,7 @@ MCP 클라이언트 ──OAuth 2.1──▶ mcp.myscguard.app (이 Worker) ─�
 - **리소스 서버 + 권한 서버**: `@cloudflare/workers-oauth-provider` 가 MCP 표준 OAuth(보호 리소스 메타데이터, 401 challenge, 동적 클라이언트 등록, CIMD, PKCE, 갱신 토큰)를 맡습니다. 토큰과 코드는 KV에 해시로만 저장되고, 사용자 정보(props)는 토큰을 가진 쪽만 풀 수 있게 암호화됩니다.
 - **로그인**: 동의 화면 → 회사 Google 계정(`hd=mysc.co.kr`) → Firebase 세션 → BFF로 활성 구성원 확인. 구성원이 아니면 토큰을 발급하지 않습니다.
 - **권한**: Worker 는 권한을 판단하지 않습니다. 모든 조회는 로그인한 구성원의 Firebase ID 토큰으로 BFF 를 부르므로, 앱 화면과 같은 역할·프로젝트 범위 검사를 받습니다.
+- **조직 전달**: 토큰에 조직 claim이 없으면 서버 설정 `BFF_TENANT_ID`를 `x-tenant-id`로 전달합니다. 현재 설정은 웹의 기본 조직과 같은 `mysc`입니다. 조직 claim이 있으면 BFF가 기존 우선순위로 판정하며, 토큰 서명과 현재 구성원·역할 검증은 항상 BFF가 수행합니다. 설정은 사용자 도구 입력으로 바꿀 수 없습니다.
 - **세션 유지**: MCP 액세스 토큰 55분, 갱신 토큰은 쓸 때마다 30일 연장됩니다. 갱신할 때 Firebase 토큰도 갱신하며, 계정이 비활성화되면 그 시점에 연결이 끊깁니다.
 - **도구**: `project_search`, `project_get`, `cashflow_status`, `accounting_read`, `sheet_check`, 그리고 검증된 조회 API 목록을 고르는 `api_catalog` / `api_read`. 목록은 `server/mcp/api-catalog.mjs` 에서 BFF 원격 MCP와 같이 씁니다. 조회를 늘릴 때는 그 목록에 GET 항목을 추가합니다.
 
