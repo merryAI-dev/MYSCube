@@ -75,18 +75,23 @@ async function authorize(request, env) {
 
 export async function handleCallback(request, env, { fetchImpl = fetch } = {}) {
   const oauth = env.OAUTH_PROVIDER;
-  const { request: original, data, headers } = await oauth.finishUpstream(request);
-  const params = new URL(request.url).searchParams;
-  if (params.get('error') || !params.get('code')) {
-    headers.set('Location', authorizationErrorRedirect(original, 'access_denied'));
-    return new Response(null, { status: 302, headers });
-  }
+  let stage = 'upstream_state';
   try {
+    const { request: original, data, headers } = await oauth.finishUpstream(request);
+    const params = new URL(request.url).searchParams;
+    if (params.get('error') || !params.get('code')) {
+      headers.set('Location', authorizationErrorRedirect(original, 'access_denied'));
+      return new Response(null, { status: 302, headers });
+    }
+    stage = 'google_exchange';
     const google = await exchangeGoogleCode({ code: params.get('code'), verifier: data.verifier, clientId: env.GOOGLE_CLIENT_ID,
       clientSecret: env.GOOGLE_CLIENT_SECRET, redirectUri: `${env.PUBLIC_ORIGIN}/callback`, hostedDomain: env.GOOGLE_HOSTED_DOMAIN, fetchImpl });
+    stage = 'firebase_sign_in';
     const firebase = await signInFirebase({ googleIdToken: google.idToken, apiKey: env.FIREBASE_WEB_API_KEY, requestUri: env.PUBLIC_ORIGIN, fetchImpl });
     // 활성 구성원인지 BFF 가 앱과 같은 규칙으로 판단한다. 구성원이 아니면 토큰을 발급하지 않는다.
-    await createBffClient({ baseUrl: env.BFF_BASE_URL, idToken: firebase.idToken, fetchImpl }).get('/api/v1/projects', { limit: 1 });
+    stage = 'member_check';
+    await createBffClient({ baseUrl: env.BFF_BASE_URL, idToken: firebase.idToken, tenantId: env.BFF_TENANT_ID, fetchImpl }).get('/api/v1/projects', { limit: 1 });
+    stage = 'grant_completion';
     const { redirectTo } = await oauth.completeAuthorization({
       request: original, userId: firebase.uid, metadata: { email: google.email }, scope: original.scope,
       props: { uid: firebase.uid, email: google.email, firebaseIdToken: firebase.idToken, firebaseRefreshToken: firebase.refreshToken,
@@ -95,8 +100,10 @@ export async function handleCallback(request, env, { fetchImpl = fetch } = {}) {
     headers.set('Location', redirectTo);
     return new Response(null, { status: 302, headers });
   } catch (error) {
+    if (error instanceof AuthorizationError) return errorPage('연결 요청이 만료됐거나 다른 브라우저에서 시작됐습니다. AI 앱에서 연결을 다시 시작해 주세요.');
     if (error instanceof IdentityError) return errorPage(error.message);
     if (error instanceof BffError && [401, 403].includes(error.status)) return errorPage('MYSCube 활성 구성원만 연결할 수 있습니다. 관리자에게 구성원 등록을 요청해 주세요.', 403);
-    throw error;
+    console.error('myscube_oauth_callback_failed', { stage, code: error instanceof BffError ? 'bff_request_failed' : 'callback_failed' });
+    return errorPage('연결 서버에서 정보를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.', error instanceof BffError && error.status === 503 ? 503 : 502);
   }
 }

@@ -28,7 +28,7 @@ const mcpHandler = {
     let props = ctx.props;
     if (!props?.firebaseIdToken || props.firebaseExpiresAt < Date.now() + 60_000) props = await refreshedProps(props, env);
     const server = createMyscubeMcpServer({
-      bff: createBffClient({ baseUrl: env.BFF_BASE_URL, attachmentBaseUrl: env.ATTACHMENT_BASE_URL, idToken: props.firebaseIdToken }),
+      bff: createBffClient({ baseUrl: env.BFF_BASE_URL, attachmentBaseUrl: env.ATTACHMENT_BASE_URL, idToken: props.firebaseIdToken, tenantId: env.BFF_TENANT_ID }),
       record: usageRecorder(env.USAGE, { uid: props.uid, role: 'member', client: clientOf(request.headers.get('user-agent')) }),
       textStore: createTextStore(env.OAUTH_KV),
       uid: props.uid,

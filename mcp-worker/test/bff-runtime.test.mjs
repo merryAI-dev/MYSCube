@@ -4,6 +4,26 @@ import { Miniflare, convertV4MiniflareOptions } from 'miniflare';
 import { fileURLToPath } from 'node:url';
 
 describe('BFF transport in the actual Worker runtime', () => {
+  it('passes the configured organization only when the token has no tenant claim', async () => {
+    const plain = `fixture.${Buffer.from(JSON.stringify({ uid: 'fixture' })).toString('base64url')}.fixture`;
+    const claimed = `fixture.${Buffer.from(JSON.stringify({ uid: 'fixture', orgId: 'other' })).toString('base64url')}.fixture`;
+    const bundle = await build({ stdin: {
+      contents: `import { createBffClient } from './bff.mjs';
+export default { async fetch(request) {
+  const idToken = new URL(request.url).pathname === '/claimed' ? ${JSON.stringify(claimed)} : ${JSON.stringify(plain)};
+  return Response.json(await createBffClient({ baseUrl: 'https://upstream.example', idToken, tenantId: 'mysc' }).get('/api/v1/projects'));
+} };`, resolveDir: fileURLToPath(new URL('../src', import.meta.url)),
+    }, bundle: true, format: 'esm', platform: 'browser', write: false });
+    const runtime = new Miniflare(convertV4MiniflareOptions({ workers: [
+      { name: 'client', compatibilityDate: '2026-09-01', modules: true, script: bundle.outputFiles[0].text, outboundService: 'upstream' },
+      { name: 'upstream', compatibilityDate: '2026-09-01', modules: true, script: `export default { fetch(request) { return Response.json({ tenant: request.headers.get('x-tenant-id') }); } };` },
+    ] }));
+    try {
+      expect(await (await runtime.dispatchFetch('http://localhost/plain')).json()).toEqual({ tenant: 'mysc' });
+      expect(await (await runtime.dispatchFetch('http://localhost/claimed')).json()).toEqual({ tenant: null });
+    } finally { await runtime.dispose(); }
+  }, 20_000);
+
   it('fetches without following redirects or forwarding credentials to another origin', async () => {
     const bundle = await build({
       stdin: {
