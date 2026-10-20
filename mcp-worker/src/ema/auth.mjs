@@ -3,7 +3,8 @@ import { createEmaClient, EmaError } from './client.mjs';
 
 // 로그인은 EMA Station 사이트에서만 한다. 이 서비스는 비밀번호를 받지 않고, 로그인한 구성원의
 // Firebase 로그인 증명(ID 토큰·갱신 토큰)만 받는다. 연결 확인 화면은 EMA 사이트의 /mcp/authorize 다.
-export const SCOPES = Object.freeze(['ema:registry']);
+import { SCOPES, NEWS_SCOPE, REGISTRY_SCOPE, NEWS_CONSENT_VERSION, requestedScopes } from './scopes.mjs';
+export { SCOPES };
 
 const escape = (value) => String(value).replace(/[&<>"']/gu, (char) => `&#${char.charCodeAt(0)};`);
 
@@ -20,12 +21,14 @@ ${body}</html>`, { status, headers });
 
 function consentPage(details, handle) {
   return `<h1>${escape(details.clientName)}에서 EMA Station을 조회하도록 허용할까요?</h1>
-<p>이 앱이 EMA Station의 <strong>스타트업 등록(FRN) 데이터</strong>를 내 권한으로 조회합니다. 관리자 계정은 엑셀 내려받기와 일괄 등록도 할 수 있지만, 등록은 미리보기를 확인한 뒤에만 실행되고 삭제는 할 수 없습니다.</p>
+${details.scope.includes(REGISTRY_SCOPE) ? '<p>이 앱이 EMA Station의 <strong>스타트업 등록(FRN) 데이터</strong>를 내 권한으로 조회합니다. 관리자 계정은 엑셀 내려받기와 일괄 등록도 할 수 있지만, 등록은 미리보기를 확인한 뒤에만 실행되고 삭제는 할 수 없습니다.</p>' : ''}
+<p><strong>선택 가능한 뉴스 읽기 전용</strong>: 검증 매체 기사·원문 링크·연결 기업과 현재 참여사업 이름/식별키를 읽습니다. 최대 KST 31일·100기사이며 전체 수집 완전성을 보증하지 않습니다. 연락처·FRN 상세·투자 원장·원시 로그·DB 쓰기·Slack 전송 권한은 포함하지 않습니다.</p>
 <p class="muted">접근 권한이 전달되는 곳: <strong>${escape(details.redirectHost)}</strong>${details.clientDomain ? ` · 게시: ${escape(details.clientDomain)}` : ' · 이 앱이 스스로 등록한 이름입니다.'}</p>
 ${details.redirectIsLoopback ? '<p><strong>내 컴퓨터의 앱으로 전달됩니다.</strong> 방금 직접 연결을 시작한 경우에만 계속하세요.</p>' : ''}
 <form method="post"><input type="hidden" name="handle" value="${escape(handle)}">
-<p><button name="decision" value="approve">허용하고 EMA Station에서 로그인</button> <button name="decision" value="deny">거부</button></p></form>
-<p class="muted">비밀번호는 EMA Station 사이트에서만 입력합니다. 7일 동안 사용하지 않으면 연결이 끊깁니다.</p>`;
+<p><label><input type="checkbox" name="newsConsent" value="yes" ${details.scope.includes(NEWS_SCOPE) ? 'required' : ''}> 뉴스 읽기 범위와 기존 연결의 갱신 기간에 동의합니다${details.scope.includes(NEWS_SCOPE) ? ' (필수)' : ' (선택, 기본 미동의)'}.</label></p>
+<p><button name="decision" value="approve">허용하고 EMA Station에서 로그인</button> <button name="decision" value="deny" formnovalidate>거부</button></p></form>
+<p class="muted">비밀번호는 EMA Station 사이트에서만 입력합니다. 접근 토큰은 55분, 갱신 연결은 최대 30일이며 7일 동안 사용하지 않으면 연결이 끊깁니다. AI 앱에서 연결을 해제할 수 있습니다.</p>`;
 }
 
 async function startUpstream(env, oauth, authRequest, headers) {
@@ -51,11 +54,12 @@ async function authorize(request, env) {
   const oauth = env.OAUTH_PROVIDER;
   const remember = { secret: env.CONSENT_SECRET };
   if (request.method === 'GET') {
-    const authRequest = await oauth.parseAuthRequest(request);
-    if (await oauth.isConsentRemembered(request, authRequest, remember)) return startUpstream(env, oauth, authRequest);
+    let authRequest = await oauth.parseAuthRequest(request);
+    try { authRequest = { ...authRequest, scope: requestedScopes(authRequest.scope) }; }
+    catch { return page('EMA Station 연결', '<h1>지원하지 않는 접근 범위입니다</h1>', new Headers(), 400); }
     const details = await oauth.describeConsent(authRequest);
     const consent = await oauth.beginConsent(authRequest);
-    return page('EMA Station 연결', consentPage(details, consent.handle), consent.headers);
+    return page('EMA Station 연결', consentPage({ ...details, scope: authRequest.scope }, consent.handle), consent.headers);
   }
   if (request.method !== 'POST') return new Response(null, { status: 405, headers: { allow: 'GET, POST' } });
   const form = await request.formData();
@@ -64,8 +68,15 @@ async function authorize(request, env) {
     const denied = await oauth.denyConsent(request, handle);
     return new Response(null, { status: 302, headers: denied.headers });
   }
-  const approved = await oauth.approveConsent(request, handle, { scope: [...SCOPES], remember });
-  return startUpstream(env, oauth, approved.request, approved.headers);
+  const approved = await oauth.approveConsent(request, handle, { remember });
+  let scopes;
+  try { scopes = requestedScopes(approved.request.scope); }
+  catch { return page('EMA Station 연결', '<h1>지원하지 않는 접근 범위입니다</h1>', new Headers(), 400); }
+  if (scopes.includes(NEWS_SCOPE) && form.get('newsConsent') !== 'yes') {
+    return page('EMA Station 연결', '<h1>뉴스 읽기 범위에 명시적으로 동의해 주세요</h1><p>AI 앱에서 연결을 다시 시작해 주세요.</p>', new Headers(), 400);
+  }
+  if (form.get('newsConsent') === 'yes' && !scopes.includes(NEWS_SCOPE)) scopes.push(NEWS_SCOPE);
+  return startUpstream(env, oauth, { ...approved.request, scope: scopes }, approved.headers);
 }
 
 function corsHeaders(env) {
@@ -122,12 +133,20 @@ export async function handleSession(request, env, { fetchImpl = fetch } = {}) {
     return json(env, { message: '연결 요청이 만료됐거나 다른 브라우저에서 시작됐습니다. AI 앱에서 연결을 다시 시작해 주세요.' }, 400);
   }
 
+  let scopes;
+  try { scopes = requestedScopes(resumed.request.scope); }
+  catch { return json(env, { message: '지원하지 않는 접근 범위입니다.' }, 400); }
+  if (scopes.includes(NEWS_SCOPE) && (access.role !== 'admin' || access.canExportAndImport !== true)) {
+    return json(env, { message: '뉴스 읽기는 기존 EMA 관리자 계정으로만 연결할 수 있습니다.' }, 403);
+  }
   const { redirectTo } = await oauth.completeAuthorization({
     request: resumed.request,
     userId: access.uid,
     metadata: { email: access.email, role: access.role },
-    scope: resumed.request.scope,
+    scope: scopes,
     props: {
+      grantedScopes: scopes,
+      ...(scopes.includes(NEWS_SCOPE) ? { newsConsentVersion: NEWS_CONSENT_VERSION } : {}),
       uid: access.uid,
       email: access.email,
       role: access.role,

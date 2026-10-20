@@ -3,6 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { refreshFirebase } from '../identity.mjs';
 import { handleAuthorize, handleSession, SCOPES } from './auth.mjs';
 import { createEmaClient } from './client.mjs';
+import { scopedAccess } from './scopes.mjs';
 import { runImportCommit } from './commit.mjs';
 import { createStore, handleConfirm, handleFileDownload, handleUpload } from './files.mjs';
 import { createNoteStore, handleNotePage, noteSaverFrom } from './note-save.mjs';
@@ -29,14 +30,21 @@ const mcpHandler = {
     if (request.method !== 'POST') return new Response(null, { status: 405, headers: { allow: 'POST' } });
     let props = ctx.props;
     if (!props?.idToken || props.expiresAt < Date.now() + 16 * 60_000) props = await refreshedProps(props, env);
+    const permission = scopedAccess(props, ctx.auth?.scope);
+    const ema = createEmaClient({ functionsBase: env.EMA_FUNCTIONS_BASE, idToken: props.idToken });
+    let freshAdmin = false;
+    if (permission.canReadNews) {
+      try { const fresh = await ema.call('getRegistryAccess'); freshAdmin = fresh.uid === props.uid && fresh.role === 'admin' && fresh.canExportAndImport === true; }
+      catch { return Response.json({ error: 'news_access_unavailable' }, { status: 403 }); }
+    }
     const server = createEmaMcpServer({
-      ema: createEmaClient({ functionsBase: env.EMA_FUNCTIONS_BASE, idToken: props.idToken }),
+      ema,
       store: createStore(env.OAUTH_KV),
       notes: createNoteStore(env.OAUTH_KV),
       saveNote: noteSaverFrom(env),
       publicOrigin: env.PUBLIC_ORIGIN,
       record: usageRecorder(env.USAGE, { uid: props.uid, role: props.role, client: clientOf(request.headers.get('user-agent')) }),
-      access: { uid: props.uid, role: props.role, canExportAndImport: props.canExportAndImport === true, idToken: props.idToken, idTokenExpiresAt: props.expiresAt },
+      access: { canReadRegistry: permission.canReadRegistry, canReadNews: permission.canReadNews && freshAdmin, uid: props.uid, role: props.role, canExportAndImport: props.canExportAndImport === true, idToken: props.idToken, idTokenExpiresAt: props.expiresAt },
     });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     await server.connect(transport);

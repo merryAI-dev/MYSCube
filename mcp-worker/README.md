@@ -57,3 +57,11 @@ MCP 클라이언트 ──OAuth 2.1──▶ ema-mcp.myscguard.app ──구성�
 - **일괄 등록**: 미리보기(검증·중복 판정, 쓰기 없음) → 사용자 확인 → 등록. 삭제된 기업·이관 기업과 같은 행은 건너뛰고, 기존 기업의 값은 빈 칸만 채우며, 크레딧은 기본으로 부여하지 않습니다. 같은 배치를 다시 실행해도 중복 등록되지 않습니다.
 - **배포**: `MCP Worker Deploy`의 `ema` 대상. GitHub `Production` 환경 비밀값 `EMA_MCP_FIREBASE_WEB_API_KEY`(EMA 웹 앱의 Firebase Web API 키), `EMA_MCP_CONSENT_SECRET`(32자 이상)이 필요합니다. 서버 쪽 함수와 연결 화면은 EMA_Station 저장소(`feat(registry)`)에 있습니다.
 
+
+### Newsletter reader proposal (inactive)
+
+`ema_news_read` projects at most 100 accepted publisher articles over at most 31 KST dates through the existing signed-in `getAdminLabNews` callable. It excludes the global directory and private fields. It requires both existing admin access and a separately verified `canReadNews === true` grant; current registry-only connections do not receive the tool. No authentication provider currently supplies that grant. The existing FRN-only consent and `ema:registry` scope must not be interpreted as news permission. A proposed separate `ema:news:read` consent/claim integration requires review and explicit authorization before activation. This change creates no scope, credential, token storage or grant.
+
+Source health and saved-corpus completeness remain unknown. Empty results do not prove a healthy collector or absence of news; over 100 articles is explicitly partial and requires a narrower range. The bound limits output, while the existing callable still reads its complete bounded interval internally. First-seen tracking, event deduplication, editorial review and delivery are outside this read-only adapter.
+
+뉴스 읽기 동의: 기존 연결을 다시 시작하면 뉴스 읽기 선택란(기본 미선택)이 나타난다. `ema:news:read`를 직접 요청한 클라이언트는 필수 동의이며, 기존 registry 클라이언트도 사용자가 선택하면 뉴스 scope를 추가할 수 있다. 기존 grant/refresh/기억 동의는 자동 승격되지 않는다. news-only token에는 registry/등록 도구가 노출되지 않는다. 현재 access-token scope, 저장된 동의 receipt, 최신 EMA 관리자 권한을 모두 확인한다. `getAdminLabNews`의 최신 관리자 검사는 유지된다. 재동의 후 실제 도구 목록과 snapshot 검증 전에는 뉴스 연결 완료가 아니다. 09시 스케줄·Slack 발신은 별도다.
