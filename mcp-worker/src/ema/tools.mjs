@@ -5,6 +5,7 @@ import { registerMeetingTools } from './meeting-tools.mjs';
 import { registerNoteTools } from './note-tools.mjs';
 import { instrumentServer } from '../usage.mjs';
 import { registerOfficeHourTools } from './office-hour-tools.mjs';
+import { registerNewsTools } from './news-tools.mjs';
 import { READ_ONLY, tool, WRITES } from './tool-kit.mjs';
 import { buildCsv, buildWorkbook, buildXlsx } from './xlsx.mjs';
 
@@ -79,9 +80,12 @@ const filterShape = {
 const rowShape = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()]));
 
 export function createEmaMcpServer({ ema, store, notes, saveNote, publicOrigin, access, record, now = () => Date.now() }) {
-  const server = new McpServer({ name: 'ema-station', version: '1.0.0' }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: 'ema-station', version: '1.0.0' }, { instructions: access.canReadRegistry === false ? '승인된 뉴스 읽기 전용 연결입니다. ema_news_read만 사용합니다. 사건·발송 중복 및 편집 검수는 별도입니다.' : INSTRUCTIONS });
   if (record) instrumentServer(server, record, { detailKeys: ['destination'] });
   const isAdmin = access.canExportAndImport === true;
+  if (isAdmin && access.canReadNews === true) registerNewsTools(server, { ema, now });
+
+  if (access.canReadRegistry === false) return server;
 
   tool(server, 'ema_registry_status', {
     title: '등록 현황',

@@ -48,6 +48,14 @@ jobs:
             echo "main advanced; skipping superseded ${TARGET_SHA}."
             exit 0
           fi
+          if [ "${{ matrix.target }}" = "myscube" ] && [ "${{ github.event_name }}" = "workflow_run" ]; then
+            changed="$(git diff-tree --no-commit-id --name-only -r "$TARGET_SHA")"
+            if printf '%s\n' "$changed" | grep -q '^mcp-worker/src/ema/' && ! printf '%s\n' "$changed" | grep -E '^mcp-worker/' | grep -Ev '^(mcp-worker/src/ema/|mcp-worker/test/ema-|mcp-worker/README.md)' | grep -q .; then
+              echo "current=false" >> "$GITHUB_OUTPUT"
+              echo "EMA-only change; unrelated MYSCube worker not redeployed."
+              exit 0
+            fi
+          fi
           echo "current=true" >> "$GITHUB_OUTPUT"
           gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/ci.yml/runs?head_sha=${TARGET_SHA}&event=push" \
             --jq '.workflow_runs | any(.conclusion == "success" and .head_branch == "main")' | grep -qx true
