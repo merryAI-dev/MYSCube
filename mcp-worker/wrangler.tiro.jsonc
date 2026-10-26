@@ -1,0 +1,16 @@
+{
+  // Tiro 회의록 자동 저장(사람 개입 없음). KV id 는 배포 스크립트(scripts/deploy-mcp-worker.mjs, target=tiro)가 넣는다.
+  "name": "myscube-tiro-autosave",
+  "main": "src/tiro/index.mjs",
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+  "routes": [{ "pattern": "tiro-autosave.myscguard.app", "custom_domain": true }],
+  "kv_namespaces": [{ "binding": "STATE_KV", "id": "REPLACED_AT_DEPLOY" }],
+  "triggers": { "crons": ["*/10 * * * *"] },
+  "vars": {
+    // workspace: 키의 워크스페이스 노트(시스템 키는 전체 공유 폴더 노트만). organization: 조직 키로 조직 전체.
+    "TIRO_SCOPE": "workspace",
+    "ANTHROPIC_MODEL": "claude-opus-5-5"
+  },
+  "observability": { "enabled": true }
+}

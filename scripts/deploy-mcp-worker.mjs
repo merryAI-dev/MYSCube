@@ -32,6 +32,25 @@ const TARGETS = {
       NOTES_SAVE_URL: 'EMA_MCP_NOTES_SAVE_URL',
     },
   },
+  // Tiro 회의록 자동 저장(크론·웹훅). MCP 가 아니라서 OAuth 확인 대신 /healthz 로 확인한다.
+  tiro: {
+    kvTitle: 'myscube-tiro-autosave-state',
+    kvBinding: 'STATE_KV',
+    origin: 'https://tiro-autosave.myscguard.app',
+    config: 'wrangler.tiro.jsonc',
+    generated: 'wrangler.tiro.generated.jsonc',
+    health: true,
+    // 비밀값을 아직 안 넣었으면 실패하지 않고 건너뛴다(다른 대상 배포를 막지 않게).
+    skipIfUnconfigured: true,
+    secrets: {
+      TIRO_API_KEY: 'TIRO_AUTOSAVE_TIRO_API_KEY',
+      ANTHROPIC_API_KEY: 'TIRO_AUTOSAVE_ANTHROPIC_API_KEY',
+      NOTES_SAVE_URL: 'EMA_MCP_NOTES_SAVE_URL',
+    },
+    optionalSecrets: {
+      TIRO_WEBHOOK_SECRET: 'TIRO_AUTOSAVE_WEBHOOK_SECRET',
+    },
+  },
 };
 const targetName = process.argv[2] || 'myscube';
 const target = TARGETS[targetName];
@@ -40,10 +59,14 @@ const KV_TITLE = target.kvTitle;
 const ORIGIN = target.origin;
 const env = process.env;
 if (env.GITHUB_ACTIONS !== 'true' || env.GITHUB_REF !== 'refs/heads/main') throw new Error('Only main GitHub Actions may deploy');
+if (target.skipIfUnconfigured && Object.values(target.secrets).some((key) => !env[key])) {
+  console.log(`::notice::${targetName} 비밀값이 없어 배포를 건너뜁니다: ${Object.values(target.secrets).filter((key) => !env[key]).join(', ')}`);
+  process.exit(0);
+}
 for (const key of ['CLOUDFLARE_API_KEY', 'CLOUDFLARE_EMAIL', 'CLOUDFLARE_ZONE_ID', ...Object.values(target.secrets)]) {
   if (!env[key]) throw new Error(`${key} is not configured`);
 }
-if (env[target.secrets.CONSENT_SECRET].length < 32) throw new Error(`${target.secrets.CONSENT_SECRET} must be at least 32 characters`);
+if (target.secrets.CONSENT_SECRET && env[target.secrets.CONSENT_SECRET].length < 32) throw new Error(`${target.secrets.CONSENT_SECRET} must be at least 32 characters`);
 
 async function cf(path, method = 'GET', body) {
   const response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
@@ -63,7 +86,7 @@ const kv = namespaces.find((item) => item.title === KV_TITLE) || await cf(`/acco
 
 const workerDir = new URL('../mcp-worker/', import.meta.url);
 const config = JSON.parse(readFileSync(new URL(target.config, workerDir), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
-config.kv_namespaces = [{ binding: 'OAUTH_KV', id: kv.id }];
+config.kv_namespaces = [{ binding: target.kvBinding ?? 'OAUTH_KV', id: kv.id }];
 if (targetName === 'myscube' && env.MCP_DOCUMENTS_ORIGIN) {
   const origin = new URL(env.MCP_DOCUMENTS_ORIGIN);
   if (origin.protocol !== 'https:' || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash) throw new Error('Invalid document service origin');
@@ -109,9 +132,19 @@ function smoke() {
   const detail = `metadata ${code} resource=${resource || '-'} / mcp ${seen.map((entry) => `${entry.agent}=${entry.status || '-'}`).join(' ')} challenge=${challenged}`;
   return { ok: metadataOk, warn: metadataOk && !challenged, detail };
 }
+// MCP 가 아닌 대상은 /healthz 가 서비스 이름과 비밀값 설정을 돌려주는지만 본다.
+function healthSmoke() {
+  const lines = curl(['-A', 'python-httpx/0.27.0', '-w', '\n%{http_code}', `${ORIGIN}/healthz`]).trimEnd().split('\n');
+  const code = lines.pop();
+  let health = null;
+  try { health = JSON.parse(lines.join('\n')); } catch { /* 아직 준비 중 */ }
+  const configured = health?.configured ?? {};
+  return { ok: code === '200' && health?.service === `myscube-${targetName}-autosave` && configured.tiro && configured.claude && configured.drive,
+    warn: false, detail: `healthz ${code} configured=${JSON.stringify(configured)}` };
+}
 let last = { ok: false, detail: 'not run' };
 for (let attempt = 1; attempt <= 18; attempt++) {
-  try { last = smoke(); } catch (error) { last = { ok: false, detail: `curl failed: ${error.message.split('\n')[0]}` }; }
+  try { last = target.health ? healthSmoke() : smoke(); } catch (error) { last = { ok: false, detail: `curl failed: ${error.message.split('\n')[0]}` }; }
   console.log(`discovery check ${attempt}: ${last.detail}`);
   if (last.ok) {
     if (last.warn) console.log('::warning::인증 없는 /mcp 요청이 401 이 아닙니다. 러너 IP 에 대한 엣지 응답일 수 있으니 공개 주소에서 직접 확인하세요.');

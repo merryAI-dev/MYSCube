@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Tiro 회의록 자동 저장을 이 Mac에서 10분마다 실행한다(Cloudflare Worker 를 못 쓸 때의 대안).
+     __NODE__, __WORKER_DIR__ 를 바꿔 ~/Library/LaunchAgents/kr.mysc.tiro-autosave.plist 로 두고
+     launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/kr.mysc.tiro-autosave.plist -->
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>kr.mysc.tiro-autosave</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__NODE__</string>
+    <string>__WORKER_DIR__/scripts/tiro-autosave-local.mjs</string>
+  </array>
+  <key>WorkingDirectory</key><string>__WORKER_DIR__</string>
+  <key>StartInterval</key><integer>600</integer>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>__WORKER_DIR__/.tiro-local/run.log</string>
+  <key>StandardErrorPath</key><string>__WORKER_DIR__/.tiro-local/run.log</string>
+</dict>
+</plist>
