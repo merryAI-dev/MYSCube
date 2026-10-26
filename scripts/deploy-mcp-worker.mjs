@@ -133,8 +133,9 @@ function smoke() {
   return { ok: metadataOk, warn: metadataOk && !challenged, detail };
 }
 // MCP 가 아닌 대상은 /healthz 가 서비스 이름과 비밀값 설정을 돌려주는지만 본다.
+// 이 호스트는 자동화 클라이언트 차단 예외(configure-mcp-edge.mjs)가 아니라서 브라우저 UA 로 확인한다.
 function healthSmoke() {
-  const lines = curl(['-A', 'python-httpx/0.27.0', '-w', '\n%{http_code}', `${ORIGIN}/healthz`]).trimEnd().split('\n');
+  const lines = curl(['-A', 'Mozilla/5.0', '-w', '\n%{http_code}', `${ORIGIN}/healthz`]).trimEnd().split('\n');
   const code = lines.pop();
   let health = null;
   try { health = JSON.parse(lines.join('\n')); } catch { /* 아직 준비 중 */ }
