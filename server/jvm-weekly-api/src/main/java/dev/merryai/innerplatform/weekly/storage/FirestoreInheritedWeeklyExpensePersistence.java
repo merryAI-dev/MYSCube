@@ -20,6 +20,7 @@ import com.google.cloud.Timestamp;
 import com.google.cloud.firestore.CollectionReference;
 import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
+import com.google.cloud.firestore.FieldMask;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.FirestoreOptions;
 import com.google.cloud.firestore.Query;
@@ -5652,13 +5653,13 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
 
     @Override
     public Integer findCashflowDeclaredWeeklyYear(String tenantId, String projectId) {
-        DocumentSnapshot mirror = cashflowRead(() -> get(db.document(
-            "orgs/" + tenantId + "/cashflow_sheet_mirrors/" + projectId
-        )));
+        DocumentSnapshot mirror = cashflowRead(() -> readWeeklyYearDeclarations(new DocumentReference[] {
+            db.document("orgs/" + tenantId + "/cashflow_sheet_mirrors/" + projectId)
+        }).getFirst());
         if (!mirror.exists()) {
             return null;
         }
-        Object value = data(mirror).get("weeklyYear");
+        Object value = mirror.get("weeklyYear");
         if (!(value instanceof Number number)) {
             return null;
         }
@@ -5672,10 +5673,11 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
     public Map<String, Integer> findCashflowDeclaredWeeklyYears(String tenantId, List<String> projectIds) {
         if (projectIds == null || projectIds.isEmpty()) return Map.of();
         Map<String, Integer> yearsByProject = new LinkedHashMap<>();
-        for (DocumentSnapshot mirror : getAll(projectIds.stream()
+        for (DocumentSnapshot mirror : readWeeklyYearDeclarations(projectIds.stream()
             .map(projectId -> db.document("orgs/" + tenantId + "/cashflow_sheet_mirrors/" + projectId))
             .toArray(DocumentReference[]::new))) {
-            Object value = data(mirror).get("weeklyYear");
+            if (!mirror.exists()) continue;
+            Object value = mirror.get("weeklyYear");
             if (!(value instanceof Number number)) continue;
             int weeklyYear = number.intValue();
             if (weeklyYear >= 2000 && weeklyYear <= 2099 && number.doubleValue() == weeklyYear) {
@@ -8423,6 +8425,22 @@ public class FirestoreInheritedWeeklyExpensePersistence implements WeeklyExpense
 
     private DocumentReference bankImportBatchRef(String tenantId, String batchId) {
         return db.document("orgs/" + tenantId + "/weekly_bank_import_batches/" + batchId);
+    }
+
+    private List<DocumentSnapshot> readWeeklyYearDeclarations(DocumentReference[] refs) {
+        long startedAt = System.nanoTime();
+        try {
+            Transaction tx = currentTransaction.get();
+            FieldMask mask = FieldMask.of("weeklyYear");
+            List<DocumentSnapshot> snapshots = tx == null
+                ? db.getAll(refs, mask).get()
+                : tx.getAll(refs, mask).get();
+            // A partial mirror must never populate the full-document transaction cache.
+            CashflowReadMetrics.recordGetAll(System.nanoTime() - startedAt, snapshots.size());
+            return snapshots;
+        } catch (Exception error) {
+            throw new IllegalStateException("Could not read cashflow weekly year declarations.", error);
+        }
     }
 
     private DocumentSnapshot get(DocumentReference ref) {

@@ -2,6 +2,7 @@ FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 ENV WEEKLY_API_PORT=8080
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=50.0 -XX:+ExitOnOutOfMemoryError"
 
 RUN groupadd --system app \
     && useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app

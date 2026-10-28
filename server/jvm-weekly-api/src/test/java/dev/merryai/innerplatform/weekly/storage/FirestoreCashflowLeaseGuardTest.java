@@ -14,6 +14,7 @@ import com.google.api.core.ApiFutures;
 import com.google.cloud.firestore.CollectionReference;
 import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
+import com.google.cloud.firestore.FieldMask;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.firestore.Query;
 import com.google.cloud.firestore.QueryDocumentSnapshot;
@@ -1546,7 +1547,7 @@ class FirestoreCashflowLeaseGuardTest {
         assertThat(fixture.documents.keySet().stream()
             .filter(path -> path.contains("/cashflow_weeks/project-a-2026-")))
             .hasSize(60);
-        assertThat(fixture.getAllSizes).containsExactly(60);
+        assertThat(fixture.getAllSizes).containsExactly(60, 1);
         verify(fixture.collections.get("orgs/tenant-a/cashflow_weeks"), times(1))
             .whereEqualTo("projectId", "project-a");
         verify(fixture.transaction, times(1)).get(any(Query.class));
@@ -9131,6 +9132,23 @@ class FirestoreCashflowLeaseGuardTest {
                 : java.util.Arrays.stream(arguments).map(DocumentReference.class::cast).toArray(DocumentReference[]::new);
             return transaction.getAll(documents);
         });
+        when(transaction.getAll(any(DocumentReference[].class), any(FieldMask.class))).thenAnswer(invocation -> {
+            DocumentReference[] documents = invocation.getArgument(0);
+            getAllSizes.add(documents.length);
+            return ApiFutures.immediateFuture(java.util.Arrays.stream(documents).map(document -> {
+                Map<String, Object> data = docs.get(document.getPath());
+                DocumentSnapshot snapshot = mock(DocumentSnapshot.class);
+                when(snapshot.exists()).thenReturn(data != null);
+                when(snapshot.get("weeklyYear")).thenReturn(data == null ? null : data.get("weeklyYear"));
+                when(snapshot.getReference()).thenReturn(document);
+                String documentId = document.getPath().substring(document.getPath().lastIndexOf('/') + 1);
+                when(snapshot.getId()).thenReturn(documentId);
+                return snapshot;
+            }).toList());
+        });
+        when(db.getAll(any(DocumentReference[].class), any(FieldMask.class))).thenAnswer(invocation ->
+            transaction.getAll(invocation.getArgument(0), invocation.getArgument(1))
+        );
         when(transaction.get(any(Query.class))).thenAnswer(invocation -> {
             QueryScope scope = queryScopes.get(invocation.getArgument(0));
             List<QueryDocumentSnapshot> snapshots = docs.entrySet().stream()
