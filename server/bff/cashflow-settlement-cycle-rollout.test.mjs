@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import {
   assertProtectedSettlementStatusesUnchanged,
   assertSettlementCycleInventoryStable,
+  isOnboardingReleaseInventoryException,
   assertSettlementCycleCutoverReady,
   buildSettlementCycleHeadMigrationBody,
   buildSettlementCycleRequestNormalizationBody,
@@ -871,6 +872,7 @@ describe('cashflow settlement-cycle rollout audit', () => {
     expect(inventory.protectedSettlementStatuses).toEqual([{
       documentId: 'project-a-2026-09',
       dataHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      nonWeeklyDataHash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
       updateTime: { seconds: 123, nanoseconds: 456 },
     }]);
   });
@@ -997,4 +999,47 @@ describe('cashflow settlement-cycle rollout audit', () => {
     expect(stdout).toContain('--reason');
     expect(stdout).toContain('--jvm-audience');
   });
+});
+
+
+describe('single onboarding release stability exception', () => {
+  const context = { parentSha: 'd0a2721945892f604ba39ab4c3adc7f79f519cd5', workflow: 'Production Deploy', ref: 'refs/heads/main', event: 'workflow_run', now: Date.parse('2026-10-29T09:00:00Z') };
+  it('is bounded to one parent, production workflow and expiry', () => {
+    expect(isOnboardingReleaseInventoryException(context)).toBe(true);
+    for (const override of [{ parentSha: 'another' }, { workflow: 'CI' }, { ref: 'refs/heads/topic' }, { event: 'pull_request' }, { now: Date.parse('2026-10-29T10:00:00Z') }, { now: NaN }]) {
+      expect(isOnboardingReleaseInventoryException({ ...context, ...override })).toBe(false);
+    }
+  });
+  it('allows concurrent weekly status only and retains strict defaults and all non-weekly fields', () => {
+    const record = { projectId: 'project-a', yearMonth: '2026-10', periods: { MONTH: { status: 'OPEN', revision: 1 }, WEEK_5: { status: 'PENDING_APPROVAL', revision: 1 } }, updatedAt: 'before' };
+    const inventory = (data) => buildSettlementCycleRolloutInventory({ settlements: [document('project-a-2026-10', data)] });
+    const before = inventory(record);
+    const changed = structuredClone(record); changed.periods.WEEK_5 = { status: 'COMPLETED', revision: 2 }; changed.updatedAt = 'after';
+    expect(() => assertSettlementCycleInventoryStable(before, inventory(changed))).toThrow(/changed/);
+    expect(assertSettlementCycleInventoryStable(before, inventory(changed), { allowWeeklyOnly: true })).toEqual({ stable: false, weeklyOnlyException: true });
+    for (const mutate of [r => { r.periods.MONTH.revision++; }, r => { r.unrelated = 'changed'; }, r => { r.periods.WEEK_6 = {}; }, r => { r.periods.MONTH.updatedAt = 'changed'; }]) {
+      const candidate = structuredClone(changed); mutate(candidate);
+      expect(() => assertSettlementCycleInventoryStable(before, inventory(candidate), { allowWeeklyOnly: true })).toThrow(/changed/);
+    }
+    const missing = structuredClone(before); delete missing.protectedSettlementStatuses[0].nonWeeklyDataHash;
+    expect(() => assertSettlementCycleInventoryStable(before, missing, { allowWeeklyOnly: true })).toThrow(/Missing/);
+    for (const field of ['heads', 'requests']) {
+      const candidate = structuredClone(before); candidate.canonicalState[field].push({ documentId: 'new' });
+      expect(() => assertSettlementCycleInventoryStable(before, candidate, { allowWeeklyOnly: true })).toThrow(/changed/);
+    }
+    const removed = buildSettlementCycleRolloutInventory({ settlements: [] });
+    expect(() => assertSettlementCycleInventoryStable(before, removed, { allowWeeklyOnly: true })).toThrow(/changed/);
+    const requestChanged = structuredClone(before); requestChanged.canonicalState.requests.push({ documentId: 'new' });
+    expect(() => assertSettlementCycleInventoryStable(before, requestChanged, { allowWeeklyOnly: true })).toThrow(/changed/);
+  });
+});
+
+it('preserves malformed/missing periods and future protected fields in the exception', () => {
+  const inventory = data => buildSettlementCycleRolloutInventory({ settlements: [document('project-a-2026-10', data)] });
+  const before = inventory({ projectId: 'project-a' });
+  for (const periods of [null, false, [], 0, '']) {
+    expect(() => assertSettlementCycleInventoryStable(before, inventory({ projectId: 'project-a', periods }), { allowWeeklyOnly: true })).toThrow(/changed/);
+  }
+  const after = structuredClone(before); after.protectedSettlementStatuses[0].futureField = 'changed';
+  expect(() => assertSettlementCycleInventoryStable(before, after, { allowWeeklyOnly: true })).toThrow(/changed/);
 });

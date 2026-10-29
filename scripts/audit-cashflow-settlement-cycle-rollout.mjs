@@ -8,6 +8,7 @@ import {
   assertProtectedSettlementStatusesUnchanged,
   assertSettlementCycleCutoverReady,
   assertSettlementCycleInventoryStable,
+  isOnboardingReleaseInventoryException,
   createSettlementCycleJvmOperations,
   executeSettlementCycleHeadMigrations,
   executeSettlementCycleRequestNormalizations,
@@ -158,7 +159,21 @@ async function main() {
       }),
     });
     const confirmed = await readSettlementCycleRolloutInventory({ db, tenantId: options.tenantId });
-    assertSettlementCycleInventoryStable(after, confirmed);
+    let parentSha = '';
+    if (!options.apply && process.env.GITHUB_WORKFLOW === 'Production Deploy') {
+      parentSha = await execFileAsync('git', ['rev-parse', 'HEAD^'])
+        .then(({ stdout }) => stdout).catch(() => '');
+    }
+    const allowWeeklyOnly = !options.apply && isOnboardingReleaseInventoryException({
+      parentSha: parentSha.trim(), workflow: process.env.GITHUB_WORKFLOW,
+      ref: process.env.GITHUB_REF, event: process.env.GITHUB_EVENT_NAME,
+    });
+    // Both snapshots must independently satisfy semantic readiness, even under the exception.
+    assertSettlementCycleCutoverReady(after, projections, options.normalizeProjects);
+    const stability = assertSettlementCycleInventoryStable(after, confirmed, { allowWeeklyOnly });
+    if (stability.weeklyOnlyException) {
+      console.warn('AUDITED ONE-RELEASE EXCEPTION: weekly-only settlement document changes accepted; non-weekly hashes, canonical state and semantic readiness unchanged. Expires 2026-10-29T10:00:00Z.');
+    }
     after = confirmed;
     cutover = assertSettlementCycleCutoverReady(after, projections, options.normalizeProjects);
   }
