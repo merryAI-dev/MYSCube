@@ -4694,3 +4694,30 @@ export async function fetchBudgetSuggestionViaBff(params: {
   );
   return response.data.suggestion ?? null;
 }
+
+export interface PeopleLinkCandidates {
+  identityKey: string;
+  authUid: string | null;
+  authVerified: boolean;
+  authIssue: string | null;
+  linkedPersonId: string | null;
+  people: Array<{ personId: string; name: string; nickname: string; email: string; linkedUid: string | null; expectedPersonVersion: string }>;
+  emailMatchPersonIds: string[];
+}
+
+export async function fetchPeopleLinkCandidatesViaBff(params: { tenantId: string; actor: ActorLike; identityKey: string; client?: PlatformApiClientLike }): Promise<PeopleLinkCandidates> {
+  const response = await resolveClient(params.client).get<PeopleLinkCandidates>(
+    `/api/v1/admin/auth-governance/people-link-candidates?identityKey=${encodeURIComponent(params.identityKey)}`,
+    { tenantId: params.tenantId, actor: toRequestActor(params.actor), timeoutMs: 10000 },
+  );
+  return response.data;
+}
+
+export async function linkGovernancePersonViaBff(params: { tenantId: string; actor: ActorLike; identityKey: string; personId: string; expectedAuthUid: string; expectedPersonVersion: string; reason: string; client?: PlatformApiClientLike }) {
+  const response = await resolveClient(params.client).post<{ identityKey: string; personId: string; uid: string; status: 'LINKED'; alreadyLinked: boolean; permissionSyncRequired: true }>(
+    `/api/v1/admin/auth-governance/users/${encodeURIComponent(params.identityKey)}/link-person`,
+    { tenantId: params.tenantId, actor: toRequestActor(params.actor), timeoutMs: 10000,
+      body: { personId: params.personId, expectedAuthUid: params.expectedAuthUid, expectedPersonVersion: params.expectedPersonVersion, reason: params.reason } },
+  );
+  return response.data;
+}

@@ -13,6 +13,7 @@ import {
   parseBootstrapAdminEmails,
 } from '../auth-governance.mjs';
 import { buildRequestFingerprint, stableStringify } from '../utils.mjs';
+import { mountMemberPersonLinkRoutes } from './member-person-link.mjs';
 
 async function listAllAuthUsers(authAdminService) {
   if (!authAdminService || typeof authAdminService.listUsers !== 'function') {
@@ -171,6 +172,7 @@ async function exactPeopleLinkedUidsInTransaction({
 export function mountMemberRoutes(app, {
   db, now, idempotencyService, auditChainService, piiProtector, rbacPolicy, authAdminService,
 }) {
+  mountMemberPersonLinkRoutes(app, { db, now, idempotencyService, auditChainService, piiProtector, authAdminService });
   const loadGovernanceDirectory = async (tenantId) => {
     const [authUsers, memberDocs] = await Promise.all([
       listAllAuthUsers(authAdminService),

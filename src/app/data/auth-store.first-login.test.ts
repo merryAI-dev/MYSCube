@@ -21,15 +21,10 @@ describe('first-login member bootstrap', () => {
     expect(authStoreSource).not.toContain('await setDoc(memberRef, created);');
   });
 
-  it('does not turn a legacy status-less member into ACTIVE from the browser', () => {
-    expect(authStoreSource).toContain("Object.prototype.hasOwnProperty.call(canonicalMember, 'status')");
-    expect(authStoreSource).not.toContain("status: existing?.status || 'ACTIVE'");
-  });
-
-  it('attaches a Firebase token before publishing the optimistic user', () => {
-    const tokenRead = authStoreSource.indexOf('const optimisticIdToken = await firebaseUser.getIdToken()');
-    const optimisticPublish = authStoreSource.indexOf('setUser(optimisticUser);', tokenRead);
-    expect(tokenRead).toBeGreaterThan(-1);
-    expect(optimisticPublish).toBeGreaterThan(tokenRead);
+  it('does not grant a role or activate membership during login', () => {
+    const login = authStoreSource.slice(authStoreSource.indexOf('async function upsertMemberFromFirebase'), authStoreSource.indexOf('const _g'));
+    expect(login).not.toContain('role:');
+    expect(login).not.toContain('status:');
+    expect(login).not.toContain('mergeMemberRecordSources');
   });
 });
