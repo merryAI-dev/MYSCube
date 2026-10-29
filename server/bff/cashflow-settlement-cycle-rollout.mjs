@@ -258,12 +258,14 @@ function canonicalHeadProjectionTarget(projectId, record, allowLegacyTargetReque
     || !YEAR_MONTH.test(text(record.closedThrough))
     || nextYearMonth(record.closedThrough) !== text(record.settlementMonth)
     || record.closedRanges.length === 0) return null;
-  let expectedFrom = '2023-01';
+  let expectedFrom = null;
   for (const range of record.closedRanges) {
     if (!range || typeof range !== 'object' || Array.isArray(range)
-      || text(range.affectedFromMonth) !== expectedFrom
       || !YEAR_MONTH.test(text(range.affectedThroughMonth))
-      || text(range.affectedThroughMonth) < expectedFrom
+      || (expectedFrom === null
+        ? !['2023-01', `${text(range.affectedThroughMonth).slice(0, 4)}-01`].includes(text(range.affectedFromMonth))
+        : text(range.affectedFromMonth) !== expectedFrom)
+      || text(range.affectedThroughMonth) < text(range.affectedFromMonth)
       || nextYearMonth(range.affectedThroughMonth) !== text(range.closedByCycleYearMonth)
       || !SAFE_ID.test(text(range.approvalVersionId))
       || !SAFE_ID.test(text(range.requestId))

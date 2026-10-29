@@ -125,6 +125,65 @@ describe('cashflow settlement-cycle rollout audit', () => {
     expect(() => assertSettlementCycleCutoverReady(inventory, [])).toThrow(/not ready/i);
   });
 
+  function firstCloseHead(fromMonth = '2026-01') {
+    return {
+      contractVersion: 'cashflow-cumulative-close-v2', projectId: 'project-range',
+      status: 'CLOSED', authorityExists: true, revision: 1, rootHash,
+      fromMonth: '2023-01', closedThrough: '2026-09', settlementMonth: '2026-10',
+      closedRanges: [{
+        affectedFromMonth: fromMonth, affectedThroughMonth: '2026-09',
+        closedByCycleYearMonth: '2026-10', approvalVersionId: 'version-range',
+        requestId: 'project-range-2026-10', ledgerRevision: 1, rootHash,
+      }],
+    };
+  }
+
+  it.each(['2023-01', '2026-01'])('accepts the JVM first-close start %s without skipping projection verification', (start) => {
+    const inventory = buildSettlementCycleRolloutInventory({
+      heads: [document('project-range', firstCloseHead(start))],
+    });
+    expect(inventory.counts).toMatchObject({ canonicalHeads: 1, invalidHeads: 0 });
+    expect(inventory.verificationTargets).toEqual([{
+      projectId: 'project-range', cycleYearMonth: '2026-10', requestId: 'project-range-2026-10',
+    }]);
+    expect(() => assertSettlementCycleCutoverReady(inventory, [])).toThrow(/invalidProjections/);
+  });
+
+  it.each([
+    ['wrong month', (head) => { head.closedRanges[0].affectedFromMonth = '2026-02'; }],
+    ['wrong year', (head) => { head.closedRanges[0].affectedFromMonth = '2025-01'; }],
+    ['reversed range', (head) => { head.closedRanges[0].affectedFromMonth = '2027-01'; }],
+    ['hash mismatch', (head) => { head.closedRanges[0].rootHash = `sha256:${'b'.repeat(64)}`; }],
+    ['malformed hash', (head) => { head.closedRanges[0].rootHash = 'invalid'; }],
+    ['request mismatch', (head) => { head.closedRanges[0].requestId = 'project-other-2026-10'; }],
+    ['cycle mismatch', (head) => { head.closedRanges[0].closedByCycleYearMonth = '2026-11'; }],
+    ['head revision', (head) => { head.revision = 0; }],
+    ['range revision', (head) => { head.closedRanges[0].ledgerRevision = 0; }],
+    ['fractional revision', (head) => { head.closedRanges[0].ledgerRevision = 1.5; }],
+  ])('still rejects %s for a yearly first-close range', (_name, mutate) => {
+    const head = firstCloseHead();
+    mutate(head);
+    const inventory = buildSettlementCycleRolloutInventory({ heads: [document('project-range', head)] });
+    expect(inventory.counts).toMatchObject({ canonicalHeads: 0, invalidHeads: 1 });
+    expect(() => assertSettlementCycleCutoverReady(inventory, [])).toThrow(/invalidHeads=1/);
+  });
+
+  it.each(['2023-01', '2026-01'])('keeps later ranges contiguous after first start %s', (start) => {
+    const head = firstCloseHead(start);
+    head.closedRanges.push({
+      ...head.closedRanges[0], affectedFromMonth: '2026-10', affectedThroughMonth: '2026-10',
+      closedByCycleYearMonth: '2026-11', requestId: 'project-range-2026-11', ledgerRevision: 2,
+    });
+    head.closedThrough = '2026-10';
+    head.settlementMonth = '2026-11';
+    const inventory = () => buildSettlementCycleRolloutInventory({ heads: [document('project-range', head)] });
+    expect(inventory().counts).toMatchObject({ canonicalHeads: 1, invalidHeads: 0 });
+    for (const invalidStart of ['2026-09', '2026-11', '2026-01']) {
+      head.closedRanges[1].affectedFromMonth = invalidStart;
+      expect(inventory().counts).toMatchObject({ canonicalHeads: 0, invalidHeads: 1 });
+    }
+  });
+
   it('requires every canonical authority head to have a JVM-verifiable projection target', () => {
     const valid = buildSettlementCycleRolloutInventory({
       heads: [document('project-a', {
