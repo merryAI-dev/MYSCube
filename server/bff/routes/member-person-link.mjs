@@ -43,10 +43,13 @@ async function readAuth(authAdminService, identityKey) {
   catch (error) { if (error.code === 'auth/user-not-found') return null; throw error; }
 }
 
-function requireAdmin(actor, actorId, people) {
-  if (actor.uid !== actorId || actor.role !== 'admin' || actor.status !== 'ACTIVE'
-    || people.filter((person) => text(person.data.uid) === actorId).length !== 1) {
-    throw createHttpError(403, '현재 관리자와 인력 명부의 연결을 확인할 수 없습니다.', 'member_authority_required');
+function requireAdmin(actor, context) {
+  const { actorId, actorEmail, tenantId, authSource } = context;
+  if (authSource !== 'firebase' || !text(actorId) || !email(actorEmail)
+    || actor.uid !== actorId || actor.role !== 'admin' || actor.status !== 'ACTIVE'
+    || (Object.hasOwn(actor, 'tenantId') && actor.tenantId !== tenantId)
+    || email(actor.email) !== email(actorEmail)) {
+    throw createHttpError(403, '로그인 계정과 활성 관리자 권한을 확인할 수 없습니다. 관리자에게 문의해 주세요.', 'member_authority_required');
   }
 }
 
@@ -64,7 +67,7 @@ export function mountMemberPersonLinkRoutes(app, {
       db.collection(`orgs/${tenantId}/persons`).get(),
     ]);
     const people = peopleSnapshot.docs.map((doc) => ({ id: doc.id, data: doc.data() || {} }));
-    requireAdmin(actorSnapshot.exists ? actorSnapshot.data() || {} : {}, actorId, people);
+    requireAdmin(actorSnapshot.exists ? actorSnapshot.data() || {} : {}, req.context);
     const authTenant = extractTenantIdFromClaims(user?.customClaims);
     const issue = authIssue(user, identityKey, allowedEmailDomains)
       || (authTenant && authTenant !== tenantId ? 'member_identity_conflict' : null);
@@ -101,7 +104,7 @@ export function mountMemberPersonLinkRoutes(app, {
         idempotencyService.checkInTransaction(tx, { tenantId, actorId, idempotencyKey, requestFingerprint, nowDate: new Date(timestamp) }),
       ]);
       const people = peopleSnapshot.docs.map((doc) => ({ id: doc.id, data: doc.data() || {} }));
-      requireAdmin(actorSnapshot.exists ? actorSnapshot.data() || {} : {}, actorId, people);
+      requireAdmin(actorSnapshot.exists ? actorSnapshot.data() || {} : {}, req.context);
       if (lock.mode === 'conflict' || lock.mode === 'in_progress') throw createHttpError(409, lock.reason, `idempotency_${lock.mode}`);
       if (lock.mode === 'replay') return { replayed: true, body: lock.body };
       const person = people.find(({ id }) => id === parsed.personId);

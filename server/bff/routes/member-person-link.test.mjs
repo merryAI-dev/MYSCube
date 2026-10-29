@@ -4,9 +4,9 @@ import request from 'supertest';
 import { mountMemberPersonLinkRoutes, personLinkVersion } from './member-person-link.mjs';
 import { createIdempotencyService } from '../idempotency.mjs';
 
-function harness({ authPatch = {}, patch = {}, failAudit = false, allowedEmailDomains = ['example.com'] } = {}) {
+function harness({ authPatch = {}, patch = {}, contextPatch = {}, failAudit = false, allowedEmailDomains = ['example.com'] } = {}) {
   const store = new Map(Object.entries({
-    'orgs/t/members/a': { uid: 'a', role: 'admin', status: 'ACTIVE' },
+    'orgs/t/members/a': { uid: 'a', role: 'admin', status: 'ACTIVE', email: 'admin@example.com', tenantId: 't' },
     'orgs/t/persons/admin': { uid: 'a' },
     'orgs/t/persons/p': { name: 'Synthetic Staff', nickname: 'Test', email: '', uid: null, tenantId: 't' },
     ...patch,
@@ -22,9 +22,9 @@ function harness({ authPatch = {}, patch = {}, failAudit = false, allowedEmailDo
     },
   };
   const app = express(); app.use(express.json());
-  app.use((req, _res, next) => { req.context = { tenantId: 't', actorId: 'a', actorRole: req.header('role') || 'admin', actorEmail: '', requestId: 'request-test', idempotencyKey: req.header('idempotency-key') || 'link-test' }; next(); });
+  app.use((req, _res, next) => { req.context = { tenantId: 't', actorId: 'a', actorRole: req.header('role') || 'admin', actorEmail: 'admin@example.com', authSource: 'firebase', requestId: 'request-test', idempotencyKey: req.header('idempotency-key') || 'link-test', ...contextPatch }; next(); });
   mountMemberPersonLinkRoutes(app, {
-    db, allowedEmailDomains, now: () => '2026-10-29T00:00:00Z', idempotencyService: createIdempotencyService(db),
+    db, allowedEmailDomains, now: () => '2026-10-29T00:00:00Z', idempotencyService: createIdempotencyService(db), piiProtector: { encryptText: async () => ({ ciphertext: 'synthetic-encrypted-email' }) },
     auditChainService: { async appendManyInTransaction(tx, entries) { if (failAudit) throw new Error('synthetic failure'); tx.set(db.doc('audit/test'), entries[0]); } },
     authAdminService: { async getUserByEmail() { return { uid: 'u', email: 'staff@example.com', emailVerified: true, disabled: false, providerData: [{ providerId: 'google.com', email: 'staff@example.com' }], ...authPatch }; } },
   });
@@ -101,17 +101,44 @@ describe('admin verified person linking', () => {
     expect((await h.post()).status).toBe(500); expect([...h.store]).toEqual(before);
   });
   it.each([
-    { 'orgs/t/members/a': { uid: 'a', role: 'pm', status: 'ACTIVE' } },
-    { 'orgs/t/members/a': { uid: 'a', role: 'admin', status: 'INACTIVE' } },
-    { 'orgs/t/persons/admin': null },
-    { 'orgs/t/persons/admin2': { uid: 'a' } },
+    { 'orgs/t/members/a': { uid: 'a', role: 'pm', status: 'ACTIVE', email: 'admin@example.com', tenantId: 't' } },
+    { 'orgs/t/members/a': { uid: 'a', role: 'admin', status: 'INACTIVE', email: 'admin@example.com', tenantId: 't' } },
+    { 'orgs/t/members/a': null },
+    { 'orgs/t/members/a': { uid: 'other', role: 'admin', status: 'ACTIVE', email: 'admin@example.com', tenantId: 't' } },
+    { 'orgs/t/members/a': { uid: 'a', role: 'admin', status: 'ACTIVE', email: 'other@example.com', tenantId: 't' } },
+    { 'orgs/t/members/a': { uid: 'a', role: 'admin', status: 'ACTIVE', tenantId: 't' } },
+    { 'orgs/t/members/a': { role: 'admin', status: 'ACTIVE', email: 'admin@example.com', tenantId: 't' } },
+    { 'orgs/t/members/a': { uid: 'a', status: 'ACTIVE', email: 'admin@example.com', tenantId: 't' } },
+    { 'orgs/t/members/a': { uid: 'a', role: 'admin', email: 'admin@example.com', tenantId: 't' } },
+    { 'orgs/t/members/a': { uid: 'a', role: 'admin', status: 'ACTIVE', email: 'admin@example.com', tenantId: 'other' } },
   ])('rejects invalid current actor authority, including replay %j', async (patch) => {
     const h = harness(); const body = h.body(); await h.post(body);
     for (const [key, value] of Object.entries(patch)) if (value === null) h.store.delete(key); else h.store.set(key, value);
+    expect((await request(h.app).get('/api/v1/admin/auth-governance/people-link-candidates?identityKey=staff@example.com')).status).toBe(403);
     expect((await h.post(body)).status).toBe(403);
   });
   it('rejects role granting fields in the link command', async () => {
     const h = harness(); expect((await h.post({ ...h.body(), role: 'admin' })).status).toBe(400);
+  });
+  it('allows a canonical Firebase admin without People membership to list and link', async () => {
+    const h = harness({ patch: { 'orgs/t/persons/admin': null } });
+    const response = await request(h.app).get('/api/v1/admin/auth-governance/people-link-candidates?identityKey=staff@example.com');
+    expect(response.status).toBe(200);
+    expect((await h.post()).status).toBe(200);
+    expect(h.store.has('orgs/t/persons/admin')).toBe(false);
+    expect(h.store.has('orgs/t/members/u')).toBe(false);
+  });
+  it('accepts an older canonical member without tenantId using the tenant-scoped document path', async () => {
+    const h = harness({ patch: { 'orgs/t/members/a': { uid: 'a', email: 'ADMIN@example.com', role: 'admin', status: 'ACTIVE' }, 'orgs/t/persons/admin': null } });
+    expect((await h.post()).status).toBe(200);
+  });
+  it.each([
+    { authSource: 'headers' }, { authSource: undefined }, { actorEmail: '' }, { actorEmail: 'different@example.com' },
+  ])('rejects unauthenticated or mismatched actor context %j on both routes', async (contextPatch) => {
+    const h = harness({ contextPatch }); const before = [...h.store];
+    expect((await request(h.app).get('/api/v1/admin/auth-governance/people-link-candidates?identityKey=staff@example.com')).status).toBe(403);
+    expect((await h.post()).status).toBe(403);
+    expect([...h.store]).toEqual(before);
   });
   it('does not silently link a recreated account with the same email', async () => {
     const h = harness({ authPatch: { uid: 'replacement-uid' } });

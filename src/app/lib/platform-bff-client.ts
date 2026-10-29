@@ -2741,6 +2741,7 @@ export async function deepSyncAuthGovernanceUserViaBff(params: {
   identityKey: string;
   role: string;
   reason?: string;
+  idempotencyKey?: string;
   client?: PlatformApiClientLike;
 }): Promise<AuthGovernanceDeepSyncResult> {
   const apiClient = resolveClient(params.client);
@@ -2754,6 +2755,8 @@ export async function deepSyncAuthGovernanceUserViaBff(params: {
         ...(params.reason ? { reason: params.reason } : {}),
       },
       timeoutMs: 10000,
+      idempotencyKey: params.idempotencyKey,
+      retries: 0,
     },
   );
   return response.data;
@@ -4713,10 +4716,10 @@ export async function fetchPeopleLinkCandidatesViaBff(params: { tenantId: string
   return response.data;
 }
 
-export async function linkGovernancePersonViaBff(params: { tenantId: string; actor: ActorLike; identityKey: string; personId: string; expectedAuthUid: string; expectedPersonVersion: string; reason: string; client?: PlatformApiClientLike }) {
+export async function linkGovernancePersonViaBff(params: { tenantId: string; actor: ActorLike; identityKey: string; personId: string; expectedAuthUid: string; expectedPersonVersion: string; reason: string; idempotencyKey: string; client?: PlatformApiClientLike }) {
   const response = await resolveClient(params.client).post<{ identityKey: string; personId: string; uid: string; status: 'LINKED'; alreadyLinked: boolean; permissionSyncRequired: true }>(
     `/api/v1/admin/auth-governance/users/${encodeURIComponent(params.identityKey)}/link-person`,
-    { tenantId: params.tenantId, actor: toRequestActor(params.actor), timeoutMs: 10000,
+    { tenantId: params.tenantId, actor: toRequestActor(params.actor), timeoutMs: 10000, idempotencyKey: params.idempotencyKey, retries: 0,
       body: { personId: params.personId, expectedAuthUid: params.expectedAuthUid, expectedPersonVersion: params.expectedPersonVersion, reason: params.reason } },
   );
   return response.data;

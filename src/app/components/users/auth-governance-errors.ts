@@ -12,6 +12,7 @@ const messages: Record<string, string> = {
   auth_identity_missing: '대상 사용자가 회사 Google 계정으로 먼저 로그인해야 합니다.',
   auth_identity_unverified: '검증된 회사 Google 로그인 계정만 연결할 수 있습니다.',
   auth_identity_disabled: '사용 중지된 로그인 계정은 연결할 수 없습니다.',
+  forbidden: '이 작업을 승인할 관리자 권한이 없습니다. 승인 가능한 관리자에게 요청해 주세요.',
   member_authority_required: '현재 관리자 권한을 확인할 수 없습니다. 관리자 계정 연결과 활성 상태를 확인해 주세요.',
   auth_governance_target_changed: '직원 권한 기록이 변경되었습니다. 목록을 다시 확인한 뒤 반영해 주세요.',
   last_admin_lockout: '마지막 관리자의 권한은 해제할 수 없습니다.',
