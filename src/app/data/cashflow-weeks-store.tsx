@@ -111,7 +111,7 @@ function patchCashflowWeekLocally(
   return nextRows;
 }
 
-export function CashflowWeekProvider({ children }: { children: ReactNode }) {
+export function CashflowWeekProvider({ children, loadWeeks = true }: { children: ReactNode; loadWeeks?: boolean }) {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
   const { db, isOnline, orgId } = useFirebase();
   const firestoreEnabled = isOnline && !!db;
@@ -163,7 +163,7 @@ export function CashflowWeekProvider({ children }: { children: ReactNode }) {
       };
     }
 
-    if (!firestoreEnabled || !db) {
+    if (!loadWeeks || !firestoreEnabled || !db) {
       setWeeks([]);
       setWeeklySettlementCompletedKeys([]);
       setIsLoading(false);
@@ -225,7 +225,7 @@ export function CashflowWeekProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, isAuthenticated, user?.uid, db, firestoreEnabled, orgId, yearMonth, reloadVersion]);
+  }, [authLoading, isAuthenticated, user?.uid, db, firestoreEnabled, orgId, yearMonth, reloadVersion, loadWeeks]);
 
   const upsertWeekAmounts = useCallback(async (input: {
     projectId: string;
