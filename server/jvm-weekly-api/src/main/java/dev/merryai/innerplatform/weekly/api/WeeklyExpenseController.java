@@ -333,10 +333,11 @@ public class WeeklyExpenseController {
         @RequestHeader("x-actor-id") String actorId,
         @RequestHeader("x-actor-role") String actorRole,
         @RequestHeader(value = "x-actor-email", required = false) String actorEmail,
+        @RequestParam(value = "omitProjectionActualSummary", defaultValue = "false") boolean omitProjectionActualSummary,
         @Valid @RequestBody CashflowWeeklyOverviewRequest request
     ) {
         return commandService.readCashflowWeeklyOverview(
-            actorContext(tenantId, actorId, actorRole, actorEmail), request
+            actorContext(tenantId, actorId, actorRole, actorEmail), request, omitProjectionActualSummary
         );
     }
 
