@@ -1,3 +1,5 @@
+import { PeopleAccountLink } from './PeopleAccountLink';
+import { governanceErrorMessage } from './auth-governance-errors';
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -39,6 +41,7 @@ import {
 import { Separator } from '../ui/separator';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../ui/table';
 import {
+  getCurrentGovernancePermissionLabel,
   emptyGovernanceSummary,
   filterGovernanceRows,
   getFriendlyGovernanceIssueLabels,
@@ -231,8 +234,8 @@ export function UserManagementPage() {
         toast.success(`${row.email} 권한 정렬을 반영했습니다.`);
       }
       await loadGovernance();
-    } catch {
-      toast.error('권한 정렬을 반영하지 못했습니다. 목록을 새로고침한 뒤 다시 시도해 주세요.');
+    } catch (error) {
+      toast.error(governanceErrorMessage(error));
     } finally {
       setSyncingIdentityKey('');
     }
@@ -439,7 +442,7 @@ export function UserManagementPage() {
                             {permission?.isActive ? '활성' : '비활성'}
                           </Badge>
                           <Badge className={ROLE_BADGE_CLASS[row.effectiveRole] || 'bg-stone-100 text-stone-700'}>
-                            {roleLabel(row.effectiveRole)}
+                            {getCurrentGovernancePermissionLabel(row, roleLabel)}
                           </Badge>
                           {headProjectNames.length > 0 ? (
                             <Badge className="border border-blue-200 bg-blue-50 text-blue-800">조직장</Badge>
@@ -507,7 +510,7 @@ export function UserManagementPage() {
                             <SourceBadge ok={Boolean(row.canonicalMember)} label={row.canonicalMember ? '직원 권한 기록 있음' : '직원 권한 기록 없음'} />
                             <Badge className="bg-stone-100 text-stone-700">예전 기록 {row.legacyMembers.length}건</Badge>
                             <Badge className={ROLE_BADGE_CLASS[row.effectiveRole] || 'bg-stone-200 text-stone-900'}>
-                              현재 권한 {roleLabel(row.effectiveRole)}
+                              {getCurrentGovernancePermissionLabel(row, roleLabel)}
                             </Badge>
                             {row.claimRole && (
                               <Badge className="bg-stone-100 text-stone-700">로그인 권한 {roleLabel(row.claimRole)}</Badge>
@@ -602,7 +605,7 @@ export function UserManagementPage() {
 
                 <div className="flex flex-wrap gap-2">
                   <Badge className={ROLE_BADGE_CLASS[selectedRow.effectiveRole] || 'bg-stone-200 text-stone-900'}>
-                    현재 권한 {roleLabel(selectedRow.effectiveRole)}
+                    {getCurrentGovernancePermissionLabel(selectedRow, roleLabel)}
                   </Badge>
                   <Badge className="bg-stone-100 text-stone-700">
                     반영할 권한 {roleLabel(draftRoles[selectedRow.identityKey] || getRecommendedGovernanceRole(selectedRow))}
@@ -610,6 +613,7 @@ export function UserManagementPage() {
                 </div>
 
                 <Separator />
+                {authUser && <PeopleAccountLink key={selectedRow.identityKey} identityKey={selectedRow.identityKey} email={selectedRow.email} actor={authUser} tenantId={orgId} onLinked={loadGovernance} />}
 
                 <div className="space-y-3">
                   <div>

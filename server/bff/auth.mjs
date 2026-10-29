@@ -41,7 +41,7 @@ function normalizeDomain(value) {
   return withoutAt.replace(/\s+/g, '');
 }
 
-function parseAllowedEmailDomains(raw) {
+export function parseAllowedEmailDomains(raw) {
   const text = typeof raw === 'string' ? raw.trim() : '';
   if (!text) return ['mysc.co.kr'];
   return text
@@ -50,7 +50,7 @@ function parseAllowedEmailDomains(raw) {
     .filter(Boolean);
 }
 
-function isAllowedEmail(email, allowedDomains) {
+export function isAllowedEmail(email, allowedDomains) {
   const normalized = normalizeEmail(email);
   if (!normalized || !normalized.includes('@')) return false;
   const domain = normalized.split('@').pop() || '';

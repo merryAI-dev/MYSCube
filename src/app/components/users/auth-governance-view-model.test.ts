@@ -1,3 +1,4 @@
+import { getCurrentGovernancePermissionLabel } from './auth-governance-view-model';
 import { describe, expect, it } from 'vitest';
 import {
   emptyGovernanceSummary,
@@ -96,4 +97,10 @@ describe('auth governance view model helpers', () => {
       description: '로그인 권한과 직원 권한이 맞춰져 있습니다.',
     });
   });
+});
+
+it('does not label a recommended PM or bootstrap admin as approved access without canonical membership', () => {
+  expect(getCurrentGovernancePermissionLabel({ ...baseRow, canonicalMember: null, effectiveRole: 'pm' }, (role) => role)).toBe('직원 권한 미승인');
+  expect(getCurrentGovernancePermissionLabel({ ...baseRow, canonicalMember: null, effectiveRole: 'admin', bootstrapAdmin: true }, (role) => role)).toBe('직원 권한 미승인');
+  expect(getCurrentGovernancePermissionLabel({ ...baseRow, canonicalMember: { ...baseRow.canonicalMember!, role: 'pm' }, effectiveRole: 'admin' }, (role) => role)).toBe('현재 권한 pm');
 });

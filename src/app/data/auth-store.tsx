@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDocFromServer, setDoc } from 'firebase/firestore';
 import {
   GoogleAuthProvider,
   onIdTokenChanged,
@@ -25,12 +25,10 @@ import {
   type ProjectOwnerEntry,
 } from './auth-helpers';
 import { resolveEffectiveAuthRole } from './auth-role-resolution';
-import { buildLegacyMemberDocId, mergeMemberRecordSources } from './member-documents';
 import { normalizeProjectIds, resolvePrimaryProjectId } from './project-assignment';
 import {
   buildWorkspacePreferencePatch,
   readMemberWorkspace,
-  resolveMemberProjectAccessState,
   type WorkspaceId,
 } from './member-workspace';
 import { extractAuthContextFromClaims, type FirebaseAuthClaims } from '../platform/rbac';
@@ -47,6 +45,8 @@ import {
   type DevHarnessPreset,
 } from '../platform/dev-harness';
 import { setObservabilityUserContext } from '../platform/observability';
+import { resolveMembershipIssue, type MembershipIssue } from './member-access';
+import { MembershipPending } from '../components/auth/MembershipPending';
 
 export interface AuthUser {
   uid: string;
@@ -199,24 +199,6 @@ function omitUndefinedFields<T extends object>(input: T): T {
   ) as T;
 }
 
-function getCachedMemberFallback(firebaseUser: FirebaseUser): Partial<MemberDoc> | undefined {
-  const saved = loadSavedUser();
-  if (!saved || saved.uid !== firebaseUser.uid) return undefined;
-  return {
-    uid: saved.uid,
-    name: saved.name,
-    email: saved.email,
-    role: toUserRole(saved.role) || 'pm',
-    tenantId: saved.tenantId,
-    projectId: saved.projectId,
-    projectIds: saved.projectIds,
-    avatarUrl: saved.avatarUrl,
-    createdAt: saved.registeredAt,
-    defaultWorkspace: saved.defaultWorkspace,
-    lastWorkspace: saved.lastWorkspace,
-  };
-}
-
 function toUserRole(role: string | undefined): UserRole | undefined {
   const normalized = typeof role === 'string' ? role.trim().toLowerCase() : '';
   const effectiveRole = normalized === 'viewer' ? 'pm' : normalized;
@@ -278,73 +260,28 @@ function mapFirebaseUserToAuthUser(
 async function upsertMemberFromFirebase(
   firebaseUser: FirebaseUser,
   tenantId: string,
-  roleFromClaims?: string,
-  department?: string,
 ): Promise<MemberDoc | undefined> {
   const db = getDb();
-  if (!db) return undefined;
+  if (!db) throw new Error('Membership lookup is unavailable');
 
-  const normalizedEmail = normalizeEmail(firebaseUser.email || '');
   const memberPath = getOrgDocumentPath(tenantId, 'members', firebaseUser.uid);
   const memberRef = doc(db, memberPath);
-  const legacyMemberId = buildLegacyMemberDocId(normalizedEmail);
-  const legacyMemberRef = legacyMemberId && legacyMemberId !== firebaseUser.uid
-    ? doc(db, getOrgDocumentPath(tenantId, 'members', legacyMemberId))
-    : null;
-  const memberSnap = await getDoc(memberRef);
-  const now = new Date().toISOString();
+  const memberSnap = await getDocFromServer(memberRef);
   if (!memberSnap.exists()) return undefined;
-  const canonicalMember = memberSnap.data() as Partial<MemberDoc>;
-  const legacySnap = legacyMemberRef ? await getDoc(legacyMemberRef) : null;
-  const existing = mergeMemberRecordSources(
-    canonicalMember as Record<string, unknown>,
-    legacySnap?.exists() ? (legacySnap.data() as Record<string, unknown>) : undefined,
-  ) as Partial<MemberDoc> | undefined;
-  const access = resolveMemberProjectAccessState(existing);
-  const mergedProjectIds = normalizeProjectIds([
-    ...access.normalizedProjectIds,
-    ...(Array.isArray(existing?.projectIds) ? existing?.projectIds : []),
-    existing?.projectId,
-    resolveProjectIdForManager(firebaseUser.uid, PROJECT_OWNERS),
-  ]);
-  const primaryProjectId = resolvePrimaryProjectId(
-    mergedProjectIds,
-    access.normalizedProjectId || existing?.projectId,
-  ) || '';
-
-  // A sign-in patches an existing document, so `name` may legitimately be absent here.
-  const merged = omitUndefinedFields<Partial<MemberDoc> & { uid: string }>({
-    uid: firebaseUser.uid,
-    // Signing in does not write the display name at all. The ledger owns it, and Google
-    // account names arrive in whatever form each person set them ('Jeongtae KIM (Able)').
-    // The field is only seeded when the ledger has nothing yet.
+  const existing = memberSnap.data() as Partial<MemberDoc>;
+  if (resolveMembershipIssue(existing, firebaseUser.uid)) return existing as MemberDoc;
+  const now = new Date().toISOString();
+  const profilePatch = omitUndefinedFields({
     ...(existing?.name ? {} : { name: firebaseUser.displayName || '사용자' }),
-    email: normalizedEmail,
-    role: resolveEffectiveAuthRole({
-      memberRole: existing?.role,
-      claimRole: roleFromClaims,
-    }),
-    tenantId,
-    ...(Object.prototype.hasOwnProperty.call(canonicalMember, 'status')
-      ? { status: canonicalMember.status }
-      : {}),
-    projectId: primaryProjectId,
-    projectIds: mergedProjectIds,
-    avatarUrl: firebaseUser.photoURL || existing?.avatarUrl,
-    createdAt: existing?.createdAt || now,
+    avatarUrl: firebaseUser.photoURL || existing.avatarUrl,
     updatedAt: now,
     lastLoginAt: now,
-    projectNames: access.projectNames || existing?.projectNames,
-    portalProfile: existing?.portalProfile,
-    defaultWorkspace: existing?.defaultWorkspace,
-    lastWorkspace: existing?.lastWorkspace,
   });
-  if (department) merged.department = department;
-
-  await setDoc(memberRef, merged, { merge: true });
-  // Only the patch is written. The caller still needs a whole record, so the ledger's
-  // existing name is filled back in here rather than being written to Firestore.
-  return { ...merged, name: merged.name ?? existing?.name ?? '' } as MemberDoc;
+  // Login only refreshes presentation metadata. The server owns membership and role.
+  await setDoc(memberRef, profilePatch, { merge: true }).catch((error) => {
+    console.warn('[Auth] Login profile metadata could not be updated:', error);
+  });
+  return { ...existing, ...profilePatch } as MemberDoc;
 }
 
 const _g = globalThis as any;
@@ -359,7 +296,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
   const [isLoading, setIsLoading] = useState(featureFlags.firebaseAuthEnabled);
 
+  const [membershipIssue, setMembershipIssue] = useState<MembershipIssue | null>(null);
+  const [signedInEmail, setSignedInEmail] = useState('');
+  const [membershipCheck, setMembershipCheck] = useState(0);
+
   useEffect(() => {
+    let generation = 0;
+    let disposed = false;
     const harnessSession = readDevHarnessSession();
     if (DEV_AUTH_HARNESS_CONFIG.enabled && harnessSession) {
       const mapped: AuthUser = {
@@ -393,6 +336,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     const unsubscribe = onIdTokenChanged(auth, async (firebaseUser) => {
+      const currentGeneration = ++generation;
+      const isCurrent = () => !disposed && currentGeneration === generation;
+      setMembershipIssue(null);
+      setSignedInEmail(firebaseUser?.email || '');
+      setUser(null);
+      saveUser(null);
+      setIsLoading(true);
       if (!firebaseUser) {
         setUser(null);
         saveUser(null);
@@ -409,21 +359,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const cachedMember = getCachedMemberFallback(firebaseUser);
-      const cachedTenantId = resolveTenantId({
-        savedTenantId: cachedMember?.tenantId,
-        envTenantId: DEFAULT_ORG_ID,
-        strict: false,
-      });
-      const optimisticIdToken = await firebaseUser.getIdToken().catch(() => undefined);
-      const optimisticUser = mapFirebaseUserToAuthUser(firebaseUser, cachedMember, cachedTenantId, optimisticIdToken);
-      optimisticUser.source = 'firebase';
-      setUser(optimisticUser);
-      saveUser(optimisticUser);
-      setIsLoading(false);
-
       try {
-        const token = await firebaseUser.getIdTokenResult().catch(() => null);
+        const token = await firebaseUser.getIdTokenResult();
         const claimsContext = extractAuthContextFromClaims(token?.claims as FirebaseAuthClaims | undefined);
         const tenantId = resolveTenantId({
           claimTenantId: claimsContext.tenantId,
@@ -433,30 +370,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const member = await upsertMemberFromFirebase(
           firebaseUser,
           tenantId,
-          claimsContext.role,
-          claimsContext.department,
         );
+        if (!isCurrent()) return;
+        const issue = resolveMembershipIssue(member, firebaseUser.uid);
+        if (issue) {
+          setMembershipIssue(issue);
+          setIsLoading(false);
+          return;
+        }
         const mapped = mapFirebaseUserToAuthUser(firebaseUser, member, tenantId, token?.token);
         mapped.source = 'firebase';
         setUser(mapped);
         saveUser(mapped);
       } catch (err) {
+        if (!isCurrent()) return;
         console.error('[Auth] Failed to sync member profile:', err);
-        const fallbackTenantId = resolveTenantId({
-          savedTenantId: cachedMember?.tenantId,
-          envTenantId: DEFAULT_ORG_ID,
-          strict: false,
-        });
-        const token = await firebaseUser.getIdTokenResult().catch(() => null);
-        const fallback = mapFirebaseUserToAuthUser(firebaseUser, cachedMember, fallbackTenantId, token?.token);
-        fallback.source = 'firebase';
-        setUser(fallback);
-        saveUser(fallback);
+        setMembershipIssue('UNAVAILABLE');
+        setUser(null);
+        saveUser(null);
+      } finally {
+        if (isCurrent()) setIsLoading(false);
       }
     });
 
-    return () => unsubscribe();
-  }, []);
+    return () => { disposed = true; generation += 1; unsubscribe(); };
+  }, [membershipCheck]);
 
   useEffect(() => {
     setObservabilityUserContext(
@@ -664,6 +602,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     }
 
+    setMembershipIssue(null);
+    setSignedInEmail('');
     setUser(null);
     saveUser(null);
     if (user?.uid) {
@@ -696,7 +636,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     isPortalUser,
   };
 
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={value}>{membershipIssue
+    ? <MembershipPending issue={membershipIssue} email={signedInEmail} onRetry={() => setMembershipCheck((value) => value + 1)} onLogout={logout} />
+    : children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
