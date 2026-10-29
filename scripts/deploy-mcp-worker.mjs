@@ -59,7 +59,9 @@ const zone = await cf(`/zones/${env.CLOUDFLARE_ZONE_ID}`);
 if (zone.name !== 'myscguard.app') throw new Error('Unexpected zone');
 const accountId = zone.account.id;
 const namespaces = await cf(`/accounts/${accountId}/storage/kv/namespaces?per_page=100`);
-const kv = namespaces.find((item) => item.title === KV_TITLE) || await cf(`/accounts/${accountId}/storage/kv/namespaces`, 'POST', { title: KV_TITLE });
+const existingKv = namespaces.find((item) => item.title === KV_TITLE);
+if (targetName === 'ema' && !existingKv) throw new Error('Existing EMA OAuth namespace required; refusing creation');
+const kv = existingKv || await cf(`/accounts/${accountId}/storage/kv/namespaces`, 'POST', { title: KV_TITLE });
 
 const workerDir = new URL('../mcp-worker/', import.meta.url);
 const config = JSON.parse(readFileSync(new URL(target.config, workerDir), 'utf8').replace(/^\s*\/\/.*$/gm, ''));
