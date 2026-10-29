@@ -776,12 +776,20 @@ public class WeeklyExpenseCommandService {
         TrustedActorContext actor,
         CashflowWeeklyOverviewRequest request
     ) {
+        return readCashflowWeeklyOverview(actor, request, false);
+    }
+
+    public CashflowWeeklyOverviewResponse readCashflowWeeklyOverview(
+        TrustedActorContext actor,
+        CashflowWeeklyOverviewRequest request,
+        boolean omitProjectionActualSummary
+    ) {
         List<String> projectIds = request.requireUniqueProjectIds();
         authorizationService.requireProjectsAllowedForCommands(
             List.of(CASHFLOW_READ_COMMAND, CASHFLOW_MONTH_CLOSE_READ_COMMAND), actor, projectIds
         );
         if (!request.settlementCycle()) {
-            return readLegacyCashflowWeeklyOverview(actor, request, projectIds);
+            return readLegacyCashflowWeeklyOverview(actor, request, projectIds, omitProjectionActualSummary);
         }
         CashflowProjectionActualSummaryCalculator.FinanceWeek boundary =
             CashflowProjectionActualSummaryCalculator.currentFinanceWeek(Clock.systemUTC());
@@ -792,7 +800,9 @@ public class WeeklyExpenseCommandService {
         CashflowSettlementCyclePolicy.Identity cycleIdentity =
             CashflowSettlementCyclePolicy.identity(request.yearMonth());
         CompletableFuture<Map<String, CashflowLedgerSource>> sourcesFuture =
-            CompletableFuture.supplyAsync(() -> persistence.findCashflowLedgerSources(
+            omitProjectionActualSummary
+                ? CompletableFuture.completedFuture(Map.of())
+                : CompletableFuture.supplyAsync(() -> persistence.findCashflowLedgerSources(
                 actor.tenantId(), projectIds, CashflowProjectionActualSummaryCalculator.FROM_MONTH, throughMonth
             ));
         CompletableFuture<Map<String, WeeklyExpensePersistence.CashflowSettlementCycleRecord>> cyclesFuture =
@@ -831,11 +841,11 @@ public class WeeklyExpenseCommandService {
             }
             CashflowProjectionActualSummaryBatchResponse.Item summary = null;
             CashflowLedgerSource source = sourcesByProject.get(projectId);
-            if (source == null) {
+            if (!omitProjectionActualSummary && source == null) {
                 errors.add(new CashflowWeeklyOverviewResponse.ErrorItem(
                     projectId, CashflowWeeklyOverviewResponse.SUMMARY_UNAVAILABLE
                 ));
-            } else {
+            } else if (!omitProjectionActualSummary) {
                 summary = toProjectionActualSummary(projectId, source, boundary, request.yearMonth());
             }
             CashflowWeeklyOverviewResponse.SettlementCycle settlementCycle = null;
@@ -854,7 +864,8 @@ public class WeeklyExpenseCommandService {
     private CashflowWeeklyOverviewResponse readLegacyCashflowWeeklyOverview(
         TrustedActorContext actor,
         CashflowWeeklyOverviewRequest request,
-        List<String> projectIds
+        List<String> projectIds,
+        boolean omitProjectionActualSummary
     ) {
         CashflowProjectionActualSummaryCalculator.FinanceWeek boundary =
             CashflowProjectionActualSummaryCalculator.currentFinanceWeek(Clock.systemUTC());
@@ -867,7 +878,9 @@ public class WeeklyExpenseCommandService {
                 actor.tenantId(), projectIds, request.yearMonth()
             ));
         CompletableFuture<Map<String, CashflowLedgerSource>> sourcesFuture =
-            CompletableFuture.supplyAsync(() -> persistence.findCashflowLedgerSources(
+            omitProjectionActualSummary
+                ? CompletableFuture.completedFuture(Map.of())
+                : CompletableFuture.supplyAsync(() -> persistence.findCashflowLedgerSources(
                 actor.tenantId(), projectIds,
                 CashflowProjectionActualSummaryCalculator.FROM_MONTH, throughMonth
             ));
@@ -901,11 +914,11 @@ public class WeeklyExpenseCommandService {
             }
             CashflowLedgerSource source = sourcesByProject.get(projectId);
             CashflowProjectionActualSummaryBatchResponse.Item summary = null;
-            if (source == null) {
+            if (!omitProjectionActualSummary && source == null) {
                 errors.add(new CashflowWeeklyOverviewResponse.ErrorItem(
                     projectId, CashflowWeeklyOverviewResponse.SUMMARY_UNAVAILABLE
                 ));
-            } else {
+            } else if (!omitProjectionActualSummary) {
                 summary = toProjectionActualSummary(projectId, source, boundary, request.yearMonth());
             }
             items.add(new CashflowWeeklyOverviewResponse.Item(projectId, statuses, summary, null));

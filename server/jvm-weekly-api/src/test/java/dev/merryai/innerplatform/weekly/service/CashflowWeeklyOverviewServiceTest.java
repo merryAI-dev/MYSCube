@@ -161,11 +161,17 @@ class CashflowWeeklyOverviewServiceTest {
         });
         assertThat(response.items()).allSatisfy(item -> assertThat(item.projectionActualSummary()).isNotNull());
         assertThat(response.errors()).isEmpty();
+        org.mockito.Mockito.clearInvocations(persistence, authorization);
+        CashflowWeeklyOverviewResponse lean = service.readCashflowWeeklyOverview(
+            ACTOR, new CashflowWeeklyOverviewRequest(projectIds, "2026-08", true), true
+        );
+        assertThat(lean).usingRecursiveComparison().ignoringFields("items.projectionActualSummary").isEqualTo(response);
+        assertThat(lean.items()).allSatisfy(item -> assertThat(item.projectionActualSummary()).isNull());
+        verify(persistence, never()).findCashflowLedgerSources(anyString(), anyList(), anyString(), anyString());
         verify(authorization).requireProjectsAllowedForCommands(
             List.of(WeeklyExpenseCommandService.CASHFLOW_READ_COMMAND, WeeklyExpenseCommandService.CASHFLOW_MONTH_CLOSE_READ_COMMAND),
             ACTOR, projectIds
         );
-        verify(persistence).findCashflowLedgerSources(anyString(), anyList(), anyString(), anyString());
         verify(persistence).findCashflowSettlementCyclesBatch(ACTOR, projectIds, "2026-08", "2026-07");
         verify(persistence, never()).findCashflowSettlementStatusesBatch(anyString(), anyList(), anyString());
     }
@@ -204,6 +210,13 @@ class CashflowWeeklyOverviewServiceTest {
                 .extracting(CashflowSettlementStatusesResponse.Item::period)
                 .containsExactly("MONTH", "WEEK_5");
         });
+        org.mockito.Mockito.clearInvocations(persistence);
+        CashflowWeeklyOverviewResponse lean = service.readCashflowWeeklyOverview(
+            ACTOR, new CashflowWeeklyOverviewRequest(projectIds, "2026-08", false), true
+        );
+        assertThat(lean).usingRecursiveComparison().ignoringFields("items.projectionActualSummary").isEqualTo(response);
+        assertThat(lean.items().getFirst().projectionActualSummary()).isNull();
+        verify(persistence, never()).findCashflowLedgerSources(anyString(), anyList(), anyString(), anyString());
         List<String> serializedItemKeys = new ArrayList<>();
         new ObjectMapper().readTree(new ObjectMapper().writeValueAsString(response))
             .path("items").get(0).fieldNames().forEachRemaining(serializedItemKeys::add);
@@ -249,4 +262,27 @@ class CashflowWeeklyOverviewServiceTest {
             org.mockito.ArgumentMatchers.any(), anyList(), anyString(), anyString()
         );
     }
+    @Test
+    void omissionKeepsStatusFailuresAndAuthorization() {
+        for (boolean canonical : List.of(false, true)) {
+            WeeklyExpensePersistence persistence = mock(WeeklyExpensePersistence.class);
+            WeeklyExpenseAuthorizationService authorization = mock(WeeklyExpenseAuthorizationService.class);
+            WeeklyExpenseCommandService service = new WeeklyExpenseCommandService(
+                persistence, authorization, new ObjectMapper(), false, "live"
+            );
+            var request = new CashflowWeeklyOverviewRequest(List.of("project-a"), "2026-08", canonical);
+            var response = service.readCashflowWeeklyOverview(ACTOR, request, true);
+            assertThat(response.errors()).extracting(CashflowWeeklyOverviewResponse.ErrorItem::code)
+                .containsExactlyElementsOf(canonical
+                    ? List.of("STATUS_UNAVAILABLE", "MONTH_CLOSE_UNAVAILABLE") : List.of("STATUS_UNAVAILABLE"));
+            verify(persistence, never()).findCashflowLedgerSources(anyString(), anyList(), anyString(), anyString());
+            org.mockito.Mockito.clearInvocations(persistence);
+            org.mockito.Mockito.doThrow(new IllegalStateException("denied")).when(authorization)
+                .requireProjectsAllowedForCommands(anyList(), org.mockito.ArgumentMatchers.eq(ACTOR), anyList());
+            org.assertj.core.api.Assertions.assertThatThrownBy(() -> service.readCashflowWeeklyOverview(ACTOR, request, true))
+                .hasMessage("denied");
+            org.mockito.Mockito.verifyNoInteractions(persistence);
+        }
+    }
+
 }
