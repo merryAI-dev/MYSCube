@@ -1,6 +1,7 @@
-import { PeopleAccountLink } from './PeopleAccountLink';
+import { isUncertainGovernanceError, newGovernanceOperation, operationStorageKey, readGovernanceOperation, saveGovernanceOperation, type GovernanceOperation } from './governance-operation';
+import { PeopleAccountLink, hasVerifiedPeopleLink } from './PeopleAccountLink';
 import { governanceErrorMessage } from './auth-governance-errors';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -20,6 +21,7 @@ import type { UserRole } from '../../data/types';
 import { useFirebase } from '../../lib/firebase-context';
 import {
   deepSyncAuthGovernanceUserViaBff,
+  fetchPeopleLinkCandidatesViaBff,
   deepSyncAuthGovernanceUsersViaBff,
   fetchAuthGovernanceUsersViaBff,
   type AuthGovernanceUserRow,
@@ -147,6 +149,10 @@ export function UserManagementPage() {
   const [selectedIdentityKey, setSelectedIdentityKey] = useState<string>('');
   const [syncingIdentityKey, setSyncingIdentityKey] = useState<string>('');
   const [bulkSyncing, setBulkSyncing] = useState(false);
+  const [linkReady, setLinkReady] = useState<Record<string, boolean>>({});
+  const [rolePending, setRolePending] = useState<Record<string, GovernanceOperation<{ role: string; reason: string }>>>({});
+  const [roleReadbackNeeded, setRoleReadbackNeeded] = useState<Record<string, boolean>>({});
+  const onLinkState = useCallback((identityKey: string, ready: boolean) => { setLinkReady((previous) => previous[identityKey] === ready ? previous : { ...previous, [identityKey]: ready }); }, []);
   const [draftRoles, setDraftRoles] = useState<Record<string, UserRole>>({});
   const [filters, setFilters] = useState<AuthGovernanceFilters>({
     searchText: '',
@@ -166,6 +172,22 @@ export function UserManagementPage() {
         tenantId: orgId,
         actor: authUser,
       });
+      const pendingByIdentity: typeof rolePending = {};
+      const readbackNeeded: Record<string, boolean> = {};
+      for (const row of response.items) {
+        const key = operationStorageKey(orgId, authUser.uid, row.identityKey, 'role');
+        const pending = readGovernanceOperation<{ role: string; reason: string }>(key);
+        if (!pending) continue;
+        const member = row.canonicalMember;
+        if (member?.uid === row.authUid && member?.role === pending.body.role && member?.status === 'ACTIVE') {
+          saveGovernanceOperation(key, null);
+        } else {
+          pendingByIdentity[row.identityKey] = pending;
+          readbackNeeded[row.identityKey] = pending.acknowledged;
+        }
+      }
+      setRolePending(pendingByIdentity);
+      setRoleReadbackNeeded(readbackNeeded);
       setItems(response.items);
       setSummary(response.summary);
       setDraftRoles((prev) => {
@@ -181,8 +203,10 @@ export function UserManagementPage() {
         if (prev && response.items.some((row) => row.identityKey === prev)) return prev;
         return response.items[0]?.identityKey || '';
       });
+      return response;
     } catch {
-      setError('권한 목록을 불러오지 못했습니다. 잠시 후 다시 조회해 주세요.');
+      setError('권한 목록을 불러오지 못했습니다. 이전 변경의 성공 여부를 판단할 수 없으므로 목록을 다시 조회해 주세요.');
+      return null;
     } finally {
       setLoading(false);
     }
@@ -217,28 +241,46 @@ export function UserManagementPage() {
   }, [selectedIdentityKey, selectedRow]);
 
   const handleDeepSync = async (row: AuthGovernanceUserRow) => {
-    if (!authUser) return;
-    const role = draftRoles[row.identityKey] || getRecommendedGovernanceRole(row);
+    if (!authUser || !linkReady[row.identityKey] || roleReadbackNeeded[row.identityKey] || syncingIdentityKey) return;
+    const key = operationStorageKey(orgId, authUser.uid, row.identityKey, 'role');
+    const pending = readGovernanceOperation<{ role: string; reason: string }>(key);
+    const operation = pending || newGovernanceOperation(authUser.uid, {
+      role: draftRoles[row.identityKey] || getRecommendedGovernanceRole(row),
+      reason: 'admin auth governance dashboard explicit role approval',
+    });
     setSyncingIdentityKey(row.identityKey);
+    let sent = false;
     try {
-      const result = await deepSyncAuthGovernanceUserViaBff({
-        tenantId: orgId,
-        actor: authUser,
-        identityKey: row.identityKey,
-        role,
-        reason: 'admin auth governance dashboard deep sync',
-      });
-      if (result.claimsSyncStatus === 'PENDING') {
+      const link = await fetchPeopleLinkCandidatesViaBff({ tenantId: orgId, actor: authUser, identityKey: row.identityKey });
+      if (!hasVerifiedPeopleLink(link)) {
+        onLinkState(row.identityKey, false);
+        toast.error('1단계에서 직원과 검증된 로그인 계정의 연결을 먼저 확인해 주세요.');
+        return;
+      }
+      saveGovernanceOperation(key, operation);
+      setRolePending((previous) => ({ ...previous, [row.identityKey]: operation }));
+      sent = true;
+      const result = await deepSyncAuthGovernanceUserViaBff({ tenantId: orgId, actor: authUser, identityKey: row.identityKey, ...operation.body, idempotencyKey: operation.idempotencyKey });
+      saveGovernanceOperation(key, { ...operation, acknowledged: true });
+      setRoleReadbackNeeded((previous) => ({ ...previous, [row.identityKey]: true }));
+      const readback = await loadGovernance();
+      if (!readback) {
+        toast.warning('서버가 권한 반영을 응답했지만 최신 상태 조회에 실패했습니다. 목록을 다시 조회해 주세요. 새 권한 요청은 보내지 않습니다.');
+      } else if (result.claimsSyncStatus === 'PENDING') {
         toast.warning(`${row.email} 권한 원본은 저장했지만 로그인 권한 동기화가 대기 중입니다. 잠시 후 다시 확인해 주세요.`);
       } else {
-        toast.success(`${row.email} 권한 정렬을 반영했습니다.`);
+        toast.success('권한 반영 응답을 받았습니다. 목록의 직원 권한과 로그인 권한을 확인해 주세요.');
       }
-      await loadGovernance();
     } catch (error) {
-      toast.error(governanceErrorMessage(error));
-    } finally {
-      setSyncingIdentityKey('');
-    }
+      if (!sent || !isUncertainGovernanceError(error)) {
+        if (sent) { saveGovernanceOperation(key, null); setRolePending((previous) => { const next = { ...previous }; delete next[row.identityKey]; return next; }); }
+        toast.error(governanceErrorMessage(error));
+      } else {
+        setRoleReadbackNeeded((previous) => ({ ...previous, [row.identityKey]: true }));
+        await loadGovernance();
+        toast.warning('권한 요청 응답을 받지 못했습니다. 목록에서 저장 상태를 확인해 주세요. 재시도는 같은 요청으로만 진행합니다.');
+      }
+    } finally { setSyncingIdentityKey(''); }
   };
 
   const handleBulkDeepSync = async () => {
@@ -318,7 +360,7 @@ export function UserManagementPage() {
               size="sm"
               className="h-9 gap-2 border-stone-300 bg-white text-stone-900"
               onClick={() => void loadGovernance()}
-              disabled={loading || bulkSyncing}
+              disabled={loading || bulkSyncing || !!syncingIdentityKey}
             >
               <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
               목록 다시 불러오기
@@ -529,6 +571,7 @@ export function UserManagementPage() {
                         <div className="flex shrink-0 flex-col items-end gap-2">
                           <Select
                             value={role}
+                            disabled={!!rolePending[row.identityKey]}
                             onValueChange={(value) => setDraftRoles((prev) => ({ ...prev, [row.identityKey]: value as UserRole }))}
                           >
                             <SelectTrigger
@@ -550,7 +593,7 @@ export function UserManagementPage() {
                               event.stopPropagation();
                               void handleDeepSync(row);
                             }}
-                            disabled={syncingIdentityKey === row.identityKey}
+                            disabled={!!syncingIdentityKey || !linkReady[row.identityKey] || !!roleReadbackNeeded[row.identityKey]}
                           >
                             {syncingIdentityKey === row.identityKey ? (
                               <>
@@ -560,7 +603,7 @@ export function UserManagementPage() {
                             ) : (
                               <>
                                 <GitMerge className="mr-2 h-3.5 w-3.5" />
-                                권한 반영
+                                {linkReady[row.identityKey] ? '2. 역할 승인' : '1단계 연결 확인 필요'}
                               </>
                             )}
                           </Button>
@@ -613,7 +656,7 @@ export function UserManagementPage() {
                 </div>
 
                 <Separator />
-                {authUser && <PeopleAccountLink key={selectedRow.identityKey} identityKey={selectedRow.identityKey} email={selectedRow.email} actor={authUser} tenantId={orgId} onLinked={loadGovernance} />}
+                {authUser && <PeopleAccountLink key={`${orgId}:${authUser.uid}:${selectedRow.identityKey}`} identityKey={selectedRow.identityKey} email={selectedRow.email} actor={authUser} tenantId={orgId} onLinked={async () => { await loadGovernance(); }} onLinkState={onLinkState} />}
 
                 <div className="space-y-3">
                   <div>
@@ -692,14 +735,16 @@ export function UserManagementPage() {
                 <Separator />
 
                 <div className="rounded-xl border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
-                  <div className="font-medium text-stone-900">권한 반영을 누르면</div>
+                  <div className="font-medium text-stone-900">2. 승인된 역할 반영</div>
                   <div className="mt-2 space-y-1">
-                    <div>1. 로그인 권한을 선택한 권한으로 저장합니다.</div>
-                    <div>2. 직원 권한 기록과 예전 기록을 같은 값으로 맞춥니다.</div>
-                    <div>3. 다음 로그인부터 같은 권한으로 들어오게 합니다.</div>
+                    <div>역할 반영은 인력 명부에 연결된 승인 가능한 관리자가 수행합니다. 계정 연결 완료만으로 역할 승인 자격이 생기지는 않습니다.</div>
+                    <div>계정 연결 담당자와 역할 승인 담당자는 다를 수 있습니다. 권한 확인 오류가 나면 역할 승인 관리자에게 인계해 주세요.</div>
+                    <div>반영 후 직원 권한과 로그인 권한 동기화 상태를 확인합니다.</div>
                   </div>
                 </div>
 
+                {!linkReady[selectedRow.identityKey] && <p className="text-sm text-amber-800">1단계 연결 상태가 확인돼야 역할을 반영할 수 있습니다.</p>}
+                {roleReadbackNeeded[selectedRow.identityKey] && <p role="status" className="text-sm text-amber-800">이전 역할 요청의 저장 상태를 먼저 확인해야 합니다. 목록을 다시 조회해 주세요. 서버 완료 응답과 현재 상태가 다르면 관리자에게 확인해 주세요.</p>}
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs text-stone-500">
                     반영할 권한은 {roleLabel(draftRoles[selectedRow.identityKey] || getRecommendedGovernanceRole(selectedRow))} 입니다.
@@ -707,9 +752,9 @@ export function UserManagementPage() {
                   <Button
                     className="bg-stone-900 text-white hover:bg-stone-800"
                     onClick={() => void handleDeepSync(selectedRow)}
-                    disabled={syncingIdentityKey === selectedRow.identityKey}
+                    disabled={!!syncingIdentityKey || !linkReady[selectedRow.identityKey] || !!roleReadbackNeeded[selectedRow.identityKey]}
                   >
-                    {syncingIdentityKey === selectedRow.identityKey ? '반영 중...' : '선택 사용자 권한 반영'}
+                    {syncingIdentityKey === selectedRow.identityKey ? '반영 중...' : rolePending[selectedRow.identityKey] ? '같은 역할 요청 다시 확인' : '승인된 역할 반영'}
                   </Button>
                 </div>
               </>

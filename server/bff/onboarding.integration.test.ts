@@ -11,19 +11,24 @@ emulatorSuite('approved onboarding identity link (Firestore transactions)', () =
   const projectId = 'demo-bff-it';
   const tenantId = `onboard-${randomUUID().slice(0, 8)}`;
   const adminUid = 'approved-admin';
+  const adminEmail = 'admin@example.test';
   const targetUid = 'verified-staff';
   const targetEmail = 'staff@example.test';
   let db: ReturnType<typeof createFirestoreDb>;
   let api: ReturnType<typeof request>;
   let authUser: Record<string, any>;
   const setCustomUserClaims = vi.fn(async () => {});
-  const headers = { 'x-tenant-id': tenantId, 'x-actor-id': adminUid, 'x-actor-role': 'admin' };
+  const headers = { 'x-tenant-id': tenantId, authorization: 'Bearer synthetic-admin-token' };
   const path = `/api/v1/admin/auth-governance/users/${encodeURIComponent(targetEmail)}/link-person`;
   const personRef = (id = 'person-a') => db.doc(`orgs/${tenantId}/persons/${id}`);
 
   function makeApi(database: typeof db = db) {
     return request(createBffApp({
-      projectId, db: database, authMode: 'headers', tokenVerifier: async () => ({}),
+      projectId, db: database, authMode: 'firebase_required',
+      tokenVerifier: async (token: string) => {
+        if (token !== 'synthetic-admin-token') throw new Error('Invalid synthetic token');
+        return { uid: adminUid, email: adminEmail, tenantId, email_verified: true };
+      },
       authAdminService: {
         getUserByEmail: async () => authUser,
         listUsers: async () => ({ users: [authUser] }),
@@ -59,8 +64,7 @@ emulatorSuite('approved onboarding identity link (Firestore transactions)', () =
       uid: targetUid, email: targetEmail, emailVerified: true, disabled: false,
       providerData: [{ providerId: 'google.com', email: targetEmail }], customClaims: {},
     };
-    await db.doc(`orgs/${tenantId}/members/${adminUid}`).set({ uid: adminUid, role: 'admin', status: 'ACTIVE' });
-    await personRef('admin-person').set({ personId: 'admin-person', uid: adminUid, email: 'admin@example.test' });
+    await db.doc(`orgs/${tenantId}/members/${adminUid}`).set({ uid: adminUid, email: adminEmail, role: 'admin', status: 'ACTIVE' });
     await personRef().set({ personId: 'person-a', name: 'Synthetic Staff', nickname: 'Fixture', email: '', uid: null });
     api = makeApi();
   });
@@ -82,6 +86,47 @@ emulatorSuite('approved onboarding identity link (Firestore transactions)', () =
     const audit = await db.collection(`orgs/${tenantId}/audit_logs`).get();
     expect(audit.size).toBe(1);
     expect(audit.docs[0].data()).toMatchObject({ action: 'IDENTITY_LINK', entityId: 'person-a', userId: adminUid });
+    expect((await db.collection(`orgs/${tenantId}/persons`).where('uid', '==', adminUid).get()).empty).toBe(true);
+  });
+
+  it.each([
+    ['uid', 'different-admin'], ['email', 'different@example.test'], ['tenantId', 'other'],
+    ['role', 'pm'], ['status', 'INACTIVE'],
+  ])('denies a mismatched canonical administrator %s', async (field, value) => {
+    const body = await candidate();
+    await db.doc(`orgs/${tenantId}/members/${adminUid}`).update({ [field]: value });
+    expect((await api.get('/api/v1/admin/auth-governance/people-link-candidates').query({ identityKey: targetEmail }).set(headers)).status).toBe(403);
+    expect((await post(body)).status).toBe(403);
+    expect((await personRef().get()).data()?.uid).toBeNull();
+    expect((await db.collection(`orgs/${tenantId}/audit_logs`).get()).empty).toBe(true);
+  });
+
+  it('rejects absent or invalid bearer identity rather than trusting actor headers', async () => {
+    const body = await candidate();
+    for (const authorization of ['', 'Bearer invalid-token']) {
+      const response = await api.post(path).set({ ...headers, authorization, 'x-actor-id': adminUid, 'x-actor-role': 'admin', 'idempotency-key': randomUUID() }).send(body);
+      expect(response.status).toBe(401);
+    }
+    expect((await personRef().get()).data()?.uid).toBeNull();
+  });
+
+  it('rejects missing canonical membership even with an otherwise valid token', async () => {
+    const body = await candidate();
+    await db.doc(`orgs/${tenantId}/members/${adminUid}`).delete();
+    expect((await api.get('/api/v1/admin/auth-governance/people-link-candidates').query({ identityKey: targetEmail }).set(headers)).status).toBe(403);
+    expect((await post(body)).status).toBe(403);
+    expect((await personRef().get()).data()?.uid).toBeNull();
+  });
+
+  it('does not relax the separate deep-sync People authority requirement', async () => {
+    const linked = await post(await candidate());
+    expect(linked.status).toBe(200);
+    const response = await api.post(`/api/v1/admin/auth-governance/users/${encodeURIComponent(targetEmail)}/deep-sync`)
+      .set({ ...headers, 'idempotency-key': randomUUID() }).send({ role: 'pm', reason: 'Synthetic separate permission request' });
+    expect(response.status).toBe(403);
+    expect(response.body.error).toBe('member_authority_required');
+    expect((await db.doc(`orgs/${tenantId}/members/${targetUid}`).get()).exists).toBe(false);
+    expect(setCustomUserClaims).not.toHaveBeenCalled();
   });
 
   it('replays a completed operation and rejects reuse with a changed payload', async () => {
@@ -152,6 +197,22 @@ emulatorSuite('approved onboarding identity link (Firestore transactions)', () =
     await db.doc(`orgs/${tenantId}/members/${adminUid}`).update({ status: 'INACTIVE' });
     expect((await post(body, 'revoked-replay')).status).toBe(403);
     expect((await db.collection(`orgs/${tenantId}/audit_logs`).get()).size).toBe(1);
+  });
+
+  it('rejects revocation between authentication middleware and the linking transaction', async () => {
+    const body = await candidate();
+    const original = db.runTransaction.bind(db);
+    const spy = vi.spyOn(db, 'runTransaction').mockImplementationOnce((async (operation: any, options: any) => {
+      await db.doc(`orgs/${tenantId}/members/${adminUid}`).update({ status: 'INACTIVE' });
+      return original(operation, options);
+    }) as any);
+    const result = await post(body, 'late-revocation');
+    spy.mockRestore();
+    expect(result.status).toBe(403);
+    expect(result.body.error).toBe('member_authority_required');
+    expect((await personRef().get()).data()?.uid).toBeNull();
+    expect((await db.collection(`orgs/${tenantId}/audit_logs`).get()).empty).toBe(true);
+    expect((await db.collection(`orgs/${tenantId}/idempotency_keys`).get()).empty).toBe(true);
   });
 
   it('rolls back identity and idempotency completion when the audit transaction fails', async () => {
