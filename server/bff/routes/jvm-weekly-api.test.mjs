@@ -1598,7 +1598,7 @@ describe('JVM weekly API BFF proxy', () => {
       expect.objectContaining({ period: 'WEEK_1', status: 'PENDING_APPROVAL' }),
     ]));
     expect(fetchImpl).toHaveBeenCalledWith(
-      'http://jvm-weekly.local/api/v1/cashflow/weekly-overview',
+      'http://jvm-weekly.local/api/v1/cashflow/weekly-overview?omitProjectionActualSummary=true',
       expect.objectContaining({
         method: 'POST',
         body: JSON.stringify({
@@ -1606,6 +1606,36 @@ describe('JVM weekly API BFF proxy', () => {
         }),
       }),
     );
+  });
+
+  it.each(['2026-08', '2026-09'])('publishes identical v5 output across JVM rollout and rollback for %s', async (yearMonth) => {
+    const source = fullMonthCloseSource();
+    const canonical = canonicalWeeklyOverviewResponse(yearMonth);
+    if (yearMonth === '2026-08') {
+      canonical.version = '1';
+      delete canonical.items[0].settlementCycle;
+    }
+    canonical.items[0].projectionActualSummary = { projectId: 'project-a', differenceAmount: 999 };
+    canonical.errors = [{ projectId: 'project-a', code: 'SUMMARY_UNAVAILABLE' }];
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify(canonical), {
+      status: 200, headers: { 'content-type': 'application/json' },
+    }));
+    const { app } = createApp(fetchImpl, createIdempotencyService(), {}, { env: runtimeEnv, db: source.db });
+    const read = () => request(app).post('/api/v1/cashflow/weekly-overview')
+      .send({ projectIds: ['project-a'], yearMonth }).expect(200);
+    const before = await read();
+    canonical.items[0].projectionActualSummary = null;
+    canonical.errors = [];
+    const after = await read();
+    expect(after.body).toEqual(before.body);
+    // A JVM rollback ignores the query and restores its old summary; BFF output remains identical.
+    canonical.items[0].projectionActualSummary = { projectId: 'project-a', differenceAmount: 999 };
+    expect((await read()).body).toEqual(before.body);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    for (const [url, options] of fetchImpl.mock.calls) {
+      expect(url).toBe('http://jvm-weekly.local/api/v1/cashflow/weekly-overview?omitProjectionActualSummary=true');
+      expect(JSON.parse(options.body)).toEqual({ projectIds: ['project-a'], yearMonth, settlementCycle: yearMonth >= '2026-09' });
+    }
   });
 
   it.each([
@@ -1736,7 +1766,7 @@ describe('JVM weekly API BFF proxy', () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(fetchImpl).toHaveBeenCalledWith(
-      'http://jvm-weekly.local/api/v1/cashflow/weekly-overview',
+      'http://jvm-weekly.local/api/v1/cashflow/weekly-overview?omitProjectionActualSummary=true',
       expect.objectContaining({
         method: 'POST', body: JSON.stringify({ projectIds, yearMonth: '2026-09', settlementCycle: true }),
       }),

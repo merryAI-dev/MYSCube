@@ -4793,8 +4793,10 @@ export function mountJvmWeeklyApiRoutes(app, {
     const weeklyResult = await trace.measure('java_overview', () => proxyJavaWeeklyRequest({
       context: req.context,
       method: 'POST',
-      path: '/api/v1/cashflow/weekly-overview',
+      // Old JVMs ignore this optional query and return their normal summary.
+      path: '/api/v1/cashflow/weekly-overview?omitProjectionActualSummary=true',
       command: 'read_cashflow_weekly_overview',
+      // BFF v5 uses the stored sheet formula summary, never the JVM ledger summary.
       body: { projectIds, yearMonth, settlementCycle: !historical },
       mutation: false,
     }), { projectCount: projectIds.length });

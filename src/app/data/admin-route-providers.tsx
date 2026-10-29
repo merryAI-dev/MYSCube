@@ -19,12 +19,17 @@ export function resolveAdminProviderScope(pathname: string) {
   };
 }
 
+export function isCashflowOverviewRoute(pathname: string) {
+  const path = pathname.replace(/\/+$/, '') || '/';
+  return path === '/cashflow' || path === '/cashflow/weekly' || path === '/cashflow/projects';
+}
+
 export function AdminRouteProviderFrame({ children, pathname }: { children: ReactNode; pathname: string }) {
   const scope = resolveAdminProviderScope(pathname);
   let tree = children;
   if (scope.training) tree = <TrainingProvider>{tree}</TrainingProvider>;
   if (scope.board) tree = <BoardProvider>{tree}</BoardProvider>;
-  if (scope.cashflowWeeks) tree = <CashflowWeekProvider>{tree}</CashflowWeekProvider>;
+  if (scope.cashflowWeeks) tree = <CashflowWeekProvider loadWeeks={!isCashflowOverviewRoute(pathname)}>{tree}</CashflowWeekProvider>;
   if (scope.payroll) tree = <PayrollProvider>{tree}</PayrollProvider>;
   if (scope.hrAnnouncements) tree = <HrAnnouncementProvider>{tree}</HrAnnouncementProvider>;
   return <FirestoreRouteModeProvider mode="admin-live">{tree}</FirestoreRouteModeProvider>;
