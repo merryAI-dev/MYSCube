@@ -1,3 +1,4 @@
+import { OnboardingGuideLink } from '../onboarding-guide/OnboardingGuideLink';
 import { ArrowRight, Building2, UserRoundCheck } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { useAppStore } from '../../data/store';
@@ -45,6 +46,7 @@ export function FeatureSearchPage() {
               </p>
             </div>
 
+<OnboardingGuideLink />
             <AdminCommandSearch projects={projects} role={user?.role} />
           </div>
         </section>
