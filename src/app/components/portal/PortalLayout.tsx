@@ -1,3 +1,4 @@
+import { MotionSurface } from '../ui/motion';
 import { OnboardingGuideLink } from '../onboarding-guide/OnboardingGuideLink';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
@@ -429,13 +430,13 @@ function PortalContent() {
   }
 
   if (location.pathname === '/portal/project-select' && canEnterPortalWorkspace(authUser?.role)) {
-    return <Outlet />;
+    return <MotionSurface changeKey={location.pathname}><Outlet /></MotionSurface>;
   }
 
   if (isPortalStandaloneEntryPath(location.pathname)
     && !isProjectRegistrationPath
     && !isAdminSpaceRole(authUser?.role)) {
-    return <Outlet />;
+    return <MotionSurface changeKey={location.pathname}><Outlet /></MotionSurface>;
   }
 
   if (!portalUser && !isProjectRegistrationPath && !isAdminSpaceRole(authUser?.role)) {
@@ -1036,7 +1037,7 @@ function PortalContent() {
             <div className={useWidePortalCanvas ? 'w-full max-w-none px-5 py-2.5' : 'mx-auto w-full max-w-[1480px] px-5 py-2.5'}>
               <PageTransition>
                 <ErrorBoundary homePath="/portal/project-select" resetKey={location.pathname}>
-                  <Outlet />
+                  <MotionSurface changeKey={location.pathname}><Outlet /></MotionSurface>
                 </ErrorBoundary>
               </PageTransition>
             </div>

@@ -26,7 +26,7 @@ afterEach(() => { act(() => root.unmount()); vi.unstubAllGlobals(); });
 it('blocks missing membership despite cached admin and admin claims, then admits approved canonical role on retry', async () => {
   mocks.getDoc.mockResolvedValue(snapshot());
   await act(async () => { await mocks.callback!(account); });
-  expect(JSON.stringify(root.toJSON())).toContain('직원 연결과 권한 승인을 기다리고 있습니다');
+  expect(JSON.stringify(root.toJSON())).toContain('이제 관리자 확인만');
   expect(JSON.stringify(root.toJSON())).not.toContain('protected:');
   expect(localStorage.getItem('mysc-auth-user')).toBeNull();
   expect(mocks.setDoc).not.toHaveBeenCalled();

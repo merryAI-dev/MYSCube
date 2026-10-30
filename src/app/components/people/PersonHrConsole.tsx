@@ -1,3 +1,4 @@
+import { MotionSurface, MotionDisclosure } from '../ui/motion';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Award,
@@ -373,7 +374,7 @@ export function PersonHrConsole({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !saving) onClose(); }}>
-      <DialogContent className="flex max-h-[94vh] w-[96vw] max-w-[1400px] flex-col overflow-hidden p-0 sm:max-w-[1400px]">
+      <DialogContent className="hr-console flex max-h-[94vh] w-[96vw] max-w-[1000px] flex-col overflow-hidden p-0 sm:max-w-[1000px]">
         <DialogHeader className="sr-only">
           <DialogTitle>{person.name} 인사정보</DialogTitle>
           <DialogDescription>인적사항, 학력·어학·자격, 계약 이력을 확인하고 수정합니다.</DialogDescription>
@@ -403,7 +404,7 @@ export function PersonHrConsole({
                 </p>
               </div>
             </div>
-            <div className="grid gap-3 sm:grid-cols-2 lg:w-[400px]">
+            <MotionDisclosure className="hr-summary"><summary>인사 요약 보기</summary>            <div className="grid gap-3 sm:grid-cols-2 lg:w-[400px]">
               <SummaryField
                 icon={<CalendarClock className="h-4 w-4" />}
                 label="생년월일"
@@ -429,11 +430,11 @@ export function PersonHrConsole({
                   ? `${highestEducation.degreeYear}년${yearsSinceDegree === null ? '' : ` · 취득 후 ${yearsSinceDegree}년`}`
                   : '미등록'}
               />
-            </div>
+            </div></MotionDisclosure>
           </div>
         </div>
 
-        <Tabs defaultValue="records" className="flex min-h-0 flex-1 flex-col">
+        <Tabs defaultValue="basic" className="flex min-h-0 flex-1 flex-col">
           <TabsList className="mx-7 mt-5 w-fit">
             <TabsTrigger value="basic" className="px-4 py-2 text-[14px]">기본정보</TabsTrigger>
             <TabsTrigger value="records" className="px-4 py-2 text-[14px]">인사정보조회</TabsTrigger>
@@ -513,7 +514,7 @@ export function PersonHrConsole({
                   <p className="mt-1 text-[14px] text-slate-500">직급과 다른 축입니다. 맡은 역할을 적습니다.</p>
                 </div>
                 <div>
-                  <Label className="text-[14px]" htmlFor="hr-email">이메일</Label>
+                  <Label className="text-[14px]" htmlFor="hr-email">이메일</Label><p className="mt-1 text-[13px] leading-5 text-slate-500">명부 연락처를 저장해요. 로그인 계정 연결과 역할 반영은 별도입니다.</p>
                   <Input
                     id="hr-email" className="mt-1.5 h-10" value={form.email} disabled={!canWritePerson || saving}
                     onChange={(event) => setForm({ ...form, email: event.target.value })}
@@ -612,6 +613,7 @@ export function PersonHrConsole({
                 </div>
               </div>
 
+              <div className="rounded-lg border bg-slate-50 p-4 text-sm"><strong>이메일을 저장했나요?</strong><p className="mt-1 text-slate-600">권한 관리에서 로그인 이메일을 확인하고 본인 계정을 연결해요. 역할은 그다음에 별도로 반영합니다.</p>{dirty ? <p className="mt-3 text-amber-800">변경한 이메일을 먼저 저장해 주세요.</p> : <a className="mt-3 inline-block font-semibold text-primary underline" href={`/users?search=${encodeURIComponent(form.email || person.name)}`}>권한 관리에서 이어서 확인 →</a>}</div>
               {canWritePerson ? (
                 <div className="flex justify-end">
                   <Button size="sm" onClick={() => void saveProfileFields()} disabled={saving || !dirty}>

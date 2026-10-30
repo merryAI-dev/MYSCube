@@ -4,6 +4,10 @@ import App from './app/App';
 import { initObservability, installGlobalObservabilityHandlers } from './app/platform/observability';
 import { installVitePreloadRecovery } from './app/platform/preload-recovery';
 import './styles/index.css';
+import './styles/next-tokens.css';
+import './styles/next-components.css';
+
+document.body.classList.add('mysc-next');
 
 if (typeof window !== 'undefined') installVitePreloadRecovery();
 initObservability(import.meta.env);

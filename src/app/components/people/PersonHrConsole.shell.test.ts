@@ -53,8 +53,8 @@ describe('인사정보 콘솔', () => {
   it('읽는 크기를 지킨다 — 본문 14~15px, 팝업 폭은 sm 변형까지 함께 준다', () => {
     // 기본 DialogContent 에 sm:max-w-lg(512px) 가 박혀 있다. sm 변형을 같이 주지 않으면
     // max-w-[...] 가 640px 이상 화면에서 무시되고 팝업이 512px 로 잘린다.
-    expect(source).toContain('sm:max-w-[1400px]');
-    expect(source).toContain('max-w-[1400px]');
+    expect(source).toContain('sm:max-w-[1000px]');
+    expect(source).toContain('max-w-[1000px]');
     expect(source).not.toContain('text-[11px]');
   });
 
