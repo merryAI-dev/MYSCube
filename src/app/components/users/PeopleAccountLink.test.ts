@@ -107,3 +107,38 @@ it('discards stale reads after tenant or token context changes and clears select
   expect(JSON.stringify(root.toJSON())).not.toContain('본인 계정 연결 확인 완료');
   expect(readiness).toHaveBeenLastCalledWith(directory.identityKey,false);
 });
+
+it('requires a separate migration confirmation and sends a bound migration command', async () => {
+  mocks.fetch.mockResolvedValue({ ...directory, people: [{ ...directory.people[0], linkedUid: 'staff_example_com', legacyMigrationEligible: true }] });
+  await act(async () => { await buttons()[0].props.onClick(); });
+  act(() => root.root.findByType('select').props.onChange({ target: { value: 'person-a' } }));
+  act(() => root.root.findByProps({ 'aria-label': '본인 확인 근거' }).props.onChange({ target: { value: 'Confirmed by supervisor' } }));
+  const checkboxes = () => root.root.findAllByType('input').filter(input => input.props.type === 'checkbox');
+  act(() => checkboxes()[1].props.onChange({ target: { checked: true } }));
+  expect(buttons()[1].props.disabled).toBe(true);
+  act(() => checkboxes()[0].props.onChange({ target: { checked: true } }));
+  expect(buttons()[1].props.disabled).toBe(false);
+  mocks.fetch.mockResolvedValue(linked);
+  await act(async () => { await buttons()[1].props.onClick(); });
+  expect(mocks.link).toHaveBeenCalledWith(expect.objectContaining({ legacyMigration: { expectedLegacyUid: 'staff_example_com', confirmed: true } }));
+  expect(mocks.link.mock.calls[0][0]).not.toHaveProperty('role');
+});
+it('resets migration confirmation on evidence edits and retries an uncertain migration with the same payload', async () => {
+  const legacy = { ...directory, people: [{ ...directory.people[0], linkedUid: 'staff_example_com', legacyMigrationEligible: true }] };
+  mocks.fetch.mockResolvedValue(legacy);
+  await act(async () => { await buttons()[0].props.onClick(); });
+  act(() => root.root.findByType('select').props.onChange({ target: { value: 'person-a' } }));
+  const evidence = () => root.root.findByProps({ 'aria-label': '본인 확인 근거' });
+  const checks = () => root.root.findAllByType('input').filter(input => input.props.type === 'checkbox');
+  act(() => { evidence().props.onChange({ target: { value: 'First evidence' } }); });
+  act(() => { checks()[0].props.onChange({ target: { checked: true } }); checks()[1].props.onChange({ target: { checked: true } }); });
+  act(() => evidence().props.onChange({ target: { value: 'Corrected evidence' } }));
+  expect(checks().map(input => input.props.checked)).toEqual([false, false]);
+  act(() => { checks()[0].props.onChange({ target: { checked: true } }); checks()[1].props.onChange({ target: { checked: true } }); });
+  mocks.link.mockRejectedValueOnce({ status: 503 });
+  await act(async () => { await buttons()[1].props.onClick(); });
+  const original = mocks.link.mock.calls[0][0];
+  mocks.fetch.mockResolvedValue(linked);
+  await act(async () => { await buttons()[1].props.onClick(); });
+  expect(mocks.link.mock.calls[1][0]).toEqual(original);
+});

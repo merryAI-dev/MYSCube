@@ -5,6 +5,8 @@ const messages: Record<string, string> = {
   people_uid_ambiguous: '같은 로그인 계정에 직원 기록이 여러 건 연결되어 있습니다. 중복 연결을 확인해 주세요.',
   people_email_ambiguous: '같은 이메일을 가진 직원 기록이 여러 건입니다. 명부를 확인해 주세요.',
   people_email_conflict: '직원 명부의 이메일과 로그인 이메일이 다릅니다. 본인 확인 후 명부를 정정해 주세요.',
+  legacy_auth_exists: '예전 연결에 실제 로그인 계정이 있어 이전할 수 없습니다. 관리자에게 확인해 주세요.',
+  legacy_identity_changed: '예전 연결 정보가 달라졌습니다. 연결 상태를 다시 확인해 주세요.',
   people_uid_conflict: '이 직원은 다른 로그인 계정에 연결되어 있습니다. 기존 연결을 확인해 주세요.',
   member_identity_conflict: '직원 권한 기록이 다른 계정과 연결되어 있습니다. 기존 연결을 확인해 주세요.',
   people_identity_changed: '직원 기록이 변경되었습니다. 목록을 다시 확인한 뒤 연결해 주세요.',
