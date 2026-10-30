@@ -1,9 +1,10 @@
+import { isGovernanceRoleApplied } from './auth-governance-view-model';
 import { MotionSurface, MotionDisclosure } from '../ui/motion';
 import { FeedbackState } from '../ui/feedback-state';
 import { isUncertainGovernanceError, newGovernanceOperation, operationStorageKey, readGovernanceOperation, saveGovernanceOperation, type GovernanceOperation } from './governance-operation';
 import { PeopleAccountLink, hasVerifiedPeopleLink } from './PeopleAccountLink';
 import { governanceErrorMessage } from './auth-governance-errors';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -167,7 +168,13 @@ export function UserManagementPage() {
 
   const governanceEnabled = featureFlags.platformApiEnabled && !!authUser?.idToken;
 
+  const lifecycle = useRef(0);
+  const loadSequence = useRef(0);
+  const writeInFlight = useRef(false);
   const loadGovernance = async () => {
+    const generation = lifecycle.current;
+    const sequence = ++loadSequence.current;
+    const current = () => generation === lifecycle.current && sequence === loadSequence.current;
     if (!authUser || !governanceEnabled) return;
     setLoading(true);
     setError(null);
@@ -176,6 +183,7 @@ export function UserManagementPage() {
         tenantId: orgId,
         actor: authUser,
       });
+      if (!current()) return null;
       const pendingByIdentity: typeof rolePending = {};
       const readbackNeeded: Record<string, boolean> = {};
       for (const row of response.items) {
@@ -183,7 +191,7 @@ export function UserManagementPage() {
         const pending = readGovernanceOperation<{ role: string; reason: string }>(key);
         if (!pending) continue;
         const member = row.canonicalMember;
-        if (member?.uid === row.authUid && member?.role === pending.body.role && member?.status === 'ACTIVE') {
+        if (isGovernanceRoleApplied(row, pending.body.role, orgId)) {
           saveGovernanceOperation(key, null);
         } else {
           pendingByIdentity[row.identityKey] = pending;
@@ -210,15 +218,21 @@ export function UserManagementPage() {
       });
       return response;
     } catch {
+      if (!current()) return null;
       setError('권한 목록을 불러오지 못했습니다. 이전 변경의 성공 여부를 판단할 수 없으므로 목록을 다시 조회해 주세요.');
       return null;
     } finally {
-      setLoading(false);
+      if (current()) setLoading(false);
     }
   };
 
   useEffect(() => {
+    lifecycle.current += 1;
+    setSyncingIdentityKey(''); setBulkSyncing(false); setItems([]); setSelectedIdentityKey('');
+    setSummary(emptyGovernanceSummary()); setRoleError({}); setError(null);
+    setLinkReady({}); setDraftRoles({}); setRolePending({}); setRoleReadbackNeeded({});
     void loadGovernance();
+    return () => { lifecycle.current += 1; loadSequence.current += 1; };
   }, [orgId, authUser?.uid, authUser?.idToken]);
 
   const filteredRows = useMemo(
@@ -242,18 +256,22 @@ export function UserManagementPage() {
   }, [selectedIdentityKey, selectedRow]);
 
   const handleDeepSync = async (row: AuthGovernanceUserRow) => {
-    if (!authUser || !linkReady[row.identityKey] || roleReadbackNeeded[row.identityKey] || syncingIdentityKey) return;
+    if (writeInFlight.current || !authUser || isGovernanceRoleApplied(row, draftRoles[row.identityKey] || getRecommendedGovernanceRole(row), orgId) || !linkReady[row.identityKey] || roleReadbackNeeded[row.identityKey] || syncingIdentityKey) return;
     const key = operationStorageKey(orgId, authUser.uid, row.identityKey, 'role');
     const pending = readGovernanceOperation<{ role: string; reason: string }>(key);
     const operation = pending || newGovernanceOperation(authUser.uid, {
       role: draftRoles[row.identityKey] || getRecommendedGovernanceRole(row),
       reason: 'admin auth governance dashboard explicit role approval',
     });
+    writeInFlight.current = true;
+    const generation = lifecycle.current;
+    const current = () => generation === lifecycle.current;
     setRoleError(previous=>({...previous,[row.identityKey]:''}));
     setSyncingIdentityKey(row.identityKey);
     let sent = false;
     try {
       const link = await fetchPeopleLinkCandidatesViaBff({ tenantId: orgId, actor: authUser, identityKey: row.identityKey });
+      if (!current()) return;
       if (!hasVerifiedPeopleLink(link)) {
         onLinkState(row.identityKey, false);
         toast.error('1단계에서 직원과 검증된 로그인 계정의 연결을 먼저 확인해 주세요.');
@@ -264,16 +282,21 @@ export function UserManagementPage() {
       sent = true;
       const result = await deepSyncAuthGovernanceUserViaBff({ tenantId: orgId, actor: authUser, identityKey: row.identityKey, ...operation.body, idempotencyKey: operation.idempotencyKey });
       saveGovernanceOperation(key, { ...operation, acknowledged: true });
+      if (!current()) return;
       setRoleReadbackNeeded((previous) => ({ ...previous, [row.identityKey]: true }));
       const readback = await loadGovernance();
+      if (!current()) return;
       if (!readback) {
         toast.warning('서버가 권한 반영을 응답했지만 최신 상태 조회에 실패했습니다. 목록을 다시 조회해 주세요. 새 권한 요청은 보내지 않습니다.');
       } else if (result.claimsSyncStatus === 'PENDING') {
         toast.warning(`${row.email} 권한 원본은 저장했지만 로그인 권한 동기화가 대기 중입니다. 잠시 후 다시 확인해 주세요.`);
       } else {
-        toast.success('권한 반영 응답을 받았습니다. 목록의 직원 권한과 로그인 권한을 확인해 주세요.');
+        const updated = readback.items.find(item => item.identityKey === row.identityKey);
+        if (updated && isGovernanceRoleApplied(updated, operation.body.role, orgId)) toast.success('역할 승인이 완료됐습니다. 직원 권한과 로그인 권한이 일치합니다.');
+        else toast.warning('요청은 처리됐지만 권한 일치를 아직 확인하지 못했습니다. 목록을 다시 조회해 주세요.');
       }
     } catch (error) {
+      if (!current()) return;
       if (!sent || !isUncertainGovernanceError(error)) {
         if (sent) { saveGovernanceOperation(key, null); setRolePending((previous) => { const next = { ...previous }; delete next[row.identityKey]; return next; }); }
         setRoleError(previous=>({...previous,[row.identityKey]:governanceErrorMessage(error)}));
@@ -281,19 +304,23 @@ export function UserManagementPage() {
       } else {
         setRoleReadbackNeeded((previous) => ({ ...previous, [row.identityKey]: true }));
         await loadGovernance();
+        if (!current()) return;
         toast.warning('권한 요청 응답을 받지 못했습니다. 목록에서 저장 상태를 확인해 주세요. 재시도는 같은 요청으로만 진행합니다.');
       }
-    } finally { setSyncingIdentityKey(''); }
+    } finally { writeInFlight.current = false; if (current()) setSyncingIdentityKey(''); }
   };
 
   const handleBulkDeepSync = async () => {
-    if (!authUser) return;
+    if (!authUser || writeInFlight.current) return;
+    const generation = lifecycle.current;
+    const current = () => generation === lifecycle.current;
     const targets = filteredRows.filter((row) => row.needsDeepSync);
     if (targets.length === 0) {
       toast.info('현재 필터 기준으로 정렬할 대상이 없습니다.');
       return;
     }
 
+    writeInFlight.current = true;
     setBulkSyncing(true);
     try {
       const result = await deepSyncAuthGovernanceUsersViaBff({
@@ -305,19 +332,28 @@ export function UserManagementPage() {
         })),
         reason: 'admin auth governance dashboard bulk deep sync',
       });
+      if (!current()) return;
+      const readback = await loadGovernance();
+      if (!current()) return;
+      const allApplied = !!readback && targets.every(target => {
+        const updated = readback.items.find(item => item.identityKey === target.identityKey);
+        return updated && isGovernanceRoleApplied(updated, draftRoles[target.identityKey] || getRecommendedGovernanceRole(target), orgId);
+      });
       if (result.summary.failed > 0) {
         const firstFailure = result.outcomes.find((outcome) => outcome.status === 'FAILED');
         toast.warning(`${result.summary.succeeded}건을 반영했고 ${result.summary.failed}건은 반영하지 못했습니다. ${firstFailure?.message || '목록을 새로고침한 뒤 다시 시도해 주세요.'}`);
       } else if (result.summary.pendingClaimsSync > 0) {
         toast.warning(`${result.summary.succeeded}건의 권한 원본을 반영했고, ${result.summary.pendingClaimsSync}건은 로그인 권한 동기화가 대기 중입니다. 잠시 후 다시 확인해 주세요.`);
       } else {
-        toast.success(`${result.summary.succeeded}건의 권한 정렬을 반영했습니다.`);
+        if (allApplied) toast.success(`${result.summary.succeeded}건의 역할 승인 완료를 확인했습니다.`);
+        else toast.warning('요청은 처리됐지만 일부 권한 일치를 확인하지 못했습니다. 목록을 다시 조회해 주세요.');
       }
-      await loadGovernance();
     } catch {
+      if (!current()) return;
       toast.error('일괄 정렬 요청을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요.');
     } finally {
-      setBulkSyncing(false);
+      writeInFlight.current = false;
+      if (current()) setBulkSyncing(false);
     }
   };
 
@@ -435,7 +471,7 @@ export function UserManagementPage() {
             <CardTitle className="text-sm font-semibold text-stone-900">사용자 권한 목록</CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            <ScrollArea className="max-h-[660px]">
+            <ScrollArea className="governance-user-scroll">
               <div className="divide-y divide-stone-200">
                 {filteredRows.map((row) => {
                   const role = draftRoles[row.identityKey] || getRecommendedGovernanceRole(row);
@@ -512,7 +548,7 @@ export function UserManagementPage() {
                               event.stopPropagation();
                               void handleDeepSync(row);
                             }}
-                            disabled={!!syncingIdentityKey || !linkReady[row.identityKey] || !!roleReadbackNeeded[row.identityKey]}
+                            disabled={isGovernanceRoleApplied(row, role, orgId) || bulkSyncing || !!syncingIdentityKey || !linkReady[row.identityKey] || !!roleReadbackNeeded[row.identityKey]}
                           >
                             {syncingIdentityKey === row.identityKey ? (
                               <>
@@ -522,7 +558,7 @@ export function UserManagementPage() {
                             ) : (
                               <>
                                 <GitMerge className="mr-2 h-3.5 w-3.5" />
-                                {linkReady[row.identityKey] ? '2. 역할 승인' : '1단계 연결 확인 필요'}
+                                {isGovernanceRoleApplied(row, role, orgId) ? '승인 완료' : linkReady[row.identityKey] ? '2. 역할 승인' : '1단계 연결 확인 필요'}
                               </>
                             )}
                           </Button>
@@ -590,9 +626,9 @@ export function UserManagementPage() {
                   <Button
                     className="bg-stone-900 text-white hover:bg-stone-800"
                     onClick={() => void handleDeepSync(selectedRow)}
-                    disabled={!!syncingIdentityKey || !linkReady[selectedRow.identityKey] || !!roleReadbackNeeded[selectedRow.identityKey]}
+                    disabled={isGovernanceRoleApplied(selectedRow, draftRoles[selectedRow.identityKey] || getRecommendedGovernanceRole(selectedRow), orgId) || bulkSyncing || !!syncingIdentityKey || !linkReady[selectedRow.identityKey] || !!roleReadbackNeeded[selectedRow.identityKey]}
                   >
-                    {syncingIdentityKey === selectedRow.identityKey ? '반영 중...' : rolePending[selectedRow.identityKey] ? '같은 역할 요청 다시 확인' : '승인된 역할 반영'}
+                    {syncingIdentityKey === selectedRow.identityKey ? '반영 중...' : rolePending[selectedRow.identityKey] ? '같은 역할 요청 다시 확인' : isGovernanceRoleApplied(selectedRow, draftRoles[selectedRow.identityKey] || getRecommendedGovernanceRole(selectedRow), orgId) ? '승인 완료' : '승인된 역할 반영'}
                   </Button>
                 </div>
                 <MotionDisclosure className="rounded-xl border p-3 text-sm"><summary className="cursor-pointer font-medium">권한 기록 상세 · 문제 확인용</summary>                <div className="space-y-3">

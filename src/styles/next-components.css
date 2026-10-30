@@ -70,3 +70,11 @@ body.mysc-next{font-family:Pretendard,-apple-system,BlinkMacSystemFont,'Segoe UI
 .enrollment-page{max-width:600px;margin:64px auto;padding:24px;display:flex;flex-direction:column;gap:20px}.enrollment-page h1{font-size:30px;font-weight:700;line-height:1.35}.enrollment-lead{line-height:1.8}:root:not(.dark) .enrollment-lead{color:#6b7684}.enrollment-page label{display:grid;gap:10px;font-size:15px}.enrollment-page label span,.enrollment-page small{font-size:13px}:root:not(.dark) .enrollment-page label span,:root:not(.dark) .enrollment-page small{color:#6b7684}.welcome-dialog{max-width:440px!important;padding:32px!important;gap:20px!important}.welcome-dialog h2{font-size:26px;line-height:1.4}.welcome-dialog [data-slot=dialog-description]{font-size:15px;line-height:1.8}.welcome-dialog [data-slot=button]{width:100%}@media(max-width:600px){.enrollment-page{margin:20px auto}.enrollment-page h1{font-size:26px}}
 
 .mysc-next.preview-reduced *, .mysc-next.preview-reduced *::before,.mysc-next.preview-reduced *::after{animation:none!important;transition:none!important}
+
+/* Give Radix's percentage-height viewport a bounded parent. */
+.governance-workflow{min-width:0;grid-template-columns:minmax(0,300px) minmax(0,1fr)}
+.governance-workflow>[data-slot=card]{min-width:0;overflow:hidden}
+.governance-user-scroll{height:min(660px,70dvh);overflow:hidden}
+.person-list-row{min-width:0;overflow-wrap:anywhere}
+.governance-workflow .connection-stage,.governance-workflow .account-summary{min-width:0;overflow-wrap:anywhere}
+@media(max-width:900px){.governance-workflow{grid-template-columns:minmax(0,1fr)}.governance-user-scroll{height:min(420px,50dvh)}}
