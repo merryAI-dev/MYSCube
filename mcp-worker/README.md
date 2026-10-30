@@ -57,3 +57,31 @@ MCP 클라이언트 ──OAuth 2.1──▶ ema-mcp.myscguard.app ──구성�
 - **일괄 등록**: 미리보기(검증·중복 판정, 쓰기 없음) → 사용자 확인 → 등록. 삭제된 기업·이관 기업과 같은 행은 건너뛰고, 기존 기업의 값은 빈 칸만 채우며, 크레딧은 기본으로 부여하지 않습니다. 같은 배치를 다시 실행해도 중복 등록되지 않습니다.
 - **배포**: `MCP Worker Deploy`의 `ema` 대상. GitHub `Production` 환경 비밀값 `EMA_MCP_FIREBASE_WEB_API_KEY`(EMA 웹 앱의 Firebase Web API 키), `EMA_MCP_CONSENT_SECRET`(32자 이상)이 필요합니다. 서버 쪽 함수와 연결 화면은 EMA_Station 저장소(`feat(registry)`)에 있습니다.
 
+
+## Tiro 회의록 자동 저장 (`tiro-autosave.myscguard.app`)
+
+사람이 MCP로 요청하지 않아도, Tiro가 회의 요약을 만들면 팀 드라이브 전사 회의록 폴더에 표준 형식(.md)으로 올리는 세 번째 Worker입니다(`wrangler.tiro.jsonc`, 진입점 `src/tiro/index.mjs`, 핵심 로직 `src/tiro/autosave.mjs`). 사람 개입이 없습니다.
+
+```
+Tiro ──웹훅(note_summary.generated)──▶ tiro-autosave Worker ◀──크론 10분── Cloudflare
+        └─ Tiro API: 노트·요약(없으면 대화록) ─▶ Claude(구조화 출력) ─▶ buildMeetingNote ─▶ Apps Script(NOTES_SAVE_URL) ─▶ 팀 드라이브
+```
+
+- **대상 노트**: `TIRO_SCOPE=workspace`(기본)에 워크스페이스 **시스템 키**를 쓰면 *워크스페이스 전체 공유 폴더에 있는 노트만* 보입니다. 개인 폴더 노트는 API가 404를 주므로 올라가지 않습니다. "공유 폴더에 두면 전사 회의록에 올라간다"가 동의 기준입니다. 조직 키(`TIRO_SCOPE=organization`)는 조직 전체가 대상이라 제목 제외 규칙(`TIRO_SKIP_PATTERN`, 기본 `비공개|private|면담|인사평가|1on1|1:1`)만 거릅니다.
+- **거르는 것**: 녹음 중, 2분 미만, 제외 제목. 요약이 아직 없으면 녹음 종료 90분까지 기다렸다가 대화록으로 정리합니다.
+- **중복 방지**: `sourceRef=tiro:<guid>`로 같은 파일을 갱신합니다. KV(`tiro:done:<guid>`)에 요약 버전을 기록해 요약이 바뀔 때만 다시 저장합니다.
+- **정리**: Claude(`ANTHROPIC_MODEL`, 기본 `claude-opus-5-5`)가 구조화 출력으로 요약·상세내용·팔로업을 채우고, 날짜(한국시간)·작성자(노트 소유자)·원본은 Tiro 메타데이터를 씁니다. 원문 속 지시문은 따르지 않습니다.
+- **상태 확인**: `GET /healthz`(비밀값은 유무만, 마지막 크론 결과 포함).
+- **배포**: `MCP Worker Deploy`의 `tiro` 대상. GitHub `Production` 환경 비밀값 `TIRO_AUTOSAVE_TIRO_API_KEY`, `TIRO_AUTOSAVE_ANTHROPIC_API_KEY`, `EMA_MCP_NOTES_SAVE_URL`(EMA와 같은 Apps Script), 선택 `TIRO_AUTOSAVE_WEBHOOK_SECRET`. 비밀값이 없으면 배포를 건너뜁니다.
+- **웹훅(선택, 즉시 반영)**: platform.tiro.ooo에서 워크스페이스 웹훅 `https://tiro-autosave.myscguard.app/tiro/webhook`을 등록하고, 발급된 secret을 `TIRO_AUTOSAVE_WEBHOOK_SECRET`에 넣습니다. 웹훅이 없어도 크론이 10분 안에 잡습니다.
+
+### 이 컴퓨터를 서버처럼 쓰기 (Cloudflare 대안)
+
+같은 코드를 로컬에서 돌립니다. `mcp-worker/.tiro-local/env`에 `TIRO_API_KEY`, `ANTHROPIC_API_KEY`, `NOTES_SAVE_URL`을 넣고:
+
+```bash
+node scripts/tiro-autosave-local.mjs --dry-run   # 드라이브에 쓰지 않고 정리 결과만 출력
+node scripts/tiro-autosave-local.mjs             # 실제 저장(처리 기록: .tiro-local/state.json)
+```
+
+10분마다 돌리려면 `scripts/tiro-autosave.plist.example`을 `~/Library/LaunchAgents/`에 두고 `launchctl bootstrap` 합니다. Mac이 잠자면 멈추므로 전사 운영은 Worker를 씁니다.

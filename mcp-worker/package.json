@@ -7,7 +7,9 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "check": "wrangler deploy --dry-run --outdir dist",
-    "check:ema": "wrangler deploy --dry-run --outdir dist-ema --config wrangler.ema.jsonc"
+    "check:ema": "wrangler deploy --dry-run --outdir dist-ema --config wrangler.ema.jsonc",
+    "check:tiro": "wrangler deploy --dry-run --outdir dist-tiro --config wrangler.tiro.jsonc",
+    "tiro:local": "node scripts/tiro-autosave-local.mjs"
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "1.2.1",
