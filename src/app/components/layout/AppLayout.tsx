@@ -1,3 +1,4 @@
+import { MotionSurface } from '../ui/motion';
 import { OnboardingGuideLink } from '../onboarding-guide/OnboardingGuideLink';
 import React, { useState, useEffect } from 'react';
 import { useObservationRetry } from '../product-operations/useObservationRetry';
@@ -135,7 +136,7 @@ function AppLayoutContent() {
         <main className="min-h-dvh">
           <PageTransition>
             <ErrorBoundary resetKey={location.pathname}>
-              <Outlet />
+              <MotionSurface changeKey={location.pathname}><Outlet /></MotionSurface>
             </ErrorBoundary>
           </PageTransition>
         </main>
@@ -460,7 +461,7 @@ function AppLayoutContent() {
             <div className="p-5 max-w-[1600px] mx-auto">
               <PageTransition>
                 <ErrorBoundary resetKey={location.pathname}>
-                  <Outlet />
+                  <MotionSurface changeKey={location.pathname}><Outlet /></MotionSurface>
                 </ErrorBoundary>
               </PageTransition>
             </div>

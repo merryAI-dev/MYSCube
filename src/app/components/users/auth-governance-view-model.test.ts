@@ -1,3 +1,4 @@
+import { selectVisibleGovernanceRow } from './auth-governance-view-model';
 import { getCurrentGovernancePermissionLabel } from './auth-governance-view-model';
 import { describe, expect, it } from 'vitest';
 import {
@@ -103,4 +104,11 @@ it('does not label a recommended PM or bootstrap admin as approved access withou
   expect(getCurrentGovernancePermissionLabel({ ...baseRow, canonicalMember: null, effectiveRole: 'pm' }, (role) => role)).toBe('직원 권한 미승인');
   expect(getCurrentGovernancePermissionLabel({ ...baseRow, canonicalMember: null, effectiveRole: 'admin', bootstrapAdmin: true }, (role) => role)).toBe('직원 권한 미승인');
   expect(getCurrentGovernancePermissionLabel({ ...baseRow, canonicalMember: { ...baseRow.canonicalMember!, role: 'pm' }, effectiveRole: 'admin' }, (role) => role)).toBe('현재 권한 pm');
+});
+
+it('never preserves an action target hidden by the current search', () => {
+ const a = {...baseRow, identityKey: 'a', email: 'a@example.com'};
+ const b = {...baseRow, identityKey: 'b', email: 'b@example.com'};
+ expect(selectVisibleGovernanceRow([b], a.identityKey)).toBe(b);
+ expect(selectVisibleGovernanceRow([], a.identityKey)).toBeNull();
 });

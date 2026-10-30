@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import content from './content.html?raw';
 import './guide.css';
+import { connectGuideMotion } from './guide-motion';
 
 export function OnboardingGuide({ embedded = false }: { embedded?: boolean }) {
   const root = useRef<HTMLDivElement>(null);
@@ -9,6 +10,10 @@ export function OnboardingGuide({ embedded = false }: { embedded?: boolean }) {
     const video = node?.querySelector<HTMLVideoElement>('video');
     const speed = node?.querySelector<HTMLSelectElement>('#speed');
     if (!node || !video || !speed) return;
+    const disconnectMotion = connectGuideMotion(node, window.matchMedia('(prefers-reduced-motion: reduce)'));
+    const fullVideo = node.querySelector<HTMLDetailsElement>('.full-video');
+    const closeVideo = () => { if (!fullVideo?.open) video.pause(); };
+    fullVideo?.addEventListener('toggle', closeVideo);
     const changeSpeed = () => { video.playbackRate = Number(speed.value); };
     const seek = (event: Event) => {
       const target = (event.target as Element).closest<HTMLButtonElement>('[data-time]');
@@ -24,6 +29,8 @@ export function OnboardingGuide({ embedded = false }: { embedded?: boolean }) {
       speed.removeEventListener('change', changeSpeed);
       node.removeEventListener('click', seek);
       video.pause();
+      disconnectMotion();
+      fullVideo?.removeEventListener('toggle', closeVideo);
     };
   }, []);
   // This is bundled, reviewed guide markup, never user or API content.

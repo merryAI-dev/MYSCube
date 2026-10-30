@@ -1,3 +1,5 @@
+import { MotionSurface, MotionDisclosure } from '../ui/motion';
+import { FeedbackState } from '../ui/feedback-state';
 import { isUncertainGovernanceError, newGovernanceOperation, operationStorageKey, readGovernanceOperation, saveGovernanceOperation, type GovernanceOperation } from './governance-operation';
 import { PeopleAccountLink, hasVerifiedPeopleLink } from './PeopleAccountLink';
 import { governanceErrorMessage } from './auth-governance-errors';
@@ -46,6 +48,7 @@ import {
   getCurrentGovernancePermissionLabel,
   emptyGovernanceSummary,
   filterGovernanceRows,
+  selectVisibleGovernanceRow,
   getFriendlyGovernanceIssueLabels,
   getGovernanceOperatorStatus,
   getRecommendedGovernanceRole,
@@ -142,6 +145,7 @@ function PermissionBadge({ allowed, label }: { allowed: boolean; label: string }
 export function UserManagementPage() {
   const { user: authUser } = useAuth();
   const { orgId } = useFirebase();
+  const [roleError, setRoleError] = useState<Record<string,string>>({});
   const [items, setItems] = useState<AuthGovernanceUserRow[]>([]);
   const [summary, setSummary] = useState<AuthGovernanceSummary>(emptyGovernanceSummary);
   const [loading, setLoading] = useState(false);
@@ -155,9 +159,9 @@ export function UserManagementPage() {
   const onLinkState = useCallback((identityKey: string, ready: boolean) => { setLinkReady((previous) => previous[identityKey] === ready ? previous : { ...previous, [identityKey]: ready }); }, []);
   const [draftRoles, setDraftRoles] = useState<Record<string, UserRole>>({});
   const [filters, setFilters] = useState<AuthGovernanceFilters>({
-    searchText: '',
+    searchText: new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search).get('search') || '',
     role: 'ALL',
-    drift: 'DRIFT_ONLY',
+    drift: new URLSearchParams(typeof window === 'undefined' ? '' : window.location.search).has('search') ? 'ALL' : 'DRIFT_ONLY',
     source: 'ALL',
   });
 
@@ -189,6 +193,7 @@ export function UserManagementPage() {
       setRolePending(pendingByIdentity);
       setRoleReadbackNeeded(readbackNeeded);
       setItems(response.items);
+      setRoleError({});
       setSummary(response.summary);
       setDraftRoles((prev) => {
         const next = { ...prev };
@@ -226,12 +231,8 @@ export function UserManagementPage() {
   );
 
   const selectedRow = useMemo(
-    () => filteredRows.find((row) => row.identityKey === selectedIdentityKey)
-      || items.find((row) => row.identityKey === selectedIdentityKey)
-      || filteredRows[0]
-      || items[0]
-      || null,
-    [filteredRows, items, selectedIdentityKey],
+    () => selectVisibleGovernanceRow(filteredRows, selectedIdentityKey),
+    [filteredRows, selectedIdentityKey],
   );
 
   useEffect(() => {
@@ -248,6 +249,7 @@ export function UserManagementPage() {
       role: draftRoles[row.identityKey] || getRecommendedGovernanceRole(row),
       reason: 'admin auth governance dashboard explicit role approval',
     });
+    setRoleError(previous=>({...previous,[row.identityKey]:''}));
     setSyncingIdentityKey(row.identityKey);
     let sent = false;
     try {
@@ -274,6 +276,7 @@ export function UserManagementPage() {
     } catch (error) {
       if (!sent || !isUncertainGovernanceError(error)) {
         if (sent) { saveGovernanceOperation(key, null); setRolePending((previous) => { const next = { ...previous }; delete next[row.identityKey]; return next; }); }
+        setRoleError(previous=>({...previous,[row.identityKey]:governanceErrorMessage(error)}));
         toast.error(governanceErrorMessage(error));
       } else {
         setRoleReadbackNeeded((previous) => ({ ...previous, [row.identityKey]: true }));
@@ -320,7 +323,7 @@ export function UserManagementPage() {
 
   if (!governanceEnabled) {
     return (
-      <div className="space-y-5">
+      <div className="governance-page space-y-5">
         <PageHeader
           icon={UserCog}
           iconGradient="linear-gradient(135deg, #44403c 0%, #0c0a09 100%)"
@@ -337,16 +340,16 @@ export function UserManagementPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="governance-page space-y-5">
       <PageHeader
         icon={UserCog}
         iconGradient="linear-gradient(135deg, #44403c 0%, #0c0a09 100%)"
         title="권한 관리"
-        description="전체 멤버의 로그인 역할, 프로젝트 접근, 조직장 지정과 재무 승인 권한을 한 화면에서 교차검증합니다."
+        description="명부의 직원과 로그인 계정을 연결하고, 승인된 역할을 반영해요."
         badge={`${summary.total}건`}
         actions={(
           <div className="flex items-center gap-2">
-            <Button
+            <Button variant="secondary"
               size="sm"
               className="h-9 gap-2 bg-stone-900 text-white hover:bg-stone-800"
               onClick={() => void handleBulkDeepSync()}
@@ -369,27 +372,6 @@ export function UserManagementPage() {
         )}
       />
 
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-        <KpiCard icon={Users} label="전체 사용자" value={summary.total} />
-        <KpiCard icon={Shield} label="지정 조직장" value={organizationHeadCount} />
-        <KpiCard icon={GitMerge} label="권한 반영 필요" value={summary.needsDeepSync} tone={summary.needsDeepSync > 0 ? 'danger' : 'default'} />
-        <KpiCard icon={KeyRound} label="로그인 계정 없음" value={summary.missingAuth} tone={summary.missingAuth > 0 ? 'danger' : 'default'} />
-        <KpiCard icon={Database} label="직원 권한 기록 없음" value={summary.missingCanonicalMember} tone={summary.missingCanonicalMember > 0 ? 'danger' : 'default'} />
-        <KpiCard icon={AlertTriangle} label="중복 기록" value={summary.duplicateMemberDocs} tone={summary.duplicateMemberDocs > 0 ? 'danger' : 'default'} />
-        <KpiCard icon={Shield} label="기본 관리자 후보" value={summary.bootstrapCandidates} />
-      </div>
-
-      <div className="rounded-xl border border-stone-200 bg-stone-950 px-5 py-4 text-white shadow-sm">
-        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="text-sm font-semibold">운영 기준</div>
-            <div className="mt-1 text-sm text-stone-300">
-              권한 반영은 로그인 권한과 직원 권한 기록을 같은 값으로 맞춥니다. 반영 후 사용자는 다시 로그인하면 새 권한으로 들어옵니다.
-            </div>
-          </div>
-          <Badge className="w-fit bg-white text-stone-950">관리자 전용</Badge>
-        </div>
-      </div>
 
       <Card className="border-stone-200">
         <CardContent className="flex flex-wrap items-center gap-2 p-3">
@@ -446,7 +428,277 @@ export function UserManagementPage() {
         </Card>
       )}
 
-      <Card className="border-stone-200" data-testid="member-permission-dashboard">
+
+      <div className="governance-workflow">
+        <Card className="border-stone-200">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-semibold text-stone-900">사용자 권한 목록</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <ScrollArea className="max-h-[660px]">
+              <div className="divide-y divide-stone-200">
+                {filteredRows.map((row) => {
+                  const role = draftRoles[row.identityKey] || getRecommendedGovernanceRole(row);
+                  const status = getGovernanceOperatorStatus(row);
+                  const issueLabels = getFriendlyGovernanceIssueLabels(row);
+                  const selected = selectedRow?.identityKey === row.identityKey;
+                  return (
+                    <div
+                      key={row.identityKey}
+                      aria-current={selected ? "true" : undefined}
+                      data-selected={selected ? "true" : "false"}
+                      className={`person-list-row cursor-pointer px-4 py-4 ${selected ? 'bg-stone-100' : 'bg-white hover:bg-stone-50'}`}
+                      tabIndex={0}
+                      onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setSelectedIdentityKey(row.identityKey); } }}
+                      onClick={() => setSelectedIdentityKey(row.identityKey)}
+                    >
+                      <div className="flex flex-col gap-4">
+                        <div className="min-w-0 space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="text-sm font-semibold text-stone-950">{row.displayName}</div>
+                            <Badge className={OPERATOR_STATUS_CLASS[status.tone]}>
+                              {status.label}
+                            </Badge>
+                            {row.bootstrapAdmin && (
+                              <Badge className="bg-stone-900 text-white">기본 관리자 후보</Badge>
+                            )}
+                          </div>
+                          <div className="text-sm text-stone-600">{row.email}</div>
+                          <div className="text-xs text-stone-500">{status.description}</div>
+                          <MotionDisclosure className="list-records"><summary>계정 기록 보기</summary><div className="flex flex-wrap items-center gap-2 text-xs">
+                            <SourceBadge ok={Boolean(row.authUid)} label={row.authUid ? '로그인 계정 있음' : '로그인 계정 없음'} />
+                            <SourceBadge ok={Boolean(row.canonicalMember)} label={row.canonicalMember ? '직원 권한 기록 있음' : '직원 권한 기록 없음'} />
+                            <Badge className="bg-stone-100 text-stone-700">예전 기록 {row.legacyMembers.length}건</Badge>
+                            <Badge className={ROLE_BADGE_CLASS[row.effectiveRole] || 'bg-stone-200 text-stone-900'}>
+                              {getCurrentGovernancePermissionLabel(row, roleLabel)}
+                            </Badge>
+                            {row.claimRole && (
+                              <Badge className="bg-stone-100 text-stone-700">로그인 권한 {roleLabel(row.claimRole)}</Badge>
+                            )}
+                          </div>
+                          </MotionDisclosure>
+                          {false && issueLabels.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {issueLabels.map((label) => (
+                                <Badge key={label} className="bg-white text-red-700 border border-stone-300">
+                                  {label}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Select
+                            value={role}
+                            disabled={!!rolePending[row.identityKey]}
+                            onValueChange={(value) => setDraftRoles((prev) => ({ ...prev, [row.identityKey]: value as UserRole }))}
+                          >
+                            <SelectTrigger
+                              className="h-9 w-[140px] border-stone-300 bg-white"
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {ROLE_OPTIONS.map((item) => (
+                                <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button
+                            size="sm"
+                            className="h-9 min-w-[140px] bg-stone-900 text-white hover:bg-stone-800"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleDeepSync(row);
+                            }}
+                            disabled={!!syncingIdentityKey || !linkReady[row.identityKey] || !!roleReadbackNeeded[row.identityKey]}
+                          >
+                            {syncingIdentityKey === row.identityKey ? (
+                              <>
+                                <RefreshCw className="mr-2 h-3.5 w-3.5 animate-spin" />
+                                반영 중
+                              </>
+                            ) : (
+                              <>
+                                <GitMerge className="mr-2 h-3.5 w-3.5" />
+                                {linkReady[row.identityKey] ? '2. 역할 승인' : '1단계 연결 확인 필요'}
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+                {!loading && filteredRows.length === 0 && (
+                  <div className="px-4 py-16 text-center text-sm text-stone-500">
+                    조건에 맞는 정렬 대상이 없습니다.
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
+          </CardContent>
+        </Card>
+
+        <Card className="border-stone-200">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-semibold text-stone-900">계정 연결과 역할 반영</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4"><MotionSurface changeKey={selectedRow?.identityKey}>
+            {!selectedRow ? (
+              <div className="text-sm text-stone-500">사용자를 선택하면 권한 상태를 보여줍니다.</div>
+            ) : (
+              <>
+
+
+                <div className="space-y-1">
+                  <div className="text-base font-semibold text-stone-950">{selectedRow.displayName}</div>
+                  <div className="text-sm text-stone-600">{selectedRow.email}</div>
+                </div>
+
+                <div className="flex flex-wrap gap-2">
+                  <Badge className={ROLE_BADGE_CLASS[selectedRow.effectiveRole] || 'bg-stone-200 text-stone-900'}>
+                    {getCurrentGovernancePermissionLabel(selectedRow, roleLabel)}
+                  </Badge>
+                  <Badge className="bg-stone-100 text-stone-700">
+                    반영할 권한 {roleLabel(draftRoles[selectedRow.identityKey] || getRecommendedGovernanceRole(selectedRow))}
+                  </Badge>
+                </div>
+
+                <Separator />
+                {authUser && <PeopleAccountLink key={`${orgId}:${authUser.uid}:${selectedRow.identityKey}`} identityKey={selectedRow.identityKey} email={selectedRow.email} actor={authUser} tenantId={orgId} onLinked={async () => { await loadGovernance(); }} onLinkState={onLinkState} />}
+
+                <Separator />
+
+                <div className="role-stage rounded-xl p-3 text-sm text-stone-700">
+                  <div className="font-medium text-stone-900">2. 연결 후, 승인된 역할 반영</div>
+                  <div className="mt-2 space-y-1">
+                    <div>역할 반영은 인력 명부에 연결된 승인 가능한 관리자가 수행합니다. 계정 연결 완료만으로 역할 승인 자격이 생기지는 않습니다.</div>
+                    <div>공용 관리자도 계정을 연결할 수 있지만, 역할 반영에는 관리자 본인의 명부 연결이 필요합니다. 조건을 충족한 역할 승인 관리자에게 이어서 요청해 주세요.</div>
+                    <div>프로젝트 접근 범위와 담당 배정은 다를 수 있어요. ‘프로젝트 접근·승인 권한 보기’에서 접근 범위를, 프로젝트에서 담당 배정을 각각 확인해 주세요.</div>
+                  </div>
+                </div>
+
+                {roleError[selectedRow.identityKey] && <FeedbackState kind="error" title="이번 역할 반영 요청을 처리하지 못했어요">{roleError[selectedRow.identityKey]}</FeedbackState>}
+                {!linkReady[selectedRow.identityKey] && <p className="text-sm text-amber-800">1단계 연결 상태가 확인돼야 역할을 반영할 수 있습니다.</p>}
+                {roleReadbackNeeded[selectedRow.identityKey] && <p role="status" className="text-sm text-amber-800">이전 역할 요청의 저장 상태를 먼저 확인해야 합니다. 목록을 다시 조회해 주세요. 서버 완료 응답과 현재 상태가 다르면 관리자에게 확인해 주세요.</p>}
+                <div className="flex items-center justify-between gap-3">
+                  <div className="text-xs text-stone-500">
+                    반영할 권한은 {roleLabel(draftRoles[selectedRow.identityKey] || getRecommendedGovernanceRole(selectedRow))} 입니다.
+                  </div>
+                  <Button
+                    className="bg-stone-900 text-white hover:bg-stone-800"
+                    onClick={() => void handleDeepSync(selectedRow)}
+                    disabled={!!syncingIdentityKey || !linkReady[selectedRow.identityKey] || !!roleReadbackNeeded[selectedRow.identityKey]}
+                  >
+                    {syncingIdentityKey === selectedRow.identityKey ? '반영 중...' : rolePending[selectedRow.identityKey] ? '같은 역할 요청 다시 확인' : '승인된 역할 반영'}
+                  </Button>
+                </div>
+                <MotionDisclosure className="rounded-xl border p-3 text-sm"><summary className="cursor-pointer font-medium">권한 기록 상세 · 문제 확인용</summary>                <div className="space-y-3">
+                  <div>
+                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
+                      <KeyRound className="h-3.5 w-3.5" />
+                      로그인 계정
+                    </div>
+                    <div className="role-stage rounded-xl p-3 text-sm text-stone-700">
+                      <div>UID: {selectedRow.authUid || '-'}</div>
+                      <div>로그인 권한: {roleLabel(selectedRow.claimRole)}</div>
+                      <div>조직: {selectedRow.claimTenantId || '-'}</div>
+                      <div>로그인 상태: {selectedRow.authUid ? (selectedRow.authDisabled ? '비활성' : '활성') : '계정 없음'}</div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
+                      <Database className="h-3.5 w-3.5" />
+                      직원 권한 기록
+                    </div>
+                    <div className="role-stage rounded-xl p-3 text-sm text-stone-700">
+                      {selectedRow.canonicalMember ? (
+                        <>
+                          <div>docId: {selectedRow.canonicalMember.docId}</div>
+                          <div>권한: {roleLabel(selectedRow.canonicalMember.role)}</div>
+                          <div>상태: {statusLabel(selectedRow.canonicalMember.status)}</div>
+                          <div>이름: {selectedRow.canonicalMember.name || '-'}</div>
+                        </>
+                      ) : (
+                        <div>직원 권한 기록이 없습니다.</div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
+                      <GitMerge className="h-3.5 w-3.5" />
+                      예전 권한 기록
+                    </div>
+                    <div className="space-y-2">
+                      {selectedRow.legacyMembers.length > 0 ? selectedRow.legacyMembers.map((member) => (
+                        <div key={member.docId} className="role-stage rounded-xl p-3 text-sm text-stone-700">
+                          <div>docId: {member.docId}</div>
+                          <div>권한: {roleLabel(member.role)}</div>
+                          <div>상태: {statusLabel(member.status)}</div>
+                          <div>이름: {member.name || '-'}</div>
+                        </div>
+                      )) : (
+                        <div className="rounded-xl border border-dashed border-stone-200 bg-white p-3 text-sm text-stone-500">
+                          예전 권한 기록은 없습니다.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      조치가 필요한 이유
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      {getFriendlyGovernanceIssueLabels(selectedRow).length > 0 ? getFriendlyGovernanceIssueLabels(selectedRow).map((label) => (
+                        <Badge key={label} className="bg-white text-red-700 border border-stone-300">
+                          {label}
+                        </Badge>
+                      )) : (
+                        <Badge className="bg-white text-stone-700 border border-stone-300">
+                          <CheckCircle2 className="mr-1 h-3 w-3" />
+                          drift 없음
+                        </Badge>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+</MotionDisclosure>
+              </>
+            )}
+          </MotionSurface></CardContent>
+        </Card>
+      </div>
+      <MotionDisclosure className="governance-summary"><summary>전체 권한 현황 <span>확인이 필요한 사용자 {summary.needsDeepSync}명</span></summary>      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-7">
+        <KpiCard icon={Users} label="전체 사용자" value={summary.total} />
+        <KpiCard icon={Shield} label="지정 조직장" value={organizationHeadCount} />
+        <KpiCard icon={GitMerge} label="권한 반영 필요" value={summary.needsDeepSync} tone={summary.needsDeepSync > 0 ? 'danger' : 'default'} />
+        <KpiCard icon={KeyRound} label="로그인 계정 없음" value={summary.missingAuth} tone={summary.missingAuth > 0 ? 'danger' : 'default'} />
+        <KpiCard icon={Database} label="직원 권한 기록 없음" value={summary.missingCanonicalMember} tone={summary.missingCanonicalMember > 0 ? 'danger' : 'default'} />
+        <KpiCard icon={AlertTriangle} label="중복 기록" value={summary.duplicateMemberDocs} tone={summary.duplicateMemberDocs > 0 ? 'danger' : 'default'} />
+        <KpiCard icon={Shield} label="기본 관리자 후보" value={summary.bootstrapCandidates} />
+      </div>
+
+      <div className="rounded-xl border border-stone-200 bg-stone-950 px-5 py-4 text-white shadow-sm">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-sm font-semibold">운영 기준</div>
+            <div className="mt-1 text-sm text-stone-300">
+              권한 반영은 로그인 권한과 직원 권한 기록을 같은 값으로 맞춥니다. 반영 후 사용자는 다시 로그인하면 새 권한으로 들어옵니다.
+            </div>
+          </div>
+          <Badge className="w-fit bg-white text-stone-950">관리자 전용</Badge>
+        </div>
+      </div>
+
+</MotionDisclosure>
+      <MotionDisclosure className="governance-summary"><summary>프로젝트 접근·승인 권한 보기</summary>      <Card className="border-stone-200" data-testid="member-permission-dashboard">
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold text-stone-900">전체 멤버 권한 대시보드</CardTitle>
           <p className="text-xs text-stone-500">
@@ -515,253 +767,7 @@ export function UserManagementPage() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(360px,0.9fr)]">
-        <Card className="border-stone-200">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold text-stone-900">사용자 권한 목록</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0">
-            <ScrollArea className="h-[720px]">
-              <div className="divide-y divide-stone-200">
-                {filteredRows.map((row) => {
-                  const role = draftRoles[row.identityKey] || getRecommendedGovernanceRole(row);
-                  const status = getGovernanceOperatorStatus(row);
-                  const issueLabels = getFriendlyGovernanceIssueLabels(row);
-                  const selected = selectedRow?.identityKey === row.identityKey;
-                  return (
-                    <div
-                      key={row.identityKey}
-                      className={`cursor-pointer px-4 py-4 ${selected ? 'bg-stone-100' : 'bg-white hover:bg-stone-50'}`}
-                      onClick={() => setSelectedIdentityKey(row.identityKey)}
-                    >
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="min-w-0 space-y-2">
-                          <div className="flex flex-wrap items-center gap-2">
-                            <div className="text-sm font-semibold text-stone-950">{row.displayName}</div>
-                            <Badge className={OPERATOR_STATUS_CLASS[status.tone]}>
-                              {status.label}
-                            </Badge>
-                            {row.bootstrapAdmin && (
-                              <Badge className="bg-stone-900 text-white">기본 관리자 후보</Badge>
-                            )}
-                          </div>
-                          <div className="text-sm text-stone-600">{row.email}</div>
-                          <div className="text-xs text-stone-500">{status.description}</div>
-                          <div className="flex flex-wrap items-center gap-2 text-xs">
-                            <SourceBadge ok={Boolean(row.authUid)} label={row.authUid ? '로그인 계정 연결됨' : '로그인 계정 없음'} />
-                            <SourceBadge ok={Boolean(row.canonicalMember)} label={row.canonicalMember ? '직원 권한 기록 있음' : '직원 권한 기록 없음'} />
-                            <Badge className="bg-stone-100 text-stone-700">예전 기록 {row.legacyMembers.length}건</Badge>
-                            <Badge className={ROLE_BADGE_CLASS[row.effectiveRole] || 'bg-stone-200 text-stone-900'}>
-                              {getCurrentGovernancePermissionLabel(row, roleLabel)}
-                            </Badge>
-                            {row.claimRole && (
-                              <Badge className="bg-stone-100 text-stone-700">로그인 권한 {roleLabel(row.claimRole)}</Badge>
-                            )}
-                          </div>
-                          {issueLabels.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5">
-                              {issueLabels.map((label) => (
-                                <Badge key={label} className="bg-white text-red-700 border border-stone-300">
-                                  {label}
-                                </Badge>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex shrink-0 flex-col items-end gap-2">
-                          <Select
-                            value={role}
-                            disabled={!!rolePending[row.identityKey]}
-                            onValueChange={(value) => setDraftRoles((prev) => ({ ...prev, [row.identityKey]: value as UserRole }))}
-                          >
-                            <SelectTrigger
-                              className="h-9 w-[140px] border-stone-300 bg-white"
-                              onClick={(event) => event.stopPropagation()}
-                            >
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {ROLE_OPTIONS.map((item) => (
-                                <SelectItem key={item.value} value={item.value}>{item.label}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          <Button
-                            size="sm"
-                            className="h-9 min-w-[140px] bg-stone-900 text-white hover:bg-stone-800"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              void handleDeepSync(row);
-                            }}
-                            disabled={!!syncingIdentityKey || !linkReady[row.identityKey] || !!roleReadbackNeeded[row.identityKey]}
-                          >
-                            {syncingIdentityKey === row.identityKey ? (
-                              <>
-                                <RefreshCw className="mr-2 h-3.5 w-3.5 animate-spin" />
-                                반영 중
-                              </>
-                            ) : (
-                              <>
-                                <GitMerge className="mr-2 h-3.5 w-3.5" />
-                                {linkReady[row.identityKey] ? '2. 역할 승인' : '1단계 연결 확인 필요'}
-                              </>
-                            )}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-                {!loading && filteredRows.length === 0 && (
-                  <div className="px-4 py-16 text-center text-sm text-stone-500">
-                    조건에 맞는 정렬 대상이 없습니다.
-                  </div>
-                )}
-              </div>
-            </ScrollArea>
-          </CardContent>
-        </Card>
-
-        <Card className="border-stone-200">
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-semibold text-stone-900">선택한 사용자</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {!selectedRow ? (
-              <div className="text-sm text-stone-500">사용자를 선택하면 권한 상태를 보여줍니다.</div>
-            ) : (
-              <>
-                {(() => {
-                  const status = getGovernanceOperatorStatus(selectedRow);
-                  return (
-                    <div className={`rounded-xl px-4 py-3 text-sm ${OPERATOR_STATUS_CLASS[status.tone]}`}>
-                      <div className="font-semibold">{status.label}</div>
-                      <div className="mt-1">{status.description}</div>
-                    </div>
-                  );
-                })()}
-
-                <div className="space-y-1">
-                  <div className="text-base font-semibold text-stone-950">{selectedRow.displayName}</div>
-                  <div className="text-sm text-stone-600">{selectedRow.email}</div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <Badge className={ROLE_BADGE_CLASS[selectedRow.effectiveRole] || 'bg-stone-200 text-stone-900'}>
-                    {getCurrentGovernancePermissionLabel(selectedRow, roleLabel)}
-                  </Badge>
-                  <Badge className="bg-stone-100 text-stone-700">
-                    반영할 권한 {roleLabel(draftRoles[selectedRow.identityKey] || getRecommendedGovernanceRole(selectedRow))}
-                  </Badge>
-                </div>
-
-                <Separator />
-                {authUser && <PeopleAccountLink key={`${orgId}:${authUser.uid}:${selectedRow.identityKey}`} identityKey={selectedRow.identityKey} email={selectedRow.email} actor={authUser} tenantId={orgId} onLinked={async () => { await loadGovernance(); }} onLinkState={onLinkState} />}
-
-                <div className="space-y-3">
-                  <div>
-                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
-                      <KeyRound className="h-3.5 w-3.5" />
-                      로그인 계정
-                    </div>
-                    <div className="rounded-xl border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
-                      <div>UID: {selectedRow.authUid || '-'}</div>
-                      <div>로그인 권한: {roleLabel(selectedRow.claimRole)}</div>
-                      <div>조직: {selectedRow.claimTenantId || '-'}</div>
-                      <div>로그인 상태: {selectedRow.authUid ? (selectedRow.authDisabled ? '비활성' : '활성') : '계정 없음'}</div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
-                      <Database className="h-3.5 w-3.5" />
-                      직원 권한 기록
-                    </div>
-                    <div className="rounded-xl border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
-                      {selectedRow.canonicalMember ? (
-                        <>
-                          <div>docId: {selectedRow.canonicalMember.docId}</div>
-                          <div>권한: {roleLabel(selectedRow.canonicalMember.role)}</div>
-                          <div>상태: {statusLabel(selectedRow.canonicalMember.status)}</div>
-                          <div>이름: {selectedRow.canonicalMember.name || '-'}</div>
-                        </>
-                      ) : (
-                        <div>직원 권한 기록이 없습니다.</div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
-                      <GitMerge className="h-3.5 w-3.5" />
-                      예전 권한 기록
-                    </div>
-                    <div className="space-y-2">
-                      {selectedRow.legacyMembers.length > 0 ? selectedRow.legacyMembers.map((member) => (
-                        <div key={member.docId} className="rounded-xl border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
-                          <div>docId: {member.docId}</div>
-                          <div>권한: {roleLabel(member.role)}</div>
-                          <div>상태: {statusLabel(member.status)}</div>
-                          <div>이름: {member.name || '-'}</div>
-                        </div>
-                      )) : (
-                        <div className="rounded-xl border border-dashed border-stone-200 bg-white p-3 text-sm text-stone-500">
-                          예전 권한 기록은 없습니다.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-1 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-stone-500">
-                      <AlertTriangle className="h-3.5 w-3.5" />
-                      조치가 필요한 이유
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {getFriendlyGovernanceIssueLabels(selectedRow).length > 0 ? getFriendlyGovernanceIssueLabels(selectedRow).map((label) => (
-                        <Badge key={label} className="bg-white text-red-700 border border-stone-300">
-                          {label}
-                        </Badge>
-                      )) : (
-                        <Badge className="bg-white text-stone-700 border border-stone-300">
-                          <CheckCircle2 className="mr-1 h-3 w-3" />
-                          drift 없음
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-                </div>
-
-                <Separator />
-
-                <div className="rounded-xl border border-stone-200 bg-stone-50 p-3 text-sm text-stone-700">
-                  <div className="font-medium text-stone-900">2. 승인된 역할 반영</div>
-                  <div className="mt-2 space-y-1">
-                    <div>역할 반영은 인력 명부에 연결된 승인 가능한 관리자가 수행합니다. 계정 연결 완료만으로 역할 승인 자격이 생기지는 않습니다.</div>
-                    <div>계정 연결 담당자와 역할 승인 담당자는 다를 수 있습니다. 권한 확인 오류가 나면 역할 승인 관리자에게 인계해 주세요.</div>
-                    <div>반영 후 직원 권한과 로그인 권한 동기화 상태를 확인합니다.</div>
-                  </div>
-                </div>
-
-                {!linkReady[selectedRow.identityKey] && <p className="text-sm text-amber-800">1단계 연결 상태가 확인돼야 역할을 반영할 수 있습니다.</p>}
-                {roleReadbackNeeded[selectedRow.identityKey] && <p role="status" className="text-sm text-amber-800">이전 역할 요청의 저장 상태를 먼저 확인해야 합니다. 목록을 다시 조회해 주세요. 서버 완료 응답과 현재 상태가 다르면 관리자에게 확인해 주세요.</p>}
-                <div className="flex items-center justify-between gap-3">
-                  <div className="text-xs text-stone-500">
-                    반영할 권한은 {roleLabel(draftRoles[selectedRow.identityKey] || getRecommendedGovernanceRole(selectedRow))} 입니다.
-                  </div>
-                  <Button
-                    className="bg-stone-900 text-white hover:bg-stone-800"
-                    onClick={() => void handleDeepSync(selectedRow)}
-                    disabled={!!syncingIdentityKey || !linkReady[selectedRow.identityKey] || !!roleReadbackNeeded[selectedRow.identityKey]}
-                  >
-                    {syncingIdentityKey === selectedRow.identityKey ? '반영 중...' : rolePending[selectedRow.identityKey] ? '같은 역할 요청 다시 확인' : '승인된 역할 반영'}
-                  </Button>
-                </div>
-              </>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+</MotionDisclosure>
     </div>
   );
 }

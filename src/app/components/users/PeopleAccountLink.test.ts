@@ -26,7 +26,7 @@ async function selectPerson() {
 it('automatically reads candidates but never auto-selects even a unique matching email', async () => {
   expect(mocks.fetch).toHaveBeenCalledOnce();
   expect(root.root.findByType('select').props.value).toBe(''); expect(buttons()[1].props.disabled).toBe(true);
-  expect(JSON.stringify(root.toJSON())).toContain('명부에 이메일을 입력하는 것만으로 계정이 연결되지는 않습니다');
+  expect(JSON.stringify(root.toJSON())).toContain('이메일과 직원 정보를 대조해 주세요. 계정을 연결한 다음 역할을 승인할 수 있어요.');
   act(() => root.root.findByType('select').props.onChange({ target: { value: 'person-a' } })); expect(buttons()[1].props.disabled).toBe(true);
   expect(mocks.link).not.toHaveBeenCalled();
 });
@@ -43,7 +43,8 @@ it('links selected identity/version with a stable key, then verifies state witho
   expect(mocks.link.mock.calls[0][0]).not.toHaveProperty('role'); expect(mocks.fetch).toHaveBeenCalledTimes(2); expect(refreshed).toHaveBeenCalledOnce();
   expect(readiness).toHaveBeenLastCalledWith(directory.identityKey,true);
   expect(JSON.stringify(root.toJSON())).toContain('2단계에서 승인된 역할');
-  expect(buttons()[1].props.disabled).toBe(true);
+  expect(root.root.findAllByType('select')).toHaveLength(0);
+  expect(buttons()).toHaveLength(1);
 });
 it('preserves selected person and evidence for a definite conflict', async () => {
   mocks.link.mockRejectedValue({ status:409, code: 'people_uid_conflict' }); await selectPerson(); await act(async () => { await buttons()[1].props.onClick(); });

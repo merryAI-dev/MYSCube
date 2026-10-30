@@ -81,7 +81,7 @@ export function getGovernanceOperatorStatus(row: AuthGovernanceUserRow): Governa
     return {
       tone: 'warning',
       label: '직원 권한 미승인',
-      description: '인력 명부에서 본인 계정 연결을 확인한 뒤 승인된 역할을 반영해 주세요.',
+      description: '아래에서 명부와 로그인 계정을 연결한 뒤 승인된 역할을 반영해 주세요.',
     };
   }
 
@@ -113,4 +113,8 @@ export function emptyGovernanceSummary(): AuthGovernanceSummary {
 
 export function getCurrentGovernancePermissionLabel(row: AuthGovernanceUserRow, formatRole: (role: string) => string): string {
   return row.canonicalMember?.role ? `현재 권한 ${formatRole(row.canonicalMember.role)}` : '직원 권한 미승인';
+}
+
+export function selectVisibleGovernanceRow(rows: AuthGovernanceUserRow[], selectedIdentityKey: string) {
+  return rows.find(row => row.identityKey === selectedIdentityKey) || rows[0] || null;
 }

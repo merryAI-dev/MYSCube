@@ -1,0 +1,3 @@
+/* MYSCube proposal. Measured reference values and own adaptations are documented in REPORT.md. */
+:root:not(.dark) { --background:#f7f8fa;--foreground:#191f28;--card:#fff;--card-foreground:#191f28;--primary:#3182f6;--primary-foreground:#fff;--secondary:#eef4ff;--secondary-foreground:#1b64da;--muted:#f2f4f6;--muted-foreground:#6b7684;--accent:#f2f4f6;--accent-foreground:#333d4b;--border:#e8ebed;--input:#e8ebed;--input-background:#f2f4f6;--ring:#3182f6;--radius:1rem;--destructive:#d84545;
+--next-type-page:30px;--next-type-section:22px;--next-type-body:15px;--next-type-caption:13px;--next-space-unit:4px;--next-radius-field:12px;--next-radius-panel:20px;--next-control-height:48px; }
