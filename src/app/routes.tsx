@@ -36,6 +36,7 @@ function lazyRoute<TModule extends Record<string, unknown>>(
 }
 
 // Lazy-loaded pages — each becomes a separate chunk
+const OnboardingGuidePage = lazyRoute(() => import('./components/onboarding-guide/OnboardingGuidePage'), 'OnboardingGuidePage');
 const LoginPage = lazyRoute(() => import('./components/auth/LoginPage'), 'LoginPage');
 const McpAuthorizePage = lazyRoute(() => import('./components/auth/McpAuthorizePage'), 'McpAuthorizePage');
 const WorkspaceSelectPage = lazyRoute(() => import('./components/auth/WorkspaceSelectPage'), 'WorkspaceSelectPage');
@@ -115,6 +116,7 @@ export const router = createBrowserRouter([
   // ── Login ──
   { path: '/login', element: <S C={LoginPage} /> },
   { path: '/mcp/authorize', element: <S C={McpAuthorizePage} /> },
+  { path: '/guides/onboarding', element: <S C={OnboardingGuidePage} /> },
   { path: '/workspace-select', element: <S C={WorkspaceSelectPage} /> },
   { path: '/install', element: <S C={PwaInstallPage} /> },
   { path: '/install/ios', element: <S C={PwaInstallPage} /> },

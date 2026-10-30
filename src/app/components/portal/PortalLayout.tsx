@@ -1,3 +1,4 @@
+import { OnboardingGuideLink } from '../onboarding-guide/OnboardingGuideLink';
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
 import { useObservationRetry } from '../product-operations/useObservationRetry';
@@ -843,6 +844,7 @@ function PortalContent() {
                 </button>
               </div>
               <div className="ml-auto flex items-center gap-1.5">
+<OnboardingGuideLink />
                 {isAdminSpaceRole(authUser?.role) && (
                   <Button
                     variant="outline"

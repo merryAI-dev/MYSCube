@@ -1,3 +1,4 @@
+import { OnboardingGuideLink } from '../onboarding-guide/OnboardingGuideLink';
 import React, { useState, useEffect } from 'react';
 import { useObservationRetry } from '../product-operations/useObservationRetry';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router';
@@ -360,6 +361,7 @@ function AppLayoutContent() {
             </div>
 
             <div className="flex items-center gap-1.5">
+<OnboardingGuideLink />
               {/* Data source pill */}
               {dataSource === 'firestore' ? (
                 <div className="flex items-center gap-1.5 text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200/60 dark:border-emerald-800/40 rounded-full px-2 py-0.5">
