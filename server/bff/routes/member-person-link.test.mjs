@@ -4,7 +4,8 @@ import request from 'supertest';
 import { mountMemberPersonLinkRoutes, personLinkVersion } from './member-person-link.mjs';
 import { createIdempotencyService } from '../idempotency.mjs';
 
-function harness({ authPatch = {}, patch = {}, contextPatch = {}, failAudit = false, allowedEmailDomains = ['example.com'] } = {}) {
+function harness({ retryTransaction = false, authSequence = null, oldAuth = null, oldAuthError = null, authPatch = {}, patch = {}, contextPatch = {}, failAudit = false, allowedEmailDomains = ['example.com'] } = {}) {
+  let authReads = 0;
   const store = new Map(Object.entries({
     'orgs/t/members/a': { uid: 'a', role: 'admin', status: 'ACTIVE', email: 'admin@example.com', tenantId: 't' },
     'orgs/t/persons/admin': { uid: 'a' },
@@ -15,6 +16,7 @@ function harness({ authPatch = {}, patch = {}, contextPatch = {}, failAudit = fa
     doc: (path) => ({ path, get: async () => ({ exists: store.has(path), data: () => store.get(path) }) }),
     collection: (path) => ({ get: async () => ({ docs: [...store].filter(([key]) => key.startsWith(path + '/') && !key.slice(path.length + 1).includes('/')).map(([key, data]) => ({ id: key.split('/').at(-1), data: () => data })) }) }),
     async runTransaction(fn) {
+      if (retryTransaction) await fn({ get: (ref) => ref.get(), set: () => {} });
       const pending = [];
       const result = await fn({ get: (ref) => ref.get(), set: (ref, value, options) => pending.push(() => store.set(ref.path, options?.merge ? { ...store.get(ref.path), ...value } : value)) });
       pending.forEach((write) => write());
@@ -26,7 +28,7 @@ function harness({ authPatch = {}, patch = {}, contextPatch = {}, failAudit = fa
   mountMemberPersonLinkRoutes(app, {
     db, allowedEmailDomains, now: () => '2026-10-29T00:00:00Z', idempotencyService: createIdempotencyService(db), piiProtector: { encryptText: async () => ({ ciphertext: 'synthetic-encrypted-email' }) },
     auditChainService: { async appendManyInTransaction(tx, entries) { if (failAudit) throw new Error('synthetic failure'); tx.set(db.doc('audit/test'), entries[0]); } },
-    authAdminService: { async getUserByEmail() { return { uid: 'u', email: 'staff@example.com', emailVerified: true, disabled: false, providerData: [{ providerId: 'google.com', email: 'staff@example.com' }], ...authPatch }; } },
+    authAdminService: { async getUser() { if (oldAuthError) throw oldAuthError; if (typeof oldAuth === 'function') return oldAuth(); if (oldAuth) return oldAuth; throw Object.assign(new Error('absent'), { code: 'auth/user-not-found' }); }, async getUserByEmail() { return { uid: 'u', email: 'staff@example.com', emailVerified: true, disabled: false, providerData: [{ providerId: 'google.com', email: 'staff@example.com' }], ...authPatch, ...(authSequence?.[authReads++] || {}) }; } },
   });
   app.use((error, _req, res, _next) => res.status(error.statusCode || 500).json({ error: error.code || 'internal_error' }));
   const body = (id = 'p') => ({ personId: id, expectedAuthUid: 'u', expectedPersonVersion: personLinkVersion(store.get(`orgs/t/persons/${id}`) || {}), reason: 'Synthetic identity verification by admin' });
@@ -149,5 +151,68 @@ describe('admin verified person linking', () => {
     const h = harness({ allowedEmailDomains: ['mysc.co.kr'] });
     expect((await h.post()).body.error).toBe('email_domain_not_allowed');
     expect(h.store.get('orgs/t/persons/p').uid).toBe(null);
+  });
+});
+
+const legacyPatch = {
+  'orgs/t/persons/p': { name: 'Synthetic Staff', email: 'staff@example.com', uid: 'staff_example_com', tenantId: 't' },
+  'orgs/t/members/staff_example_com': { email: 'staff@example.com', uid: 'staff_example_com', role: 'pm', tenantId: 't' },
+};
+const migrationBody = (h) => ({ ...h.body(), legacyMigration: { expectedLegacyUid: 'staff_example_com', confirmed: true } });
+describe('explicit legacy UID migration', () => {
+  it('migrates only People and audits before/after, preserves legacy role and replays', async () => {
+    const h = harness({ patch: legacyPatch }); const body = migrationBody(h); const legacy = h.store.get('orgs/t/members/staff_example_com');
+    const directory = await request(h.app).get('/api/v1/admin/auth-governance/people-link-candidates?identityKey=staff@example.com');
+    expect(directory.body.people.find(p => p.personId === 'p').legacyMigrationEligible).toBe(true);
+    const response = await h.post(body); expect(response.status).toBe(200);
+    expect(h.store.get('orgs/t/persons/p').uid).toBe('u');
+    expect(h.store.get('orgs/t/members/staff_example_com')).toEqual(legacy); expect(h.store.has('orgs/t/members/u')).toBe(false);
+    expect(h.store.get('audit/test')).toMatchObject({ action: 'IDENTITY_LINK_MIGRATION', metadata: { previousUid: 'staff_example_com', nextUid: 'u', migration: true } });
+    const audit = h.store.get('audit/test'); expect((await h.post(body)).headers['x-idempotency-replayed']).toBe('1'); expect(h.store.get('audit/test')).toBe(audit);
+  });
+  it.each([{ uid: 'staff_example_com' }, { uid: 'staff_example_com', disabled: true }])('rejects any existing old Auth', async oldAuth => {
+    const h = harness({ patch: legacyPatch, oldAuth }); const before = [...h.store];
+    expect((await h.post(migrationBody(h))).body.error).toBe('legacy_auth_exists'); expect([...h.store]).toEqual(before);
+  });
+  it('fails closed on old Auth lookup error and rolls back audit failures', async () => {
+    for (const options of [{ oldAuthError: new Error('lookup unavailable') }, { failAudit: true }]) {
+      const h = harness({ patch: legacyPatch, ...options }); const before = [...h.store];
+      expect((await h.post(migrationBody(h))).status).toBe(500); expect([...h.store]).toEqual(before);
+    }
+  });
+  it('requires explicit true migration confirmation; normal link still refuses overwrite', async () => {
+    const h = harness({ patch: legacyPatch });
+    expect((await h.post()).body.error).toBe('people_uid_conflict');
+    expect((await h.post({ ...h.body(), legacyMigration: { expectedLegacyUid: 'staff_example_com', confirmed: false } })).status).toBe(400);
+  });
+  it.each([
+    [{ 'orgs/t/persons/p': { email: 'staff@example.com', uid: 'arbitrary-real-uid' } }, 'legacy_identity_changed'],
+    [{ 'orgs/t/persons/p': { email: '', uid: 'staff_example_com' } }, 'legacy_identity_changed'],
+    [{ 'orgs/t/persons/duplicate': { uid: 'staff_example_com' } }, 'people_uid_ambiguous'],
+    [{ 'orgs/t/persons/duplicate': { uid: 'u' } }, 'people_uid_ambiguous'],
+    [{ 'orgs/t/persons/duplicate': { email: 'STAFF@example.com' } }, 'people_email_ambiguous'],
+    [{ 'orgs/t/members/staff_example_com': null }, 'legacy_identity_changed'],
+  ])('rejects conflicting migration %j', async (patch, code) => {
+    const h = harness({ patch: { ...legacyPatch, ...patch } }); const before = [...h.store];
+    expect((await h.post(migrationBody(h))).body.error).toBe(code); expect([...h.store]).toEqual(before);
+  });
+  it('rejects stale version and revoked actor without writes', async () => {
+    const h = harness({ patch: legacyPatch }); const body = migrationBody(h);
+    h.store.set('orgs/t/persons/p', { ...h.store.get('orgs/t/persons/p'), updatedAt: 'changed' });
+    expect((await h.post(body)).body.error).toBe('people_identity_changed');
+    h.store.set('orgs/t/members/a', { ...h.store.get('orgs/t/members/a'), status: 'INACTIVE' });
+    expect((await h.post(migrationBody(h))).status).toBe(403); expect(h.store.has('audit/test')).toBe(false);
+  });
+});
+
+describe('migration Auth revalidation', () => {
+  it.each([{ uid: 'recreated' }, { disabled: true }, { emailVerified: false }, { providerData: [] }, { customClaims: { tenantId: 'elsewhere' } }])('rejects target change before commit %j', async changed => {
+    const h = harness({ patch: legacyPatch, authSequence: [{}, changed] }); const before = [...h.store];
+    expect((await h.post(migrationBody(h))).body.error).toBe('auth_identity_changed'); expect([...h.store]).toEqual(before);
+  });
+  it('checks old Auth again on a transaction retry and commits nothing if it appeared', async () => {
+    let reads = 0;
+    const h = harness({ patch: legacyPatch, retryTransaction: true, oldAuth: () => { if (++reads === 1) throw Object.assign(new Error('absent'), { code: 'auth/user-not-found' }); return { uid: 'staff_example_com' }; } });
+    const before = [...h.store]; expect((await h.post(migrationBody(h))).body.error).toBe('legacy_auth_exists'); expect(reads).toBe(2); expect([...h.store]).toEqual(before);
   });
 });

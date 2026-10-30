@@ -4704,7 +4704,7 @@ export interface PeopleLinkCandidates {
   authVerified: boolean;
   authIssue: string | null;
   linkedPersonId: string | null;
-  people: Array<{ personId: string; name: string; nickname: string; email: string; linkedUid: string | null; expectedPersonVersion: string }>;
+  people: Array<{ personId: string; name: string; nickname: string; email: string; linkedUid: string | null; legacyMigrationEligible?: boolean; expectedPersonVersion: string }>;
   emailMatchPersonIds: string[];
 }
 
@@ -4716,11 +4716,11 @@ export async function fetchPeopleLinkCandidatesViaBff(params: { tenantId: string
   return response.data;
 }
 
-export async function linkGovernancePersonViaBff(params: { tenantId: string; actor: ActorLike; identityKey: string; personId: string; expectedAuthUid: string; expectedPersonVersion: string; reason: string; idempotencyKey: string; client?: PlatformApiClientLike }) {
+export async function linkGovernancePersonViaBff(params: { tenantId: string; actor: ActorLike; identityKey: string; personId: string; expectedAuthUid: string; expectedPersonVersion: string; reason: string; legacyMigration?: { expectedLegacyUid: string; confirmed: true }; idempotencyKey: string; client?: PlatformApiClientLike }) {
   const response = await resolveClient(params.client).post<{ identityKey: string; personId: string; uid: string; status: 'LINKED'; alreadyLinked: boolean; permissionSyncRequired: true }>(
     `/api/v1/admin/auth-governance/users/${encodeURIComponent(params.identityKey)}/link-person`,
     { tenantId: params.tenantId, actor: toRequestActor(params.actor), timeoutMs: 10000, idempotencyKey: params.idempotencyKey, retries: 0,
-      body: { personId: params.personId, expectedAuthUid: params.expectedAuthUid, expectedPersonVersion: params.expectedPersonVersion, reason: params.reason } },
+      body: { personId: params.personId, expectedAuthUid: params.expectedAuthUid, expectedPersonVersion: params.expectedPersonVersion, reason: params.reason, ...(params.legacyMigration ? { legacyMigration: params.legacyMigration } : {}) } },
   );
   return response.data;
 }

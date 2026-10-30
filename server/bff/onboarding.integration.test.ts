@@ -30,6 +30,7 @@ emulatorSuite('approved onboarding identity link (Firestore transactions)', () =
         return { uid: adminUid, email: adminEmail, tenantId, email_verified: true };
       },
       authAdminService: {
+        getUser: async () => { throw Object.assign(new Error('absent'), { code: 'auth/user-not-found' }); },
         getUserByEmail: async () => authUser,
         listUsers: async () => ({ users: [authUser] }),
         setCustomUserClaims,
@@ -234,4 +235,22 @@ emulatorSuite('approved onboarding identity link (Firestore transactions)', () =
     expect((await post(body, 'audit-failure')).status).toBe(200);
     expect((await personRef().get()).data()?.uid).toBe(targetUid);
   });
+  it('atomically migrates a synthetic legacy link once under competing requests without granting roles', async () => {
+    const oldUid = targetEmail.replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    await personRef().update({ email: targetEmail, uid: oldUid });
+    const legacyRef = db.doc(`orgs/${tenantId}/members/${oldUid}`);
+    const legacy = { uid: oldUid, email: targetEmail, role: 'pm', tenantId };
+    await legacyRef.set(legacy);
+    const body = { ...await candidate(), legacyMigration: { expectedLegacyUid: oldUid, confirmed: true } };
+    const responses = await Promise.all([post(body, 'migration-a'), post(body, 'migration-b')]);
+    expect(responses.map(r => r.status).sort()).toEqual([200, 409]);
+    expect((await personRef().get()).data()?.uid).toBe(targetUid);
+    expect((await legacyRef.get()).data()).toEqual(legacy);
+    expect((await db.doc(`orgs/${tenantId}/members/${targetUid}`).get()).exists).toBe(false);
+    const audit = await db.collection(`orgs/${tenantId}/audit_logs`).get();
+    expect(audit.size).toBe(1);
+    expect(audit.docs[0].data()).toMatchObject({ action: 'IDENTITY_LINK_MIGRATION' });
+    expect(setCustomUserClaims).not.toHaveBeenCalled();
+  });
+
 });

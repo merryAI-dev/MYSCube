@@ -119,6 +119,9 @@ export function createFirebaseAuthAdminService(options = {}) {
     async listUsers(maxResults = 1000, pageToken) {
       return auth.listUsers(maxResults, pageToken);
     },
+    async getUser(uid) {
+      return auth.getUser(uid);
+    },
     async getUserByEmail(email) {
       return auth.getUserByEmail(email);
     },

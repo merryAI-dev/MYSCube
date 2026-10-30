@@ -6,7 +6,7 @@ import { fetchPeopleLinkCandidatesViaBff, linkGovernancePersonViaBff, type Actor
 import { governanceErrorMessage } from './auth-governance-errors';
 import { isUncertainGovernanceError, newGovernanceOperation, operationStorageKey, readGovernanceOperation, saveGovernanceOperation, type GovernanceOperation } from './governance-operation';
 
-type LinkBody = { personId: string; expectedAuthUid: string; expectedPersonVersion: string; reason: string };
+type LinkBody = { personId: string; expectedAuthUid: string; expectedPersonVersion: string; reason: string; legacyMigration?: { expectedLegacyUid: string; confirmed: true } };
 export function hasVerifiedPeopleLink(directory: PeopleLinkCandidates) {
   return directory.authVerified && !!directory.authUid && !!directory.linkedPersonId
     && directory.people.filter((person) => person.linkedUid === directory.authUid).length === 1
@@ -21,6 +21,7 @@ export function PeopleAccountLink({ identityKey, email, actor, tenantId, onLinke
   const [personId, setPersonId] = useState('');
   const [reason, setReason] = useState('');
   const [confirmed, setConfirmed] = useState(false);
+  const [migrationConfirmed, setMigrationConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessageText] = useState('');
   const [messageTone, setMessageTone] = useState<'success' | 'error'>('error');
@@ -46,7 +47,7 @@ export function PeopleAccountLink({ identityKey, email, actor, tenantId, onLinke
     callbacks.current.onLinkState?.(identityKey, hasVerifiedPeopleLink(next));
     if (operation) {
       if (hasVerifiedPeopleLink(next) && next.linkedPersonId === operation.body.personId && next.authUid === operation.body.expectedAuthUid) {
-        persist(null); setConfirmed(false);
+        persist(null); setConfirmed(false); setMigrationConfirmed(false);
         setMessage('직원과 로그인 계정의 연결을 확인했습니다. 2단계에서 승인된 역할을 반영해 주세요.', 'success');
         await callbacks.current.onLinked();
       } else if (operation.acknowledged) {
@@ -61,7 +62,7 @@ export function PeopleAccountLink({ identityKey, email, actor, tenantId, onLinke
   };
   const load = async (operation = pending) => {
     const currentGeneration = generation.current;
-    setBusy(true); setMessage(''); setConfirmed(false);
+    setBusy(true); setMessage(''); setConfirmed(false); setMigrationConfirmed(false);
     try { await refresh(operation); }
     catch (error) { if (mounted.current && currentGeneration === generation.current) setMessage(operation ? '연결 요청 결과가 아직 확인되지 않았습니다. 상태 조회를 다시 시도해 주세요. 새 연결 요청은 보내지 않습니다.' : governanceErrorMessage(error)); }
     finally { if (mounted.current && currentGeneration === generation.current) setBusy(false); }
@@ -69,7 +70,7 @@ export function PeopleAccountLink({ identityKey, email, actor, tenantId, onLinke
   useEffect(() => {
     mounted.current = true;
     generation.current += 1;
-    setDirectory(null); setPersonId(''); setReason(''); setConfirmed(false);
+    setDirectory(null); setPersonId(''); setReason(''); setConfirmed(false); setMigrationConfirmed(false);
     const operation = readGovernanceOperation<LinkBody>(key);
     setPending(operation);
     void load(operation);
@@ -77,9 +78,9 @@ export function PeopleAccountLink({ identityKey, email, actor, tenantId, onLinke
   }, [identityKey, tenantId, actor.uid, actor.idToken]);
   const link = async () => {
     if (busy || (pending && !retryReady)) return;
-    if (!pending && (!selected || !confirmed || !reason.trim() || !directory?.authVerified || !directory.authUid)) return;
+    if (!pending && (!selected || !confirmed || !reason.trim() || !directory?.authVerified || !directory.authUid || (selected.legacyMigrationEligible && !migrationConfirmed))) return;
     const currentGeneration = generation.current;
-    const operation = pending || newGovernanceOperation(actor.uid, { personId, expectedAuthUid: directory!.authUid!, expectedPersonVersion: selected!.expectedPersonVersion, reason: reason.trim() });
+    const operation = pending || newGovernanceOperation(actor.uid, { personId, expectedAuthUid: directory!.authUid!, expectedPersonVersion: selected!.expectedPersonVersion, reason: reason.trim(), ...(selected!.legacyMigrationEligible ? { legacyMigration: { expectedLegacyUid: selected!.linkedUid!, confirmed: true as const } } : {}) });
     persist(operation); setBusy(true); setMessage(''); setRetryReady(false);
     callbacks.current.onLinkState?.(identityKey, false);
     let acknowledged = operation;
@@ -92,7 +93,10 @@ export function PeopleAccountLink({ identityKey, email, actor, tenantId, onLinke
     } catch (error) {
       if (!mounted.current || currentGeneration !== generation.current) return;
       if (!isUncertainGovernanceError(error)) {
-        persist(null); setMessage(governanceErrorMessage(error)); setBusy(false); return;
+        persist(null);
+        try { await refresh(null); } catch { /* Keep the definite error; refresh never retries the write. */ }
+        if (mounted.current && currentGeneration === generation.current) { setConfirmed(false); setMigrationConfirmed(false); setMessage(governanceErrorMessage(error)); setBusy(false); }
+        return;
       }
     }
     try { await refresh(acknowledged); }
@@ -116,18 +120,19 @@ export function PeopleAccountLink({ identityKey, email, actor, tenantId, onLinke
       {directory.emailMatchPersonIds.length > 1 && <FeedbackState kind="error" title="같은 이메일의 직원 기록이 여러 건이에요">명부의 중복 기록을 확인해 주세요. 이름만 보고 선택하지 마세요.</FeedbackState>}
       {!hasVerifiedPeopleLink(directory) && <>
       <label className="field-label">연결할 직원
-        <select aria-label="연결할 직원" className="person-select" value={personId} disabled={busy || !!pending || !directory.authVerified || hasVerifiedPeopleLink(directory)} onChange={(event) => { setPersonId(event.target.value); setConfirmed(false); }}>
+        <select aria-label="연결할 직원" className="person-select" value={personId} disabled={busy || !!pending || !directory.authVerified || hasVerifiedPeopleLink(directory)} onChange={(event) => { setPersonId(event.target.value); setConfirmed(false); setMigrationConfirmed(false); }}>
           <option value="">본인 확인 후 직접 선택해 주세요</option>
-          {prioritizePeople(directory).map((person) => <option key={person.personId} value={person.personId} disabled={!!person.linkedUid && person.linkedUid !== directory.authUid}>{directory.emailMatchPersonIds.includes(person.personId) ? '[이메일 일치] ' : ''}{person.name} {person.nickname ? `(${person.nickname})` : ''} · {person.email || '명부 이메일 없음'}{person.linkedUid ? ' · 연결됨' : ''}</option>)}
+          {prioritizePeople(directory).map((person) => <option key={person.personId} value={person.personId} disabled={!!person.linkedUid && person.linkedUid !== directory.authUid && !person.legacyMigrationEligible}>{directory.emailMatchPersonIds.includes(person.personId) ? '[이메일 일치] ' : ''}{person.name} {person.nickname ? `(${person.nickname})` : ''} · {person.email || '명부 이메일 없음'}{person.legacyMigrationEligible ? ' · 예전 연결 이전 필요' : person.linkedUid ? ' · 연결됨' : ''}</option>)}
         </select>
       </label>
       {selected && <div className="selected-person"><p>선택한 직원: {selected.name} {selected.nickname && `(${selected.nickname})`}</p><p>명부 이메일: {selected.email || '없음 — 본인 확인 근거가 필요합니다'}</p><p className="break-all">연결된 UID: {selected.linkedUid || '없음'}</p><p>이름이나 이메일 일치만으로 본인 여부를 확정하지 않습니다.</p></div>}
+      {selected?.legacyMigrationEligible && <div className="rounded-2xl bg-blue-50 p-4 text-sm"><strong>예전 연결을 현재 Google 계정으로 이전해요</strong><p>예전 식별자에는 로그인 계정이 없습니다. 기존 명부와 이력은 보존하고 계정 연결만 변경합니다. 역할은 별도로 승인해야 합니다.</p><label className="flex gap-3 mt-3"><input type="checkbox" checked={migrationConfirmed} disabled={busy || !!pending} onChange={(event) => setMigrationConfirmed(event.target.checked)} />선택한 직원의 예전 연결을 위 Google 계정으로 이전하는 데 동의합니다.</label></div>}
       <label className="field-label">본인 확인 근거
         <span className="block mt-1 text-xs text-slate-500">누가 어떤 확인을 거쳐 연결했는지 감사 기록에 남깁니다.</span>
-        <Input className="mt-2" aria-label="본인 확인 근거" value={reason} maxLength={500} disabled={busy || !!pending || hasVerifiedPeopleLink(directory)} onChange={(event) => { setReason(event.target.value); setConfirmed(false); }} placeholder="직원에게 확인한 방법과 승인 근거" />
+        <Input className="mt-2" aria-label="본인 확인 근거" value={reason} maxLength={500} disabled={busy || !!pending || hasVerifiedPeopleLink(directory)} onChange={(event) => { setReason(event.target.value); setConfirmed(false); setMigrationConfirmed(false); }} placeholder="직원에게 확인한 방법과 승인 근거" />
       </label>
       <label className="identity-confirm flex gap-3 text-sm"><input type="checkbox" checked={confirmed} disabled={busy || !!pending || !selected || hasVerifiedPeopleLink(directory)} onChange={(event) => setConfirmed(event.target.checked)} />{selected ? `${selected.name} (${selected.nickname || selected.personId}) 직원의 로그인 계정이 ${email}임을 확인했습니다.` : '직원을 선택하고 로그인 계정의 본인 여부를 확인해 주세요.'}</label>
-      <Button size="lg" type="button" className="connection-primary" disabled={busy || (pending ? !retryReady : (!selected || !confirmed || !reason.trim() || !directory.authVerified || hasVerifiedPeopleLink(directory)))} onClick={() => void link()}>{pending ? '같은 연결 요청 다시 확인' : '이 직원의 계정 연결하기'}</Button></>}
+      <Button size="lg" type="button" className="connection-primary" disabled={busy || (pending ? !retryReady : (!selected || !confirmed || !reason.trim() || !directory.authVerified || hasVerifiedPeopleLink(directory) || (selected.legacyMigrationEligible && !migrationConfirmed)))} onClick={() => void link()}>{pending ? '같은 연결 요청 다시 확인' : selected?.legacyMigrationEligible ? '예전 연결을 이 계정으로 이전하기' : '이 직원의 계정 연결하기'}</Button></>}
     </>}
     {message && <FeedbackState kind={messageTone} title="연결 결과를 확인해 주세요">{message}</FeedbackState>}
   </section>;
