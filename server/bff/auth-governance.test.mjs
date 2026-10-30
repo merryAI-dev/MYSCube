@@ -158,3 +158,23 @@ describe('auth governance helpers', () => {
     expect(emails).not.toContain('admin@mysc.co.kr');
   });
 });
+
+describe('retained synchronized legacy alias', () => {
+  const email = 'staff@example.com', uid = 'verified-uid';
+  const canonical = { docId: uid, data: { uid, email, role: 'admin', status: 'ACTIVE', tenantId: 'test' } };
+  const alias = { docId: 'staff_example_com', data: { ...canonical.data, uid: 'staff_example_com', canonicalUid: uid } };
+  const read = (docs, claims = { role: 'admin', tenantId: 'test' }) => mergeAuthGovernanceDirectory({ authUsers: [{ uid, email, customClaims: claims }], memberDocs: docs })[0];
+  it('finishes with a verified retained alias regardless of document order', () => {
+    for (const docs of [[alias, canonical], [canonical, alias]]) {
+      expect(read(docs)).toMatchObject({ needsDeepSync: false, driftFlags: [], canonicalMember: { docId: uid } });
+    }
+  });
+  it.each([{canonicalUid:'other'}, {role:'pm'}, {status:'INACTIVE'}, {tenantId:'other'}])('retains conflict for alias mismatch %j', patch => {
+    expect(read([canonical, { ...alias, data: { ...alias.data, ...patch } }]).driftFlags).toContain('duplicate_member_docs');
+  });
+  it('keeps arbitrary duplicate and missing or wrong claims actionable', () => {
+    expect(read([canonical, alias, {docId:'other',data:canonical.data}]).needsDeepSync).toBe(true);
+    expect(read([canonical, alias], {}).driftFlags).toContain('claim_mismatch');
+    expect(read([canonical, alias], {role:'admin',tenantId:'other'}).driftFlags).toContain('claim_mismatch');
+  });
+});

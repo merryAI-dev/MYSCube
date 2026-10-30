@@ -35,6 +35,7 @@ function classifyMemberDoc(doc) {
   const uid = readOptionalText(data.uid || docId);
   return {
     docId,
+    tenantId: readOptionalText(data.tenantId),
     uid,
     email,
     role: normalizeRole(data.role || ''),
@@ -49,7 +50,8 @@ function pickCanonicalMember(memberDocs, authUid) {
   if (!Array.isArray(memberDocs) || memberDocs.length === 0) return null;
   const normalizedAuthUid = readOptionalText(authUid);
   if (normalizedAuthUid) {
-    const exact = memberDocs.find((doc) => doc.docId === normalizedAuthUid || doc.uid === normalizedAuthUid);
+    const exact = memberDocs.find((doc) => doc.docId === normalizedAuthUid)
+      || memberDocs.find((doc) => !doc.isLegacy && doc.uid === normalizedAuthUid);
     if (exact) return exact;
   }
   return memberDocs.find((doc) => !doc.isLegacy) || null;
@@ -77,13 +79,20 @@ function computeDriftFlags(entry) {
   if (!entry.authUid) flags.push('missing_auth');
   if (!entry.canonicalMember) flags.push('missing_canonical_member');
   if (!entry.canonicalMember && entry.legacyMembers.length > 0) flags.push('legacy_only');
-  if (entry.allMemberDocs.length > 1) flags.push('duplicate_member_docs');
+  const canonical = entry.canonicalMember;
+  const conflictingDocs = entry.allMemberDocs.filter((doc) => doc.docId !== canonical?.docId && !(
+    doc.isLegacy && doc.uid === doc.docId && canonical?.docId === entry.authUid && doc.data.canonicalUid === entry.authUid
+    && canonical.uid === entry.authUid && doc.email === canonical.email
+    && doc.role === canonical.role && doc.status === canonical.status
+    && doc.data.tenantId === canonical.data.tenantId
+  ));
+  if (conflictingDocs.length > 0 && entry.allMemberDocs.length > 1) flags.push('duplicate_member_docs');
 
   const canonicalRole = normalizeRole(entry.canonicalMember?.role || '');
   const legacyRole = normalizeRole(entry.legacyMembers[0]?.role || '');
   if (canonicalRole && legacyRole && canonicalRole !== legacyRole) flags.push('legacy_role_mismatch');
 
-  if (entry.claimRole && entry.effectiveRole && normalizeRole(entry.claimRole) !== normalizeRole(entry.effectiveRole)) {
+  if (entry.authUid && entry.effectiveRole && (normalizeRole(entry.claimRole || '') !== normalizeRole(entry.effectiveRole) || entry.claimTenantId !== canonical?.data.tenantId)) {
     flags.push('claim_mismatch');
   }
 

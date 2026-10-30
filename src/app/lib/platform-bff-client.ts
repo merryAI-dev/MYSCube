@@ -431,6 +431,7 @@ export type AuthGovernanceDriftFlag =
   | 'bootstrap_admin_not_adopted';
 
 export interface AuthGovernanceMemberSnapshot {
+  tenantId?: string;
   docId: string;
   uid: string;
   email: string;

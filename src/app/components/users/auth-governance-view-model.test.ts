@@ -112,3 +112,15 @@ it('never preserves an action target hidden by the current search', () => {
  expect(selectVisibleGovernanceRow([b], a.identityKey)).toBe(b);
  expect(selectVisibleGovernanceRow([], a.identityKey)).toBeNull();
 });
+
+describe('verified approval completion', () => {
+  it('requires claims, exact canonical identity, active status and tenant agreement', async () => {
+    const { isGovernanceRoleApplied } = await import('./auth-governance-view-model');
+    const row = { ...baseRow, needsDeepSync: false, canonicalMember: { ...baseRow.canonicalMember!, tenantId: 'mysc' } };
+    expect(isGovernanceRoleApplied(row, 'pm', 'mysc')).toBe(true);
+    for (const patch of [{claimRole:null},{claimTenantId:'other'},{authDisabled:true},{needsDeepSync:true},{canonicalMember:{...row.canonicalMember,docId:'legacy'}},{canonicalMember:{...row.canonicalMember,status:'INACTIVE'}}]) {
+      expect(isGovernanceRoleApplied({...row,...patch},'pm','mysc')).toBe(false);
+    }
+    expect(isGovernanceRoleApplied(row,'admin','mysc')).toBe(false);
+  });
+});

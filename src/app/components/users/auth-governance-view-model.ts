@@ -118,3 +118,11 @@ export function getCurrentGovernancePermissionLabel(row: AuthGovernanceUserRow, 
 export function selectVisibleGovernanceRow(rows: AuthGovernanceUserRow[], selectedIdentityKey: string) {
   return rows.find(row => row.identityKey === selectedIdentityKey) || rows[0] || null;
 }
+
+export function isGovernanceRoleApplied(row: AuthGovernanceUserRow, role: string, tenantId: string): boolean {
+  return !!row.authUid && !row.authDisabled && row.canonicalMember?.docId === row.authUid && row.canonicalMember?.uid === row.authUid
+    && row.canonicalMember?.email?.trim().toLowerCase() === row.email.trim().toLowerCase()
+    && row.canonicalMember?.role === role && row.canonicalMember?.status === 'ACTIVE'
+    && row.canonicalMember?.tenantId === tenantId
+    && row.claimRole === role && row.claimTenantId === tenantId && !row.needsDeepSync;
+}
